@@ -118,18 +118,20 @@
 ---
 
 ### 6. `gastos_consolidados`
-**Propósito:** Gastos agrupados y consolidados por número de factura.
+**Propósito:** Gastos agrupados y consolidados por número de factura y proveedor.
 
-**Regla de negocio:** Se agrupa por `numero_factura`, sumando los montos y contando las líneas.
+**Regla de negocio:** Se agrupa por `(numero_factura, proveedor_texto)`, sumando los montos y contando las líneas. Esto permite que diferentes proveedores tengan el mismo número de factura.
 
 **Campos principales:**
-- `numero_factura` - Único, el número de factura consolidado
+- `numero_factura` - Número de factura consolidado
+- `proveedor_texto` - Proveedor predominante (normalizado, NOT NULL)
 - `cantidad_items` - Número de líneas agrupadas
 - `fecha_min` / `fecha_max` - Rango de fechas de los gastos
 - `suma_base` / `suma_iva` / `suma_total` - Sumas consolidadas
 
 **Índices:**
-- `uk_numero_factura` - Único
+- `uk_numero_factura_proveedor` - Único compuesto (permite mismo número en diferentes proveedores)
+- `idx_numero_factura` - Búsqueda por número solo
 - `idx_fecha_min`, `idx_fecha_max` - Reportes por fecha
 
 ---
@@ -140,7 +142,7 @@
 **Lógica de relaciones:**
 - `factura_xml_id` puede ser NULL → caso: "gasto_sin_xml"
 - `gasto_consolidado_id` puede ser NULL → caso: "pendiente" (factura sin gasto)
-- **Restricción:** Al menos uno de los dos debe ser NOT NULL (constraint `chk_al_menos_uno`)
+- **Validación:** Al menos uno de los dos debe ser NOT NULL (validar en código PHP, no con CHECK)
 
 **Campos principales:**
 - `estado_id` - FK a catalogo_estados
@@ -155,9 +157,11 @@
 - `idx_estado_fecha` - Compuesto para reportes
 
 **Relaciones:**
-- FK a `facturas_xml` (CASCADE)
-- FK a `gastos_consolidados` (CASCADE)
+- FK a `facturas_xml` (RESTRICT para preservar auditoría)
+- FK a `gastos_consolidados` (RESTRICT para preservar auditoría)
 - FK a `catalogo_estados` (RESTRICT)
+
+**⚠️ Importante:** No se permite borrar facturas o gastos si tienen conciliaciones asociadas (ON DELETE RESTRICT).
 
 ---
 
@@ -199,15 +203,18 @@
 
 ### Proceso de Consolidación de Gastos
 
-1. Agrupar registros de `gastos_raw` por `numero_factura`
-2. Calcular:
+1. Normalizar el `proveedor_texto` (quitar acentos, convertir a mayúsculas, etc.)
+2. Agrupar registros de `gastos_raw` por `(numero_factura, proveedor_texto_normalizado)`
+3. Calcular:
    - `cantidad_items` = COUNT(*)
    - `suma_base` = SUM(monto_base)
    - `suma_iva` = SUM(iva)
    - `suma_total` = SUM(total)
    - `fecha_min` = MIN(fecha_gasto)
    - `fecha_max` = MAX(fecha_gasto)
-3. Insertar en `gastos_consolidados`
+4. Insertar/actualizar en `gastos_consolidados`
+
+**⚠️ Nota:** La clave única compuesta `(numero_factura, proveedor_texto)` permite que diferentes proveedores usen la misma numeración de facturas, evitando colisiones.
 
 ### Cálculo de Diferencias
 
@@ -349,8 +356,24 @@ importaciones (1) ──────< (N) gastos_raw
 catalogo_estados (1) ──< (N) conciliaciones (N) >── (0,1) facturas_xml
                                                 (N) >── (0,1) gastos_consolidados
 ```
+Consideraciones Importantes de MySQL 5.7
 
----
+### ⚠️ Limitaciones conocidas:
+
+1. **CHECK constraints no funcionan:**
+   - MySQL 5.7 acepta la sintaxis CHECK pero **la ignora completamente**
+   - La validación de que `factura_xml_id` o `gasto_consolidado_id` sea NOT NULL debe hacerse en **código PHP**
+   - En MySQL 8.0+ estos constraints sí funcionan
+
+2. **Integridad referencial:**
+   - Las FK usan `ON DELETE RESTRICT` para preservar auditoría
+   - No se puede borrar una factura o gasto si tiene conciliaciones asociadas
+   - Si necesitas eliminar, primero elimina las conciliaciones o usa soft-delete
+
+3. **Normalización de proveedores:**
+   - La clave única `(numero_factura, proveedor_texto)` requiere texto normalizado consistente
+   - Implementar función de normalización en PHP antes de insertar
+   - Ejemplo: "Empresa S.A. de C.V." → "EMPRESA SA DE CV"
 
 ## Mantenimiento y Optimización
 
@@ -368,6 +391,14 @@ catalogo_estados (1) ──< (N) conciliaciones (N) >── (0,1) facturas_xml
    - Backup diario de la base de datos
    - Especial atención a carpetas de uploads (XML físicos)
 
+4. **Optimización:**
+   - Ejecutar `OPTIMIZE TABLE` mensualmente en tablas grandes
+   - Monitorear tamaño de tabla `gastos_raw` (puede crecer rápidamente)
+
+5. **Validaciones en código:**
+   - Validar que al menos un ID esté presente en conciliaciones
+   - Normalizar `proveedor_texto` antes de insertar en `gastos_consolidados`
+   - Validar unicidad de `(numero_factura, proveedor)` antes de consolidar
 4. **Optimización:**
    - Ejecutar `OPTIMIZE TABLE` mensualmente en tablas grandes
    - Monitorear tamaño de tabla `gastos_raw` (puede crecer rápidamente)

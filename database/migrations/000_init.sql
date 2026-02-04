@@ -164,7 +164,7 @@ COMMENT='Gastos importados (datos crudos sin consolidar)';
 CREATE TABLE `gastos_consolidados` (
     `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
     `numero_factura` VARCHAR(50) NOT NULL COMMENT 'Número de factura consolidado',
-    `proveedor_texto` VARCHAR(255) NULL DEFAULT NULL COMMENT 'Proveedor predominante',
+    `proveedor_texto` VARCHAR(255) NOT NULL COMMENT 'Proveedor predominante (normalizado)',
     `cantidad_items` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Cantidad de líneas consolidadas',
     `fecha_min` DATE NULL DEFAULT NULL COMMENT 'Fecha más antigua de los gastos',
     `fecha_max` DATE NULL DEFAULT NULL COMMENT 'Fecha más reciente de los gastos',
@@ -174,11 +174,12 @@ CREATE TABLE `gastos_consolidados` (
     `consolidado_en` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `actualizado_en` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_numero_factura` (`numero_factura`),
+    UNIQUE KEY `uk_numero_factura_proveedor` (`numero_factura`, `proveedor_texto`),
+    KEY `idx_numero_factura` (`numero_factura`),
     KEY `idx_fecha_min` (`fecha_min`),
     KEY `idx_fecha_max` (`fecha_max`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-COMMENT='Gastos consolidados por número de factura';
+COMMENT='Gastos consolidados por número de factura y proveedor';
 
 -- =========================================
 -- TABLA: conciliaciones
@@ -208,15 +209,16 @@ CREATE TABLE `conciliaciones` (
     KEY `idx_estado_fecha` (`estado_id`, `fecha_conciliacion`),
     CONSTRAINT `fk_conciliacion_factura` 
         FOREIGN KEY (`factura_xml_id`) REFERENCES `facturas_xml` (`id`)
-        ON DELETE CASCADE ON UPDATE CASCADE,
+        ON DELETE RESTRICT ON UPDATE CASCADE,
     CONSTRAINT `fk_conciliacion_gasto` 
         FOREIGN KEY (`gasto_consolidado_id`) REFERENCES `gastos_consolidados` (`id`)
-        ON DELETE CASCADE ON UPDATE CASCADE,
+        ON DELETE RESTRICT ON UPDATE CASCADE,
     CONSTRAINT `fk_conciliacion_estado` 
         FOREIGN KEY (`estado_id`) REFERENCES `catalogo_estados` (`id`)
-        ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT `chk_al_menos_uno` 
-        CHECK ((`factura_xml_id` IS NOT NULL) OR (`gasto_consolidado_id` IS NOT NULL))
+        ON DELETE RESTRICT ON UPDATE CASCADE
+    -- NOTA: CHECK constraint no funciona en MySQL 5.7 (se ignora)
+    -- La validación de que al menos uno (factura_xml_id o gasto_consolidado_id) 
+    -- debe ser NOT NULL se debe hacer en el código de la aplicación
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='Registro de conciliaciones entre facturas XML y gastos';
 
