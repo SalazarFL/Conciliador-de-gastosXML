@@ -1,0 +1,4 @@
+<?php
+/**
+ * Modelo de Factura
+ */
