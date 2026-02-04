@@ -1,8 +1,8 @@
 -- =========================================
--- ESQUEMA DE BASE DE DATOS
+-- MIGRACIÓN INICIAL - 000_init.sql
 -- Sistema: XMLConcilia (VerificadorXMLConciliacion)
--- Motor: MySQL 5.7+ / XAMPP
--- Charset: utf8mb4
+-- Descripción: Creación inicial de base de datos y tablas
+-- Fecha: 2026-02-03
 -- =========================================
 
 -- Crear base de datos
@@ -271,5 +271,5 @@ CREATE INDEX `idx_facturas_fecha_estado` ON `facturas_xml` (`fecha_emision`, `id
 CREATE INDEX `idx_hash_xml` ON `facturas_xml` (`hash_xml`);
 
 -- =========================================
--- FIN DEL SCHEMA
+-- FIN DE LA MIGRACIÓN
 -- =========================================
