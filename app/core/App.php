@@ -68,8 +68,9 @@ class App
         require_once __DIR__ . '/Router.php';
         $this->router = new Router();
         
-        // Cargar definición de rutas
+        // Cargar definición de rutas con $app disponible
         if (file_exists(__DIR__ . '/../config/routes.php')) {
+            $app = $this; // Hacer $this disponible como $app en routes.php
             require __DIR__ . '/../config/routes.php';
         }
     }
