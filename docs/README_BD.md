@@ -34,18 +34,29 @@
 
 **Estados predefinidos:**
 
-| Código | Nombre | Descripción | Color |
-|--------|--------|-------------|-------|
-| `conciliada` | Conciliada | Factura y gasto coinciden perfectamente | #28a745 (verde) |
-| `con_diferencias` | Con Diferencias | Factura y gasto existen pero con diferencias en montos | #ffc107 (amarillo) |
-| `pendiente` | Pendiente | Factura XML sin gasto asociado | #17a2b8 (azul) |
-| `gasto_sin_xml` | Gasto sin XML | Gasto registrado sin factura XML | #dc3545 (rojo) |
+| Orden | Código | Nombre | Descripción | Color |
+|-------|--------|--------|-------------|-------|
+| 1 | `conciliada` | Conciliada | Factura y gasto coinciden perfectamente (100%) | #28a745 (verde) |
+| 2 | `requiere_revision` | Requiere Revisión | Coincidencia parcial o sugerida; requiere validación humana | #fd7e14 (naranja) |
+| 3 | `con_diferencias` | Con Diferencias | Factura y gasto existen pero con diferencias en montos | #ffc107 (amarillo) |
+| 4 | `pendiente` | Pendiente | Factura XML sin gasto asociado | #17a2b8 (azul) |
+| 5 | `gasto_sin_xml` | Gasto sin XML | Gasto registrado sin factura XML | #dc3545 (rojo) |
+
+**⚠️ Regla de Negocio - "Verde solo si 100%":**
+- **Estado `conciliada` (verde)** se asigna ÚNICAMENTE cuando:
+  1. `numero_factura_normalizado` coincide exactamente (100%)
+  2. `proveedor_normalizado` coincide exactamente (100%)
+  3. Diferencias de montos están dentro de tolerancia configurada
+  4. `score_total` = 100 y `match_tipo` = 'exacto'
+
+- Si NO se cumple alguna condición → estado `requiere_revision` (naranja)
+- El sistema NO concilia automáticamente casos con coincidencia parcial
 
 **Campos:**
 - `codigo` - Identificador textual único
 - `nombre` - Nombre descriptivo
 - `color_hex` - Color para interfaz de usuario
-- `orden` - Orden de presentación
+- `orden` - Orden de presentación (1=más favorable)
 
 ---
 
@@ -137,31 +148,58 @@
 ---
 
 ### 7. `conciliaciones`
-**Propósito:** Registro del resultado del proceso de conciliación entre facturas XML y gastos.
+**Propósito:** Registro del resultado del proceso de conciliación entre facturas XML y gastos con sistema de scoring y revisión manual.
 
 **Lógica de relaciones:**
 - `factura_xml_id` puede ser NULL → caso: "gasto_sin_xml"
 - `gasto_consolidado_id` puede ser NULL → caso: "pendiente" (factura sin gasto)
 - **Validación:** Al menos uno de los dos debe ser NOT NULL (validar en código PHP, no con CHECK)
 
-**Campos principales:**
-- `estado_id` - FK a catalogo_estados
+**Campos de scoring (matching automático):**
+- `score_numero` - Score de coincidencia del número (0-100)
+- `score_proveedor` - Score de coincidencia del proveedor (0-100)
+- `score_total` - Score total ponderado (0-100, calculado como: 60% número + 40% proveedor)
+- `match_tipo` - ENUM('exacto', 'sugerido', 'manual')
+  - `exacto`: Match 100% automático → verde
+  - `sugerido`: Match parcial → requiere revisión (naranja)
+  - `manual`: Conciliación forzada por usuario
+- `observaciones_match` - Detalles del proceso de matching automático
+
+**Campos de diferencias:**
 - `diferencia_base` / `diferencia_iva` / `diferencia_total` - Cálculo: (XML - Gasto)
 - `porcentaje_diferencia` - Porcentaje de diferencia respecto al total
-- `fecha_conciliacion` - Timestamp del proceso
-- `notas` - Observaciones manuales
+- `estado_id` - FK a catalogo_estados
+
+**Campos de revisión manual (auditoría):**
+- `revisado` - TINYINT(1), indica si fue revisado (0=no, 1=sí)
+- `revisado_por` - VARCHAR(100), usuario que revisó
+- `revisado_en` - TIMESTAMP, fecha/hora de revisión
+- `revision_comentario` - TEXT, comentarios del revisor
+
+**Campos adicionales:**
+- `fecha_conciliacion` - Timestamp del proceso de conciliación
+- `notas` - Observaciones generales
+- `conciliado_por` - Usuario que realizó la conciliación (futuro)
 
 **Índices:**
 - `idx_estado` - Filtrado por estado
 - `idx_fecha_conciliacion` - Orden cronológico
 - `idx_estado_fecha` - Compuesto para reportes
+- `idx_revisado` - Filtrado por estado de revisión
+- `idx_estado_revisado` - Compuesto estado + revisión
+- `idx_revisado_en` - Fecha de revisión
+- `idx_match_tipo` - Tipo de match
+- `idx_score_total` - Score total
 
 **Relaciones:**
 - FK a `facturas_xml` (RESTRICT para preservar auditoría)
 - FK a `gastos_consolidados` (RESTRICT para preservar auditoría)
 - FK a `catalogo_estados` (RESTRICT)
 
-**⚠️ Importante:** No se permite borrar facturas o gastos si tienen conciliaciones asociadas (ON DELETE RESTRICT).
+**⚠️ Importante:** 
+- No se permite borrar facturas o gastos si tienen conciliaciones asociadas (ON DELETE RESTRICT)
+- El campo `revisado` debe marcarse en TRUE solo después de validación humana
+- Use el procedimiento `sp_marcar_revisado(conciliacion_id, usuario, comentario)` para marcar revisiones
 
 ---
 
@@ -181,25 +219,47 @@
 
 ### Estados de Conciliación
 
-1. **conciliada**: 
+**Regla Principal: Verde solo si 100%**
+
+Los estados se asignan según las siguientes reglas estrictas:
+
+1. **conciliada** (🟢 Verde): 
    - Existe factura XML
    - Existe gasto consolidado
-   - Los montos coinciden exactamente (diferencia = 0)
+   - `numero_factura_normalizado` coincide 100%
+   - `proveedor_normalizado` coincide 100%
+   - Los montos coinciden dentro de tolerancia (≤ $0.05 o ≤ 1%)
+   - `score_total` = 100
+   - `match_tipo` = 'exacto'
 
-2. **con_diferencias**:
+2. **requiere_revision** (🟠 Naranja):
    - Existe factura XML
    - Existe gasto consolidado
-   - Los montos NO coinciden (diferencia > 0)
+   - Coincidencia PARCIAL detectada automáticamente
+   - `score_total` < 100 (típicamente 75-99)
+   - `match_tipo` = 'sugerido'
+   - **Requiere validación humana antes de aprobar**
+   - El sistema NO concilia automáticamente estos casos
 
-3. **pendiente**:
+3. **con_diferencias** (🟡 Amarillo):
+   - Existe factura XML
+   - Existe gasto consolidado
+   - Números y proveedor coinciden
+   - Los montos NO coinciden (diferencia > tolerancia)
+   - `match_tipo` = 'exacto' o 'manual'
+   - Puede requerir revisión según política
+
+4. **pendiente** (🔵 Azul):
    - Existe factura XML
    - NO existe gasto consolidado
    - `gasto_consolidado_id` es NULL
+   - Esperando carga de gastos
 
-4. **gasto_sin_xml**:
+5. **gasto_sin_xml** (🔴 Rojo):
    - NO existe factura XML
    - Existe gasto consolidado
    - `factura_xml_id` es NULL
+   - Puede indicar gasto no documentado o XML faltante
 
 ### Proceso de Consolidación de Gastos
 
@@ -223,6 +283,221 @@ diferencia_base = factura.subtotal - gasto.suma_base
 diferencia_iva = factura.iva - gasto.suma_iva
 diferencia_total = factura.total - gasto.suma_total
 porcentaje_diferencia = ABS(diferencia_total / factura.total * 100)
+```
+
+---
+
+## Sistema de Revisión Manual
+
+### Propósito
+
+El sistema de revisión manual permite auditoría y validación humana de las conciliaciones, especialmente aquellas marcadas como `requiere_revision` donde existe coincidencia parcial.
+
+### Campos de Auditoría
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| `revisado` | TINYINT(1) | Bandera de revisión (0=pendiente, 1=revisado) |
+| `revisado_por` | VARCHAR(100) | Usuario que realizó la revisión |
+| `revisado_en` | TIMESTAMP | Fecha y hora de la revisión |
+| `revision_comentario` | TEXT | Comentarios del revisor |
+
+### Flujo de Trabajo
+
+1. **Conciliación Automática:**
+   - Sistema ejecuta matching automático
+   - Match 100% → estado `conciliada`, `revisado` = 0 (opcional revisar)
+   - Match parcial → estado `requiere_revision`, `revisado` = 0 (obligatorio revisar)
+
+2. **Revisión Manual:**
+   - Usuario accede a lista de pendientes (`revisado` = 0)
+   - Revisa detalles de cada conciliación
+   - Verifica scores, diferencias, documentos
+   - Marca como revisado con comentario
+
+3. **Aprobación:**
+   - Usuario aprueba o rechaza la conciliación
+   - Si aprueba: actualizar `revisado` = 1, registrar usuario/fecha/comentario
+   - Si rechaza: puede cambiar estado o eliminar conciliación
+
+### Uso del Procedimiento Almacenado
+
+```sql
+-- Marcar conciliación como revisada
+CALL sp_marcar_revisado(
+    123,                              -- ID de conciliación
+    'juan.perez@empresa.com',         -- Usuario revisor
+    'Revisado y aprobado. Diferencia por redondeo.'  -- Comentario
+);
+```
+
+### Interfaz de Usuario Sugerida
+
+**Vista de Revisión:**
+```
+┌─────────────────────────────────────────────────┐
+│ [📋 123] Requiere Revisión (Score: 85%)         │
+├─────────────────────────────────────────────────┤
+│ Factura: A-1234  |  Gasto: A1234                │
+│ Match Número: 🟡 80%  |  Match Proveedor: 🟢 92% │
+│ Diferencia: $15.00 (0.13%)                      │
+│                                                  │
+│ [☑ Marcar como Revisado]                        │
+│ Comentario: [____________________________]      │
+│ [✅ Aprobar] [❌ Rechazar] [📝 Notas]            │
+└─────────────────────────────────────────────────┘
+```
+
+---
+
+## Consultas SQL para Reportes
+
+### A) Pendientes de Revisión (Estado requiere_revision y NO revisados)
+
+```sql
+-- Conciliaciones que requieren revisión manual
+SELECT 
+    c.id,
+    f.numero_factura_asistente AS factura_num,
+    p.razon_social AS proveedor,
+    g.numero_factura AS gasto_num,
+    c.score_total,
+    c.diferencia_total,
+    c.porcentaje_diferencia,
+    c.fecha_conciliacion
+FROM conciliaciones c
+INNER JOIN catalogo_estados e ON c.estado_id = e.id
+LEFT JOIN facturas_xml f ON c.factura_xml_id = f.id
+LEFT JOIN proveedores p ON f.proveedor_id = p.id
+LEFT JOIN gastos_consolidados g ON c.gasto_consolidado_id = g.id
+WHERE e.codigo = 'requiere_revision'
+  AND c.revisado = 0
+ORDER BY c.score_total DESC, c.fecha_conciliacion DESC;
+```
+
+**Uso de la vista simplificada:**
+```sql
+-- Usando vista pre-construida
+SELECT *
+FROM v_pendientes_revision
+WHERE estado_codigo = 'requiere_revision'
+LIMIT 100;
+```
+
+### B) Con Diferencias No Revisadas
+
+```sql
+-- Conciliaciones con diferencias que aún no han sido revisadas
+SELECT 
+    c.id,
+    f.numero_factura_asistente,
+    p.razon_social AS proveedor,
+    f.total AS factura_total,
+    g.suma_total AS gasto_total,
+    c.diferencia_total,
+    c.porcentaje_diferencia,
+    CASE 
+        WHEN c.porcentaje_diferencia <= 1.0 THEN '🟢 Menor'
+        WHEN c.porcentaje_diferencia <= 5.0 THEN '🟡 Media'
+        ELSE '🔴 Alta'
+    END AS severidad
+FROM conciliaciones c
+INNER JOIN catalogo_estados e ON c.estado_id = e.id
+INNER JOIN facturas_xml f ON c.factura_xml_id = f.id
+INNER JOIN proveedores p ON f.proveedor_id = p.id
+INNER JOIN gastos_consolidados g ON c.gasto_consolidado_id = g.id
+WHERE e.codigo = 'con_diferencias'
+  AND c.revisado = 0
+ORDER BY c.porcentaje_diferencia DESC;
+```
+
+### C) Conciliadas por Rango de Fechas y Proveedor
+
+```sql
+-- Reporte de conciliaciones exitosas filtrado
+SELECT 
+    f.fecha_emision,
+    f.numero_factura_asistente,
+    p.razon_social AS proveedor,
+    p.rfc,
+    f.total AS monto_factura,
+    g.suma_total AS monto_gasto,
+    c.diferencia_total,
+    c.revisado,
+    c.revisado_por,
+    c.revisado_en
+FROM conciliaciones c
+INNER JOIN catalogo_estados e ON c.estado_id = e.id
+INNER JOIN facturas_xml f ON c.factura_xml_id = f.id
+INNER JOIN proveedores p ON f.proveedor_id = p.id
+INNER JOIN gastos_consolidados g ON c.gasto_consolidado_id = g.id
+WHERE e.codigo = 'conciliada'
+  AND f.fecha_emision BETWEEN '2026-01-01' AND '2026-01-31'
+  AND p.id = 5  -- Cambiar por el ID del proveedor deseado
+ORDER BY f.fecha_emision DESC;
+```
+
+**Variante con nombre de proveedor:**
+```sql
+-- Mismo reporte usando nombre de proveedor
+SELECT 
+    f.fecha_emision,
+    f.numero_factura_asistente,
+    p.razon_social AS proveedor,
+    f.total AS monto_factura,
+    c.match_tipo,
+    c.score_total,
+    c.revisado
+FROM conciliaciones c
+INNER JOIN catalogo_estados e ON c.estado_id = e.id
+INNER JOIN facturas_xml f ON c.factura_xml_id = f.id
+INNER JOIN proveedores p ON f.proveedor_id = p.id
+WHERE e.codigo = 'conciliada'
+  AND f.fecha_emision BETWEEN '2026-01-01' AND '2026-12-31'
+  AND p.razon_social LIKE '%ACME%'
+ORDER BY f.fecha_emision DESC, f.total DESC;
+```
+
+### D) Resumen de Revisiones por Usuario
+
+```sql
+-- Estadísticas de revisión por usuario
+SELECT 
+    c.revisado_por AS usuario,
+    COUNT(*) AS total_revisados,
+    SUM(CASE WHEN e.codigo = 'conciliada' THEN 1 ELSE 0 END) AS aprobadas,
+    SUM(CASE WHEN e.codigo = 'requiere_revision' THEN 1 ELSE 0 END) AS pendientes,
+    SUM(CASE WHEN e.codigo = 'con_diferencias' THEN 1 ELSE 0 END) AS con_diferencias,
+    MIN(c.revisado_en) AS primera_revision,
+    MAX(c.revisado_en) AS ultima_revision,
+    AVG(c.score_total) AS score_promedio
+FROM conciliaciones c
+INNER JOIN catalogo_estados e ON c.estado_id = e.id
+WHERE c.revisado = 1
+  AND c.revisado_en >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+GROUP BY c.revisado_por
+ORDER BY total_revisados DESC;
+```
+
+### E) Conciliaciones por Estado de Revisión
+
+```sql
+-- Vista general del estado de revisión
+SELECT 
+    e.nombre AS estado,
+    COUNT(*) AS total,
+    SUM(CASE WHEN c.revisado = 1 THEN 1 ELSE 0 END) AS revisadas,
+    SUM(CASE WHEN c.revisado = 0 THEN 1 ELSE 0 END) AS sin_revisar,
+    ROUND(SUM(CASE WHEN c.revisado = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS porcentaje_revision
+FROM conciliaciones c
+INNER JOIN catalogo_estados e ON c.estado_id = e.id
+GROUP BY e.id, e.nombre, e.orden
+ORDER BY e.orden;
+```
+
+**Usando vista pre-construida:**
+```sql
+SELECT * FROM v_resumen_revision;
 ```
 
 ---
@@ -256,14 +531,51 @@ porcentaje_diferencia = ABS(diferencia_total / factura.total * 100)
 ## Vistas Útiles
 
 ### `v_conciliaciones_completas`
-Vista que combina datos de conciliaciones con información completa de facturas, proveedores y gastos.
+Vista que combina datos de conciliaciones con información completa de facturas, proveedores y gastos, incluyendo campos de scoring y revisión.
+
+**Campos incluidos:**
+- Datos completos de factura y gasto
+- Scores (numero, proveedor, total)
+- Estado y tipo de match
+- Campos de revisión (revisado, revisado_por, revisado_en, revision_comentario)
+- Diferencias y porcentajes
 
 **Uso típico:**
 ```sql
 SELECT * FROM v_conciliaciones_completas 
 WHERE estado_codigo = 'con_diferencias'
   AND fecha_emision BETWEEN '2026-01-01' AND '2026-01-31'
+  AND revisado = 0
 ORDER BY diferencia_total DESC;
+```
+
+### `v_pendientes_revision`
+Vista especializada para listar conciliaciones que requieren atención (no revisadas con estado `requiere_revision` o `con_diferencias`).
+
+**Ordenamiento:** Por prioridad (requiere_revision primero) y score total descendente.
+
+**Uso típico:**
+```sql
+SELECT * FROM v_pendientes_revision LIMIT 50;
+```
+
+### `v_resumen_revision`
+Vista de estadísticas agregadas por estado mostrando total, sin revisar, revisadas y porcentaje.
+
+**Uso típico:**
+```sql
+SELECT * FROM v_resumen_revision;
+```
+
+**Resultado esperado:**
+```
+estado_codigo      | total | sin_revisar | revisadas | porcentaje_revisado
+-------------------|-------|-------------|-----------|--------------------
+conciliada         | 150   | 10          | 140       | 93.33
+requiere_revision  | 45    | 38          | 7         | 15.56
+con_diferencias    | 20    | 15          | 5         | 25.00
+pendiente          | 12    | 12          | 0         | 0.00
+gasto_sin_xml      | 8     | 8           | 0         | 0.00
 ```
 
 ---
