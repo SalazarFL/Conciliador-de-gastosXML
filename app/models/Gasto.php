@@ -13,11 +13,9 @@ class Gasto extends Model
      */
     public function getAllWithProveedor()
     {
-        $sql = "SELECT g.*, p.razon_social as proveedor_nombre, i.nombre_archivo as archivo_importacion
+        $sql = "SELECT g.*, g.proveedor_texto as proveedor_nombre
                 FROM {$this->table} g
-                LEFT JOIN proveedores p ON g.proveedor_id = p.id
-                LEFT JOIN importaciones i ON g.importacion_id = i.id
-                ORDER BY g.fecha_gasto DESC";
+                ORDER BY g.fecha_max DESC";
         
         return $this->fetchAll($sql);
     }
@@ -27,8 +25,8 @@ class Gasto extends Model
      */
     public function findByProveedor($proveedorId)
     {
-        $sql = "SELECT * FROM {$this->table} WHERE proveedor_id = ? ORDER BY fecha_gasto DESC";
-        return $this->fetchAll($sql, [$proveedorId]);
+        $sql = "SELECT * FROM {$this->table} WHERE proveedor_texto LIKE ? ORDER BY fecha_max DESC";
+        return $this->fetchAll($sql, ['%' . $proveedorId . '%']);
     }
     
     /**
@@ -36,7 +34,7 @@ class Gasto extends Model
      */
     public function findByNumeroFactura($numero)
     {
-        $sql = "SELECT * FROM {$this->table} WHERE numero_factura LIKE ? ORDER BY fecha_gasto DESC";
+        $sql = "SELECT * FROM {$this->table} WHERE numero_factura LIKE ? ORDER BY fecha_max DESC";
         return $this->fetchAll($sql, ['%' . $numero . '%']);
     }
     
@@ -45,13 +43,13 @@ class Gasto extends Model
      */
     public function findByFechaRange($fechaInicio, $fechaFin)
     {
-        $sql = "SELECT g.*, p.razon_social as proveedor_nombre
-                FROM {$this->table} g
-                LEFT JOIN proveedores p ON g.proveedor_id = p.id
-                WHERE g.fecha_gasto BETWEEN ? AND ?
-                ORDER BY g.fecha_gasto DESC";
+        $sql = "SELECT g.*, g.proveedor_texto as proveedor_nombre
+            FROM {$this->table} g
+            WHERE (g.fecha_min IS NULL OR g.fecha_min <= ?)
+              AND (g.fecha_max IS NULL OR g.fecha_max >= ?)
+            ORDER BY g.fecha_max DESC";
         
-        return $this->fetchAll($sql, [$fechaInicio, $fechaFin]);
+        return $this->fetchAll($sql, [$fechaFin, $fechaInicio]);
     }
     
     /**
@@ -60,21 +58,60 @@ class Gasto extends Model
     public function crear($data)
     {
         $sql = "INSERT INTO {$this->table} 
-                (importacion_id, proveedor_id, numero_factura, fecha_gasto, monto_total, 
-                 numero_factura_normalizado, proveedor_normalizado)
-                VALUES (?, ?, ?, ?, ?, ?, ?)";
+                (numero_factura, proveedor_texto, cantidad_items, fecha_min, fecha_max, suma_base, suma_iva, suma_total)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
         
         $params = [
-            $data['importacion_id'],
-            $data['proveedor_id'],
             $data['numero_factura'],
-            $data['fecha_gasto'],
-            $data['monto_total'],
-            $data['numero_factura_normalizado'] ?? null,
-            $data['proveedor_normalizado'] ?? null
+            $data['proveedor_texto'] ?? '',
+            $data['cantidad_items'] ?? 1,
+            $data['fecha_min'] ?? $data['fecha_gasto'] ?? null,
+            $data['fecha_max'] ?? $data['fecha_gasto'] ?? null,
+            $data['suma_base'] ?? $data['monto_base'] ?? 0,
+            $data['suma_iva'] ?? $data['iva'] ?? 0,
+            $data['suma_total'] ?? $data['monto_total'] ?? 0
         ];
         
         return $this->insert($sql, $params);
+    }
+
+    /**
+     * Crear o acumular gasto consolidado por número/proveedor
+     */
+    public function upsertConsolidado($data)
+    {
+        $numeroFactura = (string) ($data['numero_factura'] ?? '');
+        $proveedorTexto = (string) ($data['proveedor_texto'] ?? '');
+
+        $sqlFind = "SELECT * FROM {$this->table} WHERE numero_factura = ? AND proveedor_texto = ? LIMIT 1";
+        $existing = $this->fetchOne($sqlFind, [$numeroFactura, $proveedorTexto]);
+
+        if (!$existing) {
+            return $this->crear($data);
+        }
+
+        $cantidadItems = (int) $existing['cantidad_items'] + ((int) ($data['cantidad_items'] ?? 1));
+        $fechaMin = $this->minDate($existing['fecha_min'] ?? null, $data['fecha_min'] ?? null);
+        $fechaMax = $this->maxDate($existing['fecha_max'] ?? null, $data['fecha_max'] ?? null);
+        $sumaBase = (float) $existing['suma_base'] + (float) ($data['suma_base'] ?? 0);
+        $sumaIva = (float) $existing['suma_iva'] + (float) ($data['suma_iva'] ?? 0);
+        $sumaTotal = (float) $existing['suma_total'] + (float) ($data['suma_total'] ?? 0);
+
+        $sqlUpdate = "UPDATE {$this->table}
+                      SET cantidad_items = ?, fecha_min = ?, fecha_max = ?, suma_base = ?, suma_iva = ?, suma_total = ?
+                      WHERE id = ?";
+
+        $this->execute($sqlUpdate, [
+            $cantidadItems,
+            $fechaMin,
+            $fechaMax,
+            $sumaBase,
+            $sumaIva,
+            $sumaTotal,
+            $existing['id']
+        ]);
+
+        return (int) $existing['id'];
     }
     
     /**
@@ -82,7 +119,31 @@ class Gasto extends Model
      */
     public function getTotalMonto()
     {
-        $sql = "SELECT COALESCE(SUM(monto_total), 0) FROM {$this->table}";
+        $sql = "SELECT COALESCE(SUM(suma_total), 0) FROM {$this->table}";
         return (float) $this->fetchColumn($sql);
+    }
+
+    private function minDate($a, $b)
+    {
+        if (empty($a)) {
+            return $b;
+        }
+        if (empty($b)) {
+            return $a;
+        }
+
+        return strtotime($a) <= strtotime($b) ? $a : $b;
+    }
+
+    private function maxDate($a, $b)
+    {
+        if (empty($a)) {
+            return $b;
+        }
+        if (empty($b)) {
+            return $a;
+        }
+
+        return strtotime($a) >= strtotime($b) ? $a : $b;
     }
 }

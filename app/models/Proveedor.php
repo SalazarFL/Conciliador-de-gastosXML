@@ -31,16 +31,29 @@ class Proveedor extends Model
      */
     public function obtenerOCrear($rfc, $razonSocial)
     {
+        $rfc = trim((string) $rfc);
+        $razonSocial = trim((string) $razonSocial);
+
+        if ($razonSocial === '') {
+            $razonSocial = 'SIN PROVEEDOR';
+        }
+
         // Buscar existente
-        $proveedor = $this->findByRfc($rfc);
+        $proveedor = null;
+        if ($rfc !== '') {
+            $proveedor = $this->findByRfc($rfc);
+        } else {
+            $sql = "SELECT * FROM {$this->table} WHERE razon_social = ? LIMIT 1";
+            $proveedor = $this->fetchOne($sql, [$razonSocial]);
+        }
         
         if ($proveedor) {
             return $proveedor['id'];
         }
         
         // Crear nuevo
-        $sql = "INSERT INTO {$this->table} (rfc, razon_social) VALUES (?, ?)";
-        return $this->insert($sql, [$rfc, $razonSocial]);
+        $sql = "INSERT INTO {$this->table} (rfc, razon_social, razon_social_normalizada) VALUES (?, ?, ?)";
+        return $this->insert($sql, [$rfc !== '' ? $rfc : null, $razonSocial, $this->normalizarRazonSocial($razonSocial)]);
     }
     
     /**
@@ -49,12 +62,13 @@ class Proveedor extends Model
     public function actualizar($id, $data)
     {
         $sql = "UPDATE {$this->table} 
-                SET rfc = ?, razon_social = ? 
+                SET rfc = ?, razon_social = ?, razon_social_normalizada = ?
                 WHERE id = ?";
         
         $params = [
             $data['rfc'],
             $data['razon_social'],
+            $this->normalizarRazonSocial($data['razon_social']),
             $id
         ];
         
@@ -82,16 +96,34 @@ class Proveedor extends Model
     public function getAllWithStats()
     {
         $sql = "SELECT p.*,
-                    COUNT(DISTINCT f.id) as total_facturas,
-                    COUNT(DISTINCT g.id) as total_gastos,
-                    COALESCE(SUM(f.total), 0) as monto_facturas,
-                    COALESCE(SUM(g.monto_total), 0) as monto_gastos
+                    COALESCE(f.total_facturas, 0) as total_facturas,
+                    COALESCE(g.total_gastos, 0) as total_gastos,
+                    COALESCE(f.monto_facturas, 0) as monto_facturas,
+                    COALESCE(g.monto_gastos, 0) as monto_gastos
                 FROM {$this->table} p
-                LEFT JOIN facturas_xml f ON p.id = f.proveedor_id
-                LEFT JOIN gastos_consolidados g ON p.id = g.proveedor_id
-                GROUP BY p.id
+                LEFT JOIN (
+                    SELECT proveedor_id, COUNT(*) as total_facturas, COALESCE(SUM(total), 0) as monto_facturas
+                    FROM facturas_xml
+                    GROUP BY proveedor_id
+                ) f ON p.id = f.proveedor_id
+                LEFT JOIN (
+                    SELECT proveedor_texto, COUNT(*) as total_gastos, COALESCE(SUM(suma_total), 0) as monto_gastos
+                    FROM gastos_consolidados
+                    GROUP BY proveedor_texto
+                ) g ON p.razon_social = g.proveedor_texto
                 ORDER BY p.razon_social";
         
         return $this->fetchAll($sql);
+    }
+
+    private function normalizarRazonSocial($value)
+    {
+        $normalized = mb_strtoupper(trim((string) $value), 'UTF-8');
+        $normalized = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $normalized);
+        if ($normalized === false) {
+            return mb_strtoupper(trim((string) $value), 'UTF-8');
+        }
+
+        return preg_replace('/\s+/', ' ', trim($normalized));
     }
 }

@@ -13,7 +13,7 @@ class Factura extends Model
      */
     public function getAllWithImportacion()
     {
-        $sql = "SELECT f.*, i.nombre_archivo as archivo_importacion, i.fecha as fecha_importacion
+        $sql = "SELECT f.*, i.archivo_origen as archivo_importacion, i.fecha_importacion
                 FROM {$this->table} f
                 LEFT JOIN importaciones i ON f.importacion_id = i.id
                 ORDER BY f.fecha_emision DESC";
@@ -26,7 +26,7 @@ class Factura extends Model
      */
     public function findByUuid($uuid)
     {
-        $sql = "SELECT * FROM {$this->table} WHERE uuid = ? LIMIT 1";
+        $sql = "SELECT * FROM {$this->table} WHERE consecutivo_completo = ? LIMIT 1";
         return $this->fetchOne($sql, [$uuid]);
     }
     
@@ -44,7 +44,7 @@ class Factura extends Model
      */
     public function findByNumero($numero)
     {
-        $sql = "SELECT * FROM {$this->table} WHERE numero_factura LIKE ? ORDER BY fecha_emision DESC";
+        $sql = "SELECT * FROM {$this->table} WHERE numero_factura_asistente LIKE ? ORDER BY fecha_emision DESC";
         return $this->fetchAll($sql, ['%' . $numero . '%']);
     }
     
@@ -68,22 +68,26 @@ class Factura extends Model
     public function crear($data)
     {
         $sql = "INSERT INTO {$this->table} 
-                (importacion_id, proveedor_id, uuid, numero_factura, fecha_emision, 
-                 subtotal, iva, total, moneda, metodo_pago, proveedor_normalizado)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                (importacion_id, consecutivo_completo, numero_factura_asistente, proveedor_id, fecha_emision,
+                 subtotal, iva, total, moneda, tipo_comprobante, archivo_xml, ruta_xml, hash_xml, xml_contenido, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         
         $params = [
-            $data['importacion_id'],
+            $data['importacion_id'] ?? null,
+            $data['consecutivo_completo'] ?? $data['uuid'] ?? '',
+            $data['numero_factura_asistente'] ?? $data['numero_factura'] ?? '',
             $data['proveedor_id'],
-            $data['uuid'],
-            $data['numero_factura'],
             $data['fecha_emision'],
-            $data['subtotal'],
-            $data['iva'],
-            $data['total'],
+            $data['subtotal'] ?? 0,
+            $data['iva'] ?? 0,
+            $data['total'] ?? 0,
             $data['moneda'] ?? 'MXN',
-            $data['metodo_pago'] ?? null,
-            $data['proveedor_normalizado'] ?? null
+            $data['tipo_comprobante'] ?? null,
+            $data['archivo_xml'] ?? 'sin_archivo.xml',
+            $data['ruta_xml'] ?? null,
+            $data['hash_xml'] ?? null,
+            $data['xml_contenido'] ?? null,
+            $data['metadata'] ?? null
         ];
         
         return $this->insert($sql, $params);

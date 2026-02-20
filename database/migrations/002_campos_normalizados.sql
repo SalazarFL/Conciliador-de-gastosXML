@@ -54,8 +54,23 @@ WHERE `numero_factura_normalizado` IS NULL
 
 -- Eliminar UNIQUE antiguo SOLO si existe
 -- Verificar primero con: SHOW INDEX FROM gastos_consolidados WHERE Key_name = 'uk_numero_factura_proveedor';
-ALTER TABLE `gastos_consolidados`
-DROP INDEX IF EXISTS `uk_numero_factura_proveedor`;
+SET @idx_exists := (
+    SELECT COUNT(1)
+    FROM information_schema.statistics
+    WHERE table_schema = DATABASE()
+      AND table_name = 'gastos_consolidados'
+      AND index_name = 'uk_numero_factura_proveedor'
+);
+
+SET @drop_sql := IF(
+    @idx_exists > 0,
+    'ALTER TABLE `gastos_consolidados` DROP INDEX `uk_numero_factura_proveedor`',
+    'SELECT "Índice uk_numero_factura_proveedor no existe, se omite DROP"'
+);
+
+PREPARE stmt_drop_idx FROM @drop_sql;
+EXECUTE stmt_drop_idx;
+DEALLOCATE PREPARE stmt_drop_idx;
 
 -- Crear UNIQUE compuesto con campos normalizados
 -- IMPORTANTE: Ejecutar esto DESPUÉS de poblar los datos

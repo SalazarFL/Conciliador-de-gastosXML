@@ -31,7 +31,7 @@ class Conciliacion extends Model
      */
     public function findByEstado($codigoEstado)
     {
-        $sql = "SELECT c.*, ce.nombre as estado_nombre, ce.color as estado_color
+        $sql = "SELECT c.*, ce.nombre as estado_nombre, ce.color_hex as estado_color
                 FROM {$this->table} c
                 INNER JOIN catalogo_estados ce ON c.estado_id = ce.id
                 WHERE ce.codigo = ?
@@ -68,20 +68,20 @@ class Conciliacion extends Model
     public function crear($data)
     {
         $sql = "INSERT INTO {$this->table} 
-                (factura_id, gasto_id, estado_id, score_numero, score_proveedor, 
-                 score_total, match_tipo, diferencia_monto, observaciones)
+                (factura_xml_id, gasto_consolidado_id, estado_id, diferencia_base, diferencia_iva,
+                 diferencia_total, porcentaje_diferencia, notas, metadata)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
         
         $params = [
-            $data['factura_id'] ?? null,
-            $data['gasto_id'] ?? null,
+            $data['factura_xml_id'] ?? $data['factura_id'] ?? null,
+            $data['gasto_consolidado_id'] ?? $data['gasto_id'] ?? null,
             $data['estado_id'],
-            $data['score_numero'] ?? null,
-            $data['score_proveedor'] ?? null,
-            $data['score_total'] ?? null,
-            $data['match_tipo'] ?? null,
-            $data['diferencia_monto'] ?? null,
-            $data['observaciones'] ?? null
+            $data['diferencia_base'] ?? 0,
+            $data['diferencia_iva'] ?? 0,
+            $data['diferencia_total'] ?? 0,
+            $data['porcentaje_diferencia'] ?? null,
+            $data['notas'] ?? $data['observaciones'] ?? null,
+            $data['metadata'] ?? null
         ];
         
         return $this->insert($sql, $params);
@@ -101,7 +101,7 @@ class Conciliacion extends Model
      */
     public function actualizarObservaciones($id, $observaciones)
     {
-        $sql = "UPDATE {$this->table} SET observaciones = ? WHERE id = ?";
+        $sql = "UPDATE {$this->table} SET notas = ? WHERE id = ?";
         return $this->execute($sql, [$observaciones, $id]);
     }
     
@@ -113,13 +113,13 @@ class Conciliacion extends Model
         $sql = "SELECT 
                     ce.codigo,
                     ce.nombre,
-                    ce.color,
+                    ce.color_hex as color,
                     COUNT(*) as cantidad,
-                    COALESCE(SUM(CASE WHEN c.factura_id IS NOT NULL THEN f.total ELSE 0 END), 0) as monto_total
+                    COALESCE(SUM(CASE WHEN c.factura_xml_id IS NOT NULL THEN f.total ELSE 0 END), 0) as monto_total
                 FROM {$this->table} c
                 INNER JOIN catalogo_estados ce ON c.estado_id = ce.id
-                LEFT JOIN facturas_xml f ON c.factura_id = f.id
-                GROUP BY ce.id, ce.codigo, ce.nombre, ce.color
+                LEFT JOIN facturas_xml f ON c.factura_xml_id = f.id
+                GROUP BY ce.id, ce.codigo, ce.nombre, ce.color_hex
                 ORDER BY ce.orden";
         
         return $this->fetchAll($sql);
