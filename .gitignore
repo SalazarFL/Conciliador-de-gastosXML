@@ -1,0 +1,10 @@
+# Runtime logs
+storage/logs/*.log
+
+# User-uploaded files (runtime artifacts)
+public/uploads/xml/*
+public/uploads/gastos/*
+
+# Keep upload directories in repo structure if needed
+!public/uploads/xml/.gitkeep
+!public/uploads/gastos/.gitkeep
