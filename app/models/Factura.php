@@ -13,8 +13,9 @@ class Factura extends Model
      */
     public function getAllWithImportacion()
     {
-        $sql = "SELECT f.*, i.archivo_origen as archivo_importacion, i.fecha_importacion
+        $sql = "SELECT f.*, p.razon_social as proveedor_nombre, i.archivo_origen as archivo_importacion, i.fecha_importacion
                 FROM {$this->table} f
+            LEFT JOIN proveedores p ON f.proveedor_id = p.id
                 LEFT JOIN importaciones i ON f.importacion_id = i.id
                 ORDER BY f.fecha_emision DESC";
         

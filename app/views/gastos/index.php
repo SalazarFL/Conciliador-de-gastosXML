@@ -14,25 +14,24 @@
 					<th style="padding:12px;text-align:left;border-bottom:1px solid #eee;">Número</th>
 					<th style="padding:12px;text-align:left;border-bottom:1px solid #eee;">Proveedor</th>
 					<th style="padding:12px;text-align:center;border-bottom:1px solid #eee;">Items</th>
-					<th style="padding:12px;text-align:left;border-bottom:1px solid #eee;">Fecha min</th>
-					<th style="padding:12px;text-align:left;border-bottom:1px solid #eee;">Fecha max</th>
+					<th style="padding:12px;text-align:left;border-bottom:1px solid #eee;">Fecha</th>
 					<th style="padding:12px;text-align:right;border-bottom:1px solid #eee;">Total</th>
 				</tr>
 			</thead>
 			<tbody>
 				<?php if (empty($gastos ?? [])): ?>
 					<tr>
-						<td colspan="6" style="padding:16px;color:#666;">No hay gastos cargados todavía.</td>
+						<td colspan="5" style="padding:16px;color:#666;">No hay gastos cargados todavía.</td>
 					</tr>
 				<?php else: ?>
 					<?php foreach ($gastos as $gasto): ?>
+						<?php $fechaVisible = $gasto['fecha_max'] ?? ($gasto['fecha_min'] ?? ''); ?>
 						<tr>
 							<td style="padding:12px;border-bottom:1px solid #f0f0f0;"><?= htmlspecialchars($gasto['numero_factura'] ?? '') ?></td>
 							<td style="padding:12px;border-bottom:1px solid #f0f0f0;"><?= htmlspecialchars($gasto['proveedor_texto'] ?? '') ?></td>
 							<td style="padding:12px;border-bottom:1px solid #f0f0f0;text-align:center;"><?= (int)($gasto['cantidad_items'] ?? 0) ?></td>
-							<td style="padding:12px;border-bottom:1px solid #f0f0f0;"><?= htmlspecialchars($gasto['fecha_min'] ?? '') ?></td>
-							<td style="padding:12px;border-bottom:1px solid #f0f0f0;"><?= htmlspecialchars($gasto['fecha_max'] ?? '') ?></td>
-							<td style="padding:12px;border-bottom:1px solid #f0f0f0;text-align:right;">$<?= number_format((float)($gasto['suma_total'] ?? 0), 2) ?></td>
+							<td style="padding:12px;border-bottom:1px solid #f0f0f0;"><?= htmlspecialchars($fechaVisible) ?></td>
+							<td style="padding:12px;border-bottom:1px solid #f0f0f0;text-align:right;"><?= number_format((float)($gasto['suma_total'] ?? 0), 2) ?></td>
 						</tr>
 					<?php endforeach; ?>
 				<?php endif; ?>

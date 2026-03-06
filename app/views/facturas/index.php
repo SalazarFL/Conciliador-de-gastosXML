@@ -13,7 +13,7 @@
 				<tr>
 					<th style="padding:12px;text-align:left;border-bottom:1px solid #eee;">Consecutivo</th>
 					<th style="padding:12px;text-align:left;border-bottom:1px solid #eee;">Número Asistente</th>
-					<th style="padding:12px;text-align:left;border-bottom:1px solid #eee;">Proveedor ID</th>
+					<th style="padding:12px;text-align:left;border-bottom:1px solid #eee;">Emisor</th>
 					<th style="padding:12px;text-align:left;border-bottom:1px solid #eee;">Fecha</th>
 					<th style="padding:12px;text-align:right;border-bottom:1px solid #eee;">Total</th>
 					<th style="padding:12px;text-align:left;border-bottom:1px solid #eee;">Archivo</th>
@@ -30,9 +30,9 @@
 						<tr>
 							<td style="padding:12px;border-bottom:1px solid #f0f0f0;"><?= htmlspecialchars($factura['consecutivo_completo'] ?? '') ?></td>
 							<td style="padding:12px;border-bottom:1px solid #f0f0f0;"><?= htmlspecialchars($factura['numero_factura_asistente'] ?? '') ?></td>
-							<td style="padding:12px;border-bottom:1px solid #f0f0f0;"><?= (int)($factura['proveedor_id'] ?? 0) ?></td>
+							<td style="padding:12px;border-bottom:1px solid #f0f0f0;"><?= htmlspecialchars($factura['proveedor_nombre'] ?? 'SIN PROVEEDOR') ?></td>
 							<td style="padding:12px;border-bottom:1px solid #f0f0f0;"><?= htmlspecialchars($factura['fecha_emision'] ?? '') ?></td>
-							<td style="padding:12px;border-bottom:1px solid #f0f0f0;text-align:right;">$<?= number_format((float)($factura['total'] ?? 0), 2) ?></td>
+							<td style="padding:12px;border-bottom:1px solid #f0f0f0;text-align:right;"><?= number_format((float)($factura['total'] ?? 0), 2) ?></td>
 							<td style="padding:12px;border-bottom:1px solid #f0f0f0;"><?= htmlspecialchars($factura['archivo_xml'] ?? '') ?></td>
 							<td style="padding:12px;border-bottom:1px solid #f0f0f0;">
 								<a href="<?= (defined('APP_URL') ? APP_URL : '/xmlconcilia/public') ?>/facturas/ver/<?= (int)$factura['id'] ?>">Ver</a>

@@ -25,12 +25,12 @@ class XmlInvoiceParser
 		$folio = self::firstAttrByLocalName($xml, 'Comprobante', 'Folio');
 
 		$consecutivo = '';
-		if ($uuid !== '') {
+		if ($numeroConsecutivo !== '') {
+			$consecutivo = $numeroConsecutivo;
+		} elseif ($uuid !== '') {
 			$consecutivo = $uuid;
 		} elseif ($clave !== '') {
 			$consecutivo = $clave;
-		} elseif ($numeroConsecutivo !== '') {
-			$consecutivo = $numeroConsecutivo;
 		} else {
 			$consecutivo = trim($serie . $folio);
 		}

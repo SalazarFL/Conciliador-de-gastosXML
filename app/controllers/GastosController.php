@@ -37,13 +37,24 @@ class GastosController extends Controller
 
 		require_once __DIR__ . '/../helpers/FileUploader.php';
 		require_once __DIR__ . '/../helpers/Validator.php';
+		require_once __DIR__ . '/../helpers/XlsxReader.php';
 
 		$config = require __DIR__ . '/../config/config.php';
 		$uploadDir = rtrim($config['uploads_path'], '/\\') . DIRECTORY_SEPARATOR . 'gastos';
 		$maxSize = $config['max_upload_size'] ?? 10485760;
 
 		try {
-			$file = FileUploader::uploadSingle('gastos_file', $uploadDir, ['csv'], $maxSize);
+			$allowed = $config['allowed_extensions']['gastos'] ?? ['csv'];
+			$file = FileUploader::uploadSingle('gastos_file', $uploadDir, $allowed, $maxSize);
+
+			$ext = strtolower(pathinfo($file['original_name'], PATHINFO_EXTENSION));
+			if (!in_array($ext, ['csv', 'xlsx', 'xls'], true)) {
+				throw new Exception('Formato no soportado. Usa CSV o XLSX.');
+			}
+
+			if ($ext === 'xls') {
+				throw new Exception('El formato .xls no está soportado en esta versión. Guarda el archivo como .xlsx o .csv e intenta de nuevo.');
+			}
 
 			$importacionModel = $this->loadModel('Importacion');
 			$gastoModel = $this->loadModel('Gasto');
@@ -54,7 +65,7 @@ class GastosController extends Controller
 				'ruta_archivo' => $file['path']
 			]);
 
-			$result = $this->procesarCsvGastos($file['path'], $gastoModel);
+			$result = $this->procesarGastos($file['path'], $ext, $gastoModel);
 			$importacionModel->cerrar($importacionId, $result['total'], $result['exitosos'], $result['fallidos'], $result['errores']);
 
 			if ($result['exitosos'] === 0) {
@@ -90,46 +101,47 @@ class GastosController extends Controller
 		exit;
 	}
 
-	private function procesarCsvGastos($filePath, $gastoModel)
+	private function procesarGastos($filePath, $ext, $gastoModel)
 	{
-		$handle = fopen($filePath, 'r');
-		if ($handle === false) {
-			throw new Exception('No fue posible abrir el archivo CSV de gastos.');
+		if ($ext === 'csv') {
+			$dataset = $this->readCsvData($filePath);
+		} else {
+			$dataset = XlsxReader::readFirstSheet($filePath);
 		}
 
-		$header = fgetcsv($handle);
-		if (!$header) {
-			fclose($handle);
-			throw new Exception('El archivo CSV no contiene encabezados.');
-		}
-
-		$map = $this->buildCsvMap($header);
+		$map = $this->buildHeaderMap($dataset['header']);
+		$this->validateRequiredColumns($map);
 		$total = 0;
 		$exitosos = 0;
 		$fallidos = 0;
 		$errores = [];
 
-		while (($row = fgetcsv($handle)) !== false) {
+		foreach ($dataset['rows'] as $row) {
 			$total++;
 			try {
-				$numero = trim((string) $this->getCsvValue($row, $map, ['numero_factura', 'factura', 'numero']));
-				$proveedor = trim((string) $this->getCsvValue($row, $map, ['proveedor', 'proveedor_texto', 'razon_social']));
-				$fecha = Validator::parseDate($this->getCsvValue($row, $map, ['fecha_gasto', 'fecha']));
-				$base = Validator::parseAmount($this->getCsvValue($row, $map, ['monto_base', 'base', 'subtotal']));
-				$iva = Validator::parseAmount($this->getCsvValue($row, $map, ['iva']));
-				$totalMonto = Validator::parseAmount($this->getCsvValue($row, $map, ['total', 'monto_total']));
+				$fecha = Validator::parseDate($this->getValue($row, $map, ['fecha']));
+				$numero = $this->normalizeNumeroFactura($this->getValue($row, $map, ['numero']));
+				$proveedor = trim((string) $this->getValue($row, $map, ['proveedor']));
+				$iva = Validator::parseAmount($this->getValue($row, $map, ['iva']));
+				$totalMonto = Validator::parseAmount($this->getValue($row, $map, ['total']));
 
 				if (!Validator::required($numero)) {
-					throw new Exception('Número de factura vacío.');
+					throw new Exception('Número vacío.');
 				}
 
 				if (!Validator::required($proveedor)) {
-					$proveedor = 'SIN PROVEEDOR';
+					throw new Exception('Proveedor vacío.');
+				}
+
+				if (!$fecha) {
+					throw new Exception('Fecha inválida.');
 				}
 
 				if ($totalMonto <= 0) {
-					$totalMonto = $base + $iva;
+					throw new Exception('Total inválido o vacío.');
 				}
+
+				$base = max(0, $totalMonto - $iva);
 
 				$gastoModel->upsertConsolidado([
 					'numero_factura' => $numero,
@@ -152,8 +164,6 @@ class GastosController extends Controller
 			}
 		}
 
-		fclose($handle);
-
 		return [
 			'total' => $total,
 			'exitosos' => $exitosos,
@@ -162,26 +172,112 @@ class GastosController extends Controller
 		];
 	}
 
-	private function buildCsvMap(array $header)
+	private function readCsvData($filePath)
+	{
+		$handle = fopen($filePath, 'r');
+		if ($handle === false) {
+			throw new Exception('No fue posible abrir el archivo CSV de gastos.');
+		}
+
+		$delimiter = $this->detectCsvDelimiter($filePath);
+		$header = fgetcsv($handle, 0, $delimiter);
+		if (!$header) {
+			fclose($handle);
+			throw new Exception('El archivo CSV no contiene encabezados.');
+		}
+
+		$rows = [];
+		while (($row = fgetcsv($handle, 0, $delimiter)) !== false) {
+			$rows[] = $row;
+		}
+
+		fclose($handle);
+
+		return [
+			'header' => $header,
+			'rows' => $rows
+		];
+	}
+
+	private function buildHeaderMap(array $header)
 	{
 		$map = [];
 		foreach ($header as $index => $name) {
-			$key = strtolower(trim((string) $name));
-			$key = str_replace([' ', '-'], '_', $key);
+			$key = $this->normalizeHeaderKey((string) $name);
 			$map[$key] = $index;
 		}
 
 		return $map;
 	}
 
-	private function getCsvValue(array $row, array $map, array $keys)
+	private function getValue(array $row, array $map, array $keys)
 	{
 		foreach ($keys as $key) {
-			if (isset($map[$key])) {
-				return $row[$map[$key]] ?? null;
+			$normalized = $this->normalizeHeaderKey($key);
+			if (isset($map[$normalized])) {
+				return $row[$map[$normalized]] ?? null;
 			}
 		}
 
 		return null;
+	}
+
+	private function validateRequiredColumns(array $map)
+	{
+		$required = ['fecha', 'numero', 'proveedor', 'iva', 'total'];
+		$missing = [];
+
+		foreach ($required as $column) {
+			if (!isset($map[$column])) {
+				$missing[] = $column;
+			}
+		}
+
+		if (!empty($missing)) {
+			throw new Exception('El archivo debe incluir las columnas: Fecha, Numero, Proveedor, Iva, Total. Faltan: ' . implode(', ', $missing));
+		}
+	}
+
+	private function normalizeHeaderKey($value)
+	{
+		$key = trim((string) $value);
+		$key = preg_replace('/^\xEF\xBB\xBF/', '', $key); // remover BOM UTF-8
+		$key = mb_strtolower($key, 'UTF-8');
+		$key = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $key) ?: $key;
+		$key = str_replace([' ', '-', '.'], '_', $key);
+		$key = preg_replace('/[^a-z0-9_]/', '', $key);
+		$key = preg_replace('/_+/', '_', $key);
+
+		return trim($key, '_');
+	}
+
+	private function detectCsvDelimiter($filePath)
+	{
+		$line = '';
+		$fh = fopen($filePath, 'r');
+		if ($fh !== false) {
+			$line = (string) fgets($fh);
+			fclose($fh);
+		}
+
+		$commaCount = substr_count($line, ',');
+		$semicolonCount = substr_count($line, ';');
+
+		return $semicolonCount > $commaCount ? ';' : ',';
+	}
+
+	private function normalizeNumeroFactura($value)
+	{
+		$text = trim((string) $value);
+		if ($text === '') {
+			return '';
+		}
+
+		// Si viene como numérico de Excel (ej: 4510215.0), quitar decimal redundante.
+		if (preg_match('/^\d+\.0+$/', $text)) {
+			$text = preg_replace('/\.0+$/', '', $text);
+		}
+
+		return $text;
 	}
 }

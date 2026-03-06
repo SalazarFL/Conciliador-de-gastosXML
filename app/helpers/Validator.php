@@ -35,6 +35,19 @@ class Validator
 			return null;
 		}
 
+		// Excel serial date (Windows epoch, with leap-year compatibility behavior).
+		if (is_numeric($text)) {
+			$serial = (float) $text;
+			if ($serial > 0) {
+				$days = (int) floor($serial);
+				$seconds = (int) round(($serial - $days) * 86400);
+				$base = new DateTime('1899-12-30 00:00:00');
+				$base->modify('+' . $days . ' days');
+				$base->modify('+' . $seconds . ' seconds');
+				return $base->format('Y-m-d');
+			}
+		}
+
 		$formats = ['Y-m-d', 'd/m/Y', 'd-m-Y', 'm/d/Y'];
 		foreach ($formats as $format) {
 			$date = DateTime::createFromFormat($format, $text);
