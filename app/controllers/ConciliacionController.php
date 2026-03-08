@@ -5,6 +5,8 @@
 
 class ConciliacionController extends Controller
 {
+	private const MONTO_TOLERANCIA = 1.00;
+
 	public function index()
 	{
 		$rows = [];
@@ -235,6 +237,7 @@ class ConciliacionController extends Controller
 		$referencia = max($facturaTotal, $gastoTotal);
 		$pct = $referencia > 0 ? (abs($difTotal) / $referencia) * 100 : 0;
 
+		$match['diferencia_total_abs'] = abs($difTotal);
 		$estadoCodigo = $this->resolverEstado($factura, $gasto, $match, $pct, $estadoMap);
 		$estadoId = (int) $estadoMap[$estadoCodigo]['id'];
 
@@ -272,8 +275,11 @@ class ConciliacionController extends Controller
 
 		$score = (float) ($match['score_total'] ?? 0);
 		$scoreNumero = (float) ($match['score_numero'] ?? 0);
+		$scoreProveedor = (float) ($match['score_proveedor'] ?? 0);
+		$difTotalAbs = abs((float) ($match['diferencia_total_abs'] ?? 0));
 
-		if ($scoreNumero >= 95 && $pctDiff <= 0.05) {
+		// Verde cuando numero/proveedor coinciden y el monto cae dentro de la tolerancia permitida.
+		if ($scoreNumero >= 100 && $scoreProveedor >= 100 && $score >= 99.99 && $difTotalAbs <= self::MONTO_TOLERANCIA) {
 			return 'conciliada';
 		}
 
@@ -329,6 +335,11 @@ class ConciliacionController extends Controller
 
 		$base = max($facturaTotal, $gastoTotal);
 		$diff = abs($facturaTotal - $gastoTotal);
+
+		if ($diff <= self::MONTO_TOLERANCIA) {
+			return 100;
+		}
+
 		$pct = ($diff / $base) * 100;
 
 		return max(0, 100 - min(100, $pct));

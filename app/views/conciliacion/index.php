@@ -56,6 +56,29 @@
 						<td colspan="13" style="padding:12px;border:1px solid #e5e7eb;color:#64748b;">No hay conciliaciones aún. Presiona <strong>Conciliar</strong> para generar coincidencias.</td>
 					</tr>
 				<?php else: ?>
+					<?php
+					$cellOk = 'background:#e8f7ec;';
+					$cellWarn = 'background:#fff8db;';
+					$cellMissing = 'background:#ffe7e7;';
+					$baseCell = 'border:1px solid #e5e7eb;padding:4px 5px;';
+
+					$normText = function ($v) {
+						$t = strtoupper(trim((string) $v));
+						$t = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $t) ?: $t;
+						$t = preg_replace('/\s+/', ' ', $t);
+						return trim($t);
+					};
+					$normNum = function ($v) {
+						$t = strtoupper(trim((string) $v));
+						$t = preg_replace('/[^A-Z0-9]/', '', $t);
+						$t = preg_replace('/^0+/', '', $t);
+						return $t;
+					};
+					$montoTolerancia = 1.00;
+					$eqAmount = function ($a, $b) use ($montoTolerancia) {
+						return abs(((float) $a) - ((float) $b)) <= $montoTolerancia;
+					};
+					?>
 					<?php foreach ($conciliaciones as $row): ?>
 						<?php
 						$color = $row['estado_color'] ?? '#94a3b8';
@@ -71,19 +94,48 @@
 						} elseif ($color === '#fd7e14') {
 							$bg = 'rgba(253,126,20,.10)';
 						}
+
+						$facturaFecha = (string) ($row['factura_fecha'] ?? '');
+						$gastoFecha = (string) ($row['gasto_fecha'] ?? '');
+						$facturaNumero = (string) ($row['factura_numero'] ?? '');
+						$gastoNumero = (string) ($row['gasto_numero'] ?? '');
+						$facturaProveedor = (string) ($row['factura_proveedor'] ?? '');
+						$gastoProveedor = (string) ($row['gasto_proveedor'] ?? '');
+						$facturaIva = (float) ($row['factura_iva'] ?? 0);
+						$gastoIva = (float) ($row['gasto_iva'] ?? 0);
+						$facturaTotal = (float) ($row['factura_total'] ?? 0);
+						$gastoTotal = (float) ($row['gasto_total'] ?? 0);
+
+						$bothFecha = ($facturaFecha !== '' && $gastoFecha !== '');
+						$bothNumero = ($facturaNumero !== '' && $gastoNumero !== '');
+						$bothProveedor = ($facturaProveedor !== '' && $gastoProveedor !== '');
+						$bothIva = (($row['factura_iva'] ?? null) !== null && ($row['gasto_iva'] ?? null) !== null);
+						$bothTotal = (($row['factura_total'] ?? null) !== null && ($row['gasto_total'] ?? null) !== null);
+
+						$eqFecha = $bothFecha && ($facturaFecha === $gastoFecha);
+						$eqNumero = $bothNumero && ($normNum($facturaNumero) === $normNum($gastoNumero));
+						$eqProveedor = $bothProveedor && ($normText($facturaProveedor) === $normText($gastoProveedor));
+						$eqIva = $bothIva && $eqAmount($facturaIva, $gastoIva);
+						$eqTotal = $bothTotal && $eqAmount($facturaTotal, $gastoTotal);
+
+						$styleFecha = $baseCell . ($bothFecha ? ($eqFecha ? $cellOk : $cellWarn) : $cellMissing);
+						$styleNumero = $baseCell . ($bothNumero ? ($eqNumero ? $cellOk : $cellWarn) : $cellMissing);
+						$styleProveedor = $baseCell . ($bothProveedor ? ($eqProveedor ? $cellOk : $cellWarn) : $cellMissing);
+						$styleIva = $baseCell . ($bothIva ? ($eqIva ? $cellOk : $cellWarn) : $cellMissing);
+						$styleTotal = $baseCell . ($bothTotal ? ($eqTotal ? $cellOk : $cellWarn) : $cellMissing);
 						?>
 						<tr style="background:<?= htmlspecialchars($bg) ?>;">
-							<td style="border:1px solid #e5e7eb;padding:4px 5px;"><?= htmlspecialchars($row['factura_fecha'] ?? '') ?></td>
-							<td style="border:1px solid #e5e7eb;padding:4px 5px;"><?= htmlspecialchars($row['factura_numero'] ?? '') ?></td>
-							<td style="border:1px solid #e5e7eb;padding:4px 5px;"><?= htmlspecialchars($row['factura_proveedor'] ?? '') ?></td>
-							<td style="border:1px solid #e5e7eb;padding:4px 5px;text-align:right;"><?= number_format((float) ($row['factura_iva'] ?? 0), 2) ?></td>
-							<td style="border:1px solid #e5e7eb;padding:4px 5px;text-align:right;"><?= number_format((float) ($row['factura_total'] ?? 0), 2) ?></td>
+							<td style="<?= $styleFecha ?>"><?= htmlspecialchars($facturaFecha) ?></td>
+							<td style="<?= $styleNumero ?>"><?= htmlspecialchars($facturaNumero) ?></td>
+							<td style="<?= $styleProveedor ?>"><?= htmlspecialchars($facturaProveedor) ?></td>
+							<td style="<?= $styleIva ?>text-align:right;"><?= number_format($facturaIva, 2) ?></td>
+							<td style="<?= $styleTotal ?>text-align:right;"><?= number_format($facturaTotal, 2) ?></td>
 
-							<td style="border:1px solid #e5e7eb;padding:4px 5px;"><?= htmlspecialchars($row['gasto_fecha'] ?? '') ?></td>
-							<td style="border:1px solid #e5e7eb;padding:4px 5px;"><?= htmlspecialchars($row['gasto_numero'] ?? '') ?></td>
-							<td style="border:1px solid #e5e7eb;padding:4px 5px;"><?= htmlspecialchars($row['gasto_proveedor'] ?? '') ?></td>
-							<td style="border:1px solid #e5e7eb;padding:4px 5px;text-align:right;"><?= number_format((float) ($row['gasto_iva'] ?? 0), 2) ?></td>
-							<td style="border:1px solid #e5e7eb;padding:4px 5px;text-align:right;"><?= number_format((float) ($row['gasto_total'] ?? 0), 2) ?></td>
+							<td style="<?= $styleFecha ?>"><?= htmlspecialchars($gastoFecha) ?></td>
+							<td style="<?= $styleNumero ?>"><?= htmlspecialchars($gastoNumero) ?></td>
+							<td style="<?= $styleProveedor ?>"><?= htmlspecialchars($gastoProveedor) ?></td>
+							<td style="<?= $styleIva ?>text-align:right;"><?= number_format($gastoIva, 2) ?></td>
+							<td style="<?= $styleTotal ?>text-align:right;"><?= number_format($gastoTotal, 2) ?></td>
 
 							<td style="border:1px solid #e5e7eb;padding:4px 5px;text-align:center;font-weight:700;"><?= number_format((float) ($row['match_score'] ?? 0), 2) ?></td>
 							<td style="border:1px solid #e5e7eb;padding:4px 5px;text-align:center;">

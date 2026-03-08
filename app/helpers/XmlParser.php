@@ -71,8 +71,32 @@ class XmlInvoiceParser
 			return date('Y-m-d');
 		}
 
+		$text = trim((string) $datetime);
+
+		// Caso XML estándar ISO-8601: 2025-03-07T14:20:00 o 2025-03-07
+		if (preg_match('/^(\d{4})-(\d{2})-(\d{2})/', $text, $m)) {
+			return $m[1] . '-' . $m[2] . '-' . $m[3];
+		}
+
+		// Formatos locales con slash: asumir d/m/Y para evitar inversión mes/día.
+		$localFormats = [
+			'd/m/Y H:i:s',
+			'd/m/Y H:i',
+			'd/m/Y',
+			'd-m-Y H:i:s',
+			'd-m-Y H:i',
+			'd-m-Y'
+		];
+
+		foreach ($localFormats as $format) {
+			$date = DateTime::createFromFormat($format, $text);
+			if ($date && $date->format($format) === $text) {
+				return $date->format('Y-m-d');
+			}
+		}
+
 		try {
-			return (new DateTime($datetime))->format('Y-m-d');
+			return (new DateTime($text))->format('Y-m-d');
 		} catch (Exception $e) {
 			return date('Y-m-d');
 		}
