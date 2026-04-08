@@ -8,6 +8,17 @@ class Importacion extends Model
 {
     protected $table = 'importaciones';
 
+    public function getLatestByTipo($tipo)
+    {
+        $sql = "SELECT *
+                FROM {$this->table}
+                WHERE tipo = ?
+                ORDER BY fecha_importacion DESC, id DESC
+                LIMIT 1";
+
+        return $this->fetchOne($sql, [$tipo]);
+    }
+
     public function crear($data)
     {
         $sql = "INSERT INTO {$this->table}

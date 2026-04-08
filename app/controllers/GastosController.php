@@ -24,15 +24,13 @@ class GastosController extends Controller
 
 	public function importar()
 	{
-		$this->render('gastos/upload', [
-			'title' => 'Importar Gastos - XMLConcilia'
-		]);
+		$this->redirect($this->url('/conciliacion'));
 	}
 
 	public function subir()
 	{
 		if (!$this->isPost()) {
-			$this->redirect($this->url('/gastos/importar'));
+			$this->redirect($this->url('/conciliacion'));
 		}
 
 		require_once __DIR__ . '/../helpers/FileUploader.php';
@@ -69,16 +67,16 @@ class GastosController extends Controller
 			$importacionModel->cerrar($importacionId, $result['total'], $result['exitosos'], $result['fallidos'], $result['errores']);
 
 			if ($result['exitosos'] === 0) {
-				$this->redirectWithMessage($this->url('/gastos/importar'), 'No se importó ningún gasto. Verifica columnas y formato CSV.', 'error');
+				$this->redirectWithMessage($this->url('/conciliacion'), 'No se importó ningún gasto. Verifica columnas y formato CSV.', 'error');
 			}
 
 			$this->redirectWithMessage(
-				$this->url('/gastos'),
+				$this->url('/conciliacion'),
 				"Importación de gastos completada. Exitosos: {$result['exitosos']}, Fallidos: {$result['fallidos']}",
 				$result['fallidos'] > 0 ? 'warning' : 'success'
 			);
 		} catch (Throwable $e) {
-			$this->redirectWithMessage($this->url('/gastos/importar'), 'Error de importación de gastos: ' . $e->getMessage(), 'error');
+			$this->redirectWithMessage($this->url('/conciliacion'), 'Error de importación de gastos: ' . $e->getMessage(), 'error');
 		}
 	}
 

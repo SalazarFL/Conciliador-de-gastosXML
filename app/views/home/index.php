@@ -55,22 +55,22 @@
         <h2><i class="fas fa-bolt"></i> Acciones Rápidas</h2>
         
         <div class="action-grid">
-            <a href="<?= $this->url('facturas/importar') ?>" class="action-card">
-                <i class="fas fa-file-upload"></i>
-                <h3>Importar Facturas XML</h3>
-                <p>Cargar archivos XML de facturas CFDI</p>
+            <a href="<?= $this->url('conciliacion') ?>" class="action-card">
+                <i class="fas fa-table-columns"></i>
+                <h3>Panel Único</h3>
+                <p>Importar XML, gastos y conciliar en la misma vista</p>
             </a>
 
-            <a href="<?= $this->url('gastos/importar') ?>" class="action-card">
-                <i class="fas fa-upload"></i>
-                <h3>Importar Gastos</h3>
-                <p>Cargar archivo CSV/Excel de gastos</p>
+            <a href="<?= $this->url('conciliacion') ?>" class="action-card">
+                <i class="fas fa-file-circle-check"></i>
+                <h3>Ver Cargas</h3>
+                <p>Revisar facturas y gastos en ventanas flotantes</p>
             </a>
 
-            <a href="<?= $this->url('conciliacion/ejecutar') ?>" class="action-card">
+            <a href="<?= $this->url('conciliacion') ?>" class="action-card">
                 <i class="fas fa-sync"></i>
                 <h3>Ejecutar Conciliación</h3>
-                <p>Realizar conciliación automática</p>
+                <p>Lanzar el proceso de conciliación automática</p>
             </a>
 
             <a href="<?= $this->url('reportes') ?>" class="action-card">

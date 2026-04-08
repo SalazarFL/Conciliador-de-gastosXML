@@ -10,25 +10,59 @@ class ConciliacionController extends Controller
 	public function index()
 	{
 		$rows = [];
+		$facturas = [];
+		$gastos = [];
 		$resumen = [];
 		$estados = [];
+		$stats = [
+			'total_facturas' => 0,
+			'total_gastos' => 0,
+			'total_conciliadas' => 0,
+			'pendientes_revision' => 0,
+			'monto_facturas' => 0,
+			'monto_gastos' => 0,
+		];
+		$lastImports = [
+			'xml' => null,
+			'gastos' => null,
+		];
 		$loadError = null;
 
 		try {
+			$facturaModel = $this->loadModel('Factura');
+			$gastoModel = $this->loadModel('Gasto');
 			$conciliacionModel = $this->loadModel('Conciliacion');
+			$importacionModel = $this->loadModel('Importacion');
+
+			$facturas = $facturaModel->getAllWithImportacion();
+			$gastos = $gastoModel->getAllWithProveedor();
 			$rows = $conciliacionModel->getGridRows();
 			$rows = $this->ordenarPorMatch($rows);
 			$resumen = $conciliacionModel->getResumenRevision();
 			$estados = $conciliacionModel->getEstadoMap();
+
+			$stats['total_facturas'] = count($facturas);
+			$stats['total_gastos'] = count($gastos);
+			$stats['total_conciliadas'] = $conciliacionModel->countByEstado('conciliada');
+			$stats['pendientes_revision'] = $conciliacionModel->countByEstado('requiere_revision') + $conciliacionModel->countByEstado('con_diferencias');
+			$stats['monto_facturas'] = $facturaModel->getTotalMonto();
+			$stats['monto_gastos'] = $gastoModel->getTotalMonto();
+
+			$lastImports['xml'] = $importacionModel->getLatestByTipo('xml');
+			$lastImports['gastos'] = $importacionModel->getLatestByTipo('gastos');
 		} catch (Throwable $e) {
 			$loadError = $e->getMessage();
 		}
 
 		$this->render('conciliacion/index', [
 			'title' => 'Conciliación - XMLConcilia',
+			'facturas' => $facturas,
+			'gastos' => $gastos,
 			'conciliaciones' => $rows,
 			'resumen' => $resumen,
 			'estados' => $estados,
+			'stats' => $stats,
+			'lastImports' => $lastImports,
 			'load_error' => $loadError
 		]);
 	}
@@ -95,6 +129,26 @@ class ConciliacionController extends Controller
 		}
 	}
 
+	public function limpiarPruebas()
+	{
+		if (!$this->isPost()) {
+			$this->redirect($this->url('/conciliacion'));
+		}
+
+		try {
+			$facturaModel = $this->loadModel('Factura');
+			$conciliacionModel = $this->loadModel('Conciliacion');
+
+			// Primero conciliaciones por integridad referencial, luego facturas.
+			$conciliacionModel->clearAll();
+			$facturaModel->clearAll();
+
+			$this->redirectWithMessage($this->url('/conciliacion'), 'Se eliminaron facturas y conciliaciones para pruebas.', 'success');
+		} catch (Throwable $e) {
+			$this->redirectWithMessage($this->url('/conciliacion'), 'No se pudo limpiar los datos de prueba: ' . $e->getMessage(), 'error');
+		}
+	}
+
 	public function resultados()
 	{
 		$this->redirect($this->url('/conciliacion'));
@@ -151,18 +205,47 @@ class ConciliacionController extends Controller
 				$match = max(0, 100 - min(100, $pct));
 			}
 			$row['match_score'] = round((float) $match, 2);
+			$row['estado_priority'] = $this->estadoPriority((string) ($row['estado_codigo'] ?? ''));
 		}
 		unset($row);
 
 		usort($rows, function ($a, $b) {
-			if ($a['match_score'] == $b['match_score']) {
-				return strcmp((string) ($b['fecha_conciliacion'] ?? ''), (string) ($a['fecha_conciliacion'] ?? ''));
+			if (($a['estado_priority'] ?? 99) !== ($b['estado_priority'] ?? 99)) {
+				return ($a['estado_priority'] < $b['estado_priority']) ? -1 : 1;
 			}
 
-			return ($a['match_score'] < $b['match_score']) ? 1 : -1;
+			// En filas "mal" (prioridad 1): las peores (menor match) primero.
+			if (($a['estado_priority'] ?? 99) === 1 && $a['match_score'] !== $b['match_score']) {
+				return ($a['match_score'] < $b['match_score']) ? -1 : 1;
+			}
+
+			// En revisión/conciliadas: mayor match arriba.
+			if ($a['match_score'] !== $b['match_score']) {
+				return ($a['match_score'] < $b['match_score']) ? 1 : -1;
+			}
+
+			return strcmp((string) ($b['fecha_conciliacion'] ?? ''), (string) ($a['fecha_conciliacion'] ?? ''));
 		});
 
 		return $rows;
+	}
+
+	private function estadoPriority($codigo)
+	{
+		// 1: mal, 2: requiere revision, 3: conciliada, 4+: otros.
+		if (in_array($codigo, ['con_diferencias', 'pendiente', 'gasto_sin_xml'], true)) {
+			return 1;
+		}
+
+		if ($codigo === 'requiere_revision') {
+			return 2;
+		}
+
+		if ($codigo === 'conciliada') {
+			return 3;
+		}
+
+		return 4;
 	}
 
 	private function buscarMejorGasto(array $factura, array $gastos, array $usados)
@@ -194,7 +277,9 @@ class ConciliacionController extends Controller
 
 			$scoreMonto = $this->scoreMonto(
 				(float) ($factura['total'] ?? 0),
-				(float) ($gasto['suma_total'] ?? 0)
+				(float) ($gasto['suma_total'] ?? 0),
+				(float) ($factura['iva'] ?? 0),
+				(float) ($gasto['suma_iva'] ?? 0)
 			);
 
 			$scoreTotal = round(($scoreNumero * 0.50) + ($scoreProveedor * 0.30) + ($scoreMonto * 0.20), 2);
@@ -238,6 +323,7 @@ class ConciliacionController extends Controller
 		$pct = $referencia > 0 ? (abs($difTotal) / $referencia) * 100 : 0;
 
 		$match['diferencia_total_abs'] = abs($difTotal);
+		$match['diferencia_iva_abs'] = abs($difIva);
 		$estadoCodigo = $this->resolverEstado($factura, $gasto, $match, $pct, $estadoMap);
 		$estadoId = (int) $estadoMap[$estadoCodigo]['id'];
 
@@ -277,9 +363,16 @@ class ConciliacionController extends Controller
 		$scoreNumero = (float) ($match['score_numero'] ?? 0);
 		$scoreProveedor = (float) ($match['score_proveedor'] ?? 0);
 		$difTotalAbs = abs((float) ($match['diferencia_total_abs'] ?? 0));
+		$difIvaAbs = abs((float) ($match['diferencia_iva_abs'] ?? 0));
 
-		// Verde cuando numero/proveedor coinciden y el monto cae dentro de la tolerancia permitida.
-		if ($scoreNumero >= 100 && $scoreProveedor >= 100 && $score >= 99.99 && $difTotalAbs <= self::MONTO_TOLERANCIA) {
+		// Verde cuando numero/proveedor coinciden y total+IVA caen dentro de tolerancia.
+		if (
+			$scoreNumero >= 100 &&
+			$scoreProveedor >= 100 &&
+			$score >= 99.99 &&
+			$difTotalAbs <= self::MONTO_TOLERANCIA &&
+			$difIvaAbs <= self::MONTO_TOLERANCIA
+		) {
 			return 'conciliada';
 		}
 
@@ -324,17 +417,35 @@ class ConciliacionController extends Controller
 		return $pct;
 	}
 
-	private function scoreMonto($facturaTotal, $gastoTotal)
+	private function scoreMonto($facturaTotal, $gastoTotal, $facturaIva, $gastoIva)
 	{
 		$facturaTotal = (float) $facturaTotal;
 		$gastoTotal = (float) $gastoTotal;
+		$facturaIva = (float) $facturaIva;
+		$gastoIva = (float) $gastoIva;
 
-		if ($facturaTotal <= 0 || $gastoTotal <= 0) {
+		$scoreTotal = $this->scorePorDiferencia($facturaTotal, $gastoTotal);
+		$scoreIva = $this->scorePorDiferencia($facturaIva, $gastoIva);
+
+		// El monto de IVA impacta explícitamente el match global.
+		return round(($scoreTotal * 0.70) + ($scoreIva * 0.30), 2);
+	}
+
+	private function scorePorDiferencia($valorA, $valorB)
+	{
+		$valorA = (float) $valorA;
+		$valorB = (float) $valorB;
+
+		if ($valorA <= 0 && $valorB <= 0) {
+			return 100;
+		}
+
+		if ($valorA <= 0 || $valorB <= 0) {
 			return 0;
 		}
 
-		$base = max($facturaTotal, $gastoTotal);
-		$diff = abs($facturaTotal - $gastoTotal);
+		$base = max($valorA, $valorB);
+		$diff = abs($valorA - $valorB);
 
 		if ($diff <= self::MONTO_TOLERANCIA) {
 			return 100;

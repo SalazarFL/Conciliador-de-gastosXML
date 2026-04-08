@@ -142,14 +142,8 @@
                 <li><a href="<?= defined('APP_URL') ? APP_URL : '/xmlconcilia/public' ?>/" <?= ($_SERVER['REQUEST_URI'] ?? '') == '/' ? 'class="active"' : '' ?>>
                     <i class="fas fa-home"></i> Inicio
                 </a></li>
-                <li><a href="<?= defined('APP_URL') ? APP_URL : '/xmlconcilia/public' ?>/facturas">
-                    <i class="fas fa-file-invoice"></i> Facturas
-                </a></li>
-                <li><a href="<?= defined('APP_URL') ? APP_URL : '/xmlconcilia/public' ?>/gastos">
-                    <i class="fas fa-receipt"></i> Gastos
-                </a></li>
                 <li><a href="<?= defined('APP_URL') ? APP_URL : '/xmlconcilia/public' ?>/conciliacion">
-                    <i class="fas fa-sync"></i> Conciliación
+                    <i class="fas fa-table-columns"></i> Panel Único
                 </a></li>
                 <li><a href="<?= defined('APP_URL') ? APP_URL : '/xmlconcilia/public' ?>/reportes">
                     <i class="fas fa-chart-bar"></i> Reportes

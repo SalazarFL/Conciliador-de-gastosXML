@@ -102,4 +102,13 @@ class Factura extends Model
         $sql = "SELECT COALESCE(SUM(total), 0) FROM {$this->table}";
         return (float) $this->fetchColumn($sql);
     }
+
+    /**
+     * Eliminar todas las facturas (uso en pruebas)
+     */
+    public function clearAll()
+    {
+        $sql = "DELETE FROM {$this->table}";
+        return $this->execute($sql);
+    }
 }

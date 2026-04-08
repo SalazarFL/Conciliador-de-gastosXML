@@ -24,20 +24,21 @@ class FacturasController extends Controller
 
 	public function importar()
 	{
-		$this->render('facturas/upload', [
-			'title' => 'Importar Facturas - XMLConcilia'
-		]);
+		$this->redirect($this->url('/conciliacion'));
 	}
 
 	public function subir()
 	{
 		if (!$this->isPost()) {
-			$this->redirect($this->url('/facturas/importar'));
+			$this->redirect($this->url('/conciliacion'));
 		}
 
 		require_once __DIR__ . '/../helpers/FileUploader.php';
 		if (!class_exists('XmlInvoiceParser', false)) {
 			require_once __DIR__ . '/../helpers/XmlParser.php';
+		}
+		if (!class_exists('PdfInvoiceParser', false)) {
+			require_once __DIR__ . '/../helpers/PdfParser.php';
 		}
 
 		$config = require __DIR__ . '/../config/config.php';
@@ -61,52 +62,95 @@ class FacturasController extends Controller
 			$exitosos = 0;
 			$fallidos = 0;
 			$errores = [];
+			$sinPlantilla = [];
 
 			foreach ($uploadedFiles as $file) {
+				$ext = strtolower(pathinfo($file['original_name'] ?? '', PATHINFO_EXTENSION));
+				$isPdf = ($ext === 'pdf');
+
 				try {
-					$xmlData = XmlInvoiceParser::parseCfdiFromFile($file['path']);
-					$proveedorId = $proveedorModel->obtenerOCrear($xmlData['rfc_emisor'], $xmlData['razon_social_emisor']);
+					if ($isPdf) {
+						$docData = PdfInvoiceParser::parseInvoiceFromPdf($file['path'], [
+							'max_ocr_pages' => 3,
+							'ocr_language' => 'spa+eng',
+							'require_template' => true,
+						]);
+					} else {
+						$docData = XmlInvoiceParser::parseCfdiFromFile($file['path']);
+					}
+
+					$proveedorId = $proveedorModel->obtenerOCrear($docData['rfc_emisor'] ?? '', $docData['razon_social_emisor'] ?? '');
+
+					$metadata = $docData['metadata'] ?? [];
+					if (!is_array($metadata)) {
+						$metadata = [];
+					}
+					$metadata['origen_archivo'] = $isPdf ? 'pdf' : 'xml';
+
+					$hashDocumento = (string) ($docData['hash_documento'] ?? ($docData['hash_xml'] ?? null));
 
 					$facturaModel->crear([
 						'importacion_id' => $importacionId,
-						'consecutivo_completo' => $xmlData['consecutivo_completo'],
-						'numero_factura_asistente' => $xmlData['numero_factura_asistente'],
+						'consecutivo_completo' => $docData['consecutivo_completo'],
+						'numero_factura_asistente' => $docData['numero_factura_asistente'],
 						'proveedor_id' => $proveedorId,
-						'fecha_emision' => $xmlData['fecha_emision'],
-						'subtotal' => $xmlData['subtotal'],
-						'iva' => $xmlData['iva'],
-						'total' => $xmlData['total'],
-						'moneda' => $xmlData['moneda'],
-						'tipo_comprobante' => $xmlData['tipo_comprobante'],
+						'fecha_emision' => $docData['fecha_emision'],
+						'subtotal' => $docData['subtotal'],
+						'iva' => $docData['iva'],
+						'total' => $docData['total'],
+						'moneda' => $docData['moneda'],
+						'tipo_comprobante' => $docData['tipo_comprobante'] ?? null,
 						'archivo_xml' => $file['original_name'],
-						'ruta_xml' => $file['path'],
-						'hash_xml' => $xmlData['hash_xml'],
-						'xml_contenido' => $xmlData['xml_contenido']
+						'ruta_xml' => $isPdf ? null : $file['path'],
+						'hash_xml' => $hashDocumento !== '' ? $hashDocumento : null,
+						'xml_contenido' => $isPdf ? null : ($docData['xml_contenido'] ?? null),
+						'metadata' => json_encode($metadata, JSON_UNESCAPED_UNICODE)
 					]);
 
 					$exitosos++;
 				} catch (Throwable $e) {
 					$fallidos++;
+					if (stripos($e->getMessage(), 'sin plantilla de parseo') !== false) {
+						$sinPlantilla[] = $file['original_name'];
+					}
 					$errores[] = [
 						'archivo' => $file['original_name'],
 						'error' => $e->getMessage()
 					];
+				} finally {
+					// Los PDF se usan solo para extracción y luego se descartan.
+					if ($isPdf && !empty($file['path']) && is_file($file['path'])) {
+						@unlink($file['path']);
+					}
 				}
 			}
 
 			$importacionModel->cerrar($importacionId, count($uploadedFiles), $exitosos, $fallidos, $errores);
 
 			if ($exitosos === 0) {
-				$this->redirectWithMessage($this->url('/facturas/importar'), 'No se importó ninguna factura. Revisa formato XML y duplicados.', 'error');
+				if (!empty($sinPlantilla)) {
+					$this->redirectWithMessage(
+						$this->url('/conciliacion'),
+						'No se importó ninguna factura porque los PDF requieren plantilla de parseo por proveedor. Pendientes: ' . implode(', ', $sinPlantilla),
+						'warning'
+					);
+				}
+
+				$this->redirectWithMessage($this->url('/conciliacion'), 'No se importó ninguna factura. Revisa formatos XML/PDF, OCR y duplicados.', 'error');
+			}
+
+			$msgPlantilla = '';
+			if (!empty($sinPlantilla)) {
+				$msgPlantilla = ' | Sin plantilla: ' . count($sinPlantilla) . ' (' . implode(', ', $sinPlantilla) . ')';
 			}
 
 			$this->redirectWithMessage(
-				$this->url('/facturas'),
-				"Importación completada. Exitosos: {$exitosos}, Fallidos: {$fallidos}",
+				$this->url('/conciliacion'),
+				"Importación de documentos completada. Exitosos: {$exitosos}, Fallidos: {$fallidos}{$msgPlantilla}",
 				$fallidos > 0 ? 'warning' : 'success'
 			);
 		} catch (Throwable $e) {
-			$this->redirectWithMessage($this->url('/facturas/importar'), 'Error de importación XML: ' . $e->getMessage(), 'error');
+			$this->redirectWithMessage($this->url('/conciliacion'), 'Error de importación XML/PDF: ' . $e->getMessage(), 'error');
 		}
 	}
 

@@ -17,19 +17,19 @@
                     <h4 style="margin-bottom: 15px;">Enlaces Rápidos</h4>
                     <ul style="list-style: none; padding: 0;">
                         <li style="margin-bottom: 8px;">
-                            <a href="<?= defined('APP_URL') ? APP_URL : '/xmlconcilia/public' ?>/facturas/importar" style="color: #3498db; text-decoration: none;">
-                                <i class="fas fa-file-upload"></i> Importar Facturas
+                            <a href="<?= defined('APP_URL') ? APP_URL : '/xmlconcilia/public' ?>/conciliacion" style="color: #3498db; text-decoration: none;">
+                                <i class="fas fa-table-columns"></i> Panel Único
                             </a>
                         </li>
                         <li style="margin-bottom: 8px;">
-                            <a href="<?= defined('APP_URL') ? APP_URL : '/xmlconcilia/public' ?>/gastos/importar" style="color: #3498db; text-decoration: none;">
-                                <i class="fas fa-upload"></i> Importar Gastos
+                            <a href="<?= defined('APP_URL') ? APP_URL : '/xmlconcilia/public' ?>/reportes" style="color: #3498db; text-decoration: none;">
+                                <i class="fas fa-chart-bar"></i> Reportes
                             </a>
                         </li>
                         <li style="margin-bottom: 8px;">
-                            <a href="<?= defined('APP_URL') ? APP_URL : '/xmlconcilia/public' ?>/conciliacion/ejecutar" style="color: #3498db; text-decoration: none;">
-                                <i class="fas fa-sync"></i> Ejecutar Conciliación
-                            </a>
+                            <span style="color: #8fb7d8; text-decoration: none;">
+                                <i class="fas fa-layer-group"></i> Listados desde el panel
+                            </span>
                         </li>
                     </ul>
                 </div>

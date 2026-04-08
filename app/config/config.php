@@ -25,7 +25,7 @@ return [
     'uploads_path' => dirname(__DIR__, 2) . '/public/uploads',
     'max_upload_size' => 10485760, // 10MB en bytes
     'allowed_extensions' => [
-        'xml' => ['xml'],
+        'xml' => ['xml', 'pdf'],
         'gastos' => ['csv', 'xlsx', 'xls']
     ],
     

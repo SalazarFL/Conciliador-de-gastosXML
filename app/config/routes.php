@@ -28,6 +28,7 @@ $router->post('/gastos/eliminar/{id}', 'GastosController@eliminar');
 // --- RUTAS DE CONCILIACIÓN ---
 $router->get('/conciliacion', 'ConciliacionController@index');
 $router->post('/conciliacion/ejecutar', 'ConciliacionController@ejecutar');
+$router->post('/conciliacion/limpiar-pruebas', 'ConciliacionController@limpiarPruebas');
 $router->get('/conciliacion/resultados', 'ConciliacionController@resultados');
 $router->get('/conciliacion/pendientes', 'ConciliacionController@pendientes');
 $router->post('/conciliacion/revisar/{id}', 'ConciliacionController@revisar');
