@@ -73,14 +73,410 @@ $formatImportDate = function ($value) {
 				<div style="margin-top:4px;"><strong>Archivo:</strong> <?= htmlspecialchars($lastImports['xml']['archivo_origen'] ?? 'Sin importaciones') ?></div>
 			</div>
 
-			<form method="post" action="<?= $baseUrl ?>/facturas/subir" enctype="multipart/form-data">
-				<label for="xml_files" style="display:block;margin-bottom:8px;font-size:13px;font-weight:700;color:#14324a;">Archivos XML o PDF</label>
-				<input type="file" id="xml_files" name="xml_files[]" accept=".xml,.pdf,application/pdf,text/xml" multiple required style="display:block;width:100%;padding:10px;border:1px dashed #9fc3de;border-radius:14px;background:#fbfdff;margin-bottom:10px;">
-				<div style="font-size:12px;color:#60717f;margin-bottom:14px;">Puedes seleccionar varios archivos. Los PDF solo se usan para extracción y luego se eliminan.</div>
-				<button type="submit" style="background:#0f4c81;color:#fff;border:none;border-radius:12px;padding:11px 16px;font-weight:700;cursor:pointer;">
+			<?php $phpMaxFiles = max(1, (int) ini_get('max_file_uploads')); ?>
+			<form method="post" action="<?= $baseUrl ?>/facturas/subir" enctype="multipart/form-data" id="form-xml-upload">
+				<div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px;">
+					<label for="xml_files" style="font-size:13px;font-weight:700;color:#14324a;">Archivos XML o PDF</label>
+					<span id="xml-files-count" style="font-size:12px;color:#60717f;"></span>
+				</div>
+				<input type="file" id="xml_files" name="xml_files[]" accept=".xml,.pdf,application/pdf,text/xml" multiple required style="display:block;width:100%;padding:10px;border:1px dashed #9fc3de;border-radius:14px;background:#fbfdff;margin-bottom:8px;">
+				<div id="xml-files-warning" style="margin-bottom:8px;padding:8px 10px;border-radius:10px;background:#eef6ff;border:1px solid #bfd7ef;color:#1f4d72;font-size:12px;">
+					⚠ El servidor solo puede procesar <strong><?= $phpMaxFiles ?></strong> archivos por envío. Seleccionaste más — los archivos que pasen ese límite serán ignorados. Importa en lotes de <?= $phpMaxFiles ?> o menos.
+				</div>
+				<div style="font-size:12px;color:#60717f;margin-bottom:14px;">Los PDF solo se usan para extracción y luego se eliminan del servidor.</div>
+				<noscript>
+					<div style="margin-bottom:8px;padding:8px 10px;border-radius:10px;background:#fff3cd;border:1px solid #ffc107;color:#856404;font-size:12px;">
+						Sin JavaScript, el servidor solo acepta hasta <?= $phpMaxFiles ?> archivos por envio.
+					</div>
+				</noscript>
+				<button type="submit" id="xml-upload-submit" style="background:#0f4c81;color:#fff;border:none;border-radius:12px;padding:11px 16px;font-weight:700;cursor:pointer;">
 					Importar documentos
 				</button>
 			</form>
+			<div id="xml-queue-status" style="display:none;margin-top:14px;padding:14px;border:1px solid #d7e8f4;border-radius:16px;background:#f8fbff;">
+				<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+					<strong style="color:#14324a;">Importacion en cola</strong>
+					<span id="xml-queue-phase" style="font-size:12px;font-weight:700;color:#0f4c81;">Preparando</span>
+				</div>
+				<div style="height:10px;background:#dbeaf6;border-radius:999px;overflow:hidden;margin-bottom:10px;">
+					<div id="xml-queue-progress-bar" style="width:0%;height:100%;background:linear-gradient(90deg,#0f4c81,#1d7dd8);transition:width .2s ease;"></div>
+				</div>
+				<div id="xml-queue-summary" style="font-size:12px;color:#38556d;margin-bottom:12px;">Esperando archivos.</div>
+				<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(92px,1fr));gap:8px;font-size:12px;">
+					<div style="padding:8px;border:1px solid #dce9f4;border-radius:12px;background:#fff;"><strong id="queue-count-uploaded">0</strong><div style="margin-top:4px;color:#60717f;">Subidos</div></div>
+					<div style="padding:8px;border:1px solid #dce9f4;border-radius:12px;background:#fff;"><strong id="queue-count-pending">0</strong><div style="margin-top:4px;color:#60717f;">Pendientes</div></div>
+					<div style="padding:8px;border:1px solid #dce9f4;border-radius:12px;background:#fff;"><strong id="queue-count-processing">0</strong><div style="margin-top:4px;color:#60717f;">Procesando</div></div>
+					<div style="padding:8px;border:1px solid #dce9f4;border-radius:12px;background:#fff;"><strong id="queue-count-imported">0</strong><div style="margin-top:4px;color:#60717f;">Importados</div></div>
+					<div style="padding:8px;border:1px solid #dce9f4;border-radius:12px;background:#fff;"><strong id="queue-count-duplicates">0</strong><div style="margin-top:4px;color:#60717f;">Duplicados</div></div>
+					<div style="padding:8px;border:1px solid #dce9f4;border-radius:12px;background:#fff;"><strong id="queue-count-templates">0</strong><div style="margin-top:4px;color:#60717f;">Sin plantilla</div></div>
+					<div style="padding:8px;border:1px solid #dce9f4;border-radius:12px;background:#fff;"><strong id="queue-count-errors">0</strong><div style="margin-top:4px;color:#60717f;">Errores</div></div>
+				</div>
+				<div id="xml-queue-errors" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid #d7e8f4;">
+					<div style="font-size:12px;font-weight:700;color:#14324a;margin-bottom:6px;">Incidencias recientes</div>
+					<div id="xml-queue-errors-list" style="display:grid;gap:6px;font-size:12px;color:#6b1d1d;"></div>
+				</div>
+			</div>
+			<script>
+			(function () {
+				var form = document.getElementById('form-xml-upload');
+				var input = document.getElementById('xml_files');
+				var submitBtn = document.getElementById('xml-upload-submit');
+				var countEl = document.getElementById('xml-files-count');
+				var warnEl = document.getElementById('xml-files-warning');
+				var queueBox = document.getElementById('xml-queue-status');
+				var phaseEl = document.getElementById('xml-queue-phase');
+				var summaryEl = document.getElementById('xml-queue-summary');
+				var progressBar = document.getElementById('xml-queue-progress-bar');
+				var errorsBox = document.getElementById('xml-queue-errors');
+				var errorsList = document.getElementById('xml-queue-errors-list');
+				var maxFiles = <?= $phpMaxFiles ?>;
+				var baseUrl = <?= json_encode($baseUrl, JSON_UNESCAPED_UNICODE) ?>;
+				var chunkSize = Math.max(1, Math.min(20, maxFiles));
+				var storageKey = 'xmlconcilia_active_invoice_queue';
+				var countEls = {
+					uploaded: document.getElementById('queue-count-uploaded'),
+					pending: document.getElementById('queue-count-pending'),
+					processing: document.getElementById('queue-count-processing'),
+					imported: document.getElementById('queue-count-imported'),
+					duplicates: document.getElementById('queue-count-duplicates'),
+					templates: document.getElementById('queue-count-templates'),
+					errors: document.getElementById('queue-count-errors')
+				};
+
+				if (!form || !input) return;
+
+				warnEl.textContent = 'La carga en cola divide automaticamente en bloques de hasta ' + chunkSize + ' archivos por request y los procesa poco a poco.';
+
+				input.addEventListener('change', function () {
+					var n = input.files ? input.files.length : 0;
+					if (n > 0) {
+						countEl.textContent = n + ' archivo' + (n !== 1 ? 's' : '') + ' seleccionado' + (n !== 1 ? 's' : '');
+					} else {
+						countEl.textContent = '';
+					}
+				});
+
+				if (!window.fetch || !window.FormData) {
+					return;
+				}
+
+				var storedQueue = loadStoredQueue();
+				if (storedQueue && storedQueue.importacionId) {
+					resumeExistingQueue(storedQueue);
+				}
+
+				form.addEventListener('submit', function (event) {
+					var files = input.files ? Array.prototype.slice.call(input.files) : [];
+					if (!files.length) {
+						return;
+					}
+
+					event.preventDefault();
+					runQueue(files);
+				});
+
+				async function runQueue(files) {
+					var importacionId = 0;
+					var uploadedClient = 0;
+					var containsPdf = files.some(function (file) {
+						return /\.pdf$/i.test(file.name || '');
+					});
+					var processLimit = containsPdf ? 1 : 10;
+
+					try {
+						setBusy(true);
+						resetQueueBox();
+						showQueueBox();
+						setPhase('Iniciando cola');
+						setSummary('Preparando ' + files.length + ' archivo' + (files.length !== 1 ? 's' : '') + '.');
+
+						var initResponse = await postForm(baseUrl + '/facturas/cola/iniciar', {
+							total_esperado: String(files.length),
+							archivo_origen: files.length === 1 ? files[0].name : 'multiple_xml_files'
+						});
+						importacionId = parseInt(initResponse.importacion_id || 0, 10);
+						saveStoredQueue({
+							importacionId: importacionId,
+							selectedCount: files.length,
+							processLimit: processLimit
+						});
+						renderQueueState(initResponse.estado, files.length, uploadedClient);
+
+						for (var start = 0; start < files.length; start += chunkSize) {
+							var chunk = files.slice(start, start + chunkSize);
+							var uploadData = new FormData();
+							uploadData.append('importacion_id', String(importacionId));
+
+							chunk.forEach(function (file) {
+								uploadData.append('xml_files[]', file, file.name);
+							});
+
+							setPhase('Subiendo a cola');
+							setSummary('Subiendo bloque ' + (Math.floor(start / chunkSize) + 1) + ' de ' + Math.ceil(files.length / chunkSize) + '.');
+
+							var uploadResponse = await fetchJson(baseUrl + '/facturas/cola/agregar', {
+								method: 'POST',
+								body: uploadData
+							});
+
+							uploadedClient += chunk.length;
+							renderQueueState(uploadResponse.estado, files.length, uploadedClient);
+						}
+
+						await continueProcessing(importacionId, files.length, uploadedClient, processLimit);
+
+						var finalState = await fetchJson(baseUrl + '/facturas/cola/estado/' + encodeURIComponent(importacionId));
+						renderQueueState(finalState.estado, files.length, uploadedClient);
+						setPhase('Cola completada');
+						setSummary('La importacion termino. Recarga la pagina para ver contadores y listados actualizados.');
+						clearStoredQueue();
+					} catch (error) {
+						showQueueBox();
+						setPhase('Error');
+						setSummary(error.message || 'No fue posible completar la importacion.');
+					} finally {
+						setBusy(false);
+					}
+				}
+
+				async function continueProcessing(importacionId, selectedCount, uploadedClient, processLimit) {
+					var idleRetries = 0;
+
+					while (true) {
+						setPhase('Procesando cola');
+						var processResponse = await postForm(baseUrl + '/facturas/cola/procesar', {
+							importacion_id: String(importacionId),
+							limit: String(processLimit)
+						});
+
+						renderQueueState(processResponse.estado, selectedCount, uploadedClient);
+
+						if (processResponse.completed) {
+							break;
+						}
+
+						if (Number(processResponse.processed_in_batch || 0) > 0) {
+							idleRetries = 0;
+							continue;
+						}
+
+						var state = processResponse.estado || {};
+						var stats = state.stats || {};
+						var hasWorkLeft = Number(stats.pendiente || 0) > 0 || Number(stats.procesando || 0) > 0;
+
+						if (!hasWorkLeft) {
+							break;
+						}
+
+						idleRetries++;
+						if (idleRetries > 40) {
+							throw new Error('La cola sigue ocupada demasiado tiempo. Puedes recargar la pagina y se reanudara sola.');
+						}
+
+						await sleep(3000);
+					}
+				}
+
+				async function resumeExistingQueue(storedQueue) {
+					try {
+						setBusy(true);
+						showQueueBox();
+						setPhase('Reanudando cola');
+						setSummary('Retomando una importacion pendiente.');
+
+						var statusResponse = await fetchJson(baseUrl + '/facturas/cola/estado/' + encodeURIComponent(storedQueue.importacionId));
+						var state = statusResponse.estado || {};
+						var selectedCount = Number(storedQueue.selectedCount || state.expected_total || 0);
+						var uploadedClient = Number((state.metadata || {}).archivos_subidos || 0);
+
+						renderQueueState(state, selectedCount, uploadedClient);
+
+						if (state.completed) {
+							clearStoredQueue();
+							setBusy(false);
+							return;
+						}
+
+						await continueProcessing(
+							storedQueue.importacionId,
+							selectedCount,
+							uploadedClient,
+							Number(storedQueue.processLimit || 1)
+						);
+
+						var finalState = await fetchJson(baseUrl + '/facturas/cola/estado/' + encodeURIComponent(storedQueue.importacionId));
+						renderQueueState(finalState.estado, selectedCount, uploadedClient);
+						if ((finalState.estado || {}).completed) {
+							clearStoredQueue();
+							setPhase('Cola completada');
+						}
+					} catch (error) {
+						showQueueBox();
+						setPhase('Error');
+						setSummary('La cola pendiente no pudo reanudarse automaticamente: ' + (error.message || 'error desconocido'));
+					} finally {
+						setBusy(false);
+					}
+				}
+
+				function renderQueueState(state, selectedCount, uploadedClient) {
+					state = state || {};
+					var stats = state.stats || {};
+					var metadata = state.metadata || {};
+					var uploaded = Number(metadata.archivos_subidos || stats.total || 0);
+					var expected = Number(state.expected_total || metadata.total_esperado || selectedCount || uploaded);
+					var progress = Number(state.progress_percent || metadata.progress_percent || 0);
+					var issues = Array.isArray(state.recent_issues) ? state.recent_issues : [];
+
+					if (selectedCount > 0 && uploadedClient < selectedCount) {
+						progress = Math.max(progress, Math.round((uploadedClient / selectedCount) * 20));
+					}
+
+					progressBar.style.width = Math.max(0, Math.min(100, progress)) + '%';
+
+					countEls.uploaded.textContent = String(uploaded);
+					countEls.pending.textContent = String(Number(stats.pendiente || 0));
+					countEls.processing.textContent = String(Number(stats.procesando || 0));
+					countEls.imported.textContent = String(Number(stats.importado || 0));
+					countEls.duplicates.textContent = String(Number(stats.duplicado || 0));
+					countEls.templates.textContent = String(Number(stats.sin_plantilla || 0));
+					countEls.errors.textContent = String(Number(stats.error || 0));
+
+					setPhase(mapPhase(metadata.estado_cola || 'subiendo'));
+					setSummary(
+						'Seleccionados: ' + selectedCount +
+						' | En cola: ' + uploaded +
+						'/' + expected +
+						' | Importados: ' + Number(stats.importado || 0) +
+						' | Pendientes: ' + Number(stats.pendiente || 0)
+					);
+
+					if (issues.length) {
+						errorsBox.style.display = 'block';
+						errorsList.innerHTML = issues.map(function (issue) {
+							return '<div style="padding:8px;border:1px solid #f2c7c7;border-radius:10px;background:#fff7f7;">'
+								+ '<strong>' + escapeHtml(issue.archivo_original || 'Archivo') + '</strong>'
+								+ ' - ' + escapeHtml(issue.estado || 'error')
+								+ '<div style="margin-top:4px;color:#7f1d1d;">' + escapeHtml(issue.error_texto || 'Sin detalle.') + '</div>'
+								+ '</div>';
+						}).join('');
+					} else {
+						errorsBox.style.display = 'none';
+						errorsList.innerHTML = '';
+					}
+				}
+
+				function resetQueueBox() {
+					progressBar.style.width = '0%';
+					errorsBox.style.display = 'none';
+					errorsList.innerHTML = '';
+					Object.keys(countEls).forEach(function (key) {
+						countEls[key].textContent = '0';
+					});
+				}
+
+				function setBusy(isBusy) {
+					input.disabled = isBusy;
+					submitBtn.disabled = isBusy;
+					submitBtn.style.opacity = isBusy ? '0.7' : '1';
+					submitBtn.style.cursor = isBusy ? 'wait' : 'pointer';
+					submitBtn.textContent = isBusy ? 'Procesando cola...' : 'Importar documentos';
+				}
+
+				function showQueueBox() {
+					queueBox.style.display = 'block';
+				}
+
+				function setPhase(text) {
+					phaseEl.textContent = text;
+				}
+
+				function setSummary(text) {
+					summaryEl.textContent = text;
+				}
+
+				function mapPhase(value) {
+					if (value === 'procesando') return 'Procesando cola';
+					if (value === 'en_cola') return 'En cola';
+					if (value === 'completada') return 'Completada';
+					return 'Subiendo a cola';
+				}
+
+				function escapeHtml(value) {
+					return String(value || '')
+						.replace(/&/g, '&amp;')
+						.replace(/</g, '&lt;')
+						.replace(/>/g, '&gt;')
+						.replace(/"/g, '&quot;')
+						.replace(/'/g, '&#039;');
+				}
+
+				async function postForm(url, data) {
+					var formData = new FormData();
+					Object.keys(data).forEach(function (key) {
+						formData.append(key, data[key]);
+					});
+
+					return fetchJson(url, {
+						method: 'POST',
+						body: formData
+					});
+				}
+
+				async function fetchJson(url, options) {
+					var response = await fetch(url, options || {});
+					var text = await response.text();
+					var payload = {};
+
+					try {
+						payload = text ? JSON.parse(text) : {};
+					} catch (error) {
+						throw new Error(text || 'La respuesta del servidor no fue JSON valido.');
+					}
+
+					if (!response.ok || payload.ok === false) {
+						throw new Error(payload.message || 'Error de comunicacion con el servidor.');
+					}
+
+					return payload;
+				}
+
+				function sleep(ms) {
+					return new Promise(function (resolve) {
+						window.setTimeout(resolve, ms);
+					});
+				}
+
+				function saveStoredQueue(data) {
+					if (!window.localStorage) {
+						return;
+					}
+
+					window.localStorage.setItem(storageKey, JSON.stringify(data));
+				}
+
+				function loadStoredQueue() {
+					if (!window.localStorage) {
+						return null;
+					}
+
+					try {
+						var raw = window.localStorage.getItem(storageKey);
+						return raw ? JSON.parse(raw) : null;
+					} catch (error) {
+						return null;
+					}
+				}
+
+				function clearStoredQueue() {
+					if (!window.localStorage) {
+						return;
+					}
+
+					window.localStorage.removeItem(storageKey);
+				}
+			})();
+			</script>
 		</section>
 
 		<section style="background:#fff;border:1px solid #e6dccd;border-radius:20px;padding:20px;box-shadow:0 12px 30px rgba(15,23,42,.05);">

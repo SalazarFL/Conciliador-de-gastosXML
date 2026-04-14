@@ -91,6 +91,21 @@ class Proveedor extends Model
     }
     
     /**
+     * Listado de nombres únicos de proveedores (facturas + gastos)
+     */
+    public function getListado()
+    {
+        $sql = "SELECT DISTINCT nombre FROM (
+                    SELECT p.razon_social AS nombre FROM {$this->table} p
+                    WHERE p.razon_social IS NOT NULL AND p.razon_social <> ''
+                    UNION
+                    SELECT g.proveedor_texto AS nombre FROM gastos_consolidados g
+                    WHERE g.proveedor_texto IS NOT NULL AND g.proveedor_texto <> ''
+                ) t ORDER BY nombre";
+        return $this->fetchAll($sql);
+    }
+
+    /**
      * Obtener proveedores con estadísticas
      */
     public function getAllWithStats()

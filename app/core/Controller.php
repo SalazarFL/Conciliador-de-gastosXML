@@ -94,7 +94,7 @@ class Controller
     /**
      * Redireccionar con mensaje flash
      */
-    protected function redirectWithMessage($url, $message, $type = 'success')
+    protected function redirectWithMessage($url, $message, $type = 'success', array $details = [])
     {
         if (session_status() === PHP_SESSION_NONE) {
             session_start();
@@ -102,7 +102,8 @@ class Controller
         
         $_SESSION['flash_message'] = [
             'message' => $message,
-            'type' => $type
+            'type' => $type,
+            'details' => $details
         ];
         
         $this->redirect($url);

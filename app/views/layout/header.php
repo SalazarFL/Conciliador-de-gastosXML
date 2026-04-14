@@ -82,35 +82,101 @@
             padding: 30px 0;
         }
         
-        .flash-message {
-            max-width: 1200px;
-            margin: 20px auto;
-            padding: 15px 20px;
-            border-radius: 4px;
+        .flash-toast {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            right: auto;
+            transform: translate(-50%, -50%);
+            width: min(440px, calc(100vw - 24px));
+            z-index: 2000;
+            border-radius: 12px;
+            box-shadow: 0 16px 32px rgba(0,0,0,0.18);
+            border: 1px solid transparent;
+            overflow: hidden;
+        }
+
+        .flash-toast-header {
             display: flex;
             align-items: center;
+            justify-content: space-between;
             gap: 10px;
+            padding: 10px 12px;
+            font-weight: 600;
+        }
+
+        .flash-toast-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .flash-toast-close {
+            border: 0;
+            background: transparent;
+            color: inherit;
+            font-size: 18px;
+            line-height: 1;
+            cursor: pointer;
+            padding: 2px 6px;
+            border-radius: 6px;
+        }
+
+        .flash-toast-close:hover {
+            background: rgba(0,0,0,0.08);
+        }
+
+        .flash-toast-body {
+            padding: 10px 12px 12px;
+            font-size: 14px;
+        }
+
+        .flash-toast-list-wrap {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px dashed rgba(0,0,0,0.2);
+        }
+
+        .flash-toast-list-title {
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+            margin-bottom: 6px;
+        }
+
+        .flash-toast-list {
+            max-height: 130px;
+            overflow: auto;
+            padding-left: 18px;
+            margin: 0;
+            font-size: 13px;
+        }
+
+        .flash-toast-list li {
+            margin-bottom: 3px;
+            word-break: break-word;
         }
         
-        .flash-message.success {
+        .flash-toast.success {
             background: #d4edda;
             border: 1px solid #c3e6cb;
             color: #155724;
         }
         
-        .flash-message.error {
+        .flash-toast.error {
             background: #f8d7da;
             border: 1px solid #f5c6cb;
             color: #721c24;
         }
         
-        .flash-message.warning {
+        .flash-toast.warning {
             background: #fff3cd;
             border: 1px solid #ffeaa7;
             color: #856404;
         }
         
-        .flash-message.info {
+        .flash-toast.info {
             background: #d1ecf1;
             border: 1px solid #bee5eb;
             color: #0c5460;
@@ -162,22 +228,90 @@
         $flash = $_SESSION['flash_message'];
         $type = $flash['type'] ?? 'info';
         $message = $flash['message'] ?? '';
-        
+        $details = is_array($flash['details'] ?? null) ? $flash['details'] : [];
+
+        $extractList = function ($key) use ($details) {
+            if (empty($details[$key]) || !is_array($details[$key])) return [];
+            return array_values(array_unique(array_filter(array_map('strval', $details[$key]))));
+        };
+
+        $failedFiles     = $extractList('failed_files');
+        $withoutTemplate = $extractList('without_template');
+        $duplicateFiles  = $extractList('duplicate_files');
+        $serverWarning   = trim((string) ($details['server_limit_warning'] ?? ''));
+
         $icons = [
             'success' => 'fa-check-circle',
-            'error' => 'fa-exclamation-circle',
+            'error'   => 'fa-exclamation-circle',
             'warning' => 'fa-exclamation-triangle',
-            'info' => 'fa-info-circle'
+            'info'    => 'fa-info-circle',
         ];
-        
-        echo "<div class='flash-message {$type}'>";
-        echo "<i class='fas {$icons[$type]}'></i>";
-        echo htmlspecialchars($message);
+        $titles = [
+            'success' => 'Importación completada',
+            'error'   => 'Error en importación',
+            'warning' => 'Importación con observaciones',
+            'info'    => 'Información',
+        ];
+
+        echo "<div id='flash-toast' class='flash-toast {$type}' role='status' aria-live='polite'>";
+        echo "<div class='flash-toast-header'>";
+        echo   "<div class='flash-toast-title'><i class='fas {$icons[$type]}'></i><span>" . htmlspecialchars($titles[$type] ?? 'Mensaje') . "</span></div>";
+        echo   "<button type='button' class='flash-toast-close' onclick='closeFlashToast()' aria-label='Cerrar'>&times;</button>";
         echo "</div>";
-        
+        echo "<div class='flash-toast-body'>";
+
+        // Mensaje principal con resumen numérico
+        echo "<div style='font-size:14px;'>" . htmlspecialchars($message) . "</div>";
+
+        // Aviso de límite del servidor (más llamativo)
+        if ($serverWarning !== '') {
+            echo "<div style='margin-top:10px;padding:8px 10px;border-radius:8px;background:rgba(0,0,0,0.07);font-size:12px;'>";
+            echo "⚠ " . htmlspecialchars($serverWarning);
+            echo "</div>";
+        }
+
+        // Archivos ya existentes (duplicados)
+        if (!empty($duplicateFiles)) {
+            echo "<div class='flash-toast-list-wrap'>";
+            echo "<div class='flash-toast-list-title'>Ya importados anteriormente (" . count($duplicateFiles) . ")</div>";
+            echo "<ul class='flash-toast-list'>";
+            foreach ($duplicateFiles as $f) echo "<li>" . htmlspecialchars($f) . "</li>";
+            echo "</ul></div>";
+        }
+
+        // Sin plantilla de parseo (PDFs)
+        if (!empty($withoutTemplate)) {
+            echo "<div class='flash-toast-list-wrap'>";
+            echo "<div class='flash-toast-list-title'>Sin plantilla PDF (" . count($withoutTemplate) . ")</div>";
+            echo "<ul class='flash-toast-list'>";
+            foreach ($withoutTemplate as $f) echo "<li>" . htmlspecialchars($f) . "</li>";
+            echo "</ul></div>";
+        }
+
+        // Errores reales de parseo/DB
+        if (!empty($failedFiles)) {
+            echo "<div class='flash-toast-list-wrap'>";
+            echo "<div class='flash-toast-list-title'>Con error de importación (" . count($failedFiles) . ")</div>";
+            echo "<ul class='flash-toast-list'>";
+            foreach ($failedFiles as $f) echo "<li>" . htmlspecialchars($f) . "</li>";
+            echo "</ul></div>";
+        }
+
+        echo "</div></div>";
+
         unset($_SESSION['flash_message']);
     }
     ?>
+
+    <script>
+        function closeFlashToast() {
+            var toast = document.getElementById('flash-toast');
+            if (toast) {
+                toast.style.display = 'none';
+            }
+        }
+
+    </script>
     
     <main>
 

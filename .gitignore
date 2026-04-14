@@ -4,7 +4,15 @@ storage/logs/*.log
 # User-uploaded files (runtime artifacts)
 public/uploads/xml/*
 public/uploads/gastos/*
+public/uploads/xml_queue/*
 
 # Keep upload directories in repo structure if needed
 !public/uploads/xml/.gitkeep
 !public/uploads/gastos/.gitkeep
+!public/uploads/xml_queue/.gitkeep
+
+# Temporary/scratch scripts
+.tmp_*
+
+# Runtime cache
+storage/cache/*.json

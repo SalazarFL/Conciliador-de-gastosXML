@@ -248,6 +248,17 @@ class ConciliacionController extends Controller
 		return 4;
 	}
 
+	/**
+	 * Umbral mínimo individual: AMBOS identificadores (número Y proveedor)
+	 * deben alcanzar esta similitud para considerar un gasto como candidato.
+	 */
+	private const UMBRAL_IDENTIFICADOR = 30;
+
+	/**
+	 * Umbral del score ponderado final para aceptar un emparejamiento.
+	 */
+	private const UMBRAL_MATCH = 45;
+
 	private function buscarMejorGasto(array $factura, array $gastos, array $usados)
 	{
 		$best = [
@@ -275,6 +286,14 @@ class ConciliacionController extends Controller
 				(string) ($gasto['proveedor_texto'] ?? '')
 			);
 
+			// --- GATE: AMBOS identificadores deben tener similitud significativa;
+			//     si cualquiera de los dos es bajo, este gasto no es candidato.
+			//     Esto evita emparejar registros que solo coinciden por número
+			//     o solo por proveedor de forma casual.
+			if ($scoreNumero < self::UMBRAL_IDENTIFICADOR || $scoreProveedor < self::UMBRAL_IDENTIFICADOR) {
+				continue;
+			}
+
 			$scoreMonto = $this->scoreMonto(
 				(float) ($factura['total'] ?? 0),
 				(float) ($gasto['suma_total'] ?? 0),
@@ -296,7 +315,7 @@ class ConciliacionController extends Controller
 			}
 		}
 
-		if (($best['score_total'] ?? 0) < 20) {
+		if (($best['score_total'] ?? 0) < self::UMBRAL_MATCH) {
 			$best['gasto'] = null;
 			$best['match_tipo'] = 'manual';
 			$best['observaciones'] = 'No se encontró coincidencia razonable';
@@ -394,6 +413,15 @@ class ConciliacionController extends Controller
 
 		if ($a === $b) {
 			return 100;
+		}
+
+		// Para números cortos (≤6 chars), similar_text() infla el porcentaje
+		// (ej: "657" vs "627" da 67% aunque son facturas distintas).
+		// Usamos levenshtein: distancia 1 = posible typo, >1 = distinto.
+		$maxLen = max(strlen($a), strlen($b));
+		if ($maxLen <= 6) {
+			$dist = levenshtein($a, $b);
+			return $dist === 1 ? 50 : 0;
 		}
 
 		similar_text($a, $b, $pct);

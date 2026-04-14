@@ -37,6 +37,73 @@ class Importacion extends Model
         ]);
     }
 
+    public function actualizarResumen($id, array $data)
+    {
+        $allowedFields = [
+            'archivo_origen',
+            'ruta_archivo',
+            'total_registros',
+            'registros_exitosos',
+            'registros_fallidos',
+            'errores',
+            'metadata',
+        ];
+
+        $sets = [];
+        $params = [];
+
+        foreach ($allowedFields as $field) {
+            if (!array_key_exists($field, $data)) {
+                continue;
+            }
+
+            $sets[] = "{$field} = ?";
+            $params[] = $data[$field];
+        }
+
+        if (empty($sets)) {
+            return 0;
+        }
+
+        $params[] = (int) $id;
+
+        $sql = "UPDATE {$this->table}
+                SET " . implode(', ', $sets) . "
+                WHERE id = ?";
+
+        return $this->execute($sql, $params);
+    }
+
+    public function actualizarMetadata($id, array $metadata)
+    {
+        $importacion = $this->findById((int) $id);
+        $actual = [];
+
+        if (!empty($importacion['metadata'])) {
+            $decoded = json_decode((string) $importacion['metadata'], true);
+            if (is_array($decoded)) {
+                $actual = $decoded;
+            }
+        }
+
+        $merged = array_merge($actual, $metadata);
+
+        return $this->actualizarResumen($id, [
+            'metadata' => json_encode($merged, JSON_UNESCAPED_UNICODE),
+        ]);
+    }
+
+    public function obtenerMetadataArray($id)
+    {
+        $importacion = $this->findById((int) $id);
+        if (!$importacion || empty($importacion['metadata'])) {
+            return [];
+        }
+
+        $decoded = json_decode((string) $importacion['metadata'], true);
+        return is_array($decoded) ? $decoded : [];
+    }
+
     public function cerrar($id, $total, $exitosos, $fallidos, $errores = [])
     {
         $sql = "UPDATE {$this->table}

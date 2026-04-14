@@ -1,13 +1,13 @@
-<?php
+﻿<?php
 /**
  * Helper para extraer datos de facturas desde PDF.
  *
  * Flujo:
  * 1) Intentar extraer texto digital del PDF.
- * 2) Si no hay texto útil, intentar OCR (PDF imagen).
+ * 2) Si no hay texto Ãºtil, intentar OCR (PDF imagen).
  * 3) Mapear texto a campos de factura y devolver estructura compatible.
  *
- * NOTA: Requiere utilidades del sistema para máxima precisión:
+ * NOTA: Requiere utilidades del sistema para mÃ¡xima precisiÃ³n:
  * - pdftotext (Poppler) para PDFs con texto.
  * - pdftoppm + tesseract para OCR en PDFs escaneados.
  */
@@ -17,12 +17,18 @@ class PdfInvoiceParser
 {
 	public static function parseInvoiceFromPdf($filePath, array $options = [])
 	{
+		self::extendExecutionWindow();
+
 		if (!file_exists($filePath)) {
 			throw new Exception('Archivo PDF no encontrado: ' . $filePath);
 		}
 
 		$maxOcrPages = (int) ($options['max_ocr_pages'] ?? 3);
 		$ocrLanguage = (string) ($options['ocr_language'] ?? 'spa+eng');
+		$sourceName = trim((string) ($options['source_name'] ?? ''));
+		if ($sourceName === '') {
+			$sourceName = basename((string) $filePath);
+		}
 
 		$text = self::extractTextFromPdf($filePath);
 		$source = 'pdf_texto';
@@ -35,7 +41,7 @@ class PdfInvoiceParser
 		}
 
 		if (!self::isUsefulText($text)) {
-			throw new Exception('No fue posible extraer texto útil del PDF. Instala pdftotext o tesseract/pdftoppm y vuelve a intentar.');
+			throw new Exception('No fue posible extraer texto Ãºtil del PDF. Instala pdftotext o tesseract/pdftoppm y vuelve a intentar.');
 		}
 
 		$normalized = self::normalizeText($text);
@@ -43,27 +49,49 @@ class PdfInvoiceParser
 		$cedulaJuridica = self::extractCedulaFromClave($claveCR);
 		$proveedorApi = self::resolveProviderNameByCedula($cedulaJuridica);
 		$templateKey = self::resolveTemplateForCedula($cedulaJuridica, $proveedorApi);
-
-		if (!empty($options['require_template']) && !self::isTemplateConfigured($templateKey)) {
-			self::registerPendingTemplate([
-				'cedula' => $cedulaJuridica,
-				'proveedor' => $proveedorApi,
-				'archivo' => basename((string) $filePath),
-				'clave' => $claveCR,
-				'texto_preview' => mb_substr(preg_replace('/\s+/', ' ', trim((string) $text)), 0, 700, 'UTF-8'),
-			]);
-
-			$cedulaInfo = $cedulaJuridica !== '' ? $cedulaJuridica : 'desconocida';
-			$provInfo = $proveedorApi !== '' ? $proveedorApi : 'PROVEEDOR NO IDENTIFICADO';
-			throw new Exception('Proveedor sin plantilla de parseo (cedula: ' . $cedulaInfo . ', proveedor: ' . $provInfo . '). Se agregó a cola de pendientes en storage/cache/pdf_templates_pending.json.');
+		if ($templateKey === 'generic_cr') {
+			$templateByFileName = self::resolveTemplateForCedula($cedulaJuridica, $sourceName);
+			if ($templateByFileName !== '' && $templateByFileName !== 'generic_cr') {
+				$templateKey = $templateByFileName;
+			}
 		}
 
-		$parsed = self::parseInvoiceText($text, basename($filePath), [
+		if (!empty($options['require_template']) && !self::isTemplateConfigured($templateKey)) {
+			$cedulaInfo = $cedulaJuridica !== '' ? $cedulaJuridica : 'desconocida';
+			$provInfo = $proveedorApi !== '' ? $proveedorApi : 'PROVEEDOR NO IDENTIFICADO';
+			throw new Exception('Proveedor sin plantilla de parseo (cedula: ' . $cedulaInfo . ', proveedor: ' . $provInfo . ').');
+		}
+
+		$parsed = self::parseInvoiceText($text, $sourceName, [
 			'clave_cr' => $claveCR,
 			'cedula_juridica' => $cedulaJuridica,
 			'proveedor_api' => $proveedorApi,
 			'template_key' => $templateKey,
 		]);
+
+		$resolvedByParsedProvider = self::resolveTemplateForCedula($cedulaJuridica, (string) ($parsed['razon_social_emisor'] ?? ''));
+		$resolvedByFileName = self::resolveTemplateForCedula($cedulaJuridica, $sourceName);
+		$resolvedTemplate = '';
+		foreach ([$resolvedByParsedProvider, $resolvedByFileName] as $candidateTemplate) {
+			if (
+				$candidateTemplate !== ''
+				&& $candidateTemplate !== 'generic_cr'
+				&& $candidateTemplate !== $templateKey
+			) {
+				$resolvedTemplate = $candidateTemplate;
+				break;
+			}
+		}
+		if ($templateKey === 'generic_cr' && $resolvedTemplate !== '') {
+			$templateKey = $resolvedTemplate;
+			$parsed = self::parseInvoiceText($text, $sourceName, [
+				'clave_cr' => $claveCR,
+				'cedula_juridica' => $cedulaJuridica,
+				'proveedor_api' => $proveedorApi,
+				'template_key' => $templateKey,
+			]);
+		}
+
 		$hash = hash_file('sha256', $filePath);
 		$consecutivo = self::normalizeConsecutivo($parsed['consecutivo_completo'] ?? '');
 		$numeroReferencia = (string) ($parsed['numero_referencia'] ?? '');
@@ -130,10 +158,11 @@ class PdfInvoiceParser
 		$heuristicAmounts = self::resolveAmounts($normalizedText, $heuristicLabels);
 
 		$amounts = [
-			'subtotal' => ($lineAmounts['subtotal'] ?? 0) > 0 ? $lineAmounts['subtotal'] : ($heuristicAmounts['subtotal'] ?? 0),
-			'iva' => ($lineAmounts['iva'] ?? 0) > 0 ? $lineAmounts['iva'] : ($heuristicAmounts['iva'] ?? 0),
-			'total' => ($lineAmounts['total'] ?? 0) > 0 ? $lineAmounts['total'] : ($heuristicAmounts['total'] ?? 0),
+			'subtotal' => array_key_exists('subtotal', $lineAmounts) && $lineAmounts['subtotal'] !== null ? $lineAmounts['subtotal'] : ($heuristicAmounts['subtotal'] ?? 0),
+			'iva' => array_key_exists('iva', $lineAmounts) && $lineAmounts['iva'] !== null ? $lineAmounts['iva'] : ($heuristicAmounts['iva'] ?? 0),
+			'total' => array_key_exists('total', $lineAmounts) && $lineAmounts['total'] !== null ? $lineAmounts['total'] : ($heuristicAmounts['total'] ?? 0),
 		];
+		$amounts = self::repairTemplateAmounts((string) $templateKey, $normalizedText, $amounts);
 
 		$priority = (array) ($template['numero_referencia_priority'] ?? ['documento', 'clave']);
 		$candidates = [];
@@ -157,7 +186,7 @@ class PdfInvoiceParser
 	private static function resolveTemplateForCedula($cedulaJuridica, $providerName = '')
 	{
 		$ced = preg_replace('/\D+/', '', (string) $cedulaJuridica);
-		$provider = mb_strtoupper(trim((string) $providerName), 'UTF-8');
+		$provider = self::normalizeAliasLookupText((string) $providerName);
 		$config = self::getTemplateConfig();
 
 		$templates = (array) ($config['provider_template_map'] ?? []);
@@ -170,7 +199,7 @@ class PdfInvoiceParser
 		if ($provider !== '') {
 			foreach ($aliasMap as $templateKey => $aliases) {
 				foreach ((array) $aliases as $alias) {
-					$aliasText = mb_strtoupper(trim((string) $alias), 'UTF-8');
+					$aliasText = self::normalizeAliasLookupText((string) $alias);
 					if ($aliasText !== '' && strpos($provider, $aliasText) !== false) {
 						return (string) $templateKey;
 					}
@@ -179,6 +208,23 @@ class PdfInvoiceParser
 		}
 
 		return (string) ($config['default_template'] ?? 'generic_cr');
+	}
+
+	private static function normalizeAliasLookupText($text)
+	{
+		$value = mb_strtoupper(trim((string) $text), 'UTF-8');
+		if ($value === '') {
+			return '';
+		}
+
+		$ascii = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $value);
+		if (is_string($ascii) && $ascii !== '') {
+			$value = $ascii;
+		}
+
+		$value = preg_replace('/[^A-Z0-9]+/u', ' ', $value);
+		$value = preg_replace('/\s+/', ' ', (string) $value);
+		return trim((string) $value);
 	}
 
 	private static function isTemplateConfigured($templateKey)
@@ -224,6 +270,8 @@ class PdfInvoiceParser
 
 	private static function extractTextFromPdf($filePath)
 	{
+		self::extendExecutionWindow();
+
 		$escaped = escapeshellarg($filePath);
 
 		// Extrae texto sin guardar archivos intermedios.
@@ -237,6 +285,8 @@ class PdfInvoiceParser
 
 	private static function extractTextViaOcr($filePath, $maxPages, $language)
 	{
+		self::extendExecutionWindow();
+
 		$tmpDir = rtrim(sys_get_temp_dir(), '/\\') . DIRECTORY_SEPARATOR . 'xmlconcilia_ocr_' . bin2hex(random_bytes(5));
 		if (!mkdir($tmpDir, 0777, true) && !is_dir($tmpDir)) {
 			return '';
@@ -256,6 +306,8 @@ class PdfInvoiceParser
 			sort($images);
 
 			foreach ($images as $imgPath) {
+				self::extendExecutionWindow();
+
 				$escapedImg = escapeshellarg($imgPath);
 				$escapedLang = escapeshellarg($language);
 				$ocrText = self::runCommand("tesseract {$escapedImg} stdout -l {$escapedLang} --psm 6");
@@ -264,7 +316,7 @@ class PdfInvoiceParser
 				}
 			}
 		} catch (Throwable $e) {
-			// Si falla OCR devolvemos vacío para que el flujo reporte error claro.
+			// Si falla OCR devolvemos vacÃ­o para que el flujo reporte error claro.
 			$text = '';
 		}
 
@@ -284,12 +336,12 @@ class PdfInvoiceParser
 		$proveedorApi = trim((string) ($context['proveedor_api'] ?? ''));
 
 		// --- Formato costarricense ---
-		// Clave: 50 dígitos numéricos
+		// Clave: 50 dÃ­gitos numÃ©ricos
 		$claveCR = trim((string) ($context['clave_cr'] ?? ''));
 		if ($claveCR === '') {
 			$claveCR = self::extractClaveCR($normalized);
 		}
-		// Documento No / Número de documento: patrón XXXXXXXXXX-XXXXXXXXXXXXXXXXXXXXX
+		// Documento No / NÃºmero de documento: patrÃ³n XXXXXXXXXX-XXXXXXXXXXXXXXXXXXXXX
 		$documentoCR = self::extractDocumentoCR($normalized, $claveCR);
 		$cedulaJuridica = trim((string) ($context['cedula_juridica'] ?? ''));
 		if ($cedulaJuridica === '') {
@@ -301,27 +353,28 @@ class PdfInvoiceParser
 		// --- Formato CFDI mexicano ---
 		$uuid = self::match('/\b([0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12})\b/i', $normalized);
 
-		// Folio genérico (último recurso, excluye palabras clave de encabezado)
+		// Folio genÃ©rico (Ãºltimo recurso, excluye palabras clave de encabezado)
 		$folio = self::firstNonEmpty([
 			self::match('/\b(?:Folio|No\.?\s*Factura|Numero\s*Factura|Comprobante)\s*[:#\-]?\s*([A-Z0-9\-]{4,40})/iu', $normalized),
 			''
 		]);
 
-		// RFC/Cédula: formato mexicano (XYYY000000XX) o costarricense (solo dígitos 9-12 chars)
+		// RFC/CÃ©dula: formato mexicano (XYYY000000XX) o costarricense (solo dÃ­gitos 9-12 chars)
 		$rfc = self::firstNonEmpty([
-			self::match('/\b([A-Z&Ñ]{3,4}\d{6}[A-Z0-9]{3})\b/iu', mb_strtoupper($normalized, 'UTF-8')),
-			self::match('/\bC[eé]dula\s*[:\-]?\s*(\d{9,12})\b/iu', $normalized),
+			self::match('/\b([A-Z&Ã‘]{3,4}\d{6}[A-Z0-9]{3})\b/iu', mb_strtoupper($normalized, 'UTF-8')),
 			$cedulaJuridica,
+			self::match('/\bC[eÃ©]dula\s*[:\-]?\s*(\d{9,12})\b/iu', $normalized),
 			''
 		]);
 
-		// Razón social: primera línea significativa del texto (antes de "Cedula" o "Dirección")
+		// RazÃ³n social: primera lÃ­nea significativa del texto (antes de "Cedula" o "DirecciÃ³n")
 		$razon = self::firstNonEmpty([
 			$proveedorApi,
 			self::match('/\b(INSTITUTO\s+COSTARRICENSE\s+DE\s+ELECTRICIDAD)\b/iu', $normalized),
-			self::match('/(?:Razon\s*Social|Raz[oó]n\s*Social|Emisor|Proveedor)\s*[:\-]\s*([^\n\r]{3,120})/iu', $normalized),
-			// Para CR: primera línea no vacía antes de "Cedula"
-			self::match('/^([A-ZÁÉÍÓÚÑ][^\n\r]{3,80})\s*\n[^\n\r]*C[eé]dula/imsu', $normalized),
+			self::extractSimplifiedProviderName($normalized),
+			self::match('/(?:Razon\s*Social|Raz[oÃ³]n\s*Social|Emisor|Proveedor)\s*[:\-]\s*([^\n\r]{3,120})/iu', $normalized),
+			// Para CR: primera lÃ­nea no vacÃ­a antes de "Cedula"
+			self::match('/^([A-ZÃÃ‰ÃÃ“ÃšÃ‘][^\n\r]{3,80})\s*\n[^\n\r]*C[eÃ©]dula/imsu', $normalized),
 			self::extractProviderFromText($normalized),
 			($fileNameInfo['proveedor'] ?? ''),
 			''
@@ -351,7 +404,7 @@ class PdfInvoiceParser
 		]);
 
 		return [
-			// Prioridad: clave CR (50 dígitos) > UUID CFDI > documento CR > folio genérico
+			// Prioridad: clave CR (50 dÃ­gitos) > UUID CFDI > documento CR > folio genÃ©rico
 			'consecutivo_completo' => $claveCR !== ''
 				? $claveCR
 				: ($uuid !== ''
@@ -359,7 +412,7 @@ class PdfInvoiceParser
 					: ($documentoCR !== ''
 						? $documentoCR
 						: ($folio !== '' ? $folio : ($fileNameInfo['consecutivo'] ?? '')))),
-			// Número de referencia para asistente: documento CR > folio > uuid > clave
+			// NÃºmero de referencia para asistente: documento CR > folio > uuid > clave
 			'numero_referencia' => (($templateParsed['numero_referencia'] ?? '') !== '')
 				? (string) $templateParsed['numero_referencia']
 				: ($documentoCR !== ''
@@ -469,10 +522,206 @@ class PdfInvoiceParser
 		];
 	}
 
+	private static function repairTemplateAmounts($templateKey, $text, array $amounts)
+	{
+		if (in_array((string) $templateKey, ['cr_sabores_coto_brus', 'cr_roma_del_sur', 'cr_cindy_retana_mora'], true)) {
+			$tail = trim((string) preg_replace('/.*Version\s*4\.4/isu', '', (string) $text));
+			if (preg_match('/([0-9][0-9\.,]{1,20})\s+((?:[0-9][0-9\.,]{1,20}|[.,]0{2}))\s+([0-9][0-9\.,]{1,20})\s*$/u', $tail, $m)) {
+				$subtotal = self::parseAmount($m[1]);
+				$iva = self::parseAmount($m[2]);
+				$total = self::parseAmount($m[3]);
+				if ($total > 0 && $subtotal > 0 && abs(($subtotal + $iva) - $total) <= 1.0) {
+					return [
+						'subtotal' => round(max(0.0, $subtotal), 2),
+						'iva' => round(max(0.0, $iva), 2),
+						'total' => round(max(0.0, $total), 2),
+					];
+				}
+			}
+
+			return $amounts;
+		}
+
+		if ((string) $templateKey === 'cr_compania_carragonza') {
+			$subtotal = 0.0;
+			$total = 0.0;
+			$iva = 0.0;
+
+			if (preg_match('/VENTA\s*NETA\s*([0-9][0-9\.,]{1,20})/iu', (string) $text, $mSubtotal)) {
+				$subtotal = self::parseAmount($mSubtotal[1] ?? '');
+			}
+			if (preg_match('/TOTAL\s*CRC\s*([0-9][0-9\.,]{1,20})/iu', (string) $text, $mTotal)) {
+				$total = self::parseAmount($mTotal[1] ?? '');
+			}
+			if (preg_match('/(?:\bIVA\b|Total\s*Impuesto)\s*([0-9][0-9\.,]{1,20})/iu', (string) $text, $mIva)) {
+				$iva = self::parseAmount($mIva[1] ?? '');
+			}
+
+			if ($subtotal > 0 && $total > 0 && abs($subtotal - $total) <= 1.0) {
+				return [
+					'subtotal' => round($subtotal, 2),
+					'iva' => round(max(0.0, $iva), 2),
+					'total' => round($total, 2),
+				];
+			}
+
+			return $amounts;
+		}
+
+		if ((string) $templateKey === 'cr_maria_jose_fonseca_sibaja') {
+			$subtotal = 0.0;
+			$iva = 0.0;
+			$total = 0.0;
+
+			if (preg_match('/\bSubtotal\s*:\s*[^\d\r\n]{0,8}([0-9][0-9\.,]{1,20})/iu', (string) $text, $mSubtotal)) {
+				$subtotal = self::parseAmount($mSubtotal[1] ?? '');
+			}
+			if (preg_match('/\bIVA\s*:\s*[^\d\r\n]{0,8}((?:[0-9][0-9\.,]{1,20}|[.,]0{2}))/iu', (string) $text, $mIva)) {
+				$iva = self::parseAmount($mIva[1] ?? '');
+			}
+			if (preg_match('/Total\s*Factura\s*Electr[\s\S]{0,30}?:\s*[\sÂ¢$]*([0-9][0-9\.,]{1,20})/iu', (string) $text, $mTotal)) {
+				$total = self::parseAmount($mTotal[1] ?? '');
+			}
+
+			if ($subtotal > 0 && $total > 0) {
+				return [
+					'subtotal' => round($subtotal, 2),
+					'iva' => round(max(0.0, $iva), 2),
+					'total' => round($total, 2),
+				];
+			}
+
+			return $amounts;
+		}
+
+		if ((string) $templateKey === 'cr_corporacion_alfaro_mano_de_dios') {
+			$subtotal = 0.0;
+			$iva = 0.0;
+			$total = 0.0;
+			$ivaRaw = '';
+
+			if (preg_match('/Total\\s*Venta\\s*Neta\\s*[Â¢$\\s]*([0-9][0-9\\.,]{1,20})/iu', (string) $text, $mSubtotal)) {
+				$subtotal = self::parseAmount($mSubtotal[1] ?? '');
+			}
+			if (preg_match('/Total\\s*Impuestos\\s*[Â¢$\\s]*([0-9][0-9\\.,]{1,20})/iu', (string) $text, $mIva)) {
+				$ivaRaw = trim((string) ($mIva[1] ?? ''));
+				$iva = self::parseAmount($ivaRaw);
+			}
+			if (preg_match('/Total\\s*Comprobante\\s*[Â¢$\\s]*([0-9][0-9\\.,]{1,20})/iu', (string) $text, $mTotal)) {
+				$total = self::parseAmount($mTotal[1] ?? '');
+			}
+			if (($iva <= 0 || ($total > 0 && $iva >= $total)) && preg_match('/IVA\\s*13%[\\s\\S]{0,30}?[Â¢$\\s]*([0-9][0-9\\.,]{1,20})/iu', (string) $text, $mIva13)) {
+				$iva = self::parseAmount($mIva13[1] ?? '');
+			}
+			if (($iva <= 0 || ($total > 0 && $iva >= $total)) && $ivaRaw !== '' && preg_match('/^([0-9]+)[\\.,]([0-9]{2})[0-9]+$/', $ivaRaw, $mIvaShort)) {
+				$iva = (float) ($mIvaShort[1] . '.' . $mIvaShort[2]);
+			}
+
+			if ($subtotal > 0 && $total > 0) {
+				return [
+					'subtotal' => round($subtotal, 2),
+					'iva' => round(max(0.0, $iva), 2),
+					'total' => round($total, 2),
+				];
+			}
+
+			return $amounts;
+		}
+
+		// BM-family stores: asterisk-delimited summary lines
+		// Format: SUBTOTAL *******4,726.38 / DESCUENTO *********818.58 / IVA *********452.71 / TOTAL *******4,360.50
+		$bmTemplates = [
+			'cr_bm_del_general', 'cr_bm_del_palmar', 'cr_bm_quepos',
+			'cr_bm_uvita', 'cr_comercial_corcovado_del_sur',
+			'cr_surbm', 'cr_arrendadora_bm_pz',
+		];
+		if (in_array((string) $templateKey, $bmTemplates, true)) {
+			$iva = 0.0;
+			$total = 0.0;
+
+			// IVA seguido de asteriscos y monto (evita columna IVA de tabla de productos)
+			if (preg_match('/(?:^|\n)\s*IVA\s*\*+\s*([0-9][0-9\.,]{1,20})/iu', (string) $text, $mIva)) {
+				$iva = self::parseAmount($mIva[1] ?? '');
+			}
+			// TOTAL seguido de asteriscos (distinto de columna TOTAL de productos)
+			if (preg_match('/(?:^|\n)\s*TOTAL\s*\*+\s*([0-9][0-9\.,]{1,20})/iu', (string) $text, $mTotal)) {
+				$total = self::parseAmount($mTotal[1] ?? '');
+			}
+
+			if ($total > 0) {
+				// SUBTOTAL en BM es pre-descuento; la base real es total - iva.
+				$subtotal = round(max(0.0, $total - $iva), 2);
+				return [
+					'subtotal' => $subtotal,
+					'iva' => round(max(0.0, $iva), 2),
+					'total' => round($total, 2),
+				];
+			}
+
+			return $amounts;
+		}
+
+		if ((string) $templateKey !== 'cr_ice') {
+			return $amounts;
+		}
+
+		$total = (float) ($amounts['total'] ?? 0);
+		$subtotal = (float) ($amounts['subtotal'] ?? 0);
+		$iva = (float) ($amounts['iva'] ?? 0);
+
+		if ($total <= 0) {
+			return $amounts;
+		}
+
+		if ($iva <= 0 || $iva < 100 || $iva >= $total || $subtotal >= $total) {
+			$inferredIva = self::inferVatFromAmounts($text, $total);
+			if ($inferredIva > 0 && $inferredIva < $total) {
+				$iva = $inferredIva;
+			}
+		}
+
+		if ($iva > 0 && ($subtotal <= 0 || $subtotal >= $total)) {
+			$subtotal = round(max(0.0, $total - $iva), 2);
+		}
+
+		$amounts['subtotal'] = round(max(0.0, $subtotal), 2);
+		$amounts['iva'] = round(max(0.0, $iva), 2);
+		$amounts['total'] = round(max(0.0, $total), 2);
+
+		return $amounts;
+	}
+
+	private static function inferVatFromAmounts($text, $total = 0.0)
+	{
+		$amounts = self::extractAllAmounts($text);
+		$best = 0.0;
+
+		foreach ($amounts as $candidate) {
+			$candidate = (float) $candidate;
+			if ($candidate <= 0 || ($total > 0 && $candidate >= $total)) {
+				continue;
+			}
+
+			foreach ($amounts as $base) {
+				$base = (float) $base;
+				if ($base <= $candidate || ($total > 0 && $base >= $total)) {
+					continue;
+				}
+
+				if (abs(round($base * 0.13, 2) - $candidate) <= 1.0) {
+					$best = max($best, $candidate);
+					break;
+				}
+			}
+		}
+
+		return round($best, 2);
+	}
+
 	private static function extractAmountByLabels($text, array $labels)
 	{
 		foreach ($labels as $label) {
-			// \s*[:\-]? permite etiquetas sin dos puntos seguidas de número en misma línea
+			// \s*[:\-]? permite etiquetas sin dos puntos seguidas de nÃºmero en misma lÃ­nea
 			$pattern = '/(?:' . $label . ')[^\S\n]*[:\-]?[^\S\n]*\$?[^\S\n]*([0-9][0-9\.,]{0,20})/iu';
 			$value = self::match($pattern, $text);
 			if ($value !== '') {
@@ -525,6 +774,8 @@ class PdfInvoiceParser
 	{
 		$lines = preg_split('/\r?\n/', (string) $text) ?: [];
 		$matches = [];
+		$zeroFound = false;
+		$moneyPattern = '/(?<!\d)(?:\d{1,3}(?:[ \x{00A0}\.,]\d{3})+(?:[\.,]\d{2})|\d+(?:[\.,]\d{2})|[\.,]0{2})(?!\d)/u';
 
 		foreach ($lines as $line) {
 			$lineTxt = trim((string) $line);
@@ -543,7 +794,7 @@ class PdfInvoiceParser
 				continue;
 			}
 
-			if (!preg_match_all('/(?<!\d)(?:\d{1,3}(?:[\.,]\d{3})+|\d+)(?:[\.,]\d{2})(?!\d)/u', $lineTxt, $m)) {
+			if (!preg_match_all($moneyPattern, $lineTxt, $m)) {
 				continue;
 			}
 
@@ -551,12 +802,14 @@ class PdfInvoiceParser
 				$amount = self::parseAmount($token);
 				if ($amount > 0 && self::isLikelyMoney($token, $amount)) {
 					$matches[] = $amount;
+				} elseif ($amount == 0.0 && preg_match('/^(?:0+(?:[\.,]0{2})|[\.,]0{2})$/', trim((string) $token))) {
+					$zeroFound = true;
 				}
 			}
 		}
 
 		if (empty($matches)) {
-			return 0.0;
+			return $zeroFound ? 0.0 : null;
 		}
 
 		rsort($matches, SORT_NUMERIC);
@@ -591,7 +844,7 @@ class PdfInvoiceParser
 			return 0.0;
 		}
 
-		$raw = str_replace(["\xc2\xa0", ' ', '$', '¢', 'CRC', 'USD', 'EUR', 'MXN'], '', $raw);
+		$raw = str_replace(["\xc2\xa0", ' ', '$', 'Â¢', 'CRC', 'USD', 'EUR', 'MXN'], '', $raw);
 		$raw = preg_replace('/[^0-9,\.\-]/u', '', $raw);
 		if ($raw === '' || $raw === '-' || $raw === '.' || $raw === ',') {
 			return 0.0;
@@ -642,7 +895,7 @@ class PdfInvoiceParser
 			return false;
 		}
 
-		// Evita años con formato de miles/decimales: 2,025 o 2,025.00 / 2.025,00
+		// Evita aÃ±os con formato de miles/decimales: 2,025 o 2,025.00 / 2.025,00
 		if (
 			preg_match('/^\s*[12][\.,]?\d{3}(?:[\.,]00)?\s*$/', $raw) &&
 			$val >= 1900 && $val <= 2100
@@ -650,12 +903,12 @@ class PdfInvoiceParser
 			return false;
 		}
 
-		// Evita años como 2025/2026 tomados como montos.
+		// Evita aÃ±os como 2025/2026 tomados como montos.
 		if (preg_match('/^\d{4}$/', $raw) && $val >= 1900 && $val <= 2100) {
 			return false;
 		}
 
-		// Para enteros sin separador decimal/miles y <= 4 dígitos, suele ser código/folio, no dinero.
+		// Para enteros sin separador decimal/miles y <= 4 dÃ­gitos, suele ser cÃ³digo/folio, no dinero.
 		$hasSeparator = (strpos($raw, ',') !== false || strpos($raw, '.') !== false);
 		if (!$hasSeparator && preg_match('/^\d{1,4}$/', $raw)) {
 			return false;
@@ -707,7 +960,7 @@ class PdfInvoiceParser
 	private static function normalizeRfc($rfc)
 	{
 		$rfc = mb_strtoupper(trim((string) $rfc), 'UTF-8');
-		$rfc = preg_replace('/[^A-Z0-9Ñ&]/u', '', $rfc);
+		$rfc = preg_replace('/[^A-Z0-9Ã‘&]/u', '', $rfc);
 		return $rfc;
 	}
 
@@ -723,10 +976,21 @@ class PdfInvoiceParser
 			return $spanishMonth;
 		}
 
-		// Eliminar parte de hora si viene con timestamp: "14/08/2025 05:50:00" → "14/08/2025"
-		$value = preg_replace('/\s+\d{1,2}:\d{2}(:\d{2})?$/', '', trim($value));
+		$spanishShortMonth = self::parseSpanishShortMonthDate($value);
+		if ($spanishShortMonth !== '') {
+			return $spanishShortMonth;
+		}
 
-		$formats = ['Y-m-d', 'Y/m/d', 'd/m/Y', 'd-m-Y', 'm/d/Y', 'm-d-Y'];
+		$spanishMonthFirst = self::parseSpanishMonthNameFirstDate($value);
+		if ($spanishMonthFirst !== '') {
+			return $spanishMonthFirst;
+		}
+
+		// Eliminar parte de hora si viene con timestamp: "14/08/2025 05:50:00" â†’ "14/08/2025"
+		$value = preg_replace('/\s+\d{1,2}:\d{2}(:\d{2})?\s*(?:A\.?M\.?|P\.?M\.?)?$/iu', '', trim($value));
+		$value = preg_replace('/^(20\d{2}[\-\/][01]?\d[\-\/][0-3]?\d)T.*$/u', '$1', $value);
+
+		$formats = ['Y-m-d', 'Y/m/d', 'd/m/Y', 'j/n/Y', 'd-m-Y', 'j-n-Y', 'd.m.Y', 'j.n.Y', 'd/m/y', 'j/n/y', 'd-m-y', 'j-n-y', 'd.m.y', 'j.n.y', 'm/d/Y', 'n/j/Y', 'm-d-Y', 'n-j-Y', 'm/d/y', 'n/j/y', 'm-d-y', 'n-j-y'];
 		foreach ($formats as $format) {
 			$date = DateTime::createFromFormat($format, $value);
 			if ($date && $date->format($format) === $value) {
@@ -744,7 +1008,7 @@ class PdfInvoiceParser
 	private static function parseSpanishMonthDate($text)
 	{
 		$value = mb_strtoupper(trim((string) $text), 'UTF-8');
-		$value = str_replace(['Á', 'É', 'Í', 'Ó', 'Ú'], ['A', 'E', 'I', 'O', 'U'], $value);
+		$value = str_replace(['Ã', 'Ã‰', 'Ã', 'Ã“', 'Ãš'], ['A', 'E', 'I', 'O', 'U'], $value);
 
 		if (!preg_match('/\b([0-3]?\d)\s+(ENERO|FEBRERO|MARZO|ABRIL|MAYO|JUNIO|JULIO|AGOSTO|SETIEMBRE|SEPTIEMBRE|OCTUBRE|NOVIEMBRE|DICIEMBRE)\s+(20\d{2})\b/u', $value, $m)) {
 			return '';
@@ -766,6 +1030,78 @@ class PdfInvoiceParser
 			'NOVIEMBRE' => '11',
 			'DICIEMBRE' => '12',
 		];
+		$month = $monthMap[$m[2]] ?? '';
+		$year = $m[3];
+
+		if ($month === '') {
+			return '';
+		}
+
+		return $year . '-' . $month . '-' . $day;
+	}
+
+	private static function parseSpanishMonthNameFirstDate($text)
+	{
+		$value = mb_strtoupper(trim((string) $text), 'UTF-8');
+		$value = str_replace(['ÃƒÂ', 'Ãƒâ€°', 'ÃƒÂ', 'Ãƒâ€œ', 'ÃƒÅ¡'], ['A', 'E', 'I', 'O', 'U'], $value);
+
+		if (!preg_match('/\b(ENERO|FEBRERO|MARZO|ABRIL|MAYO|JUNIO|JULIO|AGOSTO|SETIEMBRE|SEPTIEMBRE|OCTUBRE|NOVIEMBRE|DICIEMBRE)\s+([0-3]?\d),?\s+(20\d{2})\b/u', $value, $m)) {
+			return '';
+		}
+
+		$monthMap = [
+			'ENERO' => '01',
+			'FEBRERO' => '02',
+			'MARZO' => '03',
+			'ABRIL' => '04',
+			'MAYO' => '05',
+			'JUNIO' => '06',
+			'JULIO' => '07',
+			'AGOSTO' => '08',
+			'SETIEMBRE' => '09',
+			'SEPTIEMBRE' => '09',
+			'OCTUBRE' => '10',
+			'NOVIEMBRE' => '11',
+			'DICIEMBRE' => '12',
+		];
+
+		$month = $monthMap[$m[1]] ?? '';
+		$day = str_pad((string) ((int) $m[2]), 2, '0', STR_PAD_LEFT);
+		$year = $m[3];
+
+		if ($month === '') {
+			return '';
+		}
+
+		return $year . '-' . $month . '-' . $day;
+	}
+
+	private static function parseSpanishShortMonthDate($text)
+	{
+		$value = mb_strtoupper(trim((string) $text), 'UTF-8');
+		$value = str_replace(['ÃƒÂ', 'Ãƒâ€°', 'ÃƒÂ', 'Ãƒâ€œ', 'ÃƒÅ¡', 'ÃƒÆ’Ã‚Â', 'ÃƒÆ’Ã¢â‚¬Â°', 'ÃƒÆ’Ã‚Â', 'ÃƒÆ’Ã¢â‚¬Å“', 'ÃƒÆ’Ã…Â¡'], ['A', 'E', 'I', 'O', 'U', 'A', 'E', 'I', 'O', 'U'], $value);
+
+		if (!preg_match('/\b([0-3]?\d)\s*(?:[\/\-]|\s)\s*(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SET|SEP|OCT|NOV|DIC)\.?\s*(?:[\/\-]|\s)\s*(20\d{2})\b/u', $value, $m)) {
+			return '';
+		}
+
+		$monthMap = [
+			'ENE' => '01',
+			'FEB' => '02',
+			'MAR' => '03',
+			'ABR' => '04',
+			'MAY' => '05',
+			'JUN' => '06',
+			'JUL' => '07',
+			'AGO' => '08',
+			'SET' => '09',
+			'SEP' => '09',
+			'OCT' => '10',
+			'NOV' => '11',
+			'DIC' => '12',
+		];
+
+		$day = str_pad((string) ((int) $m[1]), 2, '0', STR_PAD_LEFT);
 		$month = $monthMap[$m[2]] ?? '';
 		$year = $m[3];
 
@@ -810,7 +1146,7 @@ class PdfInvoiceParser
 			return false;
 		}
 
-		// Texto útil mínimo: longitud y mezcla de letras/números.
+		// Texto Ãºtil mÃ­nimo: longitud y mezcla de letras/nÃºmeros.
 		return mb_strlen($trimmed, 'UTF-8') >= 60 && preg_match('/[A-Za-z]/', $trimmed) && preg_match('/\d/', $trimmed);
 	}
 
@@ -818,25 +1154,25 @@ class PdfInvoiceParser
 	{
 		$raw = (string) $value;
 
-		// Si es consecutivo de fallback por hash, no inventar número desde letras/números del hash.
+		// Si es consecutivo de fallback por hash, no inventar nÃºmero desde letras/nÃºmeros del hash.
 		if (stripos($raw, 'PDF-') === 0) {
 			return '0';
 		}
 
-		// Clave CR de 50 dígitos: estructura 3+2+2+2+12+1+20+8
-		// El bloque F (20 dígitos) es 22-41 en base 1 => índice 21 en base 0.
-		// Dentro de esos 20: 3(sucursal)+5(terminal)+2(tipo)+10(número).
+		// Clave CR de 50 dÃ­gitos: estructura 3+2+2+2+12+1+20+8
+		// El bloque F (20 dÃ­gitos) es 22-41 en base 1 => Ã­ndice 21 en base 0.
+		// Dentro de esos 20: 3(sucursal)+5(terminal)+2(tipo)+10(nÃºmero).
 		if (preg_match('/(?:^|\D)(\d{50})(?:\D|$)/', $raw, $m50) ||
 			preg_match('/^(\d{50})$/', $raw, $m50)) {
 			$consecutivoInterno = substr($m50[1], 21, 20);
 			if (strlen($consecutivoInterno) === 20) {
-				$numero = substr($consecutivoInterno, 10, 10); // últimos 10 = número puro
+				$numero = substr($consecutivoInterno, 10, 10); // Ãºltimos 10 = nÃºmero puro
 				$numero = ltrim($numero, '0');
 				return $numero !== '' ? $numero : '0';
 			}
 		}
 
-		// Documento CR típico: 00100001010023894455 -> usar consecutivo final de 8 dígitos.
+		// Documento CR tÃ­pico: 00100001010023894455 -> usar consecutivo final de 8 dÃ­gitos.
 		if (preg_match('/\b\d{20}\b/', $raw, $m20)) {
 			$numero = substr($m20[0], -10);
 			$numero = ltrim($numero, '0');
@@ -853,7 +1189,7 @@ class PdfInvoiceParser
 		}
 
 		// Algunos proveedores incluyen un bloque extra (p.ej. seguridad) a la derecha.
-		// En secuencias 21..30 se toma el primer bloque lógico de 20 dígitos.
+		// En secuencias 21..30 se toma el primer bloque lÃ³gico de 20 dÃ­gitos.
 		if (preg_match('/\b(\d{21,30})\b/', $raw, $mLong)) {
 			$doc20 = substr($mLong[1], 0, 20);
 			$numero = substr($doc20, -10);
@@ -885,7 +1221,7 @@ class PdfInvoiceParser
 	{
 		$subject = (string) $text;
 
-		// 1) Clave junto a la etiqueta, permitiendo separadores/espacios/saltos entre dígitos.
+		// 1) Clave junto a la etiqueta, permitiendo separadores/espacios/saltos entre dÃ­gitos.
 		if (preg_match('/Clave\s*[:\-]?\s*([0-9\s\-]{55,120})/iu', $subject, $mLabel)) {
 			$digits = preg_replace('/\D+/', '', (string) ($mLabel[1] ?? ''));
 			if (strlen($digits) >= 50) {
@@ -893,7 +1229,7 @@ class PdfInvoiceParser
 			}
 		}
 
-		// 2) Cualquier secuencia de 50 dígitos continuos en el texto.
+		// 2) Cualquier secuencia de 50 dÃ­gitos continuos en el texto.
 		if (preg_match('/\b(\d{50})\b/u', $subject, $m50)) {
 			return (string) $m50[1];
 		}
@@ -920,7 +1256,7 @@ class PdfInvoiceParser
 
 		$digits = preg_replace('/\D+/', '', $raw);
 
-		// Para clave CR, algunos OCR agregan 1 dígito extra al final. Normalizamos a 50.
+		// Para clave CR, algunos OCR agregan 1 dÃ­gito extra al final. Normalizamos a 50.
 		if (strlen($digits) >= 50 && strpos($digits, '506') === 0) {
 			return substr($digits, 0, 50);
 		}
@@ -932,9 +1268,16 @@ class PdfInvoiceParser
 	private static function extractDocumentoCR($text, $claveCR = '')
 	{
 		$subject = (string) $text;
+		$docHash = self::match('/#\s*(\d{20})\b/u', $subject);
+		if ($docHash !== '') {
+			$numero = substr($docHash, -10);
+			$numero = ltrim($numero, '0');
+			return $numero !== '' ? $numero : '0';
+		}
 
-		// 1) Documento No explícito.
-		$doc = self::match('/(?:Documento\s*No|N[uú]mero\s*(?:de\s*)?documento)\s*[:\-]?\s*([A-Z0-9\-]{10,60})/iu', $subject);
+
+		// 1) Documento No explÃ­cito.
+		$doc = self::match('/(?:Documento\s*No|N[uÃº]mero\s*(?:de\s*)?documento)\s*[:\-]?\s*([A-Z0-9\-]{10,60})/iu', $subject);
 		if ($doc !== '') {
 			$digitsDoc = preg_replace('/\D+/', '', (string) $doc);
 			if (strlen($digitsDoc) >= 21 && strlen($digitsDoc) <= 30) {
@@ -953,11 +1296,11 @@ class PdfInvoiceParser
 			return $doc;
 		}
 
-		// 2) Si existe clave CR de 50, extraer el número consecutivo puro desde bloque F (22-41 base 1).
+		// 2) Si existe clave CR de 50, extraer el nÃºmero consecutivo puro desde bloque F (22-41 base 1).
 		if ($claveCR !== '' && preg_match('/^\d{50}$/', $claveCR)) {
 			$consecutivoInterno = substr($claveCR, 21, 20); // F block at 0-based offset 21
 			if (strlen($consecutivoInterno) === 20) {
-				$numeroPuro = substr($consecutivoInterno, 10, 10); // last 10 = número
+				$numeroPuro = substr($consecutivoInterno, 10, 10); // last 10 = nÃºmero
 				return ltrim($numeroPuro, '0') ?: $numeroPuro;
 			}
 		}
@@ -972,14 +1315,14 @@ class PdfInvoiceParser
 			return '';
 		}
 
-		// Estructura clave CR: 3+2+2+2+12+1+20+8. Cédula = bloque de 12 desde offset 9.
+		// Estructura clave CR: 3+2+2+2+12+1+20+8. CÃ©dula = bloque de 12 desde offset 9.
 		$cedula12 = substr($digits, 9, 12);
 		$cedula12 = preg_replace('/\D+/', '', (string) $cedula12);
 		if (strlen($cedula12) !== 12) {
 			return '';
 		}
 
-		// API suele usar identificación sin padding.
+		// API suele usar identificaciÃ³n sin padding.
 		$cedula = ltrim($cedula12, '0');
 		return $cedula !== '' ? $cedula : $cedula12;
 	}
@@ -1123,96 +1466,16 @@ class PdfInvoiceParser
 		return $root . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'cache' . DIRECTORY_SEPARATOR . 'proveedores_hacienda.json';
 	}
 
-	private static function pendingTemplatesFilePath()
-	{
-		$root = dirname(__DIR__, 2);
-		return $root . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'cache' . DIRECTORY_SEPARATOR . 'pdf_templates_pending.json';
-	}
-
-	private static function registerPendingTemplate(array $payload)
-	{
-		$cedula = preg_replace('/\D+/', '', (string) ($payload['cedula'] ?? ''));
-		$proveedor = trim((string) ($payload['proveedor'] ?? ''));
-		$archivo = trim((string) ($payload['archivo'] ?? ''));
-		$clave = preg_replace('/\D+/', '', (string) ($payload['clave'] ?? ''));
-		$preview = trim((string) ($payload['texto_preview'] ?? ''));
-
-		$key = $cedula !== '' ? $cedula : ('unknown_' . substr(hash('sha1', $proveedor . '|' . $archivo), 0, 12));
-		$path = self::pendingTemplatesFilePath();
-		$dir = dirname($path);
-		if (!is_dir($dir)) {
-			@mkdir($dir, 0777, true);
-		}
-
-		$current = [];
-		if (is_file($path)) {
-			$raw = @file_get_contents($path);
-			$decoded = is_string($raw) ? json_decode($raw, true) : null;
-			if (is_array($decoded)) {
-				$current = $decoded;
-			}
-		}
-
-		$existing = isset($current[$key]) && is_array($current[$key]) ? $current[$key] : [];
-		$attempts = (int) ($existing['attempts'] ?? 0) + 1;
-		$firstSeen = (string) ($existing['first_seen'] ?? date('c'));
-
-		$current[$key] = [
-			'cedula' => $cedula,
-			'proveedor' => $proveedor,
-			'archivo_ultima_vez' => $archivo,
-			'clave_ejemplo' => $clave,
-			'attempts' => $attempts,
-			'first_seen' => $firstSeen,
-			'last_seen' => date('c'),
-			'texto_preview' => $preview,
-			'sugerencia' => self::buildTemplateSuggestion($cedula, $proveedor),
-		];
-
-		@file_put_contents($path, json_encode($current, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-	}
-
-	private static function buildTemplateSuggestion($cedula, $proveedor)
-	{
-		$ced = preg_replace('/\D+/', '', (string) $cedula);
-		$prov = mb_strtoupper(trim((string) $proveedor), 'UTF-8');
-		$templateId = 'cr_auto_' . ($ced !== '' ? $ced : substr(hash('sha1', $prov), 0, 8));
-
-		return [
-			'template_id' => $templateId,
-			'provider_template_map_entry' => $ced !== '' ? [$ced => $templateId] : null,
-			'provider_alias_templates_entry' => [$templateId => array_values(array_filter([$prov]))],
-			'template_definition' => [
-				'enabled' => true,
-				'date_patterns' => [
-					'/\\bFecha\\s*(?:de\\s*)?(?:Emision|Facturaci[oó]n)?\\s*[:\\-]?\\s*([0-3]?\\d[\\/\\-][01]?\\d[\\/\\-]20\\d{2})\\b/iu',
-					'/\\b([0-3]?\\d[\\/\\-][01]?\\d[\\/\\-]20\\d{2})\\b/u',
-				],
-				'line_labels' => [
-					'subtotal' => ['Sub\\s*[Tt]otal', 'Base\\s*Imponible', 'Subtotal'],
-					'iva' => ['I\\.?\\s*V\\.?\\s*A\\.?', 'Impuesto\\s*al\\s*Valor\\s*Agregado', 'Impuesto\\s*de\\s*Venta'],
-					'total' => ['Total\\s*Comprobante', 'Total\\s*a\\s*pagar', 'Total\\s*Factura', 'Monto\\s*Total'],
-				],
-				'heuristic_labels' => [
-					'subtotal' => ['Sub\\s*[Tt]otal', 'Base\\s*Imponible', 'Subtotal'],
-					'iva' => ['I\\.?\\s*V\\.?\\s*A\\.?', 'Impuesto\\s*al\\s*Valor\\s*Agregado', 'Impuesto\\s*de\\s*Venta'],
-					'total' => ['Total\\s*Comprobante', 'Total\\s*a\\s*pagar', 'Total\\s*Factura', 'Monto\\s*Total', '(?<![a-zA-Z])Total(?![a-zA-Z])'],
-				],
-				'numero_referencia_priority' => ['documento', 'clave'],
-			],
-		];
-	}
-
 	private static function extractReferencesFromFileName($fileName)
 	{
 		$name = preg_replace('/\.pdf$/i', '', (string) $fileName);
 		$out = ['consecutivo' => '', 'numero' => '', 'proveedor' => ''];
 
-		if (preg_match('/\b(\d{50})\b/', $name, $mClave)) {
+		if (preg_match('/(?<!\d)(\d{50})(?!\d)/', $name, $mClave)) {
 			$out['consecutivo'] = $mClave[1];
 		}
 
-		if (preg_match('/\b(\d{20})\b/', $name, $mDoc)) {
+		if (preg_match('/(?<!\d)(\d{20})(?!\d)/', $name, $mDoc)) {
 			$numero = substr($mDoc[1], -10);
 			$out['numero'] = ltrim($numero, '0') ?: $numero;
 			if ($out['consecutivo'] === '') {
@@ -1233,6 +1496,24 @@ class PdfInvoiceParser
 		}
 
 		return $out;
+	}
+
+	private static function extractSimplifiedProviderName($text)
+	{
+		$provider = self::match('/Proveedor\s*:\s*([^\n\r]+)/iu', (string) $text);
+		if ($provider === '') {
+			return '';
+		}
+
+		$provider = preg_replace('/\s+Es\s+Compra\b.*$/iu', '', $provider);
+		$provider = preg_replace('/^\d+\s*/u', '', (string) $provider);
+		$provider = trim((string) preg_replace('/\s+/', ' ', (string) $provider));
+
+		if (!self::isLikelyCompanyName($provider)) {
+			return '';
+		}
+
+		return mb_strtoupper($provider, 'UTF-8');
 	}
 
 	private static function extractProviderFromText($text)
@@ -1268,11 +1549,13 @@ class PdfInvoiceParser
 			return false;
 		}
 
-		return (bool) preg_match('/[A-ZÁÉÍÓÚÑ]/u', $upper);
+		return (bool) preg_match('/[A-ZÃÃ‰ÃÃ“ÃšÃ‘]/u', $upper);
 	}
 
 	private static function runCommand($command)
 	{
+		self::extendExecutionWindow();
+
 		if (!function_exists('shell_exec')) {
 			return '';
 		}
@@ -1283,5 +1566,17 @@ class PdfInvoiceParser
 
 		return is_string($output) ? trim($output) : '';
 	}
+
+	private static function extendExecutionWindow($seconds = 600)
+	{
+		$seconds = max(120, (int) $seconds);
+
+		if (function_exists('set_time_limit')) {
+			@set_time_limit($seconds);
+		}
+
+		@ini_set('max_execution_time', (string) $seconds);
+	}
 }
 }
+

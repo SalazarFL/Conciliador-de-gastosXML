@@ -15,6 +15,10 @@ $router->get('/home', 'HomeController@index');
 $router->get('/facturas', 'FacturasController@index');
 $router->get('/facturas/importar', 'FacturasController@importar');
 $router->post('/facturas/subir', 'FacturasController@subir');
+$router->post('/facturas/cola/iniciar', 'FacturasController@colaIniciar');
+$router->post('/facturas/cola/agregar', 'FacturasController@colaAgregar');
+$router->post('/facturas/cola/procesar', 'FacturasController@colaProcesar');
+$router->get('/facturas/cola/estado/{id}', 'FacturasController@colaEstado');
 $router->get('/facturas/ver/{id}', 'FacturasController@ver');
 $router->post('/facturas/eliminar/{id}', 'FacturasController@eliminar');
 
@@ -36,6 +40,7 @@ $router->get('/conciliacion/exportar', 'ConciliacionController@exportar');
 
 // --- RUTAS DE REPORTES ---
 $router->get('/reportes', 'ReportesController@index');
+$router->get('/reportes/preview', 'ReportesController@preview');
 $router->get('/reportes/resumen', 'ReportesController@resumen');
 $router->get('/reportes/por-proveedor', 'ReportesController@porProveedor');
 $router->get('/reportes/por-estado', 'ReportesController@porEstado');
