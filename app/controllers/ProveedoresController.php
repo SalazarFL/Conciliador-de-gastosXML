@@ -6,9 +6,8 @@
 
 class ProveedoresController extends Controller
 {
-    /**
-     * Buscar proveedores (API AJAX)
-     */
+    public function __construct() { $this->requireAuth(); }
+
     public function buscar()
     {
         $termino = $this->get('q', '');

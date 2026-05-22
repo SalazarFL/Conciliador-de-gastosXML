@@ -10,7 +10,7 @@
 			<p><strong>Número asistente:</strong> <?= htmlspecialchars($factura['numero_factura_asistente'] ?? '') ?></p>
 			<p><strong>Fecha emisión:</strong> <?= htmlspecialchars($factura['fecha_emision'] ?? '') ?></p>
 					<p><strong>Total:</strong> <?= number_format((float)($factura['total'] ?? 0), 2) ?></p>
-			<p><strong>Moneda:</strong> <?= htmlspecialchars($factura['moneda'] ?? 'MXN') ?></p>
+			<p><strong>Moneda:</strong> <?= htmlspecialchars($factura['moneda'] ?? 'CRC') ?></p>
 			<p><strong>Archivo XML:</strong> <?= htmlspecialchars($factura['archivo_xml'] ?? '') ?></p>
 		</div>
 	<?php endif; ?>

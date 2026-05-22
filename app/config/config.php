@@ -7,7 +7,7 @@ return [
     // Información de la aplicación
     'app_name' => 'XMLConcilia',
     'app_version' => '1.0.0',
-    'app_url' => 'http://localhost/xmlconcilia/public',
+    'app_url' => '/xmlconcilia/public',
     
     // Rutas base
     'base_path' => dirname(__DIR__, 2),
@@ -25,7 +25,7 @@ return [
     'uploads_path' => dirname(__DIR__, 2) . '/public/uploads',
     'max_upload_size' => 10485760, // 10MB en bytes
     'allowed_extensions' => [
-        'xml' => ['xml', 'pdf'],
+        'xml' => ['xml'],
         'gastos' => ['csv', 'xlsx', 'xls']
     ],
     

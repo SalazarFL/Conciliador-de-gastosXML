@@ -6,9 +6,8 @@
 
 class HomeController extends Controller
 {
-    /**
-     * Página principal
-     */
+    public function __construct() { $this->requireAuth(); }
+
     public function index()
     {
         // Obtener estadísticas básicas si hay conexión a BD

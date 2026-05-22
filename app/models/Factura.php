@@ -82,7 +82,7 @@ class Factura extends Model
             $data['subtotal'] ?? 0,
             $data['iva'] ?? 0,
             $data['total'] ?? 0,
-            $data['moneda'] ?? 'MXN',
+            $data['moneda'] ?? 'CRC',
             $data['tipo_comprobante'] ?? null,
             $data['archivo_xml'] ?? 'sin_archivo.xml',
             $data['ruta_xml'] ?? null,
@@ -110,5 +110,15 @@ class Factura extends Model
     {
         $sql = "DELETE FROM {$this->table}";
         return $this->execute($sql);
+    }
+
+    public function getByImportacion(int $importacionId): array
+    {
+        $sql = "SELECT f.*, p.razon_social as proveedor_nombre
+                FROM {$this->table} f
+                LEFT JOIN proveedores p ON f.proveedor_id = p.id
+                WHERE f.importacion_id = ?
+                ORDER BY f.fecha_emision DESC";
+        return $this->fetchAll($sql, [$importacionId]) ?: [];
     }
 }

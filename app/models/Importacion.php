@@ -118,4 +118,19 @@ class Importacion extends Model
             (int) $id
         ]);
     }
+
+    public function getAllByTipo(string $tipo, int $limit = 50): array
+    {
+        $sql = "SELECT * FROM {$this->table}
+                WHERE tipo = ?
+                ORDER BY fecha_importacion DESC, id DESC
+                LIMIT ?";
+        return $this->fetchAll($sql, [$tipo, $limit]) ?: [];
+    }
+
+    public function clearByTipo(string $tipo): int
+    {
+        $sql = "DELETE FROM {$this->table} WHERE tipo = ?";
+        return (int) $this->execute($sql, [$tipo]);
+    }
 }

@@ -7,26 +7,42 @@ class FacturasController extends Controller
 {
 	private $queueService;
 
+	public function __construct() { $this->requireAuth(); }
+
 	public function index()
 	{
-		$facturas = [];
+		$facturas          = [];
+		$historial         = [];
+		$importacionActiva = null;
 
 		try {
-			$facturaModel = $this->loadModel('Factura');
-			$facturas = $facturaModel->getAllWithImportacion();
+			$facturaModel     = $this->loadModel('Factura');
+			$importacionModel = $this->loadModel('Importacion');
+
+			if (!empty($_GET['limpiar'])) {
+				// Vista limpia: no se muestra ningún registro
+			} else {
+				$importacionId = max(0, (int) ($_GET['importacion_id'] ?? 0));
+
+				if ($importacionId > 0) {
+					$facturas          = $facturaModel->getByImportacion($importacionId);
+					$importacionActiva = $importacionModel->findById($importacionId);
+				} else {
+					$facturas = $facturaModel->getAllWithImportacion();
+				}
+
+				$historial = $importacionModel->getAllByTipo('xml');
+			}
 		} catch (Exception $e) {
-			$this->redirectWithMessage($this->url('/facturas/importar'), 'No fue posible cargar facturas: ' . $e->getMessage(), 'warning');
+			$this->redirectWithMessage($this->url('/facturas'), 'No fue posible cargar facturas: ' . $e->getMessage(), 'warning');
 		}
 
 		$this->render('facturas/index', [
-			'title' => 'Facturas - XMLConcilia',
-			'facturas' => $facturas
+			'title'             => 'Facturas - XMLConcilia',
+			'facturas'          => $facturas,
+			'historial'         => $historial,
+			'importacionActiva' => $importacionActiva,
 		]);
-	}
-
-	public function importar()
-	{
-		$this->redirect($this->url('/conciliacion'));
 	}
 
 	public function subir()
@@ -38,9 +54,6 @@ class FacturasController extends Controller
 		require_once __DIR__ . '/../helpers/FileUploader.php';
 		if (!class_exists('XmlInvoiceParser', false)) {
 			require_once __DIR__ . '/../helpers/XmlParser.php';
-		}
-		if (!class_exists('PdfInvoiceParser', false)) {
-			require_once __DIR__ . '/../helpers/PdfParser.php';
 		}
 
 		$config = require __DIR__ . '/../config/config.php';
@@ -61,7 +74,6 @@ class FacturasController extends Controller
 				'ruta_archivo' => $uploadDir
 			]);
 
-			// Cuántos archivos recibió realmente PHP (puede ser menor a lo enviado si hay límite ini).
 			$recibidos = count($uploadedFiles);
 			$limitePhp = (int) ini_get('max_file_uploads');
 
@@ -69,25 +81,12 @@ class FacturasController extends Controller
 			$duplicados = 0;
 			$fallidos = 0;
 			$errores = [];
-			$sinPlantilla = [];   // archivos PDF sin plantilla configurada
-			$archivosError = [];  // archivos con error real de parseo/DB
-			$archivosDup = [];    // archivos ya importados (duplicado de consecutivo)
+			$archivosError = [];
+			$archivosDup = [];
 
 			foreach ($uploadedFiles as $file) {
-				$ext = strtolower(pathinfo($file['original_name'] ?? '', PATHINFO_EXTENSION));
-				$isPdf = ($ext === 'pdf');
-
 				try {
-					if ($isPdf) {
-						$docData = PdfInvoiceParser::parseInvoiceFromPdf($file['path'], [
-							'max_ocr_pages' => 3,
-							'ocr_language' => 'spa+eng',
-							'source_name' => (string) ($file['original_name'] ?? ''),
-							'require_template' => true,
-						]);
-					} else {
-						$docData = XmlInvoiceParser::parseCfdiFromFile($file['path']);
-					}
+					$docData = XmlInvoiceParser::parseCfdiFromFile($file['path']);
 
 					$proveedorId = $proveedorModel->obtenerOCrear($docData['rfc_emisor'] ?? '', $docData['razon_social_emisor'] ?? '');
 
@@ -95,7 +94,6 @@ class FacturasController extends Controller
 					if (!is_array($metadata)) {
 						$metadata = [];
 					}
-					$metadata['origen_archivo'] = $isPdf ? 'pdf' : 'xml';
 
 					$hashDocumento = (string) ($docData['hash_documento'] ?? ($docData['hash_xml'] ?? null));
 
@@ -111,9 +109,9 @@ class FacturasController extends Controller
 						'moneda' => $docData['moneda'],
 						'tipo_comprobante' => $docData['tipo_comprobante'] ?? null,
 						'archivo_xml' => $file['original_name'],
-						'ruta_xml' => $isPdf ? null : $file['path'],
+						'ruta_xml' => $file['path'],
 						'hash_xml' => $hashDocumento !== '' ? $hashDocumento : null,
-						'xml_contenido' => $isPdf ? null : ($docData['xml_contenido'] ?? null),
+						'xml_contenido' => $docData['xml_contenido'] ?? null,
 						'metadata' => json_encode($metadata, JSON_UNESCAPED_UNICODE)
 					]);
 
@@ -123,14 +121,10 @@ class FacturasController extends Controller
 					$esDuplicado = stripos($msg, 'Duplicate entry') !== false
 						|| stripos($msg, 'uk_consecutivo') !== false
 						|| stripos($msg, 'uk_hash') !== false;
-					$esSinPlantilla = stripos($msg, 'sin plantilla de parseo') !== false;
 
 					if ($esDuplicado) {
 						$duplicados++;
 						$archivosDup[] = $file['original_name'];
-					} elseif ($esSinPlantilla) {
-						$fallidos++;
-						$sinPlantilla[] = $file['original_name'];
 					} else {
 						$fallidos++;
 						$archivosError[] = $file['original_name'];
@@ -140,36 +134,29 @@ class FacturasController extends Controller
 						'archivo' => $file['original_name'],
 						'error' => $msg
 					];
-				} finally {
-					// Los PDF se usan solo para extracción y luego se descartan.
-					if ($isPdf && !empty($file['path']) && is_file($file['path'])) {
-						@unlink($file['path']);
-					}
+				}
+
+				if (is_file($file['path'])) {
+					@unlink($file['path']);
 				}
 			}
 
 			$importacionModel->cerrar($importacionId, $recibidos, $exitosos, $fallidos + $duplicados, $errores);
 
-			// Aviso si el servidor pudo haber truncado archivos por límite PHP.
 			$avisoLimite = '';
 			if ($limitePhp > 0 && $recibidos >= $limitePhp) {
 				$avisoLimite = "El servidor recibió solo {$recibidos} archivos (límite PHP max_file_uploads={$limitePhp}). Si enviaste más, divídelos en lotes de {$limitePhp}.";
 			}
 
-			// Armar resumen legible.
-			$partes = ["Recibidos por servidor: {$recibidos}"];
-			$partes[] = "Importados: {$exitosos}";
+			$partes = ["Recibidos: {$recibidos}", "Importados: {$exitosos}"];
 			if ($duplicados > 0) {
 				$partes[] = "Ya existían: {$duplicados}";
 			}
-			if (!empty($sinPlantilla)) {
-				$partes[] = "Sin plantilla PDF: " . count($sinPlantilla);
-			}
-			if ($fallidos > count($sinPlantilla)) {
-				$partes[] = "Errores reales: " . ($fallidos - count($sinPlantilla));
+			if ($fallidos > 0) {
+				$partes[] = "Errores: {$fallidos}";
 			}
 
-			$hayProblemas = $fallidos > 0 || !empty($sinPlantilla) || $avisoLimite !== '';
+			$hayProblemas = $fallidos > 0 || $avisoLimite !== '';
 			$todosFallaron = $exitosos === 0 && $duplicados === 0;
 			$tipo = $todosFallaron ? 'error' : ($hayProblemas ? 'warning' : 'success');
 
@@ -180,12 +167,11 @@ class FacturasController extends Controller
 				[
 					'server_limit_warning' => $avisoLimite,
 					'duplicate_files'      => array_values(array_unique($archivosDup)),
-					'without_template'     => array_values(array_unique($sinPlantilla)),
 					'failed_files'         => array_values(array_unique($archivosError)),
 				]
 			);
 		} catch (Throwable $e) {
-			$this->redirectWithMessage($this->url('/conciliacion'), 'Error de importación XML/PDF: ' . $e->getMessage(), 'error');
+			$this->redirectWithMessage($this->url('/conciliacion'), 'Error de importación XML: ' . $e->getMessage(), 'error');
 		}
 	}
 
@@ -322,11 +308,6 @@ class FacturasController extends Controller
 		}
 	}
 
-	public function eliminar($id)
-	{
-		$this->respondNotImplemented('Eliminación de factura');
-	}
-
 	private function getQueueService()
 	{
 		if ($this->queueService === null) {
@@ -337,12 +318,4 @@ class FacturasController extends Controller
 		return $this->queueService;
 	}
 
-	private function respondNotImplemented($feature)
-	{
-		http_response_code(501);
-		header('Content-Type: text/html; charset=utf-8');
-		echo '<h1>501 - No implementado</h1>';
-		echo '<p>' . htmlspecialchars($feature, ENT_QUOTES, 'UTF-8') . ' estará disponible en la siguiente iteración.</p>';
-		exit;
-	}
 }

@@ -1,7 +1,13 @@
 # Habilitar rewrite engine
 <IfModule mod_rewrite.c>
     RewriteEngine On
-    
+
+    # Bloquear acceso HTTP directo a archivos subidos
+    RewriteRule ^uploads/ - [F,L]
+
+    # Servir todo lo que esté bajo assets/ directamente (sin pasar por index.php)
+    RewriteRule ^assets/ - [L]
+
     # Redirigir a index.php si no es un archivo o directorio
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteCond %{REQUEST_FILENAME} !-d

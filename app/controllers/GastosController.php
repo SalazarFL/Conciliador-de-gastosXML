@@ -5,26 +5,52 @@
 
 class GastosController extends Controller
 {
+	public function __construct() { $this->requireAuth(); }
+
 	public function index()
 	{
-		$gastos = [];
+		$gastos           = [];
+		$historial        = [];
+		$importacionActiva = null;
 
 		try {
-			$gastoModel = $this->loadModel('Gasto');
-			$gastos = $gastoModel->getAllWithProveedor();
+			$gastoModel       = $this->loadModel('Gasto');
+			$importacionModel = $this->loadModel('Importacion');
+
+			// Garantiza que la columna exista (migración lazy)
+			$gastoModel->ensureImportacionIdColumn();
+
+			if (!empty($_GET['limpiar'])) {
+				// Vista limpia: no se muestra ningún registro
+			} else {
+				// Cargar historial primero para poder hacer el backfill
+				$historial = $importacionModel->getAllByTipo('gastos');
+
+				// Backfill: si hay filas sin importacion_id, asignarlas a la importación más reciente
+				if (!empty($historial)) {
+					$gastoModel->backfillImportacionId((int) $historial[0]['id']);
+				}
+
+				$importacionId = max(0, (int) ($_GET['importacion_id'] ?? 0));
+
+				if ($importacionId > 0) {
+					$gastos            = $gastoModel->getByImportacion($importacionId);
+					$importacionActiva = $importacionModel->findById($importacionId);
+				} else {
+					$gastos = $gastoModel->getAllWithProveedor();
+				}
+			}
+
 		} catch (Exception $e) {
-			$this->redirectWithMessage($this->url('/gastos/importar'), 'No fue posible cargar gastos: ' . $e->getMessage(), 'warning');
+			$this->redirectWithMessage($this->url('/conciliacion'), 'No fue posible cargar gastos: ' . $e->getMessage(), 'warning');
 		}
 
 		$this->render('gastos/index', [
-			'title' => 'Gastos - XMLConcilia',
-			'gastos' => $gastos
+			'title'            => 'Gastos - XMLConcilia',
+			'gastos'           => $gastos,
+			'historial'        => $historial,
+			'importacionActiva' => $importacionActiva,
 		]);
-	}
-
-	public function importar()
-	{
-		$this->redirect($this->url('/conciliacion'));
 	}
 
 	public function subir()
@@ -63,7 +89,11 @@ class GastosController extends Controller
 				'ruta_archivo' => $file['path']
 			]);
 
-			$result = $this->procesarGastos($file['path'], $ext, $gastoModel);
+			$gastoModel->ensureImportacionIdColumn();
+			$result = $this->procesarGastos($file['path'], $ext, $gastoModel, (int) $importacionId);
+			if (is_file($file['path'])) {
+				@unlink($file['path']);
+			}
 			$importacionModel->cerrar($importacionId, $result['total'], $result['exitosos'], $result['fallidos'], $result['errores']);
 
 			if ($result['exitosos'] === 0) {
@@ -80,32 +110,11 @@ class GastosController extends Controller
 		}
 	}
 
-	public function ver($id)
+	private function procesarGastos($filePath, $ext, $gastoModel, $importacionId = null)
 	{
-		$this->respondNotImplemented('Detalle de gasto');
-	}
-
-	public function eliminar($id)
-	{
-		$this->respondNotImplemented('Eliminación de gasto');
-	}
-
-	private function respondNotImplemented($feature)
-	{
-		http_response_code(501);
-		header('Content-Type: text/html; charset=utf-8');
-		echo '<h1>501 - No implementado</h1>';
-		echo '<p>' . htmlspecialchars($feature, ENT_QUOTES, 'UTF-8') . ' estará disponible en la siguiente iteración.</p>';
-		exit;
-	}
-
-	private function procesarGastos($filePath, $ext, $gastoModel)
-	{
-		if ($ext === 'csv') {
-			$dataset = $this->readCsvData($filePath);
-		} else {
-			$dataset = XlsxReader::readFirstSheet($filePath);
-		}
+		$dataset = $ext === 'csv'
+			? $this->readCsvData($filePath)
+			: XlsxReader::readFirstSheet($filePath);
 
 		$map = $this->buildHeaderMap($dataset['header']);
 		$this->validateRequiredColumns($map);
@@ -142,14 +151,15 @@ class GastosController extends Controller
 				$base = max(0, $totalMonto - $iva);
 
 				$gastoModel->upsertConsolidado([
-					'numero_factura' => $numero,
+					'numero_factura'  => $numero,
 					'proveedor_texto' => $proveedor,
-					'cantidad_items' => 1,
-					'fecha_min' => $fecha,
-					'fecha_max' => $fecha,
-					'suma_base' => $base,
-					'suma_iva' => $iva,
-					'suma_total' => $totalMonto
+					'cantidad_items'  => 1,
+					'fecha_min'       => $fecha,
+					'fecha_max'       => $fecha,
+					'suma_base'       => $base,
+					'suma_iva'        => $iva,
+					'suma_total'      => $totalMonto,
+					'importacion_id'  => $importacionId,
 				]);
 
 				$exitosos++;
@@ -278,4 +288,7 @@ class GastosController extends Controller
 
 		return $text;
 	}
+
+
 }
+

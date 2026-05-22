@@ -1,306 +1,132 @@
-<div class="container">
-    <div class="page-header">
-        <h1>
-            <i class="fas fa-home"></i> 
-            XMLConcilia
-        </h1>
-        <p class="subtitle">Sistema de Conciliación de Facturas XML vs Gastos</p>
-    </div>
+<?php
+$baseUrl = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
+$stats   = $stats ?? ['total_facturas'=>0,'total_gastos'=>0,'total_conciliadas'=>0,'pendientes_revision'=>0];
+?>
 
-    <!-- Estadísticas rápidas -->
-    <div class="stats-grid">
-        <div class="stat-card stat-primary">
-            <div class="stat-icon">
-                <i class="fas fa-file-invoice"></i>
-            </div>
-            <div class="stat-content">
-                <h3><?= number_format($stats['total_facturas']) ?></h3>
-                <p>Facturas XML</p>
-            </div>
-        </div>
-
-        <div class="stat-card stat-success">
-            <div class="stat-icon">
-                <i class="fas fa-receipt"></i>
-            </div>
-            <div class="stat-content">
-                <h3><?= number_format($stats['total_gastos']) ?></h3>
-                <p>Gastos Registrados</p>
-            </div>
-        </div>
-
-        <div class="stat-card stat-info">
-            <div class="stat-icon">
-                <i class="fas fa-check-circle"></i>
-            </div>
-            <div class="stat-content">
-                <h3><?= number_format($stats['total_conciliadas']) ?></h3>
-                <p>Conciliadas</p>
-            </div>
-        </div>
-
-        <div class="stat-card stat-warning">
-            <div class="stat-icon">
-                <i class="fas fa-exclamation-triangle"></i>
-            </div>
-            <div class="stat-content">
-                <h3><?= number_format($stats['pendientes_revision']) ?></h3>
-                <p>Pendientes Revisión</p>
-            </div>
-        </div>
-    </div>
-
-    <!-- Acciones rápidas -->
-    <div class="quick-actions">
-        <h2><i class="fas fa-bolt"></i> Acciones Rápidas</h2>
-        
-        <div class="action-grid">
-            <a href="<?= $this->url('conciliacion') ?>" class="action-card">
-                <i class="fas fa-table-columns"></i>
-                <h3>Panel Único</h3>
-                <p>Importar XML, gastos y conciliar en la misma vista</p>
-            </a>
-
-            <a href="<?= $this->url('conciliacion') ?>" class="action-card">
-                <i class="fas fa-file-circle-check"></i>
-                <h3>Ver Cargas</h3>
-                <p>Revisar facturas y gastos en ventanas flotantes</p>
-            </a>
-
-            <a href="<?= $this->url('conciliacion') ?>" class="action-card">
-                <i class="fas fa-sync"></i>
-                <h3>Ejecutar Conciliación</h3>
-                <p>Lanzar el proceso de conciliación automática</p>
-            </a>
-
-            <a href="<?= $this->url('reportes') ?>" class="action-card">
-                <i class="fas fa-chart-bar"></i>
-                <h3>Ver Reportes</h3>
-                <p>Consultar reportes y estadísticas</p>
-            </a>
-        </div>
-    </div>
-
-    <!-- Información -->
-    <div class="info-section">
-        <div class="info-card">
-            <h3><i class="fas fa-info-circle"></i> Acerca del Sistema</h3>
-            <p>
-                XMLConcilia es un sistema de verificación y conciliación entre facturas XML (CFDI) 
-                y registros de gastos. Utiliza algoritmos de coincidencia difusa (fuzzy matching) 
-                para identificar correspondencias entre documentos.
-            </p>
-            <ul>
-                <li>✓ Importación masiva de archivos XML</li>
-                <li>✓ Carga de gastos desde Excel/CSV</li>
-                <li>✓ Conciliación automática con scoring</li>
-                <li>✓ Sistema de revisión manual</li>
-                <li>✓ Reportes y exportación de resultados</li>
-            </ul>
-        </div>
-
-        <div class="info-card">
-            <h3><i class="fas fa-traffic-light"></i> Sistema de Estados</h3>
-            <div class="estado-list">
-                <div class="estado-item">
-                    <span class="badge badge-conciliada">🟢 Conciliada</span>
-                    <span>Match 100% - Datos coinciden exactamente</span>
-                </div>
-                <div class="estado-item">
-                    <span class="badge badge-requiere-revision">🟠 Requiere Revisión</span>
-                    <span>Match parcial - Requiere validación manual</span>
-                </div>
-                <div class="estado-item">
-                    <span class="badge badge-con-diferencias">🟡 Con Diferencias</span>
-                    <span>Match encontrado con diferencias en monto</span>
-                </div>
-                <div class="estado-item">
-                    <span class="badge badge-pendiente">🔵 Pendiente</span>
-                    <span>No se encontró coincidencia</span>
-                </div>
-                <div class="estado-item">
-                    <span class="badge badge-sin-xml">🔴 Sin XML</span>
-                    <span>Gasto sin factura XML correspondiente</span>
-                </div>
-            </div>
-        </div>
+<div class="page-header">
+    <div>
+        <h1>Panel Principal</h1>
+        <p>Resumen del estado actual de la conciliación. Accede a cada módulo desde el menú lateral.</p>
     </div>
 </div>
 
-<style>
-.container {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 20px;
-}
+<!-- Estadísticas -->
+<div class="stats-grid mb-20">
+    <div class="stat-card navy">
+        <div class="stat-label"><i class="fas fa-file-invoice" style="margin-right:5px;"></i>Facturas XML</div>
+        <div class="stat-value"><?= number_format((int)($stats['total_facturas'] ?? 0)) ?></div>
+        <div class="stat-sub">Importadas en el sistema</div>
+    </div>
+    <div class="stat-card gold">
+        <div class="stat-label"><i class="fas fa-receipt" style="margin-right:5px;"></i>Gastos Consolidados</div>
+        <div class="stat-value"><?= number_format((int)($stats['total_gastos'] ?? 0)) ?></div>
+        <div class="stat-sub">Registros activos</div>
+    </div>
+    <div class="stat-card white">
+        <div class="stat-label"><i class="fas fa-check-circle" style="margin-right:5px;"></i>Conciliadas</div>
+        <div class="stat-value" style="color:var(--ok);"><?= number_format((int)($stats['total_conciliadas'] ?? 0)) ?></div>
+        <div class="stat-sub">Coincidencias automáticas</div>
+    </div>
+    <div class="stat-card white">
+        <div class="stat-label"><i class="fas fa-clock" style="margin-right:5px;"></i>Pendientes</div>
+        <div class="stat-value" style="color:var(--warn);"><?= number_format((int)($stats['pendientes_revision'] ?? 0)) ?></div>
+        <div class="stat-sub">Requieren revisión manual</div>
+    </div>
+</div>
 
-.page-header {
-    text-align: center;
-    margin-bottom: 40px;
-}
+<!-- Accesos rápidos -->
+<div class="grid-2 mb-20">
 
-.page-header h1 {
-    color: #2c3e50;
-    font-size: 2.5em;
-    margin-bottom: 10px;
-}
+    <a href="<?= $baseUrl ?>/facturas" class="card" style="text-decoration:none;transition:transform .14s,box-shadow .14s;"
+       onmouseover="this.style.transform='translateY(-3px)';this.style.boxShadow='0 12px 32px rgba(27,58,107,.16)'"
+       onmouseout="this.style.transform='';this.style.boxShadow=''">
+        <div style="display:flex;align-items:center;gap:16px;">
+            <div style="width:48px;height:48px;border-radius:12px;background:rgba(27,58,107,.09);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                <i class="fas fa-file-invoice" style="font-size:20px;color:var(--navy);"></i>
+            </div>
+            <div style="flex:1;min-height:56px;display:flex;flex-direction:column;justify-content:flex-start;">
+                <div style="font-size:14px;font-weight:700;color:var(--navy);margin-bottom:3px;">Carga de Facturas XML</div>
+                <div style="font-size:12px;color:var(--text-muted);">Importar y gestionar facturas CFDI</div>
+            </div>
+            <i class="fas fa-chevron-right" style="color:var(--border);"></i>
+        </div>
+    </a>
 
-.subtitle {
-    color: #7f8c8d;
-    font-size: 1.1em;
-}
+    <a href="<?= $baseUrl ?>/gastos" class="card" style="text-decoration:none;transition:transform .14s,box-shadow .14s;"
+       onmouseover="this.style.transform='translateY(-3px)';this.style.boxShadow='0 12px 32px rgba(240,165,0,.14)'"
+       onmouseout="this.style.transform='';this.style.boxShadow=''">
+        <div style="display:flex;align-items:center;gap:16px;">
+            <div style="width:48px;height:48px;border-radius:12px;background:rgba(240,165,0,.10);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                <i class="fas fa-file-csv" style="font-size:20px;color:var(--gold-dark);"></i>
+            </div>
+            <div style="flex:1;min-height:56px;display:flex;flex-direction:column;justify-content:flex-start;">
+                <div style="font-size:14px;font-weight:700;color:var(--navy);margin-bottom:3px;">Carga de Gastos CSV</div>
+                <div style="font-size:12px;color:var(--text-muted);">Importar listado de gastos CSV / XLSX</div>
+            </div>
+            <i class="fas fa-chevron-right" style="color:var(--border);"></i>
+        </div>
+    </a>
 
-.stats-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-    gap: 20px;
-    margin-bottom: 40px;
-}
+    <a href="<?= $baseUrl ?>/conciliacion" class="card" style="text-decoration:none;transition:transform .14s,box-shadow .14s;"
+       onmouseover="this.style.transform='translateY(-3px)';this.style.boxShadow='0 12px 32px rgba(15,118,110,.14)'"
+       onmouseout="this.style.transform='';this.style.boxShadow=''">
+        <div style="display:flex;align-items:center;gap:16px;">
+            <div style="width:48px;height:48px;border-radius:12px;background:rgba(15,118,110,.09);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                <i class="fas fa-check-double" style="font-size:20px;color:#0f766e;"></i>
+            </div>
+            <div style="flex:1;min-height:56px;display:flex;flex-direction:column;justify-content:flex-start;">
+                <div style="font-size:14px;font-weight:700;color:var(--navy);margin-bottom:3px;">Conciliación</div>
+                <div style="font-size:12px;color:var(--text-muted);">Ejecutar conciliación automática</div>
+            </div>
+            <i class="fas fa-chevron-right" style="color:var(--border);"></i>
+        </div>
+    </a>
 
-.stat-card {
-    background: white;
-    border-radius: 8px;
-    padding: 25px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    display: flex;
-    align-items: center;
-    gap: 20px;
-}
+    <a href="<?= $baseUrl ?>/reportes" class="card" style="text-decoration:none;transition:transform .14s,box-shadow .14s;"
+       onmouseover="this.style.transform='translateY(-3px)';this.style.boxShadow='0 12px 32px rgba(27,58,107,.12)'"
+       onmouseout="this.style.transform='';this.style.boxShadow=''">
+        <div style="display:flex;align-items:center;gap:16px;">
+            <div style="width:48px;height:48px;border-radius:12px;background:rgba(27,58,107,.07);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                <i class="fas fa-chart-bar" style="font-size:20px;color:var(--navy-light);"></i>
+            </div>
+            <div style="flex:1;min-height:56px;display:flex;flex-direction:column;justify-content:flex-start;">
+                <div style="font-size:14px;font-weight:700;color:var(--navy);margin-bottom:3px;">Reportes</div>
+                <div style="font-size:12px;color:var(--text-muted);">Filtrar y exportar datos a XLSX</div>
+            </div>
+            <i class="fas fa-chevron-right" style="color:var(--border);"></i>
+        </div>
+    </a>
 
-.stat-icon {
-    font-size: 3em;
-    opacity: 0.8;
-}
+</div>
 
-.stat-primary .stat-icon { color: #3498db; }
-.stat-success .stat-icon { color: #2ecc71; }
-.stat-info .stat-icon { color: #9b59b6; }
-.stat-warning .stat-icon { color: #f39c12; }
-
-.stat-content h3 {
-    font-size: 2em;
-    margin: 0;
-    color: #2c3e50;
-}
-
-.stat-content p {
-    margin: 5px 0 0 0;
-    color: #7f8c8d;
-}
-
-.quick-actions {
-    margin-bottom: 40px;
-}
-
-.quick-actions h2 {
-    color: #2c3e50;
-    margin-bottom: 20px;
-}
-
-.action-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-    gap: 20px;
-}
-
-.action-card {
-    background: white;
-    border-radius: 8px;
-    padding: 30px;
-    text-align: center;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    text-decoration: none;
-    color: inherit;
-    transition: all 0.3s ease;
-    border: 2px solid transparent;
-}
-
-.action-card:hover {
-    transform: translateY(-5px);
-    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-    border-color: #3498db;
-}
-
-.action-card i {
-    font-size: 3em;
-    color: #3498db;
-    margin-bottom: 15px;
-}
-
-.action-card h3 {
-    color: #2c3e50;
-    margin: 10px 0;
-}
-
-.action-card p {
-    color: #7f8c8d;
-    font-size: 0.9em;
-}
-
-.info-section {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
-    gap: 20px;
-}
-
-.info-card {
-    background: white;
-    border-radius: 8px;
-    padding: 25px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-}
-
-.info-card h3 {
-    color: #2c3e50;
-    margin-bottom: 15px;
-}
-
-.info-card ul {
-    list-style: none;
-    padding: 0;
-}
-
-.info-card ul li {
-    padding: 5px 0;
-    color: #555;
-}
-
-.estado-list {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.estado-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 10px;
-    background: #f8f9fa;
-    border-radius: 4px;
-}
-
-.badge {
-    padding: 5px 12px;
-    border-radius: 4px;
-    font-weight: 500;
-    white-space: nowrap;
-}
-
-.badge-conciliada { background: #d4edda; color: #155724; }
-.badge-requiere-revision { background: #fff3cd; color: #856404; }
-.badge-con-diferencias { background: #fff3cd; color: #856404; }
-.badge-pendiente { background: #cce5ff; color: #004085; }
-.badge-sin-xml { background: #f8d7da; color: #721c24; }
-
-@media (max-width: 768px) {
-    .info-section {
-        grid-template-columns: 1fr;
-    }
-    
-    .stats-grid {
-        grid-template-columns: 1fr;
-    }
-}
-</style>
-
+<!-- Estados del sistema -->
+<div class="card">
+    <div class="card-header mb-12">
+        <div class="card-title">
+            <i class="fas fa-traffic-light" style="margin-right:6px;color:var(--navy-light);"></i>
+            Estados de Conciliación
+        </div>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:10px;">
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:8px;background:#f3f7fb;">
+            <span class="badge badge-ok"><i class="fas fa-check-circle"></i> Conciliada</span>
+            <span style="font-size:12px;color:var(--text-muted);">Match 100% automático</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:8px;background:#f3f7fb;">
+            <span class="badge badge-warn"><i class="fas fa-search"></i> Requiere Revisión</span>
+            <span style="font-size:12px;color:var(--text-muted);">Match parcial 75–99%</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:8px;background:#f3f7fb;">
+            <span class="badge badge-diff"><i class="fas fa-exclamation-triangle"></i> Con Diferencias</span>
+            <span style="font-size:12px;color:var(--text-muted);">Montos no coinciden</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:8px;background:#f3f7fb;">
+            <span class="badge badge-pend"><i class="fas fa-clock"></i> Pendiente</span>
+            <span style="font-size:12px;color:var(--text-muted);">Sin gasto asociado</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:8px;background:#f3f7fb;">
+            <span class="badge badge-miss"><i class="fas fa-times-circle"></i> Sin XML</span>
+            <span style="font-size:12px;color:var(--text-muted);">Gasto sin factura</span>
+        </div>
+    </div>
+</div>
