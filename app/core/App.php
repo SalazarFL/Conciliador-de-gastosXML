@@ -8,6 +8,16 @@ class App
 {
     protected $router;
     protected $config;
+
+    /**
+     * Detectar base URI real de ejecución (ej. /xmlconcilia/public)
+     */
+    private function detectBaseUri(): string
+    {
+        $scriptName = str_replace('\\', '/', $_SERVER['SCRIPT_NAME'] ?? '');
+        $dir = rtrim(dirname($scriptName), '/');
+        return $dir === '' ? '/' : $dir;
+    }
     
     public function __construct()
     {
@@ -33,8 +43,26 @@ class App
             define('BASE_PATH', $this->config['base_path'] ?? dirname(__DIR__, 2));
         }
         
+        $detectedBaseUri = $this->detectBaseUri();
+        $requestPath = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
+
+        $configuredAppUrl = (string) ($this->config['app_url'] ?? '');
+        $configuredBaseUri = (string) ($this->config['base_uri'] ?? '');
+        $configuredPath = (string) (parse_url($configuredAppUrl, PHP_URL_PATH) ?: $configuredBaseUri);
+        $configuredPath = rtrim($configuredPath, '/');
+        if ($configuredPath === '') {
+            $configuredPath = '/';
+        }
+
+        // Si la ruta configurada no coincide con la URL actual, usar la base real.
+        $effectiveBaseUri = (strpos($requestPath, $configuredPath) === 0) ? $configuredPath : $detectedBaseUri;
+
+        if (!defined('BASE_URI')) {
+            define('BASE_URI', $effectiveBaseUri);
+        }
+
         if (!defined('APP_URL')) {
-            define('APP_URL', $this->config['app_url'] ?? 'http://localhost/xmlconcilia/public');
+            define('APP_URL', $effectiveBaseUri);
         }
         
         // Configurar zona horaria
@@ -101,7 +129,7 @@ class App
         }
         
         // Remover base path si existe (para subdirectorios)
-        $basePath = $this->config['base_uri'] ?? '/xmlconcilia/public';
+        $basePath = defined('BASE_URI') ? BASE_URI : ($this->config['base_uri'] ?? $this->detectBaseUri());
         if (strpos($uri, $basePath) === 0) {
             $uri = substr($uri, strlen($basePath));
         }

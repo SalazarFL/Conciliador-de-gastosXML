@@ -181,7 +181,7 @@ class XmlInvoiceParser
 			return $codigoMoneda;
 		}
 
-		return 'MXN';
+		return 'CRC';
 	}
 
 	private static function getFechaEmision(SimpleXMLElement $xml)

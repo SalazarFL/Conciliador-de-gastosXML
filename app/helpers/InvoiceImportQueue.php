@@ -1,6 +1,6 @@
 <?php
 /**
- * Servicio de cola para importaciones masivas de facturas XML/PDF.
+ * Servicio de cola para importaciones masivas de facturas XML.
  */
 
 require_once __DIR__ . '/../models/Importacion.php';
@@ -11,10 +11,6 @@ require_once __DIR__ . '/FileUploader.php';
 
 if (!class_exists('XmlInvoiceParser', false)) {
     require_once __DIR__ . '/XmlParser.php';
-}
-
-if (!class_exists('PdfInvoiceParser', false)) {
-    require_once __DIR__ . '/PdfParser.php';
 }
 
 class InvoiceImportQueue
@@ -36,7 +32,7 @@ class InvoiceImportQueue
     {
         $this->config = require __DIR__ . '/../config/config.php';
         $this->queueBaseDir = rtrim($this->config['uploads_path'], '/\\') . DIRECTORY_SEPARATOR . 'xml_queue';
-        $this->allowedExtensions = $this->config['allowed_extensions']['xml'] ?? ['xml', 'pdf'];
+        $this->allowedExtensions = $this->config['allowed_extensions']['xml'] ?? ['xml'];
         $this->maxUploadSize = (int) ($this->config['max_upload_size'] ?? 10485760);
         $this->importacionModel = new Importacion();
         $this->importacionItemModel = new ImportacionItem();
@@ -218,20 +214,11 @@ class InvoiceImportQueue
         $importacionId = (int) ($item['importacion_id'] ?? 0);
         $originalName = (string) ($item['archivo_original'] ?? '');
         $filePath = (string) ($item['ruta_archivo'] ?? '');
-        $extension = strtolower((string) ($item['extension'] ?? pathinfo($originalName, PATHINFO_EXTENSION)));
-        $isPdf = ($extension === 'pdf');
 
         try {
             $this->extendExecutionWindow();
 
-            $docData = $isPdf
-                ? PdfInvoiceParser::parseInvoiceFromPdf($filePath, [
-                    'max_ocr_pages' => 3,
-                    'ocr_language' => 'spa+eng',
-                    'source_name' => $originalName,
-                    'require_template' => true,
-                ])
-                : XmlInvoiceParser::parseCfdiFromFile($filePath);
+            $docData = XmlInvoiceParser::parseCfdiFromFile($filePath);
 
             $proveedorId = $this->proveedorModel->obtenerOCrear(
                 $docData['rfc_emisor'] ?? '',
@@ -243,7 +230,6 @@ class InvoiceImportQueue
                 $metadata = [];
             }
 
-            $metadata['origen_archivo'] = $isPdf ? 'pdf' : 'xml';
             $metadata['queue_item_id'] = $itemId;
 
             $hashDocumento = (string) ($docData['hash_documento'] ?? ($docData['hash_xml'] ?? null));
@@ -260,17 +246,20 @@ class InvoiceImportQueue
                 'moneda' => $docData['moneda'],
                 'tipo_comprobante' => $docData['tipo_comprobante'] ?? null,
                 'archivo_xml' => $originalName,
-                'ruta_xml' => $isPdf ? null : $filePath,
+                'ruta_xml' => $filePath,
                 'hash_xml' => $hashDocumento !== '' ? $hashDocumento : null,
-                'xml_contenido' => $isPdf ? null : ($docData['xml_contenido'] ?? null),
+                'xml_contenido' => $docData['xml_contenido'] ?? null,
                 'metadata' => json_encode($metadata, JSON_UNESCAPED_UNICODE),
             ]);
 
             $this->importacionItemModel->marcarResultado($itemId, 'importado', null, $facturaId, [
-                'template' => $metadata['matched_template_key'] ?? null,
                 'proveedor' => $docData['razon_social_emisor'] ?? null,
                 'consecutivo' => $docData['consecutivo_completo'] ?? null,
             ]);
+
+            if ($filePath && is_file($filePath)) {
+                @unlink($filePath);
+            }
 
             return [
                 'item_id' => $itemId,
@@ -285,16 +274,16 @@ class InvoiceImportQueue
                 'exception_class' => get_class($e),
             ]);
 
+            if ($filePath && is_file($filePath)) {
+                @unlink($filePath);
+            }
+
             return [
                 'item_id' => $itemId,
                 'archivo' => $originalName,
                 'estado' => $estado,
                 'error' => $e->getMessage(),
             ];
-        } finally {
-            if ($isPdf && $filePath !== '' && is_file($filePath)) {
-                @unlink($filePath);
-            }
         }
     }
 
@@ -310,7 +299,7 @@ class InvoiceImportQueue
         $this->importacionModel->actualizarResumen((int) $importacion['id'], [
             'total_registros' => (int) $estado['expected_total'],
             'registros_exitosos' => (int) $stats['importado'],
-            'registros_fallidos' => (int) ($stats['duplicado'] + $stats['sin_plantilla'] + $stats['error']),
+            'registros_fallidos' => (int) ($stats['duplicado'] + $stats['error']),
             'errores' => !empty($errores) ? json_encode($errores, JSON_UNESCAPED_UNICODE) : null,
             'metadata' => json_encode($metadata, JSON_UNESCAPED_UNICODE),
         ]);
@@ -398,10 +387,6 @@ class InvoiceImportQueue
 
         if ($isDuplicate) {
             return 'duplicado';
-        }
-
-        if (stripos($message, 'sin plantilla de parseo') !== false) {
-            return 'sin_plantilla';
         }
 
         return 'error';

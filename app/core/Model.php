@@ -104,79 +104,21 @@ class Model
         $sql = "SELECT * FROM {$this->table} WHERE id = ? LIMIT 1";
         return $this->fetchOne($sql, [$id]);
     }
-    
-    /**
-     * Obtener todos los registros de la tabla
-     */
-    public function findAll($orderBy = 'id', $direction = 'ASC')
-    {
-        $sql = "SELECT * FROM {$this->table} ORDER BY {$orderBy} {$direction}";
-        return $this->fetchAll($sql);
-    }
-    
+
     /**
      * Contar registros
      */
     public function count($where = '', $params = [])
     {
         $sql = "SELECT COUNT(*) FROM {$this->table}";
-        
+
         if (!empty($where)) {
             $sql .= " WHERE {$where}";
         }
-        
+
         return (int) $this->fetchColumn($sql, $params);
     }
-    
-    /**
-     * Eliminar por ID
-     */
-    public function delete($id)
-    {
-        $sql = "DELETE FROM {$this->table} WHERE id = ?";
-        return $this->execute($sql, [$id]);
-    }
-    
-    /**
-     * Iniciar transacción
-     */
-    protected function beginTransaction()
-    {
-        return self::getDB()->beginTransaction();
-    }
-    
-    /**
-     * Confirmar transacción
-     */
-    protected function commit()
-    {
-        return self::getDB()->commit();
-    }
-    
-    /**
-     * Revertir transacción
-     */
-    protected function rollBack()
-    {
-        return self::getDB()->rollBack();
-    }
-    
-    /**
-     * Verificar si está en transacción
-     */
-    protected function inTransaction()
-    {
-        return self::getDB()->inTransaction();
-    }
-    
-    /**
-     * Escapar identificador (tabla/columna)
-     */
-    protected function escapeIdentifier($identifier)
-    {
-        return '`' . str_replace('`', '``', $identifier) . '`';
-    }
-    
+
     /**
      * Registrar error en log
      */

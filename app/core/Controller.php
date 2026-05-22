@@ -110,31 +110,13 @@ class Controller
     }
     
     /**
-     * Obtener mensaje flash
-     */
-    protected function getFlashMessage()
-    {
-        if (session_status() === PHP_SESSION_NONE) {
-            session_start();
-        }
-        
-        if (isset($_SESSION['flash_message'])) {
-            $message = $_SESSION['flash_message'];
-            unset($_SESSION['flash_message']);
-            return $message;
-        }
-        
-        return null;
-    }
-    
-    /**
      * Validar request POST
      */
     protected function isPost()
     {
         return $_SERVER['REQUEST_METHOD'] === 'POST';
     }
-    
+
     /**
      * Validar request GET
      */
@@ -142,7 +124,7 @@ class Controller
     {
         return $_SERVER['REQUEST_METHOD'] === 'GET';
     }
-    
+
     /**
      * Obtener dato de POST
      */
@@ -150,7 +132,7 @@ class Controller
     {
         return $_POST[$key] ?? $default;
     }
-    
+
     /**
      * Obtener dato de GET
      */
@@ -158,35 +140,7 @@ class Controller
     {
         return $_GET[$key] ?? $default;
     }
-    
-    /**
-     * Obtener todos los datos de POST
-     */
-    protected function postData()
-    {
-        return $_POST;
-    }
-    
-    /**
-     * Obtener todos los datos de GET
-     */
-    protected function getData()
-    {
-        return $_GET;
-    }
-    
-    /**
-     * Sanitizar string
-     */
-    protected function sanitize($data)
-    {
-        if (is_array($data)) {
-            return array_map([$this, 'sanitize'], $data);
-        }
-        
-        return htmlspecialchars(strip_tags(trim($data)), ENT_QUOTES, 'UTF-8');
-    }
-    
+
     /**
      * Cargar modelo
      */
@@ -212,7 +166,29 @@ class Controller
      */
     protected function url($path = '')
     {
-        $baseUrl = defined('APP_URL') ? APP_URL : 'http://localhost/xmlconcilia/public';
+        $baseUrl = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
         return rtrim($baseUrl, '/') . '/' . ltrim($path, '/');
+    }
+
+    /**
+     * Requerir sesión activa — redirige a /login si no hay sesión
+     */
+    protected function requireAuth(): void
+    {
+        if (session_status() === PHP_SESSION_NONE) session_start();
+        if (empty($_SESSION['user_id'])) {
+            $this->redirect($this->url('/login'));
+        }
+    }
+
+    /**
+     * Requerir sesión de administrador — redirige a inicio si no es admin
+     */
+    protected function requireAdmin(): void
+    {
+        $this->requireAuth();
+        if (empty($_SESSION['user_is_admin'])) {
+            $this->redirect($this->url('/'));
+        }
     }
 }
