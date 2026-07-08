@@ -16,3 +16,10 @@ public/uploads/xml_queue/*
 
 # Runtime cache
 storage/cache/*.json
+
+# Session files (runtime)
+storage/sessions/
+
+# Local-only utilities and notes (never deploy/commit)
+public/create_admin.php
+MEMORY.md
