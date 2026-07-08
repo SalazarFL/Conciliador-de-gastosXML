@@ -19,9 +19,9 @@ class FacturasController extends Controller
 			$facturaModel     = $this->loadModel('Factura');
 			$importacionModel = $this->loadModel('Importacion');
 
-			if (!empty($_GET['limpiar'])) {
-				// Vista limpia: no se muestra ningún registro
-			} else {
+			$historial = $importacionModel->getAllByTipo('xml');
+
+			if (empty($_GET['limpiar'])) {
 				$importacionId = max(0, (int) ($_GET['importacion_id'] ?? 0));
 
 				if ($importacionId > 0) {
@@ -30,8 +30,6 @@ class FacturasController extends Controller
 				} else {
 					$facturas = $facturaModel->getAllWithImportacion();
 				}
-
-				$historial = $importacionModel->getAllByTipo('xml');
 			}
 		} catch (Exception $e) {
 			$this->redirectWithMessage($this->url('/facturas'), 'No fue posible cargar facturas: ' . $e->getMessage(), 'warning');
@@ -48,7 +46,7 @@ class FacturasController extends Controller
 	public function subir()
 	{
 		if (!$this->isPost()) {
-			$this->redirect($this->url('/conciliacion'));
+			$this->redirect($this->url('/facturas'));
 		}
 
 		require_once __DIR__ . '/../helpers/FileUploader.php';
@@ -61,6 +59,18 @@ class FacturasController extends Controller
 		$maxSize = $config['max_upload_size'] ?? 10485760;
 		$allowed = $config['allowed_extensions']['xml'] ?? ['xml'];
 
+		// El nombre de la importación es obligatorio: identifica el lote al conciliar.
+		$nombreImportacion = trim((string) $this->post('nombre_importacion', ''));
+		if ($nombreImportacion === '') {
+			$this->redirectWithMessage(
+				$this->url('/facturas'),
+				'Debes asignar un nombre a la importación antes de subir las facturas XML.',
+				'error'
+			);
+			return;
+		}
+		$nombreImportacion = mb_substr($nombreImportacion, 0, 120, 'UTF-8');
+
 		try {
 			$uploadedFiles = FileUploader::uploadMultiple('xml_files', $uploadDir, $allowed, $maxSize);
 
@@ -70,7 +80,7 @@ class FacturasController extends Controller
 
 			$importacionId = $importacionModel->crear([
 				'tipo' => 'xml',
-				'archivo_origen' => count($uploadedFiles) === 1 ? $uploadedFiles[0]['original_name'] : 'multiple_xml_files',
+				'archivo_origen' => $nombreImportacion,
 				'ruta_archivo' => $uploadDir
 			]);
 
@@ -97,25 +107,42 @@ class FacturasController extends Controller
 
 					$hashDocumento = (string) ($docData['hash_documento'] ?? ($docData['hash_xml'] ?? null));
 
-					$facturaModel->crear([
-						'importacion_id' => $importacionId,
-						'consecutivo_completo' => $docData['consecutivo_completo'],
-						'numero_factura_asistente' => $docData['numero_factura_asistente'],
-						'proveedor_id' => $proveedorId,
-						'fecha_emision' => $docData['fecha_emision'],
-						'subtotal' => $docData['subtotal'],
-						'iva' => $docData['iva'],
-						'total' => $docData['total'],
-						'moneda' => $docData['moneda'],
-						'tipo_comprobante' => $docData['tipo_comprobante'] ?? null,
-						'archivo_xml' => $file['original_name'],
-						'ruta_xml' => $file['path'],
-						'hash_xml' => $hashDocumento !== '' ? $hashDocumento : null,
-						'xml_contenido' => $docData['xml_contenido'] ?? null,
-						'metadata' => json_encode($metadata, JSON_UNESCAPED_UNICODE)
-					]);
+					// Verificar duplicado por hash o consecutivo antes de insertar
+					$esDuplicadoPrevio = false;
+					if ($hashDocumento !== '') {
+						$esDuplicadoPrevio = $facturaModel->existsByHash($hashDocumento);
+					}
+					if (!$esDuplicadoPrevio && !empty($docData['consecutivo_completo'])) {
+						$esDuplicadoPrevio = $facturaModel->existsByConsecutivo(
+							$docData['consecutivo_completo'],
+							$proveedorId,
+							$docData['fecha_emision'] ?? ''
+						);
+					}
 
-					$exitosos++;
+					if ($esDuplicadoPrevio) {
+						$duplicados++;
+						$archivosDup[] = $file['original_name'];
+					} else {
+						$facturaModel->crear([
+							'importacion_id' => $importacionId,
+							'consecutivo_completo' => $docData['consecutivo_completo'],
+							'numero_factura_asistente' => $docData['numero_factura_asistente'],
+							'proveedor_id' => $proveedorId,
+							'fecha_emision' => $docData['fecha_emision'],
+							'subtotal' => $docData['subtotal'],
+							'iva' => $docData['iva'],
+							'total' => $docData['total'],
+							'moneda' => $docData['moneda'],
+							'tipo_comprobante' => $docData['tipo_comprobante'] ?? null,
+							'archivo_xml' => $file['original_name'],
+							'ruta_xml' => $file['path'],
+							'hash_xml' => $hashDocumento !== '' ? $hashDocumento : null,
+							'xml_contenido' => $docData['xml_contenido'] ?? null,
+							'metadata' => json_encode($metadata, JSON_UNESCAPED_UNICODE)
+						]);
+						$exitosos++;
+					}
 				} catch (Throwable $e) {
 					$msg = $e->getMessage();
 					$esDuplicado = stripos($msg, 'Duplicate entry') !== false
@@ -161,7 +188,7 @@ class FacturasController extends Controller
 			$tipo = $todosFallaron ? 'error' : ($hayProblemas ? 'warning' : 'success');
 
 			$this->redirectWithMessage(
-				$this->url('/conciliacion'),
+				$this->url('/facturas'),
 				implode(' | ', $partes),
 				$tipo,
 				[
@@ -171,7 +198,7 @@ class FacturasController extends Controller
 				]
 			);
 		} catch (Throwable $e) {
-			$this->redirectWithMessage($this->url('/conciliacion'), 'Error de importación XML: ' . $e->getMessage(), 'error');
+			$this->redirectWithMessage($this->url('/facturas'), 'Error de importación XML: ' . $e->getMessage(), 'error');
 		}
 	}
 
@@ -182,9 +209,18 @@ class FacturasController extends Controller
 		}
 
 		try {
+			// Nombre obligatorio: identifica el lote al conciliar.
+			$nombre = trim((string) $this->post('nombre_importacion', $this->post('archivo_origen', '')));
+			if ($nombre === '' || $nombre === 'multiple_xml_files') {
+				$this->json([
+					'ok' => false,
+					'message' => 'Debes asignar un nombre a la importación.',
+				], 422);
+			}
+
 			$service = $this->getQueueService();
 			$result = $service->iniciarImportacion([
-				'archivo_origen' => $this->post('archivo_origen', 'multiple_xml_files'),
+				'archivo_origen' => mb_substr($nombre, 0, 120, 'UTF-8'),
 				'total_esperado' => (int) $this->post('total_esperado', 0),
 			]);
 

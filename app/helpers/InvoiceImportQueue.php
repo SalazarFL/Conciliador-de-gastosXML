@@ -234,7 +234,7 @@ class InvoiceImportQueue
 
             $hashDocumento = (string) ($docData['hash_documento'] ?? ($docData['hash_xml'] ?? null));
 
-            $facturaId = (int) $this->facturaModel->crear([
+            $registro = [
                 'importacion_id' => $importacionId,
                 'consecutivo_completo' => $docData['consecutivo_completo'],
                 'numero_factura_asistente' => $docData['numero_factura_asistente'],
@@ -250,12 +250,51 @@ class InvoiceImportQueue
                 'hash_xml' => $hashDocumento !== '' ? $hashDocumento : null,
                 'xml_contenido' => $docData['xml_contenido'] ?? null,
                 'metadata' => json_encode($metadata, JSON_UNESCAPED_UNICODE),
-            ]);
+            ];
+
+            $facturaId = (int) $this->facturaModel->crear($registro);
+
+            // Verificación anti-hosting: algunos hostings compartidos (InfinityFree/ProxySQL)
+            // responden OK a un INSERT sin ejecutarlo realmente cuando reciben muchas
+            // escrituras seguidas. Verificamos que la fila exista de verdad y, si no,
+            // reintentamos con pausa. Jamás marcar 'importado' sin fila confirmada.
+            if ($hashDocumento !== '') {
+                $confirmada = $this->facturaModel->existsByHash($hashDocumento);
+                $reintentos = 0;
+
+                while (!$confirmada && $reintentos < 3) {
+                    $reintentos++;
+                    usleep(500000); // 0.5s: dejar respirar al proxy de BD
+
+                    try {
+                        $facturaId = (int) $this->facturaModel->crear($registro);
+                    } catch (Throwable $e2) {
+                        if ($this->clasificarError($e2->getMessage()) === 'duplicado') {
+                            // La fila sí quedó (el primer INSERT llegó tarde): confirmado.
+                            break;
+                        }
+                        throw $e2;
+                    }
+
+                    $confirmada = $this->facturaModel->existsByHash($hashDocumento);
+                }
+
+                if (!$this->facturaModel->existsByHash($hashDocumento)) {
+                    throw new Exception(
+                        'La base de datos no confirmó la escritura de esta factura tras '
+                        . (1 + $reintentos) . ' intentos (el hosting descartó el INSERT). Reintenta la importación.'
+                    );
+                }
+            }
 
             $this->importacionItemModel->marcarResultado($itemId, 'importado', null, $facturaId, [
                 'proveedor' => $docData['razon_social_emisor'] ?? null,
                 'consecutivo' => $docData['consecutivo_completo'] ?? null,
             ]);
+
+            // Pausa corta entre facturas para no disparar el límite de escrituras
+            // del hosting compartido (sin esto, InfinityFree descarta INSERTs).
+            usleep(250000);
 
             if ($filePath && is_file($filePath)) {
                 @unlink($filePath);
