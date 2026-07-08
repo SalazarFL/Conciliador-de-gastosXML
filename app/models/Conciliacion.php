@@ -44,29 +44,110 @@ class Conciliacion extends Model
     }
     
     /**
-     * Contar conciliaciones por estado
+     * Contar conciliaciones por estado (opcionalmente de una corrida específica)
      */
-    public function countByEstado($codigoEstado)
+    public function countByEstado($codigoEstado, $corridaId = null)
     {
-        $sql = "SELECT COUNT(*) 
+        $sql = "SELECT COUNT(*)
                 FROM {$this->table} c
                 INNER JOIN catalogo_estados ce ON c.estado_id = ce.id
                 WHERE ce.codigo = ?";
-        
-        return (int) $this->fetchColumn($sql, [$codigoEstado]);
+        $params = [$codigoEstado];
+
+        if ($corridaId !== null && (int) $corridaId > 0 && $this->hasColumn('corrida_id')) {
+            $sql .= " AND c.corrida_id = ?";
+            $params[] = (int) $corridaId;
+        }
+
+        return (int) $this->fetchColumn($sql, $params);
     }
-    
+
     /**
-     * Obtener resumen de revisión
+     * Obtener resumen de revisión (opcionalmente de una corrida específica)
      */
-    public function getResumenRevision()
+    public function getResumenRevision($corridaId = null)
     {
+        $joinExtra = '';
+        $params = [];
+        if ($corridaId !== null && (int) $corridaId > 0 && $this->hasColumn('corrida_id')) {
+            $joinExtra = ' AND c.corrida_id = ?';
+            $params[] = (int) $corridaId;
+        }
+
         $sql = "SELECT e.codigo, e.nombre, e.color_hex as color, COUNT(c.id) as total
                 FROM catalogo_estados e
-                LEFT JOIN conciliaciones c ON c.estado_id = e.id
+                LEFT JOIN conciliaciones c ON c.estado_id = e.id{$joinExtra}
                 GROUP BY e.id, e.codigo, e.nombre, e.color_hex, e.orden
                 ORDER BY e.orden";
-        return $this->fetchAll($sql);
+        return $this->fetchAll($sql, $params);
+    }
+
+    // ─── Corridas de conciliación (ejecuciones guardadas) ─────────────
+
+    public function crearCorrida($nombre, $importacionXmlId = null, $importacionGastosId = null)
+    {
+        $sql = "INSERT INTO conciliacion_corridas (nombre, importacion_xml_id, importacion_gastos_id)
+                VALUES (?, ?, ?)";
+        return $this->insert($sql, [
+            mb_substr((string) $nombre, 0, 255, 'UTF-8'),
+            (int) $importacionXmlId > 0 ? (int) $importacionXmlId : null,
+            (int) $importacionGastosId > 0 ? (int) $importacionGastosId : null,
+        ]);
+    }
+
+    public function getCorridas($limit = 50)
+    {
+        $limit = max(1, (int) $limit);
+        $sql = "SELECT id, nombre, importacion_xml_id, importacion_gastos_id,
+                       total_registros, fecha_ejecucion
+                FROM conciliacion_corridas
+                ORDER BY fecha_ejecucion DESC, id DESC
+                LIMIT {$limit}";
+        return $this->fetchAll($sql) ?: [];
+    }
+
+    public function getUltimaCorridaId()
+    {
+        $id = $this->fetchColumn("SELECT MAX(id) FROM conciliacion_corridas");
+        return $id !== null ? (int) $id : 0;
+    }
+
+    public function actualizarTotalCorrida($corridaId, $total)
+    {
+        return $this->execute(
+            "UPDATE conciliacion_corridas SET total_registros = ? WHERE id = ?",
+            [(int) $total, (int) $corridaId]
+        );
+    }
+
+    /**
+     * Facturas XML de una corrida que SÍ tienen gasto asociado
+     * (excluye pendientes y gasto_sin_xml). Incluye el contenido XML
+     * para generar el ZIP de descarga.
+     */
+    public function getFacturasParaZip($corridaId = null)
+    {
+        $sql = "SELECT f.id,
+                       f.numero_factura_asistente,
+                       f.fecha_emision,
+                       f.archivo_xml,
+                       f.hash_xml,
+                       f.xml_contenido,
+                       p.razon_social AS proveedor_nombre
+                FROM {$this->table} c
+                INNER JOIN facturas_xml f ON c.factura_xml_id = f.id
+                LEFT JOIN proveedores p ON f.proveedor_id = p.id
+                WHERE c.gasto_consolidado_id IS NOT NULL";
+        $params = [];
+
+        if ($corridaId !== null && (int) $corridaId > 0 && $this->hasColumn('corrida_id')) {
+            $sql .= " AND c.corrida_id = ?";
+            $params[] = (int) $corridaId;
+        }
+
+        $sql .= " ORDER BY f.fecha_emision, f.id";
+
+        return $this->fetchAll($sql, $params) ?: [];
     }
 
     public function clearAll()
@@ -114,6 +195,9 @@ class Conciliacion extends Model
         if ($this->hasColumn('observaciones_match')) {
             $fields['observaciones_match'] = $data['observaciones_match'] ?? null;
         }
+        if ($this->hasColumn('corrida_id')) {
+            $fields['corrida_id'] = !empty($data['corrida_id']) ? (int) $data['corrida_id'] : null;
+        }
 
         $columns = array_keys($fields);
         $placeholders = array_fill(0, count($columns), '?');
@@ -126,7 +210,14 @@ class Conciliacion extends Model
         return $this->insert($sql, $params);
     }
 
-    public function getGridRows()
+    /**
+     * Filas de la grilla de conciliación.
+     *
+     * @param int|null $corridaId  ID de corrida a cargar. null = última corrida
+     *                             (o todas las filas si aún no existen corridas).
+     *                             0 = todas las filas sin filtrar.
+     */
+    public function getGridRows($corridaId = null)
     {
         $select = [
             'c.id AS conciliacion_id',
@@ -141,6 +232,7 @@ class Conciliacion extends Model
             'e.codigo AS estado_codigo',
             'e.nombre AS estado_nombre',
             'e.color_hex AS estado_color',
+            'f.importacion_id AS factura_importacion_id',
             'f.fecha_emision AS factura_fecha',
             'f.numero_factura_asistente AS factura_numero',
             'p.razon_social AS factura_proveedor',
@@ -191,7 +283,18 @@ class Conciliacion extends Model
                 LEFT JOIN proveedores p ON f.proveedor_id = p.id
                 LEFT JOIN gastos_consolidados g ON c.gasto_consolidado_id = g.id";
 
-        return $this->fetchAll($sql);
+        $params = [];
+        if ($this->hasColumn('corrida_id')) {
+            if ($corridaId === null) {
+                $corridaId = $this->getUltimaCorridaId();
+            }
+            if ((int) $corridaId > 0) {
+                $sql .= " WHERE c.corrida_id = ?";
+                $params[] = (int) $corridaId;
+            }
+        }
+
+        return $this->fetchAll($sql, $params);
     }
 
     public function marcarManual($id, $estadoId, $comentario, $usuario)

@@ -5,6 +5,7 @@
  */
 
 // Obtener instancia del router
+/** @var App $app */
 $router = $app->getRouter();
 
 // --- RUTAS DE AUTENTICACIÓN ---
@@ -33,11 +34,14 @@ $router->post('/gastos/subir', 'GastosController@subir');
 $router->get('/conciliacion', 'ConciliacionController@index');
 $router->post('/conciliacion/ejecutar', 'ConciliacionController@ejecutar');
 $router->post('/conciliacion/revisar/{id}', 'ConciliacionController@revisar');
+$router->get('/conciliacion/descargar-xml', 'ConciliacionController@descargarXml');
+$router->get('/conciliacion/mapa-nombres', 'ConciliacionController@mapaNombresPdf');
 
 // --- RUTAS DE REPORTES ---
 $router->get('/reportes', 'ReportesController@index');
 $router->get('/reportes/preview', 'ReportesController@preview');
 $router->get('/reportes/exportar', 'ReportesController@exportar');
+$router->get('/reportes/importaciones', 'ReportesController@importaciones');
 
 // --- RUTAS DE USUARIOS (solo admin) ---
 $router->get('/usuarios',              'UsuariosController@index');

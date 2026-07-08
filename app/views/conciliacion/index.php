@@ -1,8 +1,17 @@
 ﻿<?php
 $baseUrl             = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
-$stats               = $stats ?? [];
-$importacionesXml    = $importacionesXml ?? [];
-$importacionesGastos = $importacionesGastos ?? [];
+$stats               ??= [];
+$importacionesXml    ??= [];
+$importacionesGastos ??= [];
+$conciliaciones      ??= [];
+$estados             ??= [];
+$resumen             ??= [];
+$facturas            ??= [];
+$gastos              ??= [];
+$corridas            ??= [];
+$corridaActiva       ??= [];
+$corridaActiva       = is_array($corridaActiva) ? $corridaActiva : [];
+$load_error          ??= '';
 ?>
 
 <div class="conc-page">
@@ -164,8 +173,42 @@ $importacionesGastos = $importacionesGastos ?? [];
     <div class="card-header">
         <div>
             <div class="card-title"><i class="fas fa-table"></i> Resultados de conciliacion</div>
+            <?php if (!empty($corridaActiva)): ?>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:3px;">
+                <i class="fas fa-bookmark" style="color:var(--gold);margin-right:4px;"></i>
+                <strong><?= htmlspecialchars($corridaActiva['nombre']) ?></strong>
+                &mdash; <?= date('d/m/Y H:i', strtotime($corridaActiva['fecha_ejecucion'])) ?>
+                (<?= (int) $corridaActiva['total_registros'] ?> registros)
+            </div>
+            <?php endif; ?>
         </div>
-        <div class="d-flex gap-8 flex-wrap">
+        <div class="d-flex gap-8 flex-wrap" style="align-items:center;">
+            <?php if (!empty($corridas)): ?>
+            <form method="get" action="<?= $baseUrl ?>/conciliacion" class="d-flex" style="gap:6px;align-items:center;">
+                <label for="corrida_id" style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;white-space:nowrap;">
+                    <i class="fas fa-history" style="margin-right:3px;"></i>Cargar guardada:
+                </label>
+                <select name="corrida_id" id="corrida_id" class="form-control" style="font-size:12px;max-width:340px;"
+                        onchange="this.form.submit()">
+                    <?php foreach ($corridas as $c): ?>
+                    <option value="<?= (int) $c['id'] ?>" <?= (!empty($corridaActiva) && (int) $corridaActiva['id'] === (int) $c['id']) ? 'selected' : '' ?>>
+                        <?= date('d/m/Y H:i', strtotime($c['fecha_ejecucion'])) ?> — <?= htmlspecialchars($c['nombre']) ?> (<?= (int) $c['total_registros'] ?>)
+                    </option>
+                    <?php endforeach; ?>
+                </select>
+            </form>
+            <?php endif; ?>
+            <?php if (!empty($corridaActiva)): ?>
+            <a href="<?= $baseUrl ?>/conciliacion/descargar-xml?corrida_id=<?= (int) $corridaActiva['id'] ?>"
+               class="btn btn-gold btn-sm" title="Descarga las facturas XML con gasto asociado, renombradas FE_PROVEEDOR_fecha_numero">
+                <i class="fas fa-file-archive"></i> Descargar XML (ZIP)
+            </a>
+            <button type="button" class="btn btn-outline btn-sm" id="btn-renombrar-pdf"
+                    data-corrida="<?= (int) $corridaActiva['id'] ?>"
+                    title="Selecciona la carpeta con tus PDF (nombrados con el número de factura) y se renombran igual que los XML. Los PDF no se suben al servidor.">
+                <i class="fas fa-file-pdf"></i> Renombrar PDFs
+            </button>
+            <?php endif; ?>
             <button type="button" class="btn btn-outline btn-sm" data-modal-target="modal-facturas">Ver facturas</button>
             <button type="button" class="btn btn-outline-gold btn-sm" data-modal-target="modal-gastos">Ver listado de gastos</button>
         </div>
@@ -175,29 +218,24 @@ $importacionesGastos = $importacionesGastos ?? [];
         <table class="data-table conc-results-table">
             <thead>
                 <tr>
-                    <th colspan="5" class="conc-group-head factura">Facturas</th>
-                    <th colspan="5" class="conc-group-head gasto">Gastos</th>
-                    <th rowspan="2" class="center">Match</th>
-                    <th rowspan="2" class="center">Estado</th>
-                    <th rowspan="2" class="center">Validacion manual</th>
+                    <th colspan="4" class="conc-group-head factura">Facturas</th>
+                    <th colspan="4" class="conc-group-head gasto">Gastos</th>
                 </tr>
                 <tr>
                     <th class="conc-field-head factura">Fecha</th>
                     <th class="conc-field-head factura">Numero</th>
                     <th class="conc-field-head factura">Proveedor</th>
-                    <th class="conc-field-head factura right">Iva</th>
                     <th class="conc-field-head factura right">Total</th>
                     <th class="conc-field-head gasto">Fecha</th>
                     <th class="conc-field-head gasto">Numero</th>
                     <th class="conc-field-head gasto">Proveedor</th>
-                    <th class="conc-field-head gasto right">Iva</th>
                     <th class="conc-field-head gasto right">Total</th>
                 </tr>
             </thead>
             <tbody>
                 <?php if (empty($conciliaciones ?? [])): ?>
                     <tr class="empty-row">
-                        <td colspan="13">No hay conciliaciones aun. Carga la informacion desde los modulos de Facturas y Gastos, luego presiona <strong>Conciliar ahora</strong>.</td>
+                        <td colspan="8">No hay conciliaciones aun. Carga la informacion desde los modulos de Facturas y Gastos, luego presiona <strong>Conciliar ahora</strong>.</td>
                     </tr>
                 <?php else: ?>
                     <?php
@@ -207,11 +245,27 @@ $importacionesGastos = $importacionesGastos ?? [];
                         $t = preg_replace('/\s+/', ' ', $t);
                         return trim($t);
                     };
-                    $normNum = function ($v) {
-                        $t = strtoupper(trim((string) $v));
-                        $t = preg_replace('/[^A-Z0-9]/', '', $t);
-                        $t = preg_replace('/^0+/', '', $t);
-                        return $t;
+                    // Núcleo numérico: secuencia de dígitos más larga sin ceros a la izquierda.
+                    // "FACT-1-1-0000071176-360" y "0000071176" comparten núcleo "71176".
+                    $nucleoNum = function ($v) {
+                        preg_match_all('/\d+/', (string) $v, $m);
+                        $best = '';
+                        foreach ($m[0] as $run) {
+                            $run = ltrim($run, '0');
+                            if (strlen($run) >= 3 && strlen($run) > strlen($best)) {
+                                $best = $run;
+                            }
+                        }
+                        return $best;
+                    };
+                    $numEq = function ($a, $b) use ($nucleoNum) {
+                        $na = ltrim(preg_replace('/[^A-Z0-9]/', '', strtoupper(trim((string) $a))), '0');
+                        $nb = ltrim(preg_replace('/[^A-Z0-9]/', '', strtoupper(trim((string) $b))), '0');
+                        if ($na !== '' && $na === $nb) {
+                            return true;
+                        }
+                        $ca = $nucleoNum($a);
+                        return $ca !== '' && $ca === $nucleoNum($b);
                     };
                     $montoTolerancia = 0.01; // solo redondeo de centavos cuenta como "match" exacto.
                     $eqAmount = function ($a, $b) use ($montoTolerancia) {
@@ -233,65 +287,29 @@ $importacionesGastos = $importacionesGastos ?? [];
                         $gastoNumero = (string) ($row['gasto_numero'] ?? '');
                         $facturaProveedor = (string) ($row['factura_proveedor'] ?? '');
                         $gastoProveedor = (string) ($row['gasto_proveedor'] ?? '');
-                        $facturaIva = (float) ($row['factura_iva'] ?? 0);
-                        $gastoIva = (float) ($row['gasto_iva'] ?? 0);
                         $facturaTotal = (float) ($row['factura_total'] ?? 0);
                         $gastoTotal = (float) ($row['gasto_total'] ?? 0);
 
-                        $bothFecha = ($facturaFecha !== '' && $gastoFecha !== '');
-                        $bothNumero = ($facturaNumero !== '' && $gastoNumero !== '');
-                        $bothProveedor = ($facturaProveedor !== '' && $gastoProveedor !== '');
-                        $bothIva = (($row['factura_iva'] ?? null) !== null && ($row['gasto_iva'] ?? null) !== null);
-                        $bothTotal = (($row['factura_total'] ?? null) !== null && ($row['gasto_total'] ?? null) !== null);
+                        $bothFecha = $facturaFecha !== '' && $gastoFecha !== '';
+                        $bothNumero = $facturaNumero !== '' && $gastoNumero !== '';
+                        $bothProveedor = $facturaProveedor !== '' && $gastoProveedor !== '';
+                        $bothTotal = ($row['factura_total'] ?? null) !== null && ($row['gasto_total'] ?? null) !== null;
 
-                        $eqFecha = $bothFecha && ($facturaFecha === $gastoFecha);
-                        $eqNumero = $bothNumero && ($normNum($facturaNumero) === $normNum($gastoNumero));
-                        $eqProveedor = $bothProveedor && ($normText($facturaProveedor) === $normText($gastoProveedor));
-                        $eqIva = $bothIva && $eqAmount($facturaIva, $gastoIva);
+                        $eqFecha = $bothFecha && $facturaFecha === $gastoFecha;
+                        $eqNumero = $bothNumero && $numEq($facturaNumero, $gastoNumero);
+                        $eqProveedor = $bothProveedor && $normText($facturaProveedor) === $normText($gastoProveedor);
                         $eqTotal = $bothTotal && $eqAmount($facturaTotal, $gastoTotal);
-
-                        $estadoCodigo = (string) ($row['estado_codigo'] ?? '');
-                        $estadoBadgeClass = 'badge-default';
-                        if ($estadoCodigo === 'conciliada') {
-                            $estadoBadgeClass = 'badge-ok';
-                        } elseif ($estadoCodigo === 'requiere_revision') {
-                            $estadoBadgeClass = 'badge-warn';
-                        } elseif ($estadoCodigo === 'con_diferencias' || $estadoCodigo === 'pendiente' || $estadoCodigo === 'gasto_sin_xml') {
-                            $estadoBadgeClass = 'badge-miss';
-                        }
                         ?>
                         <tr>
                             <td class="<?= $cellClass($bothFecha, $eqFecha) ?>" style="border:1px solid #0c2461;"><?= htmlspecialchars($facturaFecha) ?></td>
                             <td class="col-num <?= $cellClass($bothNumero, $eqNumero) ?>" style="border:1px solid #0c2461;" title="<?= htmlspecialchars($facturaNumero) ?>"><?= htmlspecialchars($facturaNumero) ?></td>
                             <td class="col-prov <?= $cellClass($bothProveedor, $eqProveedor) ?>" style="border:1px solid #0c2461;" title="<?= htmlspecialchars($facturaProveedor) ?>"><?= htmlspecialchars($facturaProveedor) ?></td>
-                            <td class="right <?= $cellClass($bothIva, $eqIva) ?>" style="border:1px solid #0c2461;"><?= number_format($facturaIva, 2) ?></td>
                             <td class="right <?= $cellClass($bothTotal, $eqTotal) ?>" style="border:1px solid #0c2461;"><?= number_format($facturaTotal, 2) ?></td>
 
                             <td class="<?= $cellClass($bothFecha, $eqFecha) ?>" style="border:1px solid #f0a500;"><?= htmlspecialchars($gastoFecha) ?></td>
                             <td class="col-num <?= $cellClass($bothNumero, $eqNumero) ?>" style="border:1px solid #f0a500;" title="<?= htmlspecialchars($gastoNumero) ?>"><?= htmlspecialchars($gastoNumero) ?></td>
                             <td class="col-prov <?= $cellClass($bothProveedor, $eqProveedor) ?>" style="border:1px solid #f0a500;" title="<?= htmlspecialchars($gastoProveedor) ?>"><?= htmlspecialchars($gastoProveedor) ?></td>
-                            <td class="right <?= $cellClass($bothIva, $eqIva) ?>" style="border:1px solid #f0a500;"><?= number_format($gastoIva, 2) ?></td>
                             <td class="right <?= $cellClass($bothTotal, $eqTotal) ?>" style="border:1px solid #f0a500;"><?= number_format($gastoTotal, 2) ?></td>
-
-                            <td class="center">
-                                <span class="badge badge-navy" style="font-size:10px;" title="Score ponderado: monto 40%, número 25%, proveedor 20%, fecha 15%"><?= number_format((float) ($row['match_score'] ?? 0), 1) ?>%</span>
-                            </td>
-                            <td class="center">
-                                <span class="badge <?= $estadoBadgeClass ?>" style="font-size:10px;white-space:nowrap;"><?= htmlspecialchars($row['estado_nombre'] ?? '') ?></span>
-                            </td>
-                            <td style="min-width:145px;">
-                                <form method="post" action="<?= $baseUrl ?>/conciliacion/revisar/<?= (int) ($row['conciliacion_id'] ?? 0) ?>" class="d-flex conc-review-form">
-                                    <select name="estado_codigo" class="form-control conc-review-select">
-                                        <?php foreach ($estados as $codigo => $estado): ?>
-                                            <option value="<?= htmlspecialchars($codigo) ?>" <?= ($codigo === ($row['estado_codigo'] ?? '')) ? 'selected' : '' ?>>
-                                                <?= htmlspecialchars($estado['nombre']) ?>
-                                            </option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                    <input type="text" name="comentario" value="<?= htmlspecialchars($row['revision_comentario'] ?? ($row['notas'] ?? '')) ?>" placeholder="Comentario" class="form-control conc-review-input">
-                                    <button type="submit" class="btn btn-primary btn-sm" title="Guardar"><i class="fas fa-check"></i></button>
-                                </form>
-                            </td>
                         </tr>
                     <?php endforeach; ?>
                 <?php endif; ?>
@@ -390,3 +408,110 @@ $importacionesGastos = $importacionesGastos ?? [];
         </div>
     </div>
 </div>
+
+<script>
+// ── Renombrador de PDFs (File System Access API) ──
+// Renombra los PDF locales del usuario con el mismo nombre FE_ que los XML.
+// Los archivos NO se suben al servidor: solo se descarga el mapa número→nombre.
+(function () {
+    var btn = document.getElementById('btn-renombrar-pdf');
+    if (!btn) return;
+
+    var BASE = '<?= $baseUrl ?>';
+
+    // Número corto: secuencia de dígitos más larga, sin ceros a la izquierda.
+    function numeroCorto(texto) {
+        var runs = String(texto).match(/\d+/g) || [];
+        var core = '';
+        for (var i = 0; i < runs.length; i++) {
+            var r = runs[i].replace(/^0+/, '');
+            if (r.length > core.length) core = r;
+        }
+        return core;
+    }
+
+    btn.addEventListener('click', function () {
+        if (!window.showDirectoryPicker) {
+            alert('Esta función requiere Chrome o Edge actualizados (acceso a carpetas del navegador).');
+            return;
+        }
+
+        var corridaId = btn.getAttribute('data-corrida') || '0';
+
+        fetch(BASE + '/conciliacion/mapa-nombres?corrida_id=' + corridaId, { credentials: 'same-origin' })
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                if (!data.success) throw new Error(data.message || 'No se pudo obtener el mapa de nombres.');
+                if (!data.total) throw new Error('La conciliación no tiene facturas con gasto asociado.');
+                return window.showDirectoryPicker({ mode: 'readwrite' }).then(function (dir) {
+                    return renombrarEnCarpeta(dir, data.mapa);
+                });
+            })
+            .then(function (resumen) {
+                var msg = 'Renombrados: ' + resumen.ok + '\n' +
+                          'Ya tenían el nombre correcto: ' + resumen.yaCorrectos + '\n' +
+                          'Sin coincidencia: ' + resumen.sinMatch.length + '\n' +
+                          'Errores: ' + resumen.errores.length;
+                if (resumen.sinMatch.length) {
+                    msg += '\n\nSin coincidencia (primeros 10):\n' + resumen.sinMatch.slice(0, 10).join('\n');
+                }
+                if (resumen.errores.length) {
+                    msg += '\n\nErrores (primeros 5):\n' + resumen.errores.slice(0, 5).join('\n');
+                }
+                alert(msg);
+            })
+            .catch(function (err) {
+                if (err && err.name === 'AbortError') return; // usuario canceló el selector
+                alert('Error: ' + (err.message || err));
+            });
+    });
+
+    function renombrarEnCarpeta(dir, mapa) {
+        var resumen = { ok: 0, yaCorrectos: 0, sinMatch: [], errores: [] };
+
+        function procesarEntrada(nombre, handle) {
+            if (handle.kind !== 'file' || !/\.pdf$/i.test(nombre)) return Promise.resolve();
+
+            var core = numeroCorto(nombre.replace(/\.pdf$/i, ''));
+            var destino = core && mapa[core] ? mapa[core] + '.pdf' : null;
+
+            if (!destino) {
+                resumen.sinMatch.push(nombre);
+                return Promise.resolve();
+            }
+            if (nombre === destino) {
+                resumen.yaCorrectos++;
+                return Promise.resolve();
+            }
+            return handle.move(destino)
+                .then(function () { resumen.ok++; })
+                .catch(function (e) {
+                    resumen.errores.push(nombre + ' → ' + destino + ' (' + (e.message || e.name) + ')');
+                });
+        }
+
+        // Recolectar primero todas las entradas, luego renombrar
+        // (renombrar mientras se itera puede saltarse archivos).
+        var entradas = [];
+        var iterator = dir.entries()[Symbol.asyncIterator]();
+
+        function recolectar() {
+            return iterator.next().then(function (r) {
+                if (r.done) return null;
+                entradas.push(r.value);
+                return recolectar();
+            });
+        }
+
+        return recolectar()
+            .then(function () {
+                var cadena = Promise.resolve();
+                entradas.forEach(function (par) {
+                    cadena = cadena.then(function () { return procesarEntrada(par[0], par[1]); });
+                });
+                return cadena;
+            })
+            .then(function () { return resumen; });
+    }
+})();
+</script>
