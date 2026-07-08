@@ -114,6 +114,7 @@ $importacionActiva = $importacionActiva ?? null;
                     <th>Fecha</th>
                     <th>Número Factura</th>
                     <th>Proveedor</th>
+                    <th class="right">IVA</th>
                     <th class="right">Monto</th>
                     <th class="center">Estado</th>
                 </tr>
@@ -121,7 +122,7 @@ $importacionActiva = $importacionActiva ?? null;
             <tbody>
                 <?php if (empty($gastos)): ?>
                     <tr class="empty-row">
-                        <td colspan="5">
+                        <td colspan="6">
                             <i class="fas fa-inbox" style="font-size:28px;color:var(--border);display:block;margin-bottom:8px;"></i>
                             No hay gastos importados todavía.<br>
                             <span style="font-size:12px;">Usa el formulario de arriba para subir un archivo CSV o XLSX.</span>
@@ -136,6 +137,7 @@ $importacionActiva = $importacionActiva ?? null;
                             <?= htmlspecialchars($g['numero_factura'] ?? '—') ?>
                         </td>
                         <td><?= htmlspecialchars($g['proveedor_texto'] ?? 'Sin proveedor') ?></td>
+                        <td class="right"><?= number_format((float)($g['suma_iva'] ?? 0), 2) ?></td>
                         <td class="right" style="font-weight:700;"><?= number_format((float)($g['suma_total'] ?? 0), 2) ?></td>
                         <td class="center">
                             <span class="badge badge-green"><i class="fas fa-check-circle"></i> Importado</span>

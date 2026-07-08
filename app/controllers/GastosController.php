@@ -20,17 +20,15 @@ class GastosController extends Controller
 			// Garantiza que la columna exista (migración lazy)
 			$gastoModel->ensureImportacionIdColumn();
 
-			if (!empty($_GET['limpiar'])) {
-				// Vista limpia: no se muestra ningún registro
-			} else {
-				// Cargar historial primero para poder hacer el backfill
-				$historial = $importacionModel->getAllByTipo('gastos');
+		// Cargar historial siempre (incluso con ?limpiar)
+			$historial = $importacionModel->getAllByTipo('gastos');
 
-				// Backfill: si hay filas sin importacion_id, asignarlas a la importación más reciente
-				if (!empty($historial)) {
-					$gastoModel->backfillImportacionId((int) $historial[0]['id']);
-				}
+			// Backfill: si hay filas sin importacion_id, asignarlas a la importación más reciente
+			if (!empty($historial)) {
+				$gastoModel->backfillImportacionId((int) $historial[0]['id']);
+			}
 
+			if (empty($_GET['limpiar'])) {
 				$importacionId = max(0, (int) ($_GET['importacion_id'] ?? 0));
 
 				if ($importacionId > 0) {
@@ -42,7 +40,7 @@ class GastosController extends Controller
 			}
 
 		} catch (Exception $e) {
-			$this->redirectWithMessage($this->url('/conciliacion'), 'No fue posible cargar gastos: ' . $e->getMessage(), 'warning');
+			$this->redirectWithMessage($this->url('/gastos'), 'No fue posible cargar gastos: ' . $e->getMessage(), 'warning');
 		}
 
 		$this->render('gastos/index', [
@@ -56,8 +54,9 @@ class GastosController extends Controller
 	public function subir()
 	{
 		if (!$this->isPost()) {
-			$this->redirect($this->url('/conciliacion'));
+			$this->redirect($this->url('/gastos'));
 		}
+
 
 		require_once __DIR__ . '/../helpers/FileUploader.php';
 		require_once __DIR__ . '/../helpers/Validator.php';
@@ -97,16 +96,16 @@ class GastosController extends Controller
 			$importacionModel->cerrar($importacionId, $result['total'], $result['exitosos'], $result['fallidos'], $result['errores']);
 
 			if ($result['exitosos'] === 0) {
-				$this->redirectWithMessage($this->url('/conciliacion'), 'No se importó ningún gasto. Verifica columnas y formato CSV.', 'error');
+				$this->redirectWithMessage($this->url('/gastos'), 'No se importó ningún gasto. Verifica columnas y formato CSV.', 'error');
 			}
 
 			$this->redirectWithMessage(
-				$this->url('/conciliacion'),
+				$this->url('/gastos'),
 				"Importación de gastos completada. Exitosos: {$result['exitosos']}, Fallidos: {$result['fallidos']}",
 				$result['fallidos'] > 0 ? 'warning' : 'success'
 			);
 		} catch (Throwable $e) {
-			$this->redirectWithMessage($this->url('/conciliacion'), 'Error de importación de gastos: ' . $e->getMessage(), 'error');
+			$this->redirectWithMessage($this->url('/gastos'), 'Error de importación de gastos: ' . $e->getMessage(), 'error');
 		}
 	}
 

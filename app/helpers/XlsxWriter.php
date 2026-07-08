@@ -6,7 +6,13 @@
 
 class XlsxWriter
 {
-	public static function generate(array $headers, array $rows, string $sheetName = 'Datos')
+	/**
+	 * $cellStyles : array[ rowIndex ][ colIndex ] = styleId
+	 *   Style 2 = fondo amarillo (hallazgo con diferencias)
+	 *   Style 3 = fondo verde   (sin diferencias / ok)
+	 * $colWidths  : array[ colIndex ] = width (unidades Excel, aprox. chars)
+	 */
+	public static function generate(array $headers, array $rows, string $sheetName = 'Datos', array $cellStyles = [], array $colWidths = [])
 	{
 		$tmpFile = tempnam(sys_get_temp_dir(), 'xlsx_');
 		if ($tmpFile === false) {
@@ -43,7 +49,8 @@ class XlsxWriter
 
 		$sheetXml .= '<cols>';
 		for ($c = 0; $c < $colCount; $c++) {
-			$sheetXml .= '<col min="' . ($c + 1) . '" max="' . ($c + 1) . '" width="18" bestFit="1" customWidth="1"/>';
+			$w = isset($colWidths[$c]) ? (float) $colWidths[$c] : 18;
+			$sheetXml .= '<col min="' . ($c + 1) . '" max="' . ($c + 1) . '" width="' . $w . '" bestFit="1" customWidth="1"/>';
 		}
 		$sheetXml .= '</cols>';
 
@@ -65,12 +72,14 @@ class XlsxWriter
 			foreach ($headers as $ci => $header) {
 				$ref = self::colLetter($ci) . $rowNum;
 				$val = $row[$ci] ?? $row[$header] ?? '';
+				$styleId = $cellStyles[$ri][$ci] ?? 0;
+				$sAttr   = $styleId > 0 ? ' s="' . $styleId . '"' : '';
 
 				if (is_numeric($val) && $val !== '' && !preg_match('/^0\d/', (string) $val)) {
-					$sheetXml .= '<c r="' . $ref . '"><v>' . $val . '</v></c>';
+					$sheetXml .= '<c r="' . $ref . '"' . $sAttr . '><v>' . $val . '</v></c>';
 				} else {
 					$idx = $addShared((string) $val);
-					$sheetXml .= '<c r="' . $ref . '" t="s"><v>' . $idx . '</v></c>';
+					$sheetXml .= '<c r="' . $ref . '" t="s"' . $sAttr . '><v>' . $idx . '</v></c>';
 				}
 			}
 			$sheetXml .= '</row>';
@@ -88,17 +97,25 @@ class XlsxWriter
 		}
 		$ssXml .= '</sst>';
 
-		// Styles (bold header)
+		// Styles
+		// 0 = normal  |  1 = bold+azul (header)  |  2 = fondo amarillo (hallazgo)  |  3 = fondo verde (ok)
 		$stylesXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' . "\n"
 			. '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
 			. '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>'
-			. '<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>'
-			. '<fill><patternFill patternType="solid"><fgColor rgb="FF4472C4"/></patternFill></fill></fills>'
+			. '<fills count="5">'
+			. '<fill><patternFill patternType="none"/></fill>'
+			. '<fill><patternFill patternType="gray125"/></fill>'
+			. '<fill><patternFill patternType="solid"><fgColor rgb="FF4472C4"/></patternFill></fill>'
+			. '<fill><patternFill patternType="solid"><fgColor rgb="FFFFF2CC"/></patternFill></fill>'
+			. '<fill><patternFill patternType="solid"><fgColor rgb="FFE2EFDA"/></patternFill></fill>'
+			. '</fills>'
 			. '<borders count="1"><border/></borders>'
 			. '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-			. '<cellXfs count="2">'
+			. '<cellXfs count="4">'
 			. '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
 			. '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>'
+			. '<xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1"/>'
+			. '<xf numFmtId="0" fontId="0" fillId="4" borderId="0" xfId="0" applyFill="1"/>'
 			. '</cellXfs>'
 			. '</styleSheet>';
 
