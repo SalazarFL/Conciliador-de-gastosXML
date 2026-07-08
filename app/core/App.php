@@ -54,15 +54,18 @@ class App
             $configuredPath = '/';
         }
 
-        // Si la ruta configurada no coincide con la URL actual, usar la base real.
-        $effectiveBaseUri = (strpos($requestPath, $configuredPath) === 0) ? $configuredPath : $detectedBaseUri;
+        // Usar configuredPath solo si es una ruta no trivial (no solo "/") y coincide con la URL.
+        // Si configuredPath es "/", cualquier URL coincidiría y se perdería el sub-directorio real.
+        $effectiveBaseUri = ($configuredPath !== '/' && strpos($requestPath, $configuredPath) === 0)
+            ? $configuredPath
+            : $detectedBaseUri;
 
         if (!defined('BASE_URI')) {
-            define('BASE_URI', $effectiveBaseUri);
+            define('BASE_URI', rtrim($effectiveBaseUri, '/'));
         }
 
         if (!defined('APP_URL')) {
-            define('APP_URL', $effectiveBaseUri);
+            define('APP_URL', rtrim($effectiveBaseUri, '/'));
         }
         
         // Configurar zona horaria

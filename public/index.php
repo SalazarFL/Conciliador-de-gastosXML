@@ -38,13 +38,24 @@
     exit;
 })();
 
-// Iniciar sesión si no está activa
+// Iniciar sesión con ruta dentro del directorio permitido.
+// En hosting con open_basedir (InfinityFree) el /tmp predeterminado puede estar bloqueado.
 if (session_status() === PHP_SESSION_NONE) {
+    $_rootPath   = is_dir(__DIR__ . '/app') ? __DIR__ : dirname(__DIR__);
+    $_sessionDir = $_rootPath . '/storage/sessions';
+    if (!is_dir($_sessionDir)) {
+        @mkdir($_sessionDir, 0700, true);
+    }
+    if (is_dir($_sessionDir) && is_writable($_sessionDir)) {
+        session_save_path($_sessionDir);
+    }
     session_start();
 }
 
 // Definir directorio raíz
-define('ROOT_PATH', dirname(__DIR__));
+// En hosting con open_basedir (ej. InfinityFree), app/ vive dentro de htdocs/;
+// en local, app/ está en el directorio padre de public/.
+define('ROOT_PATH', is_dir(__DIR__ . '/app') ? __DIR__ : dirname(__DIR__));
 
 // Cargar clases del core
 require_once ROOT_PATH . '/app/core/App.php';

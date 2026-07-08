@@ -99,13 +99,17 @@ class Controller
         if (session_status() === PHP_SESSION_NONE) {
             session_start();
         }
-        
+
         $_SESSION['flash_message'] = [
             'message' => $message,
             'type' => $type,
             'details' => $details
         ];
-        
+
+        // Forzar escritura en disco antes del redirect; en hosting compartido
+        // PHP puede no escribir la sesión a tiempo si solo se depende del shutdown.
+        session_write_close();
+
         $this->redirect($url);
     }
     

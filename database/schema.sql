@@ -108,7 +108,7 @@ CREATE TABLE `facturas_xml` (
     `creado_en` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `actualizado_en` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_consecutivo` (`consecutivo_completo`),
+    UNIQUE KEY `uk_consecutivo` (`consecutivo_completo`(191), `proveedor_id`, `fecha_emision`),
     KEY `idx_numero_factura` (`numero_factura_asistente`),
     KEY `idx_proveedor` (`proveedor_id`),
     KEY `idx_fecha_emision` (`fecha_emision`),

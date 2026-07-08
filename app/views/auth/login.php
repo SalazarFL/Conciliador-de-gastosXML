@@ -70,16 +70,40 @@
         .login-body { padding: 36px 40px 28px; }
 
         .alert-error {
-            background: #fff5f5;
-            border: 1.5px solid #fca5a5;
+            background: #fff;
+            border-left: 4px solid #ef4444;
             border-radius: 10px;
-            padding: 12px 16px;
-            color: #b91c1c;
+            box-shadow: 0 2px 10px rgba(239,68,68,.12);
+            padding: 13px 16px;
+            color: #1a202c;
             font-size: 13px;
             margin-bottom: 24px;
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 12px;
+            animation: slideDown .3s ease;
+        }
+
+        .alert-error-icon {
+            width: 32px;
+            height: 32px;
+            background: #fee2e2;
+            color: #dc2626;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .alert-error-text { flex: 1; }
+        .alert-error-title { font-weight: 700; font-size: 12px; color: #dc2626; margin-bottom: 2px; }
+        .alert-error-msg   { color: #4a5568; font-size: 12.5px; }
+
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-8px); }
+            to   { opacity: 1; transform: translateY(0); }
         }
 
         .form-group { margin-bottom: 22px; }
@@ -188,8 +212,11 @@
 
             <?php if (!empty($error)): ?>
             <div class="alert-error">
-                <i class="fas fa-exclamation-circle"></i>
-                <?= htmlspecialchars($error) ?>
+                <div class="alert-error-icon"><i class="fas fa-times-circle"></i></div>
+                <div class="alert-error-text">
+                    <div class="alert-error-title">Acceso denegado</div>
+                    <div class="alert-error-msg"><?= htmlspecialchars($error) ?></div>
+                </div>
             </div>
             <?php endif; ?>
 

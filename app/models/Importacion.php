@@ -121,11 +121,12 @@ class Importacion extends Model
 
     public function getAllByTipo(string $tipo, int $limit = 50): array
     {
+        $limit = max(1, min(1000, $limit));
         $sql = "SELECT * FROM {$this->table}
                 WHERE tipo = ?
                 ORDER BY fecha_importacion DESC, id DESC
-                LIMIT ?";
-        return $this->fetchAll($sql, [$tipo, $limit]) ?: [];
+                LIMIT {$limit}";
+        return $this->fetchAll($sql, [$tipo]) ?: [];
     }
 
     public function clearByTipo(string $tipo): int

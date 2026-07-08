@@ -155,10 +155,10 @@ foreach ($pageLabels as $seg => $labels) {
         <?php
         if (session_status() === PHP_SESSION_NONE) session_start();
 
-        if (isset($_SESSION['flash_message'])) {
+        if (isset($_SESSION['flash_message'])):
             $flash  = $_SESSION['flash_message'];
-            $type   = $flash['type'] ?? 'info';
-            $msg    = $flash['message'] ?? '';
+            $fType  = $flash['type'] ?? 'info';
+            $fMsg   = $flash['message'] ?? '';
             $det    = is_array($flash['details'] ?? null) ? $flash['details'] : [];
 
             $extractList = function ($key) use ($det) {
@@ -170,37 +170,97 @@ foreach ($pageLabels as $seg => $labels) {
             $duplicateFiles = $extractList('duplicate_files');
             $serverWarning  = trim((string) ($det['server_limit_warning'] ?? ''));
 
-            $icons  = ['success'=>'fa-check-circle','error'=>'fa-exclamation-circle','warning'=>'fa-exclamation-triangle','info'=>'fa-info-circle'];
-            $titles = ['success'=>'Importación completada','error'=>'Error en importación','warning'=>'Importación con observaciones','info'=>'Información'];
+            $icons  = ['success' => 'fa-check-circle', 'error' => 'fa-times-circle', 'warning' => 'fa-exclamation-triangle', 'info' => 'fa-info-circle'];
+            $titles = ['success' => 'Listo', 'error' => 'Error', 'warning' => 'Atención', 'info' => 'Información'];
 
-            echo "<div id='flash-toast' class='flash-toast {$type}' role='status' aria-live='polite'>";
-            echo "<div class='flash-toast-header'>";
-            echo   "<div class='flash-toast-title'><i class='fas {$icons[$type]}'></i><span>" . htmlspecialchars($titles[$type] ?? 'Mensaje') . "</span></div>";
-            echo   "<button type='button' class='flash-toast-close' onclick='document.getElementById(\"flash-toast\").style.display=\"none\"' aria-label='Cerrar'>&times;</button>";
-            echo "</div>";
-            echo "<div class='flash-toast-body'>";
-            echo "<div>" . htmlspecialchars($msg) . "</div>";
+            // Error/warning stays longer, success/info dismisses after 7s
+            $duration = in_array($fType, ['error', 'warning']) ? 10000 : 7000;
 
-            if ($serverWarning !== '') {
-                echo "<div style='margin-top:9px;padding:7px 10px;border-radius:8px;background:rgba(0,0,0,.06);font-size:12px;'>⚠ " . htmlspecialchars($serverWarning) . "</div>";
-            }
-
-            if (!empty($duplicateFiles)) {
-                echo "<div class='flash-toast-list-wrap'><div class='flash-toast-list-title'>Ya importados (" . count($duplicateFiles) . ")</div><ul class='flash-toast-list'>";
-                foreach ($duplicateFiles as $f) echo "<li>" . htmlspecialchars($f) . "</li>";
-                echo "</ul></div>";
-            }
-
-            if (!empty($failedFiles)) {
-                echo "<div class='flash-toast-list-wrap'><div class='flash-toast-list-title'>Con error (" . count($failedFiles) . ")</div><ul class='flash-toast-list'>";
-                foreach ($failedFiles as $f) echo "<li>" . htmlspecialchars($f) . "</li>";
-                echo "</ul></div>";
-            }
-
-            echo "</div></div>";
             unset($_SESSION['flash_message']);
-        }
         ?>
+        <div id="flash-toast-container" aria-live="polite">
+            <div id="flash-toast" class="flash-toast <?= htmlspecialchars($fType) ?>"
+                 data-duration="<?= $duration ?>" role="status">
+                <div class="flash-toast-inner">
+                    <div class="flash-toast-icon">
+                        <i class="fas <?= $icons[$fType] ?? 'fa-info-circle' ?>"></i>
+                    </div>
+                    <div class="flash-toast-content">
+                        <div class="flash-toast-title"><?= htmlspecialchars($titles[$fType] ?? 'Mensaje') ?></div>
+                        <div class="flash-toast-msg"><?= htmlspecialchars($fMsg) ?></div>
+                    </div>
+                    <button type="button" class="flash-toast-close" onclick="dismissToast()" aria-label="Cerrar">&times;</button>
+                </div>
+                <?php if ($serverWarning !== '' || !empty($duplicateFiles) || !empty($failedFiles)): ?>
+                <div class="flash-toast-extra">
+                    <?php if ($serverWarning !== ''): ?>
+                    <div class="flash-toast-warning-box">
+                        <i class="fas fa-exclamation-triangle" style="margin-right:5px;"></i><?= htmlspecialchars($serverWarning) ?>
+                    </div>
+                    <?php endif; ?>
+                    <?php if (!empty($duplicateFiles)): ?>
+                    <div class="flash-toast-list-wrap">
+                        <div class="flash-toast-list-title">Ya existían (<?= count($duplicateFiles) ?>)</div>
+                        <ul class="flash-toast-list">
+                            <?php foreach ($duplicateFiles as $f): ?><li><?= htmlspecialchars($f) ?></li><?php endforeach; ?>
+                        </ul>
+                    </div>
+                    <?php endif; ?>
+                    <?php if (!empty($failedFiles)): ?>
+                    <div class="flash-toast-list-wrap">
+                        <div class="flash-toast-list-title">Con error (<?= count($failedFiles) ?>)</div>
+                        <ul class="flash-toast-list">
+                            <?php foreach ($failedFiles as $f): ?><li><?= htmlspecialchars($f) ?></li><?php endforeach; ?>
+                        </ul>
+                    </div>
+                    <?php endif; ?>
+                </div>
+                <?php endif; ?>
+                <div class="flash-toast-progress">
+                    <div class="flash-toast-progress-bar" id="flash-progress-bar"></div>
+                </div>
+            </div>
+        </div>
+        <script>
+        (function () {
+            var toast    = document.getElementById('flash-toast');
+            var bar      = document.getElementById('flash-progress-bar');
+            var duration = parseInt(toast.dataset.duration, 10) || 5000;
+            var timer;
+
+            function dismissToast() {
+                clearTimeout(timer);
+                toast.classList.remove('show');
+                toast.classList.add('hide');
+            }
+            window.dismissToast = dismissToast;
+
+            // Slide in
+            requestAnimationFrame(function () {
+                requestAnimationFrame(function () {
+                    toast.classList.add('show');
+                    // Progress bar shrink
+                    bar.style.transition = 'transform ' + duration + 'ms linear';
+                    bar.style.transform  = 'scaleX(0)';
+                    timer = setTimeout(dismissToast, duration);
+                });
+            });
+
+            // Pause on hover
+            toast.addEventListener('mouseenter', function () {
+                clearTimeout(timer);
+                bar.style.transition = 'none';
+            });
+            toast.addEventListener('mouseleave', function () {
+                var remaining = parseFloat(bar.style.transform.replace('scaleX(', '')) || 0;
+                var timeLeft  = remaining * duration;
+                bar.style.transition = 'transform ' + timeLeft + 'ms linear';
+                bar.style.transform  = 'scaleX(0)';
+                timer = setTimeout(dismissToast, timeLeft);
+            });
+        })();
+        </script>
+        <?php endif; ?>
 
         <!-- Contenido de la página -->
         <main class="page-content">

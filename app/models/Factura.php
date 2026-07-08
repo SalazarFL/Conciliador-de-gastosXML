@@ -112,6 +112,24 @@ class Factura extends Model
         return $this->execute($sql);
     }
 
+    public function existsByHash(string $hash): bool
+    {
+        $sql = "SELECT 1 FROM {$this->table} WHERE hash_xml = ? LIMIT 1";
+        return (bool) $this->fetchColumn($sql, [$hash]);
+    }
+
+    public function existsByConsecutivo(string $consecutivo, int $proveedorId = 0, string $fechaEmision = ''): bool
+    {
+        if ($proveedorId > 0 && $fechaEmision !== '') {
+            $sql = "SELECT 1 FROM {$this->table}
+                    WHERE consecutivo_completo = ? AND proveedor_id = ? AND fecha_emision = ?
+                    LIMIT 1";
+            return (bool) $this->fetchColumn($sql, [$consecutivo, $proveedorId, $fechaEmision]);
+        }
+        $sql = "SELECT 1 FROM {$this->table} WHERE consecutivo_completo = ? LIMIT 1";
+        return (bool) $this->fetchColumn($sql, [$consecutivo]);
+    }
+
     public function getByImportacion(int $importacionId): array
     {
         $sql = "SELECT f.*, p.razon_social as proveedor_nombre
