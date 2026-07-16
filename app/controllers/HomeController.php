@@ -1,7 +1,8 @@
 <?php
 /**
  * Controlador de Home
- * Página principal y dashboard
+ * Panel principal: sociedades (con la activa se trabaja) y estado del
+ * último listado de facturas por pagar.
  */
 
 class HomeController extends Controller
@@ -10,35 +11,50 @@ class HomeController extends Controller
 
     public function index()
     {
-        // Obtener estadísticas básicas si hay conexión a BD
         $stats = [
             'total_facturas' => 0,
-            'total_gastos' => 0,
-            'total_conciliadas' => 0,
-            'pendientes_revision' => 0
+            'bandeja_pendientes' => 0,
         ];
-        
+        $sociedades = [];
+        $sociedadActiva = null;
+        $ultimoListado = null;
+        $resumenListado = [];
+
         try {
-            // Intentar cargar estadísticas
-            $facturasModel = $this->loadModel('Factura');
-            $gastosModel = $this->loadModel('Gasto');
-            $conciliacionModel = $this->loadModel('Conciliacion');
-            
-            // Obtener totales (si las tablas existen)
-            $stats['total_facturas'] = $facturasModel->count();
-            $stats['total_gastos'] = $gastosModel->count();
-            $stats['total_conciliadas'] = $conciliacionModel->countByEstado('conciliada');
-            $stats['pendientes_revision'] = $conciliacionModel->countByEstado('requiere_revision');
-        } catch (Exception $e) {
-            // Si no hay BD configurada, usar valores por defecto
-            // No mostrar error en home
+            $stats['total_facturas'] = $this->loadModel('Factura')->count();
+        } catch (Throwable $e) {
         }
-        
-        $data = [
+
+        try {
+            $conteo = $this->loadModel('CorreoBandeja')->contarPorEstado();
+            $stats['bandeja_pendientes'] = (int) ($conteo['pendiente'] ?? 0);
+        } catch (Throwable $e) {
+        }
+
+        try {
+            $sociedadModel = $this->loadModel('Sociedad');
+            $sociedades = $sociedadModel->getAll();
+            $sociedadActiva = $sociedadModel->getActiva();
+        } catch (Throwable $e) {
+        }
+
+        try {
+            $porPagar = $this->loadModel('PorPagar');
+            $listados = $porPagar->getListados(1);
+            if (!empty($listados)) {
+                $ultimoListado = $listados[0];
+                $resumenListado = $porPagar->resumenPorEstado((int) $ultimoListado['id']);
+            }
+        } catch (Throwable $e) {
+        }
+
+        $this->render('home/index', [
             'title' => 'Inicio - XMLConcilia',
-            'stats' => $stats
-        ];
-        
-        $this->render('home/index', $data);
+            'stats' => $stats,
+            'sociedades' => $sociedades,
+            'sociedadActiva' => $sociedadActiva,
+            'ultimoListado' => $ultimoListado,
+            'resumenListado' => $resumenListado,
+        ]);
     }
 }
