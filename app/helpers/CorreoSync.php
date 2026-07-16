@@ -22,6 +22,42 @@ require_once __DIR__ . '/MailFetcher.php';
 
 class CorreoSync
 {
+    /**
+     * Archivo de lock que serializa TODA sincronización (navegador y CLI).
+     * Es el mismo que usa cli/sync_correo.php: nunca corren dos
+     * sincronizaciones a la vez contra el buzón ni escriben doble el índice.
+     */
+    public static function rutaLock()
+    {
+        return MailFetcher::storagePath() . DIRECTORY_SEPARATOR . 'sync_auto.lock';
+    }
+
+    /**
+     * Intenta tomar el lock sin bloquear. Devuelve el handle (hay que
+     * conservarlo mientras dura la corrida y soltarlo con liberarLock)
+     * o null si otra sincronización está en curso.
+     */
+    public static function adquirirLock()
+    {
+        $fp = @fopen(self::rutaLock(), 'c');
+        if ($fp === false) {
+            return null;
+        }
+        if (!flock($fp, LOCK_EX | LOCK_NB)) {
+            fclose($fp);
+            return null;
+        }
+        return $fp;
+    }
+
+    public static function liberarLock($fp)
+    {
+        if (is_resource($fp)) {
+            flock($fp, LOCK_UN);
+            fclose($fp);
+        }
+    }
+
     public static function ejecutar(array $config, $indice, $presupuestoSegundos = 20)
     {
         $inicio = microtime(true);

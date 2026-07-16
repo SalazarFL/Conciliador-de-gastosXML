@@ -248,7 +248,7 @@ class CorreoController extends Controller
                 $lista = $indice->buscar($texto, $ambito, (int) $config['dias_atras'], 500);
             }
 
-            // Marcar procesados (lee procesados.json, sin conectar al buzón)
+            // Marcar procesados (lee correo_procesados, sin conectar al buzón)
             $fetcher = new MailFetcher($config);
             foreach ($lista['correos'] as &$correo) {
                 $correo['procesado'] = $fetcher->yaProcesado((string) $correo['clave']);
@@ -309,14 +309,33 @@ class CorreoController extends Controller
     /**
      * Actualiza el índice local carpeta por carpeta hasta agotar el
      * presupuesto de tiempo. La lógica vive en CorreoSync para que la
-     * compartan el navegador (esta ruta AJAX) y la tarea programada de
-     * Windows (cli/sync_correo.php), que mantiene el índice al día aunque
-     * el módulo esté cerrado.
+     * compartan el navegador (esta ruta AJAX) y la tarea programada
+     * (cli/sync_correo.php), que mantiene el índice al día aunque el
+     * módulo esté cerrado.
+     *
+     * Solo corre UNA sincronización a la vez en todo el sistema (mismo
+     * lock que el CLI): con varios usuarios abriendo el módulo, el primero
+     * sincroniza y los demás siguen leyendo el índice sin abrir IMAP.
      */
     private function ejecutarSincronizacion(array $config, $indice, $presupuestoSegundos = 20)
     {
         require_once __DIR__ . '/../helpers/CorreoSync.php';
-        return CorreoSync::ejecutar($config, $indice, $presupuestoSegundos);
+
+        $lock = CorreoSync::adquirirLock();
+        if ($lock === null) {
+            // Otro usuario o el cron ya están sincronizando: no se duplica
+            // la conexión. completado=true corta el ciclo de tandas del JS.
+            return [
+                'carpetas' => 0, 'nuevos' => 0, 'reindexadas' => 0, 'restantes' => 0,
+                'adjuntos' => 0, 'completado' => true, 'en_curso' => true, 'segundos' => 0,
+            ];
+        }
+
+        try {
+            return CorreoSync::ejecutar($config, $indice, $presupuestoSegundos);
+        } finally {
+            CorreoSync::liberarLock($lock);
+        }
     }
 
     /**
@@ -691,7 +710,7 @@ class CorreoController extends Controller
                 if ($rutaXml !== '' && is_file($rutaXml)) {
                     @unlink($rutaXml);
                 }
-                // uid_correo es la misma clave usada en procesados.json
+                // uid_correo es la misma clave usada en correo_procesados
                 $clave = (string) ($fila['uid_correo'] ?? '');
                 if ($clave !== '') {
                     $clavesCorreo[$clave] = true;

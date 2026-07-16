@@ -1008,6 +1008,13 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                     return paso();
                 }
 
+                if (s.en_curso) {
+                    // Otro usuario (o la tarea automática) ya está actualizando:
+                    // no se guarda el timestamp para reintentar en la próxima visita.
+                    pintarSyncInfo('Índice: ' + (r.total_indexados || 0) + ' correos · otra actualización en curso');
+                    return;
+                }
+
                 try { localStorage.setItem('correoSyncTs_' + CUENTA_ID, String(Date.now())); } catch (e) {}
                 pintarSyncInfo('Índice: ' + (r.total_indexados || 0) + ' correos'
                     + (acumNuevos ? ' · +' + acumNuevos + ' nuevos' : ' · al día'));

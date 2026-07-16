@@ -37,7 +37,7 @@ $topeSegundos = isset($argv[1]) ? max(30, min(3600, (int) $argv[1])) : 480; // 8
 $presupuestoTanda = 25; // segundos por tanda de una cuenta
 
 $dirCorreo = MailFetcher::storagePath();
-$rutaLock   = $dirCorreo . DIRECTORY_SEPARATOR . 'sync_auto.lock';
+$rutaLock   = CorreoSync::rutaLock(); // mismo lock que la sincronización web
 $rutaEstado = $dirCorreo . DIRECTORY_SEPARATOR . 'sync_estado.json';
 $rutaLog    = $dirCorreo . DIRECTORY_SEPARATOR . 'sync_auto.log';
 
