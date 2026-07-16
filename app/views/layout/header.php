@@ -164,14 +164,6 @@ foreach ($pageLabels as $seg => $labels) {
                         title="Configuración: carpeta destino y cédula de la empresa">
                     <i class="fas fa-gear"></i>
                 </button>
-                <?php else: ?>
-                <a href="<?= $baseUrl ?>/assets/docs/<?= rawurlencode('Manual Sistema de Conciliación.pdf') ?>"
-                   target="_blank"
-                   style="font-size:12px;color:#0C2461;text-decoration:none;display:flex;align-items:center;gap:5px;padding:5px 12px;border:1.5px solid #c3d0e8;border-radius:8px;font-weight:600;transition:background .2s;"
-                   onmouseover="this.style.background='#eef3fb'" onmouseout="this.style.background='transparent'"
-                   title="Abrir manual de usuario">
-                    <i class="fas fa-book"></i> Manual
-                </a>
                 <?php endif; ?>
                 <span style="font-size:12px;color:#4a5568;display:flex;align-items:center;gap:6px;">
                     <i class="fas fa-user-circle" style="color:#0C2461;font-size:16px;"></i>
