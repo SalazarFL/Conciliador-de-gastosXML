@@ -17,6 +17,12 @@ $router->get('/logout', 'AuthController@logout');
 $router->get('/', 'HomeController@index');
 $router->get('/home', 'HomeController@index');
 
+// --- RUTAS DE SOCIEDADES (se administran desde Inicio) ---
+$router->post('/sociedades/crear', 'SociedadesController@crear');
+$router->post('/sociedades/editar/{id}', 'SociedadesController@editar');
+$router->post('/sociedades/eliminar/{id}', 'SociedadesController@eliminar');
+$router->post('/sociedades/activar/{id}', 'SociedadesController@activar');
+
 // --- RUTAS DE FACTURAS XML ---
 $router->get('/facturas', 'FacturasController@index');
 $router->post('/facturas/subir', 'FacturasController@subir');
@@ -25,6 +31,14 @@ $router->post('/facturas/cola/agregar', 'FacturasController@colaAgregar');
 $router->post('/facturas/cola/procesar', 'FacturasController@colaProcesar');
 $router->get('/facturas/cola/estado/{id}', 'FacturasController@colaEstado');
 $router->get('/facturas/ver/{id}', 'FacturasController@ver');
+
+// --- RUTAS DE FACTURAS POR PAGAR (listado del pago semanal) ---
+$router->get('/por-pagar', 'PorPagarController@index');
+$router->post('/por-pagar/subir', 'PorPagarController@subir');
+$router->post('/por-pagar/previsualizar', 'PorPagarController@previsualizar');
+$router->post('/por-pagar/verificar/{id}', 'PorPagarController@verificar');
+$router->post('/por-pagar/eliminar/{id}', 'PorPagarController@eliminar');
+$router->get('/por-pagar/exportar', 'PorPagarController@exportar');
 
 // --- RUTAS DE GASTOS ---
 $router->get('/gastos', 'GastosController@index');
