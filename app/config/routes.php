@@ -62,7 +62,7 @@ $router->post('/por-pagar/verificar/{id}', 'PorPagarController@verificar');
 $router->post('/por-pagar/eliminar/{id}', 'PorPagarController@eliminar');
 $router->get('/por-pagar/exportar', 'PorPagarController@exportar');
 
-// --- RUTAS DE GASTOS ---
+// --- RUTAS DE GASTOS (legado: fuera del menú, accesible por URL) ---
 $router->get('/gastos', 'GastosController@index');
 $router->post('/gastos/subir', 'GastosController@subir');
 

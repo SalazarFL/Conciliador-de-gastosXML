@@ -37,6 +37,8 @@ function navActive(string $segment, string $uri): string {
 // Determinar el título de la página actual para el topbar
 $pageLabels = [
     'facturas'     => ['Carga de Facturas XML',  ''],
+    'correo'       => ['Facturas desde Correo',   'Captura automática de XML y PDF del buzón'],
+    'por-pagar'    => ['Facturas por pagar',      'Verificación del listado del pago semanal'],
     'gastos'       => ['Carga de Gastos CSV',     ''],
     'conciliacion' => ['Conciliación',             ''],
     'reportes'     => ['Reportes y Exportación',  ''],
@@ -66,8 +68,11 @@ foreach ($pageLabels as $seg => $labels) {
         <!-- Logo texto -->
         <div class="sidebar-logo">
             <a href="<?= $baseUrl ?>/" style="text-decoration:none;">
-                <div style="font-size:22px;font-weight:800;letter-spacing:.5px;line-height:1.1;text-align:center;">
+                <div class="logo-full" style="font-size:22px;font-weight:800;letter-spacing:.5px;line-height:1.1;text-align:center;">
                     <span style="color:var(--gold);">XML</span><span style="color:#fff;"> Concilia</span>
+                </div>
+                <div class="logo-mini" title="XML Concilia">
+                    <span style="color:var(--gold);">X</span><span style="color:#fff;">C</span>
                 </div>
             </a>
             <div class="sidebar-logo-subtitle">Sistema de Conciliación</div>
@@ -77,31 +82,31 @@ foreach ($pageLabels as $seg => $labels) {
         <nav class="sidebar-nav">
             <div class="sidebar-section-label">Módulos</div>
 
-            <a href="<?= $baseUrl ?>/facturas" class="<?= navActive('facturas', $uriClean) ?>">
+            <a href="<?= $baseUrl ?>/facturas" class="<?= navActive('facturas', $uriClean) ?>" title="Carga de Facturas XML">
                 <span class="nav-icon"><i class="fas fa-file-invoice"></i></span>
-                Carga de Facturas XML
+                <span class="nav-label">Carga de Facturas XML</span>
             </a>
 
-            <a href="<?= $baseUrl ?>/gastos" class="<?= navActive('gastos', $uriClean) ?>">
-                <span class="nav-icon"><i class="fas fa-file-csv"></i></span>
-                Carga de Gastos CSV
+            <a href="<?= $baseUrl ?>/correo" class="<?= navActive('correo', $uriClean) ?>" title="Facturas desde Correo">
+                <span class="nav-icon"><i class="fas fa-envelope-open-text"></i></span>
+                <span class="nav-label">Facturas desde Correo</span>
             </a>
 
-            <a href="<?= $baseUrl ?>/conciliacion" class="<?= navActive('conciliacion', $uriClean) ?>">
-                <span class="nav-icon"><i class="fas fa-check-double"></i></span>
-                Conciliación
+            <a href="<?= $baseUrl ?>/por-pagar" class="<?= navActive('por-pagar', $uriClean) ?>" title="Facturas por pagar">
+                <span class="nav-icon"><i class="fas fa-file-invoice-dollar"></i></span>
+                <span class="nav-label">Facturas por pagar</span>
             </a>
 
-            <a href="<?= $baseUrl ?>/reportes" class="<?= navActive('reportes', $uriClean) ?>">
+            <a href="<?= $baseUrl ?>/reportes" class="<?= navActive('reportes', $uriClean) ?>" title="Reportes">
                 <span class="nav-icon"><i class="fas fa-chart-bar"></i></span>
-                Reportes
+                <span class="nav-label">Reportes</span>
             </a>
 
             <?php if (!empty($_SESSION['user_is_admin'])): ?>
             <div class="sidebar-section-label" style="margin-top:16px;">Administración</div>
-            <a href="<?= $baseUrl ?>/usuarios" class="<?= navActive('usuarios', $uriClean) ?>">
+            <a href="<?= $baseUrl ?>/usuarios" class="<?= navActive('usuarios', $uriClean) ?>" title="Usuarios">
                 <span class="nav-icon"><i class="fas fa-users-cog"></i></span>
-                Usuarios
+                <span class="nav-label">Usuarios</span>
             </a>
             <?php endif; ?>
         </nav>
@@ -110,12 +115,34 @@ foreach ($pageLabels as $seg => $labels) {
         <div class="sidebar-bottom">
             <a href="<?= $baseUrl ?>/" title="Ir al inicio">
                 <span class="nav-icon"><i class="fas fa-house"></i></span>
-                Inicio
+                <span class="nav-label">Inicio</span>
             </a>
         </div>
 
     </aside>
     <!-- ── /sidebar ── -->
+
+    <script>
+    // Sidebar mini: clic en la barra la expande (flotando sobre el contenido);
+    // clic fuera o de nuevo sobre ella la colapsa. En móvil manda el hamburger.
+    (function () {
+        var sb = document.getElementById('sidebar');
+        if (!sb) return;
+
+        sb.addEventListener('click', function (e) {
+            if (window.innerWidth <= 900) return;
+            if (e.target.closest('a')) return; // los enlaces navegan
+            sb.classList.toggle('expanded');
+        });
+
+        document.addEventListener('click', function (e) {
+            if (window.innerWidth <= 900) return;
+            if (!sb.classList.contains('expanded')) return;
+            if (e.target.closest('#sidebar')) return;
+            sb.classList.remove('expanded');
+        });
+    })();
+    </script>
 
     <!-- ══ MAIN ═══════════════════════════════════════ -->
     <div class="app-main">
@@ -130,6 +157,14 @@ foreach ($pageLabels as $seg => $labels) {
             </div>
             <div class="topbar-right" style="display:flex;align-items:center;gap:14px;">
                 <?php if (!empty($_SESSION['user_id'])): ?>
+                <?php if (strpos($uriClean, '/correo') !== false): ?>
+                <button type="button" onclick="if (window.abrirConfigCorreo) window.abrirConfigCorreo()"
+                        style="font-size:12px;color:#0C2461;background:transparent;cursor:pointer;display:flex;align-items:center;gap:5px;padding:5px 12px;border:1.5px solid #c3d0e8;border-radius:8px;font-weight:600;transition:background .2s;"
+                        onmouseover="this.style.background='#eef3fb'" onmouseout="this.style.background='transparent'"
+                        title="Configuración: carpeta destino y cédula de la empresa">
+                    <i class="fas fa-gear"></i>
+                </button>
+                <?php else: ?>
                 <a href="<?= $baseUrl ?>/assets/docs/<?= rawurlencode('Manual Sistema de Conciliación.pdf') ?>"
                    target="_blank"
                    style="font-size:12px;color:#0C2461;text-decoration:none;display:flex;align-items:center;gap:5px;padding:5px 12px;border:1.5px solid #c3d0e8;border-radius:8px;font-weight:600;transition:background .2s;"
@@ -137,6 +172,7 @@ foreach ($pageLabels as $seg => $labels) {
                    title="Abrir manual de usuario">
                     <i class="fas fa-book"></i> Manual
                 </a>
+                <?php endif; ?>
                 <span style="font-size:12px;color:#4a5568;display:flex;align-items:center;gap:6px;">
                     <i class="fas fa-user-circle" style="color:#0C2461;font-size:16px;"></i>
                     <?= htmlspecialchars($_SESSION['user_nombre'] ?? $_SESSION['user_username'] ?? '') ?>

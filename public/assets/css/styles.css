@@ -22,6 +22,7 @@
   --text-muted:  #5A6E8A;
   --text-light:  #8A9BB8;
   --sidebar-w:   255px;
+  --sidebar-w-mini: 62px;
   --radius:      10px;
   --radius-lg:   14px;
   --shadow:      0 3px 14px rgba(12,36,97,.10);
@@ -178,11 +179,63 @@ html, body {
   box-shadow: var(--shadow-md);
 }
 
+/* ── Sidebar mini (escritorio): solo iconos; clic para expandir ── */
+.sidebar .logo-mini { display: none; }
+
+@media (min-width: 901px) {
+  .sidebar {
+    width: var(--sidebar-w-mini);
+    overflow: hidden;
+    cursor: pointer;
+    transition: width .22s ease;
+  }
+
+  .sidebar.expanded {
+    width: var(--sidebar-w);
+    cursor: default;
+    box-shadow: 10px 0 34px rgba(0,0,0,.35);
+  }
+
+  .sidebar .nav-label,
+  .sidebar .sidebar-section-label,
+  .sidebar .sidebar-logo-subtitle,
+  .sidebar .logo-full { display: none; }
+
+  .sidebar.expanded .nav-label { display: inline; }
+  .sidebar.expanded .sidebar-section-label,
+  .sidebar.expanded .sidebar-logo-subtitle,
+  .sidebar.expanded .logo-full { display: block; }
+
+  .sidebar .logo-mini {
+    display: block;
+    font-size: 17px;
+    font-weight: 800;
+    letter-spacing: .5px;
+    text-align: center;
+  }
+  .sidebar.expanded .logo-mini { display: none; }
+
+  .sidebar-logo { padding: 16px 8px 14px; }
+  .sidebar.expanded .sidebar-logo { padding: 24px 20px 20px; }
+
+  .sidebar-nav a,
+  .sidebar-bottom a {
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+    white-space: nowrap;
+  }
+
+  .sidebar.expanded .sidebar-nav a { justify-content: flex-start; padding: 11px 20px; }
+  .sidebar.expanded .sidebar-bottom a { justify-content: flex-start; padding: 10px 20px; }
+}
+
 /* ══════════════════════════════
    MAIN CONTENT
 ══════════════════════════════ */
 .app-main {
-  margin-left: var(--sidebar-w);
+  /* Sidebar mini fija: la expansión flota encima, el contenido no se mueve */
+  margin-left: var(--sidebar-w-mini);
   flex: 1;
   display: flex;
   flex-direction: column;

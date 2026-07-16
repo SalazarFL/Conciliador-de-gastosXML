@@ -290,17 +290,17 @@ $estados = $estados ?? [];
     <section class="rep-card" id="filtros-card">
         <h2 class="rep-card-title"><i class="fas fa-sliders-h"></i> Filtros de Reporte</h2>
 
-        <!-- Tipo de datos -->
+        <!-- Tipo de datos (Conciliación y Gastos: módulos legado, ocultos) -->
         <div class="tipo-tabs" id="tipo-tabs">
-            <label class="tipo-tab active" for="tipo-conc">
-                <input type="radio" name="tipo" id="tipo-conc" value="conciliacion" checked>
+            <label class="tipo-tab" for="tipo-conc" style="display:none;">
+                <input type="radio" name="tipo" id="tipo-conc" value="conciliacion">
                 <i class="fas fa-exchange-alt"></i> Conciliación
             </label>
-            <label class="tipo-tab" for="tipo-facts">
-                <input type="radio" name="tipo" id="tipo-facts" value="facturas">
+            <label class="tipo-tab active" for="tipo-facts">
+                <input type="radio" name="tipo" id="tipo-facts" value="facturas" checked>
                 <i class="fas fa-file-invoice"></i> Facturas
             </label>
-            <label class="tipo-tab" for="tipo-gastos">
+            <label class="tipo-tab" for="tipo-gastos" style="display:none;">
                 <input type="radio" name="tipo" id="tipo-gastos" value="gastos">
                 <i class="fas fa-receipt"></i> Gastos
             </label>
@@ -904,8 +904,8 @@ $estados = $estados ?? [];
 
     // ── Init ──────────────────────────────────────────────────────────
     actualizarFiltrosVisibles();
-    buildColPills('conciliacion');
-    loadImportaciones('conciliacion');
+    buildColPills('facturas');
+    loadImportaciones('facturas');
 
 })();
 </script>
