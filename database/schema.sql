@@ -131,7 +131,7 @@ COMMENT='Facturas electrónicas XML procesadas (CFDI)';
 CREATE TABLE `gastos_raw` (
     `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
     `importacion_id` INT UNSIGNED NULL DEFAULT NULL COMMENT 'FK a importaciones',
-    `numero_factura` VARCHAR(50) NOT NULL COMMENT 'Número de factura reportado en el gasto',
+    `numero_factura` VARCHAR(255) NOT NULL COMMENT 'Número de factura reportado en el gasto',
     `proveedor_texto` VARCHAR(255) NULL DEFAULT NULL COMMENT 'Proveedor como texto libre',
     `fecha_gasto` DATE NULL DEFAULT NULL COMMENT 'Fecha del gasto',
     `descripcion` TEXT NULL DEFAULT NULL COMMENT 'Descripción del gasto',
@@ -163,7 +163,7 @@ COMMENT='Gastos importados (datos crudos sin consolidar)';
 -- =========================================
 CREATE TABLE `gastos_consolidados` (
     `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
-    `numero_factura` VARCHAR(50) NOT NULL COMMENT 'Número de factura consolidado',
+    `numero_factura` VARCHAR(255) NOT NULL COMMENT 'Número de factura consolidado',
     `proveedor_texto` VARCHAR(255) NOT NULL COMMENT 'Proveedor predominante (normalizado)',
     `cantidad_items` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Cantidad de líneas consolidadas',
     `fecha_min` DATE NULL DEFAULT NULL COMMENT 'Fecha más antigua de los gastos',
