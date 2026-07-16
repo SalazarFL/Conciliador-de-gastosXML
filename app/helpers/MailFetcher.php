@@ -710,7 +710,11 @@ class MailFetcher
         return $cuerpo;
     }
 
-    // ── Deduplicación entre corridas (procesados.json) ─────────────
+    // ── Deduplicación entre corridas (tabla correo_procesados) ─────
+    // El estado vive en MySQL: una fila por correo, escritura atómica
+    // (el procesados.json anterior se reescribía completo en cada marca y
+    // con varios usuarios a la vez se perdían marcas). Aquí solo se cachea
+    // en memoria por instancia para que listar no consulte por mensaje.
 
     public function yaProcesado($clave)
     {
@@ -722,42 +726,17 @@ class MailFetcher
     {
         $this->cargarProcesados();
         $this->procesados[$clave] = date('Y-m-d H:i:s');
-
-        $archivo = self::storagePath() . DIRECTORY_SEPARATOR . 'procesados.json';
-        file_put_contents($archivo, json_encode($this->procesados, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+        self::modeloProcesados()->marcar($clave);
     }
 
     /**
-     * Quita claves de procesados.json para que esos correos vuelvan a
-     * aparecer como "sin procesar" (p. ej. al descartar de la bandeja).
+     * Quita marcas de procesado para que esos correos vuelvan a aparecer
+     * como "sin procesar" (p. ej. al descartar de la bandeja).
      * Estático: no necesita conexión ni configuración de cuenta.
      */
     public static function desmarcarProcesados(array $claves)
     {
-        $archivo = self::storagePath() . DIRECTORY_SEPARATOR . 'procesados.json';
-        if (!is_file($archivo)) {
-            return 0;
-        }
-
-        $data = json_decode((string) file_get_contents($archivo), true);
-        if (!is_array($data)) {
-            return 0;
-        }
-
-        $quitadas = 0;
-        foreach ($claves as $clave) {
-            $clave = (string) $clave;
-            if ($clave !== '' && array_key_exists($clave, $data)) {
-                unset($data[$clave]);
-                $quitadas++;
-            }
-        }
-
-        if ($quitadas > 0) {
-            file_put_contents($archivo, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
-        }
-
-        return $quitadas;
+        return self::modeloProcesados()->desmarcar($claves);
     }
 
     private function cargarProcesados()
@@ -765,16 +744,18 @@ class MailFetcher
         if ($this->procesados !== null) {
             return;
         }
+        $this->procesados = self::modeloProcesados()->todas();
+    }
 
-        $archivo = self::storagePath() . DIRECTORY_SEPARATOR . 'procesados.json';
-        $this->procesados = [];
-
-        if (is_file($archivo)) {
-            $data = json_decode((string) file_get_contents($archivo), true);
-            if (is_array($data)) {
-                $this->procesados = $data;
-            }
+    private static function modeloProcesados()
+    {
+        if (!class_exists('Model')) {
+            require_once __DIR__ . '/../core/Model.php';
         }
+        if (!class_exists('CorreoProcesado')) {
+            require_once __DIR__ . '/../models/CorreoProcesado.php';
+        }
+        return new CorreoProcesado();
     }
 
     private function claveMensaje($uid)

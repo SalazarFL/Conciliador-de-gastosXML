@@ -9,8 +9,8 @@
  * La primera vez que se usa, si existe app/config/correo.php (la config
  * antigua de una sola cuenta) se siembra como "Cuenta principal" y los
  * datos ya indexados (correo_indice/correo_carpetas/correo_bandeja con
- * cuenta_id = 0) se adoptan a su nombre, igual que las claves de
- * procesados.json (se prefijan con "c{id}:").
+ * cuenta_id = 0) se adoptan a su nombre, igual que las marcas de
+ * correo_procesados (se prefijan con "c{id}:").
  */
 
 class CorreoCuenta extends Model
@@ -173,17 +173,16 @@ class CorreoCuenta extends Model
             // Tablas aún sin la columna: la migración manual la agrega
         }
 
-        // Prefijar las claves de procesados.json ("uidvalidity:uid" → "c{id}:...")
-        $archivo = MailFetcher::storagePath() . DIRECTORY_SEPARATOR . 'procesados.json';
-        if (is_file($archivo)) {
-            $data = json_decode((string) file_get_contents($archivo), true);
-            if (is_array($data)) {
-                $migrado = [];
-                foreach ($data as $clave => $valor) {
-                    $migrado[strpos((string) $clave, 'c') === 0 ? $clave : 'c' . $id . ':' . $clave] = $valor;
-                }
-                file_put_contents($archivo, json_encode($migrado, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+        // Prefijar las marcas de procesado ("uidvalidity:uid" → "c{id}:...").
+        // Instanciar el modelo también importa un procesados.json legado que
+        // siga en disco, así el prefijado alcanza esas marcas.
+        try {
+            if (!class_exists('CorreoProcesado')) {
+                require_once __DIR__ . '/CorreoProcesado.php';
             }
+            (new CorreoProcesado())->prefijarCuenta($id);
+        } catch (Throwable $e) {
+            // Sin marcas que adoptar
         }
 
         return $id;
