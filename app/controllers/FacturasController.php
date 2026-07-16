@@ -14,12 +14,24 @@ class FacturasController extends Controller
 		$facturas          = [];
 		$historial         = [];
 		$importacionActiva = null;
+		$semanas           = [];
+
+		// El selector "Semana de trabajo" define lo que se muestra abajo:
+		// semana_id=N = las facturas de esa semana; 0 = "Sin semana".
+		// Sin parámetro se usa la última semana elegida (compartida entre
+		// módulos vía sesión); al llegar en la URL se recuerda para los demás.
+		$semanaFiltro = $this->semanaActiva();
+		if (isset($_GET['semana_id']) && $_GET['semana_id'] !== '') {
+			$semanaFiltro = max(0, (int) $_GET['semana_id']);
+			$this->setSemanaActiva($semanaFiltro);
+		}
 
 		try {
 			$facturaModel     = $this->loadModel('Factura');
 			$importacionModel = $this->loadModel('Importacion');
 
 			$historial = $importacionModel->getAllByTipo('xml');
+			$semanas = $this->loadModel('Semana')->getAll();
 
 			if (empty($_GET['limpiar'])) {
 				$importacionId = max(0, (int) ($_GET['importacion_id'] ?? 0));
@@ -28,7 +40,7 @@ class FacturasController extends Controller
 					$facturas          = $facturaModel->getByImportacion($importacionId);
 					$importacionActiva = $importacionModel->findById($importacionId);
 				} else {
-					$facturas = $facturaModel->getAllWithImportacion();
+					$facturas = $facturaModel->getAllWithImportacion($semanaFiltro);
 				}
 			}
 		} catch (Exception $e) {
@@ -40,7 +52,70 @@ class FacturasController extends Controller
 			'facturas'          => $facturas,
 			'historial'         => $historial,
 			'importacionActiva' => $importacionActiva,
+			'semanas'           => $semanas,
+			'semanaFiltro'      => $semanaFiltro,
 		]);
+	}
+
+	/**
+	 * Semana elegida en un formulario (semana_id + semana_nueva) → id o null.
+	 */
+	private function resolverSemana()
+	{
+		try {
+			return $this->loadModel('Semana')->resolverSeleccion(
+				(string) $this->post('semana_id', ''),
+				(string) $this->post('semana_nueva', '')
+			);
+		} catch (Throwable $e) {
+			return null;
+		}
+	}
+
+	/**
+	 * Asignar o cambiar la semana de una factura desde el botón de la
+	 * columna Semana (AJAX). semana_id: '' quita la semana, N la asigna,
+	 * 'nueva' crea una con el nombre de semana_nueva.
+	 */
+	public function semanaAsignar()
+	{
+		if (!$this->isPost()) {
+			$this->redirect($this->url('/facturas'));
+		}
+
+		$facturaId = (int) $this->post('factura_id', 0);
+
+		try {
+			$facturaModel = $this->loadModel('Factura');
+			if ($facturaId <= 0 || empty($facturaModel->findById($facturaId))) {
+				$this->json(['ok' => false, 'message' => 'La factura no existe.'], 404);
+			}
+
+			$semanaId = $this->resolverSemana();
+			$facturaModel->asignarSemana($facturaId, $semanaId);
+
+			$this->json(['ok' => true, 'semana_id' => !empty($semanaId) ? (int) $semanaId : '']);
+		} catch (Throwable $e) {
+			$this->json(['ok' => false, 'message' => 'No se pudo asignar la semana: ' . $e->getMessage()], 500);
+		}
+	}
+
+	/**
+	 * Nombre automático del lote de importación (ya no se pide al usuario).
+	 * Usa la semana si viene, si no la fecha/hora.
+	 */
+	private function nombreImportacionAuto($semanaId = null)
+	{
+		if (!empty($semanaId)) {
+			try {
+				$semana = $this->loadModel('Semana')->findById((int) $semanaId);
+				if (!empty($semana['nombre'])) {
+					return mb_substr('Carga ' . $semana['nombre'], 0, 120, 'UTF-8');
+				}
+			} catch (Throwable $e) {
+			}
+		}
+		return 'Carga ' . date('d/m/Y H:i');
 	}
 
 	public function subir()
@@ -59,17 +134,9 @@ class FacturasController extends Controller
 		$maxSize = $config['max_upload_size'] ?? 10485760;
 		$allowed = $config['allowed_extensions']['xml'] ?? ['xml'];
 
-		// El nombre de la importación es obligatorio: identifica el lote al conciliar.
-		$nombreImportacion = trim((string) $this->post('nombre_importacion', ''));
-		if ($nombreImportacion === '') {
-			$this->redirectWithMessage(
-				$this->url('/facturas'),
-				'Debes asignar un nombre a la importación antes de subir las facturas XML.',
-				'error'
-			);
-			return;
-		}
-		$nombreImportacion = mb_substr($nombreImportacion, 0, 120, 'UTF-8');
+		// El nombre del lote se genera solo (el sistema se organiza por semana).
+		$semanaId = $this->resolverSemana();
+		$nombreImportacion = $this->nombreImportacionAuto($semanaId);
 
 		try {
 			$uploadedFiles = FileUploader::uploadMultiple('xml_files', $uploadDir, $allowed, $maxSize);
@@ -126,7 +193,11 @@ class FacturasController extends Controller
 					} else {
 						$facturaModel->crear([
 							'importacion_id' => $importacionId,
+							'semana_id' => $semanaId,
 							'consecutivo_completo' => $docData['consecutivo_completo'],
+							'clave' => $docData['clave'] ?? null,
+							'tipo_documento' => $docData['tipo_documento'] ?? null,
+							'receptor_id' => $docData['receptor_id'] ?? null,
 							'numero_factura_asistente' => $docData['numero_factura_asistente'],
 							'proveedor_id' => $proveedorId,
 							'fecha_emision' => $docData['fecha_emision'],
@@ -187,8 +258,9 @@ class FacturasController extends Controller
 			$todosFallaron = $exitosos === 0 && $duplicados === 0;
 			$tipo = $todosFallaron ? 'error' : ($hayProblemas ? 'warning' : 'success');
 
+			// Volver a la vista de la semana elegida (ahí quedan las subidas)
 			$this->redirectWithMessage(
-				$this->url('/facturas'),
+				$this->url('/facturas' . (!empty($semanaId) ? '?semana_id=' . (int) $semanaId : '')),
 				implode(' | ', $partes),
 				$tipo,
 				[
@@ -209,24 +281,21 @@ class FacturasController extends Controller
 		}
 
 		try {
-			// Nombre obligatorio: identifica el lote al conciliar.
-			$nombre = trim((string) $this->post('nombre_importacion', $this->post('archivo_origen', '')));
-			if ($nombre === '' || $nombre === 'multiple_xml_files') {
-				$this->json([
-					'ok' => false,
-					'message' => 'Debes asignar un nombre a la importación.',
-				], 422);
-			}
+			// El nombre del lote se genera solo (el sistema se organiza por semana).
+			$semanaId = $this->resolverSemana();
+			$nombre = $this->nombreImportacionAuto($semanaId);
 
 			$service = $this->getQueueService();
 			$result = $service->iniciarImportacion([
-				'archivo_origen' => mb_substr($nombre, 0, 120, 'UTF-8'),
+				'archivo_origen' => $nombre,
 				'total_esperado' => (int) $this->post('total_esperado', 0),
+				'semana_id' => $semanaId,
 			]);
 
 			$this->json([
 				'ok' => true,
 				'importacion_id' => $result['importacion_id'],
+				'semana_id' => $semanaId,
 				'estado' => $service->getEstado($result['importacion_id']),
 			]);
 		} catch (Throwable $e) {

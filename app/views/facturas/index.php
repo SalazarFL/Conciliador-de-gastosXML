@@ -3,6 +3,8 @@ $baseUrl           = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 $facturas          = $facturas ?? [];
 $historial         = $historial ?? [];
 $importacionActiva = $importacionActiva ?? null;
+$semanas           = is_array($semanas ?? null) ? $semanas : [];
+$semanaFiltro      = (int) ($semanaFiltro ?? 0);
 ?>
 
 <!-- CARGA DE FACTURAS XML -->
@@ -39,14 +41,28 @@ $importacionActiva = $importacionActiva ?? null;
                accept=".xml" style="display:none;" onchange="updateFileDisplay(this)">
 
         <div style="margin-bottom:14px;">
-            <label for="nombre_importacion" style="display:block;font-size:12px;font-weight:700;color:var(--navy);margin-bottom:5px;">
-                <i class="fas fa-tag" style="margin-right:4px;color:var(--gold);"></i>Nombre de la importación <span style="color:#b91c1c;">*</span>
+            <label for="semana_id" style="display:block;font-size:12px;font-weight:700;color:var(--navy);margin-bottom:5px;">
+                <i class="fas fa-calendar-week" style="margin-right:4px;color:var(--gold);"></i>Semana de trabajo
             </label>
-            <input type="text" name="nombre_importacion" id="nombre_importacion" required
-                   maxlength="120" placeholder="Ej: Facturas enero 2026, Proveedor Bejos semana 3…"
-                   class="form-control" style="max-width:420px;font-size:13px;">
+            <select name="semana_id" id="semana_id" class="form-control" style="max-width:300px;font-size:13px;"
+                    onchange="semanaCambio(this)">
+                <option value="" <?= $semanaFiltro === 0 ? 'selected' : '' ?>>— Sin semana —</option>
+                <?php foreach (($semanas ?? []) as $sem): ?>
+                <option value="<?= (int) $sem['id'] ?>" <?= $semanaFiltro === (int) $sem['id'] ? 'selected' : '' ?>>
+                    <?= htmlspecialchars($sem['nombre']) ?>
+                </option>
+                <?php endforeach; ?>
+                <option value="nueva">➕ Nueva semana…</option>
+            </select>
+            <div id="semana-nueva-box" style="display:none;margin-top:6px;">
+                <input type="text" name="semana_nueva" id="semana_nueva" maxlength="100"
+                       placeholder="Semana <?= date('d/m/Y') ?>"
+                       class="form-control" style="max-width:300px;font-size:12.5px;">
+            </div>
             <span style="display:block;font-size:11px;color:var(--text-muted);margin-top:3px;">
-                Este nombre identificará la importación al momento de conciliar.
+                Abajo se muestran las facturas de la opción elegida
+                (<strong><?= count($facturas) ?></strong> en esta vista);
+                las que subas quedarán asignadas a ella.
             </span>
         </div>
 
@@ -82,39 +98,24 @@ $importacionActiva = $importacionActiva ?? null;
     </div>
 </div>
 
-<!-- Barra de filtro por importación -->
-<?php if (!empty($historial)): ?>
-<div class="card" style="margin-bottom:14px;padding:12px 20px;">
-    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-        <span style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">
-            <i class="fas fa-filter" style="margin-right:4px;"></i>Importación:
-        </span>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-            <a href="<?= $baseUrl ?>/facturas"
-               class="btn btn-sm <?= empty($importacionActiva) ? 'btn-primary' : 'btn-outline' ?>">
-                Todas
-            </a>
-            <?php foreach (array_slice($historial, 0, 8) as $imp): ?>
-            <?php $esActiva = !empty($importacionActiva) && (int)$importacionActiva['id'] === (int)$imp['id']; ?>
-            <a href="<?= $baseUrl ?>/facturas?importacion_id=<?= (int)$imp['id'] ?>"
-               class="btn btn-sm <?= $esActiva ? 'btn-primary' : 'btn-outline' ?>"
-               title="<?= htmlspecialchars($imp['archivo_origen']) ?>">
-                <?= date('d/m/Y', strtotime($imp['fecha_importacion'])) ?>
-                <span class="badge badge-navy" style="font-size:10px;padding:1px 6px;margin-left:3px;">
-                    <?= (int)$imp['registros_exitosos'] ?>
-                </span>
-            </a>
-            <?php endforeach; ?>
-        </div>
-        <?php if ($importacionActiva): ?>
-        <span style="font-size:11px;color:var(--text-muted);margin-left:auto;">
-            <?= htmlspecialchars($importacionActiva['archivo_origen']) ?>
-            &mdash; <?= date('d/m/Y H:i', strtotime($importacionActiva['fecha_importacion'])) ?>
-        </span>
-        <?php endif; ?>
-    </div>
-</div>
-<?php endif; ?>
+<script>
+// El selector "Semana de trabajo" controla la lista de abajo: al cambiar
+// se recarga mostrando las facturas de esa opción ("Sin semana" = las no
+// asignadas). "Nueva semana" solo abre el campo del nombre, sin recargar.
+function semanaCambio(sel) {
+    var box = document.getElementById('semana-nueva-box');
+    if (sel.value === 'nueva') {
+        box.style.display = 'block';
+        document.getElementById('semana_nueva').focus();
+        return;
+    }
+    box.style.display = 'none';
+    // "Sin semana" navega con semana_id=0 explícito para que se recuerde
+    // como selección (y no se confunda con una llegada sin parámetro).
+    var base = '<?= $baseUrl ?>/facturas';
+    window.location.href = base + '?semana_id=' + (sel.value === '' ? '0' : sel.value);
+}
+</script>
 
 <!-- Facturas Importadas -->
 <div class="card">
@@ -146,6 +147,7 @@ $importacionActiva = $importacionActiva ?? null;
                     <th>Fecha</th>
                     <th>Número Factura</th>
                     <th>Proveedor</th>
+                    <th class="center">Semana</th>
                     <th class="right">IVA</th>
                     <th class="right">Monto</th>
                     <th class="center">Estado</th>
@@ -155,7 +157,7 @@ $importacionActiva = $importacionActiva ?? null;
             <tbody>
                 <?php if (empty($facturas)): ?>
                     <tr class="empty-row">
-                        <td colspan="7">
+                        <td colspan="8">
                             <i class="fas fa-inbox" style="font-size:28px;color:var(--border);display:block;margin-bottom:8px;"></i>
                             No hay facturas importadas todavía.<br>
                             <span style="font-size:12px;">Usa el formulario de arriba para subir archivos XML.</span>
@@ -171,6 +173,19 @@ $importacionActiva = $importacionActiva ?? null;
                             </span>
                         </td>
                         <td><?= htmlspecialchars($f['proveedor_nombre'] ?? 'Sin proveedor') ?></td>
+                        <td class="center" style="white-space:nowrap;">
+                            <?php if (!empty($f['semana_nombre'])): ?>
+                            <span class="badge badge-navy" style="font-size:10px;padding:2px 8px;"><?= htmlspecialchars($f['semana_nombre']) ?></span>
+                            <?php else: ?>
+                            <span style="color:#cbd5e1;">—</span>
+                            <?php endif; ?>
+                            <button type="button" class="btn btn-outline btn-sm"
+                                    style="padding:2px 7px;font-size:10px;margin-left:4px;"
+                                    title="<?= empty($f['semana_id']) ? 'Asignar semana' : 'Cambiar de semana' ?>"
+                                    onclick="semAsignar(this, <?= (int) $f['id'] ?>, <?= (int) ($f['semana_id'] ?? 0) ?>)">
+                                <i class="fas fa-pen"></i>
+                            </button>
+                        </td>
                         <td class="right muted"><?= number_format((float)($f['iva'] ?? 0), 2) ?></td>
                         <td class="right" style="font-weight:700;"><?= number_format((float)($f['total'] ?? 0), 2) ?></td>
                         <td class="center">
@@ -190,44 +205,82 @@ $importacionActiva = $importacionActiva ?? null;
     </div>
 </div>
 
-<!-- Panel historial completo -->
-<?php if (!empty($historial)): ?>
-<div class="history-panel">
-    <button class="history-toggle" aria-expanded="false" onclick="toggleHistory(this)">
-        <i class="fas fa-chevron-right toggle-icon"></i>
-        <i class="fas fa-history" style="color:var(--navy-light);"></i>
-        Historial de importaciones XML
-        <span class="badge badge-navy" style="margin-left:4px;"><?= count($historial) ?></span>
-    </button>
-    <div class="history-body">
-        <div class="card" style="padding:0;overflow:hidden;">
-            <?php foreach ($historial as $imp): ?>
-            <?php $esActiva = !empty($importacionActiva) && (int)$importacionActiva['id'] === (int)$imp['id']; ?>
-            <a href="<?= $baseUrl ?>/facturas?importacion_id=<?= (int)$imp['id'] ?>"
-               class="history-row <?= $esActiva ? 'active' : '' ?>">
-                <span class="history-row-date">
-                    <i class="fas fa-calendar-alt" style="margin-right:4px;opacity:.5;"></i>
-                    <?= date('d/m/Y H:i', strtotime($imp['fecha_importacion'])) ?>
-                </span>
-                <span class="history-row-file" title="<?= htmlspecialchars($imp['archivo_origen']) ?>">
-                    <?= htmlspecialchars($imp['archivo_origen']) ?>
-                </span>
-                <span class="history-row-stats">
-                    <?php if ((int)$imp['registros_exitosos'] > 0): ?>
-                    <span class="badge badge-green"><?= (int)$imp['registros_exitosos'] ?> ok</span>
-                    <?php endif; ?>
-                    <?php if ((int)$imp['registros_fallidos'] > 0): ?>
-                    <span class="badge" style="background:#fee2e2;color:#b91c1c;"><?= (int)$imp['registros_fallidos'] ?> err</span>
-                    <?php endif; ?>
-                </span>
-            </a>
-            <?php endforeach; ?>
-        </div>
-    </div>
-</div>
-<?php endif; ?>
-
 <script>
+// ── Asignar / cambiar semana desde la columna Semana ──
+// El lápiz convierte la celda en un selector; al elegir se guarda por AJAX
+// y se recarga la vista (si la factura ya no corresponde al filtro, sale
+// de la lista, que es lo esperado).
+var SEMANAS_LISTA = <?= json_encode(array_map(function ($s) {
+    return ['id' => (int) $s['id'], 'nombre' => (string) $s['nombre']];
+}, $semanas), JSON_UNESCAPED_UNICODE) ?>;
+
+function semAsignar(btn, facturaId, semanaActual) {
+    var td = btn.closest('td');
+    var original = td.innerHTML;
+
+    var sel = document.createElement('select');
+    sel.className = 'form-control';
+    sel.style.cssText = 'font-size:11.5px;padding:3px 6px;max-width:190px;display:inline-block;';
+
+    var opciones = [['', '— Sin semana —']];
+    SEMANAS_LISTA.forEach(function (s) { opciones.push([String(s.id), s.nombre]); });
+    opciones.push(['nueva', '➕ Nueva semana…']);
+    opciones.forEach(function (o) {
+        var op = document.createElement('option');
+        op.value = o[0];
+        op.textContent = o[1];
+        if (o[0] === (semanaActual ? String(semanaActual) : '')) op.selected = true;
+        sel.appendChild(op);
+    });
+
+    td.innerHTML = '';
+    td.appendChild(sel);
+    sel.focus();
+
+    var guardando = false;
+
+    // Clic fuera sin elegir = cancelar y restaurar la celda
+    sel.addEventListener('blur', function () {
+        if (!guardando) td.innerHTML = original;
+    });
+
+    sel.addEventListener('change', function () {
+        var valor = sel.value;
+        var nombreNueva = '';
+
+        if (valor === 'nueva') {
+            nombreNueva = prompt('Nombre de la nueva semana:', 'Semana <?= date('d/m/Y') ?>');
+            if (nombreNueva === null) { td.innerHTML = original; return; }
+        } else if (valor === (semanaActual ? String(semanaActual) : '')) {
+            td.innerHTML = original;
+            return;
+        }
+
+        guardando = true;
+        sel.disabled = true;
+
+        var fd = new FormData();
+        fd.append('factura_id', facturaId);
+        fd.append('semana_id', valor);
+        fd.append('semana_nueva', nombreNueva);
+
+        fetch('<?= $baseUrl ?>/facturas/semana', { method: 'POST', body: fd, credentials: 'same-origin' })
+            .then(function (res) {
+                return res.json().catch(function () { return null; }).then(function (body) {
+                    if (!res.ok || !body || body.ok === false) {
+                        throw new Error((body && body.message) || ('Error HTTP ' + res.status));
+                    }
+                    return body;
+                });
+            })
+            .then(function () { window.location.reload(); })
+            .catch(function (err) {
+                alert('No se pudo cambiar la semana: ' + err.message);
+                td.innerHTML = original;
+            });
+    });
+}
+
 function updateFileDisplay(input) {
     var label = document.getElementById('files-selected-name');
     var count = input.files.length;
@@ -295,9 +348,7 @@ function updateFileDisplay(input) {
         e.preventDefault();
 
         var files  = Array.prototype.slice.call(input.files);
-        var nombre = (document.getElementById('nombre_importacion').value || '').trim();
 
-        if (!nombre) { alert('Debes asignar un nombre a la importación.'); return; }
         if (!files.length) { alert('Selecciona al menos un archivo XML.'); return; }
 
         btn.disabled = true;
@@ -306,14 +357,19 @@ function updateFileDisplay(input) {
         elDetail.textContent = '';
 
         var importacionId = 0;
+        var semanaDestino = '';
 
         setStatus('Creando importación…');
+        var selSemana = document.getElementById('semana_id');
+        var inpSemanaNueva = document.getElementById('semana_nueva');
         postJson(BASE + '/facturas/cola/iniciar', {
-            nombre_importacion: nombre,
-            total_esperado: files.length
+            total_esperado: files.length,
+            semana_id: selSemana ? selSemana.value : '',
+            semana_nueva: inpSemanaNueva ? inpSemanaNueva.value : ''
         })
         .then(function (inicio) {
             importacionId = inicio.importacion_id;
+            semanaDestino = inicio.semana_id || '';
 
             // Fase 1: subir archivos en chunks (primer 30% de la barra)
             var cadena = Promise.resolve();
@@ -352,7 +408,7 @@ function updateFileDisplay(input) {
                     if (!r.processed_in_batch) {
                         sinAvance++;
                         if (sinAvance >= 5) {
-                            throw new Error('El procesamiento se detuvo sin completar. Revisa el historial de importaciones.');
+                            throw new Error('El procesamiento se detuvo sin completar. Vuelve a intentarlo.');
                         }
                         return sleep(2000).then(paso);
                     }
@@ -386,17 +442,20 @@ function updateFileDisplay(input) {
                 return;
             }
 
+            // Volver a la vista de la semana elegida: ahí quedan las recién subidas
+            var urlDestino = BASE + '/facturas' + (semanaDestino ? '?semana_id=' + semanaDestino : '');
+
             if (problemas > 0) {
                 setStatus('Importación completada con avisos: ' + importadas + ' importadas, ' + problemas + ' con problema.');
                 setTimeout(function () {
-                    window.location.href = BASE + '/facturas?importacion_id=' + importacionId;
+                    window.location.href = urlDestino;
                 }, 3500);
                 return;
             }
 
             setStatus('¡Importación completada! ' + importadas + ' facturas importadas.');
             setTimeout(function () {
-                window.location.href = BASE + '/facturas?importacion_id=' + importacionId;
+                window.location.href = urlDestino;
             }, 800);
         })
         .catch(function (err) {
@@ -406,10 +465,4 @@ function updateFileDisplay(input) {
         });
     });
 })();
-
-function toggleHistory(btn) {
-    var expanded = btn.getAttribute('aria-expanded') === 'true';
-    btn.setAttribute('aria-expanded', String(!expanded));
-    btn.nextElementSibling.classList.toggle('open', !expanded);
-}
 </script>

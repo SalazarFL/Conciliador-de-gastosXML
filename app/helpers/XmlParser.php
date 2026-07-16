@@ -18,6 +18,14 @@ class XmlInvoiceParser
 			throw new Exception('No fue posible parsear el XML.');
 		}
 
+		// Algunos proveedores (p. ej. vía EDICOM/BusinessMail) envían por correo
+		// solo el MensajeHacienda de aceptación + el PDF, sin la FacturaElectronica.
+		// Se toma el mensaje como fuente: trae emisor, receptor y total, y de la
+		// Clave se derivan consecutivo, fecha y tipo de documento.
+		if (stripos($xml->getName(), 'mensaje') !== false) {
+			return self::parseMensajeHacienda($xml, $filePath);
+		}
+
 		$uuid = self::firstAttrByLocalName($xml, 'TimbreFiscalDigital', 'UUID');
 		$clave = self::firstNodeText($xml, 'Clave');
 		$numeroConsecutivo = self::firstNodeText($xml, 'NumeroConsecutivo');
@@ -48,12 +56,17 @@ class XmlInvoiceParser
 		$total = self::getTotal($xml);
 		$moneda = self::getMoneda($xml);
 		$tipoComprobante = self::firstAttrByLocalName($xml, 'Comprobante', 'TipoDeComprobante');
+		$receptorId = self::getReceptorId($xml);
+		$tipoDocumento = self::getTipoDocumento($xml, $tipoComprobante);
 
 		return [
 			'consecutivo_completo' => $consecutivo,
+			'clave' => $clave,
 			'numero_factura_asistente' => $numeroAsistente,
 			'rfc_emisor' => $rfcEmisor,
 			'razon_social_emisor' => $razonSocialEmisor,
+			'receptor_id' => $receptorId,
+			'tipo_documento' => $tipoDocumento,
 			'fecha_emision' => $fechaEmision,
 			'subtotal' => $subtotal,
 			'iva' => $iva,
@@ -199,6 +212,43 @@ class XmlInvoiceParser
 		return '';
 	}
 
+	/**
+	 * Identificación del receptor (a quién va la factura): cédula en FE
+	 * de Costa Rica, RFC en CFDI de México. Sirve para verificar que la
+	 * factura esté a nombre de la empresa configurada.
+	 */
+	private static function getReceptorId(SimpleXMLElement $xml)
+	{
+		$rfc = self::firstAttrByLocalName($xml, 'Receptor', 'Rfc');
+		if ($rfc !== '') {
+			return $rfc;
+		}
+
+		return self::firstNodeText($xml, 'Numero', '//*[local-name()="Receptor"]//*[local-name()="Identificacion"]/*[local-name()="Numero"]');
+	}
+
+	/**
+	 * Tipo del documento: 'FE' factura, 'NC' nota de crédito, 'ND' nota
+	 * de débito. Se detecta por la raíz del XML (FacturaElectronica /
+	 * NotaCreditoElectronica…) o por TipoDeComprobante en CFDI (E = NC).
+	 */
+	private static function getTipoDocumento(SimpleXMLElement $xml, $tipoComprobante)
+	{
+		$root = strtolower($xml->getName());
+
+		if (strpos($root, 'notacredito') !== false) {
+			return 'NC';
+		}
+		if (strpos($root, 'notadebito') !== false) {
+			return 'ND';
+		}
+		if (strtoupper(trim((string) $tipoComprobante)) === 'E') {
+			return 'NC';
+		}
+
+		return 'FE';
+	}
+
 	private static function getEmisorId(SimpleXMLElement $xml)
 	{
 		$rfc = self::firstAttrByLocalName($xml, 'Emisor', 'Rfc');
@@ -270,6 +320,60 @@ class XmlInvoiceParser
 		}
 
 		return substr($digits, -10);
+	}
+
+	/**
+	 * Factura reconstruida a partir del MensajeHacienda de aceptación (cuando
+	 * el correo no trae la FacturaElectronica). El mensaje trae Clave, emisor,
+	 * receptor y totales; el consecutivo, la fecha y el tipo de documento se
+	 * derivan de la Clave (50 díg.: 506 + ddmmaa + cédula(12) + consecutivo(20)
+	 * + situación(1) + código(8); el consecutivo = sucursal(3)+terminal(5)+
+	 * tipo(2)+número(10), tipo 01=FE, 02=ND, 03=NC, 04=tiquete).
+	 */
+	private static function parseMensajeHacienda(SimpleXMLElement $xml, $filePath)
+	{
+		$clave             = self::firstNodeText($xml, 'Clave');
+		$razonSocialEmisor = self::firstNodeText($xml, 'NombreEmisor');
+		$rfcEmisor         = self::firstNodeText($xml, 'NumeroCedulaEmisor');
+		$receptorId        = self::firstNodeText($xml, 'NumeroCedulaReceptor');
+		$total             = (float) self::firstNodeText($xml, 'TotalFactura');
+		$iva               = (float) self::firstNodeText($xml, 'MontoTotalImpuesto');
+
+		$claveDigits = preg_replace('/\D+/', '', $clave);
+
+		$consecutivo   = $claveDigits;
+		$fecha         = '';
+		$tipoDocumento = 'FE';
+
+		if (strlen($claveDigits) >= 50) {
+			$consecutivo = substr($claveDigits, 21, 20);
+			$fecha = '20' . substr($claveDigits, 7, 2) . '-' . substr($claveDigits, 5, 2) . '-' . substr($claveDigits, 3, 2);
+
+			$mapaTipo = ['01' => 'FE', '02' => 'ND', '03' => 'NC', '04' => 'FE'];
+			$tipoDocumento = $mapaTipo[substr($consecutivo, 8, 2)] ?? 'FE';
+		}
+
+		if ($consecutivo === '') {
+			$consecutivo = sha1_file($filePath);
+		}
+
+		return [
+			'consecutivo_completo'     => $consecutivo,
+			'clave'                    => $clave,
+			'numero_factura_asistente' => self::buildNumeroAsistente($consecutivo),
+			'rfc_emisor'               => $rfcEmisor,
+			'razon_social_emisor'      => $razonSocialEmisor !== '' ? $razonSocialEmisor : 'SIN NOMBRE',
+			'receptor_id'              => $receptorId,
+			'tipo_documento'           => $tipoDocumento,
+			'fecha_emision'            => self::normalizeDate($fecha),
+			'subtotal'                 => $total > 0 ? max(0.0, $total - $iva) : 0.0,
+			'iva'                      => $iva,
+			'total'                    => $total,
+			'moneda'                   => 'CRC',
+			'tipo_comprobante'         => null,
+			'hash_xml'                 => hash_file('sha256', $filePath),
+			'xml_contenido'            => file_get_contents($filePath),
+		];
 	}
 }
 }

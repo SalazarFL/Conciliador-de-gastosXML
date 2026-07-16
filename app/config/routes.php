@@ -31,6 +31,7 @@ $router->post('/facturas/cola/agregar', 'FacturasController@colaAgregar');
 $router->post('/facturas/cola/procesar', 'FacturasController@colaProcesar');
 $router->get('/facturas/cola/estado/{id}', 'FacturasController@colaEstado');
 $router->get('/facturas/ver/{id}', 'FacturasController@ver');
+$router->post('/facturas/semana', 'FacturasController@semanaAsignar');
 
 // --- RUTAS DE CORREO (captura IMAP de facturas, solo local) ---
 $router->get('/correo', 'CorreoController@index');
@@ -40,6 +41,7 @@ $router->post('/correo/config', 'CorreoController@config');
 $router->post('/correo/cuentas/guardar', 'CorreoController@cuentaGuardar');
 $router->post('/correo/cuentas/eliminar', 'CorreoController@cuentaEliminar');
 $router->post('/correo/cuentas/usar', 'CorreoController@cuentaUsar');
+$router->post('/correo/semana/usar', 'CorreoController@semanaUsar');
 $router->post('/correo/cuentas/probar', 'CorreoController@cuentaProbar');
 $router->post('/correo/carpetas', 'CorreoController@carpetas');
 $router->post('/correo/selector/abrir', 'CorreoController@selectorAbrir');

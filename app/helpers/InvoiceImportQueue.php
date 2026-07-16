@@ -54,6 +54,12 @@ class InvoiceImportQueue
             'ultima_actualizacion' => date('Y-m-d H:i:s'),
         ];
 
+        // Semana de trabajo elegida: cada factura de esta importación
+        // quedará asignada a ella (buildEstado conserva la clave al mergear)
+        if (!empty($data['semana_id'])) {
+            $metadata['semana_id'] = (int) $data['semana_id'];
+        }
+
         $importacionId = (int) $this->importacionModel->crear([
             'tipo' => 'xml',
             'archivo_origen' => $archivoOrigen !== '' ? $archivoOrigen : 'multiple_xml_files',
@@ -108,6 +114,78 @@ class InvoiceImportQueue
             'importacion_id' => (int) $importacion['id'],
             'uploaded_count' => count($uploadedFiles),
             'files' => $uploadedFiles,
+            'estado' => $estado,
+        ];
+    }
+
+    /**
+     * Encola archivos que ya están en el servidor (p. ej. XML capturados del
+     * correo). Copia cada archivo al directorio de la importación; el original
+     * queda intacto (la cola borra su copia al procesarla).
+     *
+     * $rutas: lista de rutas absolutas, o ['ruta' => ..., 'nombre' => ...]
+     * para conservar el nombre original del adjunto.
+     */
+    public function agregarArchivosLocales($importacionId, array $rutas)
+    {
+        $importacion = $this->getImportacionOrFail($importacionId);
+        $directory = $this->getImportacionDirectory((int) $importacion['id']);
+        $this->ensureDirectory($directory);
+
+        $agregados = [];
+
+        foreach ($rutas as $entrada) {
+            $ruta = is_array($entrada) ? (string) ($entrada['ruta'] ?? '') : (string) $entrada;
+            $nombreOriginal = is_array($entrada) && !empty($entrada['nombre'])
+                ? (string) $entrada['nombre']
+                : basename($ruta);
+
+            if ($ruta === '' || !is_file($ruta)) {
+                continue;
+            }
+
+            $extension = strtolower((string) pathinfo($nombreOriginal, PATHINFO_EXTENSION));
+            if (!in_array($extension, $this->allowedExtensions, true)) {
+                continue;
+            }
+
+            $nombreSeguro = preg_replace('/[^A-Za-z0-9._-]+/', '_', $nombreOriginal);
+            $savedName = uniqid('local_', true) . '_' . $nombreSeguro;
+            $destino = $directory . DIRECTORY_SEPARATOR . $savedName;
+
+            if (!copy($ruta, $destino)) {
+                continue;
+            }
+
+            $this->importacionItemModel->crear([
+                'importacion_id' => (int) $importacion['id'],
+                'archivo_original' => $nombreOriginal,
+                'archivo_guardado' => $savedName,
+                'ruta_archivo' => $destino,
+                'extension' => $extension,
+                'tamano' => (int) filesize($destino),
+                'estado' => 'pendiente',
+                'metadata' => [
+                    'subido_en' => date('Y-m-d H:i:s'),
+                    'origen' => 'correo',
+                ],
+            ]);
+
+            $agregados[] = [
+                'original_name' => $nombreOriginal,
+                'saved_name' => $savedName,
+                'path' => $destino,
+            ];
+        }
+
+        $estado = $this->persistirEstadoImportacion((int) $importacion['id'], [
+            'estado_cola' => 'en_cola',
+        ]);
+
+        return [
+            'importacion_id' => (int) $importacion['id'],
+            'uploaded_count' => count($agregados),
+            'files' => $agregados,
             'estado' => $estado,
         ];
     }
@@ -208,6 +286,36 @@ class InvoiceImportQueue
         return $this->queueBaseDir . DIRECTORY_SEPARATOR . 'importacion_' . (int) $importacionId;
     }
 
+    /** Cache por petición: semana asignada a cada importación (metadata). */
+    private $semanaPorImportacion = [];
+
+    /**
+     * Semana de trabajo de la importación (metadata.semana_id) o null.
+     */
+    private function semanaDeImportacion($importacionId)
+    {
+        $importacionId = (int) $importacionId;
+        if ($importacionId <= 0) {
+            return null;
+        }
+
+        if (!array_key_exists($importacionId, $this->semanaPorImportacion)) {
+            $semana = null;
+            try {
+                $importacion = $this->importacionModel->findById($importacionId);
+                $metadata = $this->decodeMetadata($importacion['metadata'] ?? null);
+                if (!empty($metadata['semana_id'])) {
+                    $semana = (int) $metadata['semana_id'];
+                }
+            } catch (Throwable $e) {
+                // Sin metadata legible la factura queda sin semana
+            }
+            $this->semanaPorImportacion[$importacionId] = $semana;
+        }
+
+        return $this->semanaPorImportacion[$importacionId];
+    }
+
     private function procesarItem(array $item)
     {
         $itemId = (int) ($item['id'] ?? 0);
@@ -236,7 +344,11 @@ class InvoiceImportQueue
 
             $registro = [
                 'importacion_id' => $importacionId,
+                'semana_id' => $this->semanaDeImportacion($importacionId),
                 'consecutivo_completo' => $docData['consecutivo_completo'],
+                'clave' => $docData['clave'] ?? null,
+                'tipo_documento' => $docData['tipo_documento'] ?? null,
+                'receptor_id' => $docData['receptor_id'] ?? null,
                 'numero_factura_asistente' => $docData['numero_factura_asistente'],
                 'proveedor_id' => $proveedorId,
                 'fecha_emision' => $docData['fecha_emision'],

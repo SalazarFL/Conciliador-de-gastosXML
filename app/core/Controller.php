@@ -175,6 +175,26 @@ class Controller
     }
 
     /**
+     * Semana de trabajo activa, compartida entre módulos (Carga XML, Correo,
+     * Facturas por pagar). Se guarda en sesión para que al pasar de un módulo
+     * a otro se recuerde la última semana elegida. 0 = "Sin semana".
+     */
+    protected function semanaActiva(): int
+    {
+        if (session_status() === PHP_SESSION_NONE) session_start();
+        return max(0, (int) ($_SESSION['semana_activa'] ?? 0));
+    }
+
+    /**
+     * Fijar la semana de trabajo activa compartida (0 = "Sin semana").
+     */
+    protected function setSemanaActiva($semanaId): void
+    {
+        if (session_status() === PHP_SESSION_NONE) session_start();
+        $_SESSION['semana_activa'] = max(0, (int) $semanaId);
+    }
+
+    /**
      * Requerir sesión activa — redirige a /login si no hay sesión
      */
     protected function requireAuth(): void

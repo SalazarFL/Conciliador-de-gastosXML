@@ -9,17 +9,33 @@ class Factura extends Model
     protected $table = 'facturas_xml';
     
     /**
-     * Obtener todas las facturas con información de importación
+     * Obtener todas las facturas con información de importación.
+     * Filtro por semana: null = todas · 0 = sin semana (no asignadas) ·
+     * >0 = esa semana de trabajo.
      */
-    public function getAllWithImportacion()
+    public function getAllWithImportacion($semanaId = null)
     {
-        $sql = "SELECT f.*, p.razon_social as proveedor_nombre, i.archivo_origen as archivo_importacion, i.fecha_importacion
+        $where = '';
+        $params = [];
+        if ($semanaId !== null && $semanaId !== '') {
+            if ((int) $semanaId > 0) {
+                $where = " WHERE f.semana_id = ?";
+                $params[] = (int) $semanaId;
+            } else {
+                $where = " WHERE f.semana_id IS NULL";
+            }
+        }
+
+        $sql = "SELECT f.*, p.razon_social as proveedor_nombre, i.archivo_origen as archivo_importacion, i.fecha_importacion,
+                       s.nombre as semana_nombre
                 FROM {$this->table} f
             LEFT JOIN proveedores p ON f.proveedor_id = p.id
                 LEFT JOIN importaciones i ON f.importacion_id = i.id
+                LEFT JOIN semanas s ON f.semana_id = s.id
+                {$where}
                 ORDER BY f.fecha_emision DESC";
-        
-        return $this->fetchAll($sql);
+
+        return $this->fetchAll($sql, $params);
     }
     
     /**
@@ -64,18 +80,32 @@ class Factura extends Model
     }
     
     /**
+     * Asignar o cambiar la semana de trabajo de una factura (null = quitarla).
+     */
+    public function asignarSemana($facturaId, $semanaId)
+    {
+        $sql = "UPDATE {$this->table} SET semana_id = ? WHERE id = ?";
+        return $this->execute($sql, [!empty($semanaId) ? (int) $semanaId : null, (int) $facturaId]);
+    }
+
+    /**
      * Insertar nueva factura
      */
     public function crear($data)
     {
-        $sql = "INSERT INTO {$this->table} 
-                (importacion_id, consecutivo_completo, numero_factura_asistente, proveedor_id, fecha_emision,
+        $sql = "INSERT INTO {$this->table}
+                (importacion_id, semana_id, consecutivo_completo, clave, tipo_documento, receptor_id,
+                 numero_factura_asistente, proveedor_id, fecha_emision,
                  subtotal, iva, total, moneda, tipo_comprobante, archivo_xml, ruta_xml, hash_xml, xml_contenido, metadata)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-        
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
         $params = [
             $data['importacion_id'] ?? null,
+            !empty($data['semana_id']) ? (int) $data['semana_id'] : null,
             $data['consecutivo_completo'] ?? $data['uuid'] ?? '',
+            $data['clave'] ?? null,
+            $data['tipo_documento'] ?? null,
+            $data['receptor_id'] ?? null,
             $data['numero_factura_asistente'] ?? $data['numero_factura'] ?? '',
             $data['proveedor_id'],
             $data['fecha_emision'],
