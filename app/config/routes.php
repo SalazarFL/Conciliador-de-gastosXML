@@ -32,6 +32,26 @@ $router->post('/facturas/cola/procesar', 'FacturasController@colaProcesar');
 $router->get('/facturas/cola/estado/{id}', 'FacturasController@colaEstado');
 $router->get('/facturas/ver/{id}', 'FacturasController@ver');
 
+// --- RUTAS DE CORREO (captura IMAP de facturas, solo local) ---
+$router->get('/correo', 'CorreoController@index');
+$router->post('/correo/listar', 'CorreoController@listar');
+$router->post('/correo/sincronizar', 'CorreoController@sincronizar');
+$router->post('/correo/config', 'CorreoController@config');
+$router->post('/correo/cuentas/guardar', 'CorreoController@cuentaGuardar');
+$router->post('/correo/cuentas/eliminar', 'CorreoController@cuentaEliminar');
+$router->post('/correo/cuentas/usar', 'CorreoController@cuentaUsar');
+$router->post('/correo/cuentas/probar', 'CorreoController@cuentaProbar');
+$router->post('/correo/carpetas', 'CorreoController@carpetas');
+$router->post('/correo/selector/abrir', 'CorreoController@selectorAbrir');
+$router->post('/correo/selector/estado', 'CorreoController@selectorEstado');
+$router->post('/correo/auto/estado', 'CorreoController@autoSyncEstado');
+$router->post('/correo/auto/activar', 'CorreoController@autoSyncActivar');
+$router->post('/correo/auto/desactivar', 'CorreoController@autoSyncDesactivar');
+$router->post('/correo/contenido', 'CorreoController@contenido');
+$router->post('/correo/procesar', 'CorreoController@procesar');
+$router->post('/correo/importar', 'CorreoController@importar');
+$router->post('/correo/descartar', 'CorreoController@descartar');
+
 // --- RUTAS DE FACTURAS POR PAGAR (listado del pago semanal) ---
 $router->get('/por-pagar', 'PorPagarController@index');
 $router->post('/por-pagar/subir', 'PorPagarController@subir');
