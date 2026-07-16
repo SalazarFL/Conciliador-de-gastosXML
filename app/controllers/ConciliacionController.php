@@ -737,6 +737,13 @@ class ConciliacionController extends Controller
 			return 95;
 		}
 
+		// El número corto está incrustado al final del consecutivo largo con
+		// relleno de ceros: "0000005061" vs "FACT-01400020010000005061-3"
+		// (el consecutivo de Hacienda termina en el número de factura).
+		if ($this->nucleoTerminaEn($coreB, $coreA) || $this->nucleoTerminaEn($coreA, $coreB)) {
+			return 100;
+		}
+
 		// Para números cortos (≤6 chars), similar_text() infla el porcentaje
 		// (ej: "657" vs "627" da 67% aunque son facturas distintas).
 		// Usamos levenshtein: distancia 1 = posible typo, >1 = distinto.
@@ -778,6 +785,25 @@ class ConciliacionController extends Controller
 			}
 		}
 		return $best;
+	}
+
+	/**
+	 * ¿El núcleo largo termina en el núcleo corto con relleno de ceros?
+	 * "1400020010000005061" termina en "5061" y el dígito anterior es 0
+	 * → mismo número. El guard del cero evita confundir 5061 con ...15061.
+	 */
+	private function nucleoTerminaEn($largo, $corto)
+	{
+		$largo = (string) $largo;
+		$corto = (string) $corto;
+
+		if (strlen($corto) < 3 || strlen($largo) <= strlen($corto)) {
+			return false;
+		}
+		if (substr($largo, -strlen($corto)) !== $corto) {
+			return false;
+		}
+		return substr($largo, -strlen($corto) - 1, 1) === '0';
 	}
 
 	/**

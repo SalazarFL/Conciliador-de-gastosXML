@@ -258,14 +258,31 @@ $load_error          ??= '';
                         }
                         return $best;
                     };
-                    $numEq = function ($a, $b) use ($nucleoNum) {
+                    // ¿El núcleo largo termina en el corto precedido por un 0 (relleno)?
+                    // "01400020010000005061" contiene "5061" al final → mismo número.
+                    $nucleoTermina = function ($largo, $corto) {
+                        $largo = (string) $largo;
+                        $corto = (string) $corto;
+                        if (strlen($corto) < 3 || strlen($largo) <= strlen($corto)) {
+                            return false;
+                        }
+                        if (substr($largo, -strlen($corto)) !== $corto) {
+                            return false;
+                        }
+                        return substr($largo, -strlen($corto) - 1, 1) === '0';
+                    };
+                    $numEq = function ($a, $b) use ($nucleoNum, $nucleoTermina) {
                         $na = ltrim(preg_replace('/[^A-Z0-9]/', '', strtoupper(trim((string) $a))), '0');
                         $nb = ltrim(preg_replace('/[^A-Z0-9]/', '', strtoupper(trim((string) $b))), '0');
                         if ($na !== '' && $na === $nb) {
                             return true;
                         }
                         $ca = $nucleoNum($a);
-                        return $ca !== '' && $ca === $nucleoNum($b);
+                        $cb = $nucleoNum($b);
+                        if ($ca !== '' && $ca === $cb) {
+                            return true;
+                        }
+                        return $nucleoTermina($ca, $cb) || $nucleoTermina($cb, $ca);
                     };
                     $montoTolerancia = 0.01; // solo redondeo de centavos cuenta como "match" exacto.
                     $eqAmount = function ($a, $b) use ($montoTolerancia) {

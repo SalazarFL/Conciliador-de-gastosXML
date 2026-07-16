@@ -393,7 +393,25 @@ class ReportesController extends Controller
 
         $coreA = $this->nucleoNumerico($a);
         $coreB = $this->nucleoNumerico($b);
-        return $coreA !== '' && $coreA === $coreB;
+        if ($coreA !== '' && $coreA === $coreB) {
+            return true;
+        }
+
+        // Número corto incrustado al final del consecutivo largo con relleno
+        // de ceros: "0000005061" vs "FACT-01400020010000005061-3".
+        return $this->nucleoTerminaEn($coreA, $coreB) || $this->nucleoTerminaEn($coreB, $coreA);
+    }
+
+    /** ¿El núcleo largo termina en el corto precedido por un 0 (relleno)? */
+    private function nucleoTerminaEn(string $largo, string $corto): bool
+    {
+        if (strlen($corto) < 3 || strlen($largo) <= strlen($corto)) {
+            return false;
+        }
+        if (substr($largo, -strlen($corto)) !== $corto) {
+            return false;
+        }
+        return substr($largo, -strlen($corto) - 1, 1) === '0';
     }
 
     /** Secuencia de dígitos más larga sin ceros a la izquierda (mín. 3 dígitos). */
