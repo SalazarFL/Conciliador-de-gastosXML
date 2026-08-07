@@ -11,31 +11,20 @@
  */
 
 require_once __DIR__ . '/../helpers/FacturaMatcher.php';
+require_once __DIR__ . '/../helpers/DocumentoArchivo.php';
+require_once __DIR__ . '/../helpers/NumeroFactura.php';
 
 class PorPagarController extends Controller
 {
-    /** Diferencia de monto tolerada por redondeo (colones). */
-    private const TOLERANCIA_CRC = 1.00;
-
-    /** Umbral mínimo de similitud de proveedor para considerar candidato. */
-    private const UMBRAL_PROVEEDOR = 60;
-
-    /** El número identifica la factura: solo matches fuertes (núcleo exacto
-     *  = 100, incrustado en consecutivo = 95). */
-    private const UMBRAL_NUMERO = 90;
-
-    /** Rescate cuando el proveedor NO se parece (nombre comercial en el XML
-     *  vs razón social en el listado, p. ej. "CENTRO DE PLASTICO DE PEREZ"
-     *  vs "WILLIAM PEREZ QUESADA"): con número contundente (≥95) Y monto
-     *  que cuadra al colón, la factura se acepta igual — esa combinación
-     *  identifica mejor que cualquier nombre. */
-    private const NUMERO_RESCATE = 95;
+    // Umbrales del matching: compartidos en FacturaMatcher (también los usa
+    // la advertencia al asignar semana desde el módulo de Facturas).
 
     public function __construct() { $this->requireAuth(); }
 
     public function index()
     {
         $modelo = $this->loadModel('PorPagar');
+        $filtros = $this->filtrosListado();
 
         // El selector "Semana de trabajo" define lo que se muestra: semana_id=N
         // = el listado de esa semana (se carga automáticamente); 0 = "Sin semana".
@@ -58,7 +47,7 @@ class PorPagarController extends Controller
         }
 
         $listado = $listadoId > 0 ? $modelo->getListado($listadoId) : null;
-        $lineas = $listado ? $modelo->getLineas($listadoId) : [];
+        $lineas = $listado ? $modelo->getLineas($listadoId, $filtros) : [];
         $resumen = $listado ? $modelo->resumenPorEstado($listadoId) : [];
 
         // Término de búsqueda para el botón "Buscar en correo" de cada línea
@@ -79,16 +68,91 @@ class PorPagarController extends Controller
         } catch (Throwable $e) {
         }
 
+        $carpetasPago = [];
+        try {
+            if (DocumentoArchivo::raizConfigurada() !== '') {
+                $carpetasPago = (new DocumentoArchivo())->carpetasPagoSemanal();
+            }
+        } catch (Throwable $e) {
+        }
+
+        // Facturas de la semana que no respaldan ninguna línea del listado
+        // (alimenta el botón "Sin coincidencia" del checklist)
+        $sinCoincidencia = 0;
+        if ($listado && !empty($listado['semana_id'])) {
+            try {
+                $sinCoincidencia = count($modelo->getFacturasSinCoincidencia(
+                    (int) $listado['semana_id'],
+                    (int) $listado['id']
+                ));
+            } catch (Throwable $e) {
+            }
+        }
+
         $this->render('porpagar/index', [
-            'title'          => 'Facturas por pagar - XMLConcilia',
-            'listados'       => $listados,
-            'listado'        => $listado,
-            'lineas'         => $lineas,
-            'resumen'        => $resumen,
-            'sociedadActiva' => $sociedadActiva,
-            'semanas'        => $semanas,
-            'semanaFiltro'   => $semanaFiltro,
+            'title'           => 'Facturas por pagar - XMLConcilia',
+            'listados'        => $listados,
+            'listado'         => $listado,
+            'lineas'          => $lineas,
+            'resumen'         => $resumen,
+            'sociedadActiva'  => $sociedadActiva,
+            'semanas'         => $semanas,
+            'semanaFiltro'    => $semanaFiltro,
+            'carpetasPago'    => $carpetasPago,
+            'sinCoincidencia' => $sinCoincidencia,
+            'filtros'         => $filtros,
         ]);
+    }
+
+    /** Normaliza los buscadores del checklist de facturas por pagar. */
+    private function filtrosListado()
+    {
+        $q = mb_substr(trim((string) $this->get('q', '')), 0, 150, 'UTF-8');
+        $proveedor = mb_substr(trim((string) $this->get('proveedor', '')), 0, 120, 'UTF-8');
+
+        $estado = strtolower(trim((string) $this->get('estado', '')));
+        if (!in_array($estado, ['', 'respaldada', 'con_diferencia', 'sin_respaldo'], true)) {
+            $estado = '';
+        }
+
+        $vinculo = strtolower(trim((string) $this->get('vinculo', '')));
+        if (!in_array($vinculo, ['', 'automatico', 'manual', 'sin_vinculo'], true)) {
+            $vinculo = '';
+        }
+
+        $desde = $this->fechaFiltro((string) $this->get('fecha_desde', ''));
+        $hasta = $this->fechaFiltro((string) $this->get('fecha_hasta', ''));
+        if ($desde !== '' && $hasta !== '' && $desde > $hasta) {
+            $tmp = $desde; $desde = $hasta; $hasta = $tmp;
+        }
+
+        $montoDesde = trim((string) $this->get('monto_desde', ''));
+        $montoHasta = trim((string) $this->get('monto_hasta', ''));
+        $montoDesde = is_numeric($montoDesde) && (float) $montoDesde >= 0 ? $montoDesde : '';
+        $montoHasta = is_numeric($montoHasta) && (float) $montoHasta >= 0 ? $montoHasta : '';
+        if ($montoDesde !== '' && $montoHasta !== '' && (float) $montoDesde > (float) $montoHasta) {
+            $tmp = $montoDesde; $montoDesde = $montoHasta; $montoHasta = $tmp;
+        }
+
+        return [
+            'q' => $q,
+            'proveedor' => $proveedor,
+            'estado' => $estado,
+            'vinculo' => $vinculo,
+            'fecha_desde' => $desde,
+            'fecha_hasta' => $hasta,
+            'monto_desde' => $montoDesde,
+            'monto_hasta' => $montoHasta,
+        ];
+    }
+
+    private function fechaFiltro($valor)
+    {
+        $valor = trim((string) $valor);
+        if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $valor, $m)) {
+            return '';
+        }
+        return checkdate((int) $m[2], (int) $m[3], (int) $m[1]) ? $valor : '';
     }
 
     /**
@@ -145,19 +209,36 @@ class PorPagarController extends Controller
 
             // Semana contra la que se verificará este listado
             $semanaId = null;
+            $semanaModel = null;
             try {
-                $semanaId = $this->loadModel('Semana')->resolverSeleccion(
+                $semanaModel = $this->loadModel('Semana');
+                $semanaId = $semanaModel->resolverSeleccion(
                     (string) $this->post('semana_id', ''),
                     (string) $this->post('semana_nueva', '')
                 );
             } catch (Throwable $e) {
             }
 
+            $semana = null;
+            if (!empty($semanaId) && $semanaModel !== null) {
+                $semana = $semanaModel->findById((int) $semanaId);
+                $carpetaSolicitada = trim((string) $this->post('carpeta_pago', ''));
+                if ($carpetaSolicitada === '') {
+                    $carpetaSolicitada = (string) ($semana['carpeta_pago'] ?? ($semana['nombre'] ?? ''));
+                }
+                $carpetaPago = DocumentoArchivo::normalizarCarpetaPago($carpetaSolicitada);
+                if ($carpetaPago === '') {
+                    throw new Exception('Selecciona una carpeta válida para el pago semanal.');
+                }
+                $semanaModel->configurarCarpetaPago((int) $semanaId, $carpetaPago);
+                (new DocumentoArchivo())->prepararCarpetaPagoSemanal($carpetaPago);
+                $semana['carpeta_pago'] = $carpetaPago;
+            }
+
             // El nombre del listado se genera solo (organizado por semana).
             $nombre = 'Pago ' . date('d/m/Y H:i');
             if (!empty($semanaId)) {
                 try {
-                    $semana = $this->loadModel('Semana')->findById((int) $semanaId);
                     if (!empty($semana['nombre'])) {
                         $nombre = 'Pago ' . $semana['nombre'];
                     }
@@ -211,13 +292,22 @@ class PorPagarController extends Controller
                     $modelo->eliminarListado($listadoId);
                     $this->redirectWithMessage($this->url('/por-pagar'),'No se pudo leer ninguna línea del listado. Verifica las columnas Fecha, Numero, Proveedor y Total.', 'error');
                 }
-                // Modo añadir: el archivo no trae nada nuevo — el listado
-                // de la semana queda intacto, sin re-verificar nada
+                // Aunque no haya líneas nuevas, reaplica la carpeta elegida
+                // a los respaldos existentes de la semana.
+                $statsSinCambios = $this->ejecutarMatching($listadoId, $modelo);
+                // Modo añadir: el archivo no trae nada nuevo.
+                $mensajeSinCambios = $omitidas > 0
+                    ? "Sin líneas nuevas: las {$omitidas} facturas ya estaban en \"{$nombre}\". La carpeta semanal quedó actualizada."
+                    : 'No se pudo leer ninguna línea del listado. Verifica las columnas Fecha, Numero, Proveedor y Total.';
+                if (!empty($statsSinCambios['archivos_movidos'])) {
+                    $mensajeSinCambios .= " {$statsSinCambios['archivos_movidos']} pares XML/PDF fueron movidos.";
+                }
+                if (!empty($statsSinCambios['archivos_errores'])) {
+                    $mensajeSinCambios .= ' Algunos archivos quedan pendientes para el reintento automático.';
+                }
                 $this->redirectWithMessage(
                     $this->url('/por-pagar?listado_id=' . $listadoId . '&semana_id=' . (int) $semanaId),
-                    $omitidas > 0
-                        ? "Sin cambios: las {$omitidas} facturas del archivo ya estaban en \"{$nombre}\"."
-                        : 'No se pudo leer ninguna línea del listado. Verifica las columnas Fecha, Numero, Proveedor y Total.',
+                    $mensajeSinCambios,
                     $omitidas > 0 ? 'warning' : 'error'
                 );
             }
@@ -231,6 +321,15 @@ class PorPagarController extends Controller
                 . ($omitidas > 0 ? " ({$omitidas} ya estaban, omitidas)" : '')
                 . ($fallidos > 0 ? " ({$fallidos} filas descartadas)" : '')
                 . " — {$stats['respaldada']} respaldadas, {$stats['con_diferencia']} con diferencia, {$stats['sin_respaldo']} sin respaldo.";
+            if (!empty($stats['archivos_movidos'])) {
+                $msg .= " {$stats['archivos_movidos']} pares XML/PDF movidos a su carpeta correspondiente.";
+            }
+            if (!empty($stats['archivos_revisar'])) {
+                $msg .= " {$stats['archivos_revisar']} documentos incompletos permanecen en REVISAR.";
+            }
+            if (!empty($stats['archivos_errores'])) {
+                $msg .= " Algunos archivos no pudieron moverse ahora; la tarea automática volverá a intentarlo.";
+            }
 
             // Volver al contexto de la semana del listado recién subido
             $this->redirectWithMessage(
@@ -306,6 +405,7 @@ class PorPagarController extends Controller
                 'ok' => true,
                 'token' => basename($file['path']),
                 'archivo' => $file['original_name'],
+                'carpeta_pago' => DocumentoArchivo::normalizarCarpetaPago((string) $this->post('carpeta_pago', '')),
                 'listado_existente' => $analisis['listado_existente'] !== null
                     ? (string) $analisis['listado_existente']['nombre'] : null,
                 'nuevas' => $nuevas,
@@ -315,6 +415,82 @@ class PorPagarController extends Controller
                 'lineas' => array_slice($analisis['lineas'], 0, 1000),
             ]);
         } catch (Throwable $e) {
+            $this->json(['ok' => false, 'message' => $e->getMessage()], 422);
+        }
+    }
+
+    /**
+     * Comparador independiente (POST, JSON). Lee un CSV/XLSX y contrasta
+     * todas sus facturas con el listado actual de la semana seleccionada.
+     * Es de solo lectura: el archivo temporal se elimina y la base de datos
+     * no recibe INSERT, UPDATE ni DELETE.
+     */
+    public function compararListado()
+    {
+        if (!$this->isPost()) {
+            $this->json(['ok' => false, 'message' => 'Metodo no permitido.'], 405);
+        }
+
+        require_once __DIR__ . '/../helpers/FileUploader.php';
+        require_once __DIR__ . '/../helpers/Validator.php';
+        require_once __DIR__ . '/../helpers/XlsxReader.php';
+        require_once __DIR__ . '/../helpers/PorPagarComparador.php';
+
+        $config = require __DIR__ . '/../config/config.php';
+        $uploadDir = rtrim($config['uploads_path'], '/\\') . DIRECTORY_SEPARATOR . 'porpagar';
+        $maxSize = $config['max_upload_size'] ?? 10485760;
+        $rutaTemporal = '';
+
+        try {
+            $semanaSel = trim((string) $this->post('semana_id', ''));
+            if (!ctype_digit($semanaSel) || (int) $semanaSel <= 0) {
+                throw new Exception('Selecciona una semana existente para hacer la comparacion.');
+            }
+            $semanaId = (int) $semanaSel;
+            $semana = $this->loadModel('Semana')->findById($semanaId);
+            if ($semana === null) {
+                throw new Exception('La semana seleccionada ya no existe.');
+            }
+            if (isset($_FILES['listado_file']['name']) && is_array($_FILES['listado_file']['name'])) {
+                throw new Exception('Selecciona un solo archivo para comparar.');
+            }
+
+            $file = FileUploader::uploadSingle('listado_file', $uploadDir, ['csv', 'xlsx', 'xls'], $maxSize);
+            $rutaTemporal = (string) $file['path'];
+            $ext = strtolower(pathinfo($file['original_name'], PATHINFO_EXTENSION));
+            if ($ext === 'xls') {
+                throw new Exception('El formato .xls no esta soportado. Guarda el archivo como .xlsx o .csv.');
+            }
+            if (!in_array($ext, ['csv', 'xlsx'], true)) {
+                throw new Exception('Selecciona un archivo CSV o XLSX.');
+            }
+
+            $modelo = $this->loadModel('PorPagar');
+            $analisisLectura = $this->analizarListado($rutaTemporal, $ext, $semanaId, $modelo);
+            $listado = $analisisLectura['listado_existente'];
+            $actuales = $listado !== null
+                ? $modelo->getLineas((int) $listado['id'])
+                : [];
+            $comparacion = PorPagarComparador::comparar($actuales, $analisisLectura['lineas']);
+
+            if (is_file($rutaTemporal)) {
+                @unlink($rutaTemporal);
+            }
+
+            $this->json([
+                'ok' => true,
+                'archivo' => (string) $file['original_name'],
+                'semana' => (string) ($semana['nombre'] ?? ('Semana #' . $semanaId)),
+                'listado_existente' => $listado !== null ? (string) $listado['nombre'] : null,
+                'resumen' => $comparacion['resumen'],
+                'lineas' => $comparacion['lineas'],
+                'total_resultados' => count($comparacion['lineas']),
+                'solo_lectura' => true,
+            ]);
+        } catch (Throwable $e) {
+            if ($rutaTemporal !== '' && is_file($rutaTemporal)) {
+                @unlink($rutaTemporal);
+            }
             $this->json(['ok' => false, 'message' => $e->getMessage()], 422);
         }
     }
@@ -480,162 +656,225 @@ class PorPagarController extends Controller
     }
 
     /**
-     * Exporta el checklist del listado a CSV (Excel lo abre directo).
+     * Elimina una sola factura del listado. El comprobante XML que pudiera
+     * estar vinculado queda intacto y vuelve a estar disponible para matching.
      */
+    public function eliminarFactura($id)
+    {
+        if (!$this->isPost()) {
+            $this->redirect($this->url('/por-pagar'));
+        }
+
+        try {
+            $modelo = $this->loadModel('PorPagar');
+            $linea = $modelo->eliminarLinea((int) $id);
+            if ($linea === null) {
+                $this->redirectWithMessage(
+                    $this->url('/por-pagar'),
+                    'La factura del listado no existe o ya fue eliminada.',
+                    'error'
+                );
+            }
+
+            $listadoId = (int) $linea['listado_id'];
+            $listado = $modelo->getListado($listadoId);
+            $destino = '/por-pagar?listado_id=' . $listadoId;
+            if ($listado !== null) {
+                $destino .= '&semana_id=' . (int) ($listado['semana_id'] ?? 0);
+            }
+            $filtrosRetorno = array_filter($this->filtrosListado(), function ($valor) {
+                return $valor !== '' && $valor !== null;
+            });
+            if ($filtrosRetorno) {
+                $destino .= '&' . http_build_query($filtrosRetorno);
+            }
+
+            $numero = trim((string) ($linea['numero'] ?? ''));
+            $mensaje = $numero !== ''
+                ? 'La factura ' . $numero . ' fue eliminada del listado. El XML asociado no fue eliminado.'
+                : 'La factura fue eliminada del listado. El XML asociado no fue eliminado.';
+
+            $this->redirectWithMessage($this->url($destino), $mensaje, 'success');
+        } catch (Throwable $e) {
+            $this->redirectWithMessage(
+                $this->url('/por-pagar'),
+                'No se pudo eliminar la factura del listado: ' . $e->getMessage(),
+                'error'
+            );
+        }
+    }
+
+    /**
+     * JSON del botón "Sin coincidencia": facturas XML de la semana que no
+     * respaldan ninguna línea del listado, las líneas aún sin respaldo
+     * (para vincular a mano) y las semanas (para mover la factura).
+     */
+    public function sinCoincidencia()
+    {
+        try {
+            $modelo = $this->loadModel('PorPagar');
+            $listado = $modelo->getListado((int) $this->get('listado_id', 0));
+            if ($listado === null || empty($listado['semana_id'])) {
+                $this->json(['ok' => false, 'message' => 'El listado no existe o no tiene semana asignada.'], 404);
+            }
+
+            $facturas = array_map(function ($f) {
+                return [
+                    'id'        => (int) $f['id'],
+                    'numero'    => NumeroFactura::xmlOchoDigitos($f['numero_factura_asistente']),
+                    'proveedor' => (string) ($f['proveedor_nombre'] ?? ''),
+                    'total'     => (float) $f['total'],
+                    'fecha'     => (string) ($f['fecha_emision'] ?? ''),
+                ];
+            }, $modelo->getFacturasSinCoincidencia((int) $listado['semana_id'], (int) $listado['id']));
+
+            $lineas = array_map(function ($l) {
+                return [
+                    'id'        => (int) $l['id'],
+                    'numero'    => (string) $l['numero'],
+                    'proveedor' => (string) $l['proveedor_texto'],
+                    'total'     => (float) $l['total'],
+                ];
+            }, $modelo->getLineasSinRespaldo((int) $listado['id']));
+
+            $semanas = [];
+            try {
+                foreach ($this->loadModel('Semana')->getAll() as $s) {
+                    $semanas[] = ['id' => (int) $s['id'], 'nombre' => (string) $s['nombre']];
+                }
+            } catch (Throwable $e) {
+            }
+
+            $this->json([
+                'ok'        => true,
+                'semana_id' => (int) $listado['semana_id'],
+                'facturas'  => $facturas,
+                'lineas'    => $lineas,
+                'semanas'   => $semanas,
+            ]);
+        } catch (Throwable $e) {
+            $this->json(['ok' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Vincula a mano una línea del listado con una factura XML (botón
+     * "Sin coincidencia"). El número y el proveedor ya no se evalúan:
+     * solo el monto clasifica respaldada / con_diferencia, y la marca
+     * match_manual protege el vínculo de "Verificar de nuevo".
+     */
+    public function forzar()
+    {
+        if (!$this->isPost()) {
+            $this->json(['ok' => false, 'message' => 'Método no permitido.'], 405);
+        }
+
+        try {
+            $modelo = $this->loadModel('PorPagar');
+            $linea = $modelo->getLinea((int) $this->post('linea_id', 0));
+            $factura = $modelo->getFacturaParaMatching((int) $this->post('factura_id', 0));
+
+            if ($linea === null || $factura === null) {
+                $this->json(['ok' => false, 'message' => 'La línea o la factura no existen.'], 404);
+            }
+
+            // Una factura solo puede respaldar una línea del listado
+            foreach ($modelo->getLineas((int) $linea['listado_id']) as $otra) {
+                if ((int) ($otra['factura_xml_id'] ?? 0) === (int) $factura['id']
+                    && (int) $otra['id'] !== (int) $linea['id']) {
+                    $this->json(['ok' => false, 'message' => 'Esa factura ya respalda la línea "' . $otra['numero'] . '".'], 409);
+                }
+            }
+
+            $diferencia = round((float) $linea['total'] - (float) $factura['total'], 2);
+            $estado = abs($diferencia) <= FacturaMatcher::TOLERANCIA_CRC ? 'respaldada' : 'con_diferencia';
+
+            $modelo->actualizarMatchManual(
+                (int) $linea['id'],
+                (int) $factura['id'],
+                $estado,
+                $estado === 'con_diferencia' ? $diferencia : null
+            );
+
+            // Asigna la semana y mueve el par XML/PDF si el vínculo manual
+            // quedó respaldado correctamente.
+            $this->ejecutarMatching((int) $linea['listado_id'], $modelo);
+
+            $this->json(['ok' => true, 'estado' => $estado, 'diferencia' => $diferencia]);
+        } catch (Throwable $e) {
+            $this->json(['ok' => false, 'message' => 'No se pudo vincular: ' . $e->getMessage()], 500);
+        }
+    }
+
+    /** Exporta el checklist del listado como un libro XLSX real. */
     public function exportar()
     {
-        $listadoId = (int) $this->get('listado_id', 0);
-        $modelo = $this->loadModel('PorPagar');
+        try {
+            require_once __DIR__ . '/../helpers/XlsxWriter.php';
 
-        $listado = $modelo->getListado($listadoId);
-        if ($listado === null) {
-            $this->redirectWithMessage($this->url('/por-pagar'),'Listado no encontrado.', 'error');
+            $listadoId = (int) $this->get('listado_id', 0);
+            $modelo = $this->loadModel('PorPagar');
+            $listado = $modelo->getListado($listadoId);
+            if ($listado === null) {
+                throw new Exception('Listado no encontrado.');
+            }
+
+            $lineas = $modelo->getLineas($listadoId, $this->filtrosListado());
+            $headers = ['Fecha', 'Número', 'Proveedor', 'Total listado', 'Número XML', 'Total XML', 'Diferencia', 'Estado'];
+            $etiquetas = [
+                'respaldada' => 'Respaldada',
+                'con_diferencia' => 'Con diferencia',
+                'sin_respaldo' => 'Sin respaldo',
+            ];
+            $rows = [];
+            $cellStyles = [];
+
+            foreach ($lineas as $ri => $linea) {
+                $estado = (string) ($linea['estado'] ?? '');
+                $rows[] = [
+                    (string) ($linea['fecha'] ?? ''),
+                    (string) $linea['numero'],
+                    (string) $linea['proveedor_texto'],
+                    round((float) $linea['total'], 2),
+                    $linea['xml_numero'] !== null
+                        ? NumeroFactura::xmlOchoDigitos($linea['xml_numero'])
+                        : '',
+                    $linea['xml_total'] !== null ? round((float) $linea['xml_total'], 2) : '',
+                    $linea['diferencia'] !== null ? round((float) $linea['diferencia'], 2) : '',
+                    $etiquetas[$estado] ?? $estado,
+                ];
+                $cellStyles[$ri][7] = $estado === 'respaldada' ? 3 : 2;
+            }
+
+            $nombreBase = trim((string) ($listado['semana_nombre'] ?? $listado['nombre'] ?? $listadoId));
+            $nombreBase = preg_replace('/[^A-Za-z0-9_-]+/', '_', $nombreBase);
+            $nombreBase = trim((string) $nombreBase, '_') ?: (string) $listadoId;
+            $nombreArchivo = 'por_pagar_' . $nombreBase . '_' . date('Ymd_His') . '.xlsx';
+            $anchos = [13, 20, 38, 16, 22, 16, 16, 18];
+
+            $tmpFile = XlsxWriter::generate($headers, $rows, 'Facturas por pagar', $cellStyles, $anchos);
+            XlsxWriter::send($tmpFile, $nombreArchivo);
+        } catch (Throwable $e) {
+            $this->redirectWithMessage(
+                $this->url('/por-pagar?listado_id=' . (int) $this->get('listado_id', 0)),
+                'Error al exportar a Excel: ' . $e->getMessage(),
+                'error'
+            );
         }
-
-        $lineas = $modelo->getLineas($listadoId);
-
-        $nombreArchivo = 'por_pagar_' . $listadoId . '_' . date('Ymd_His') . '.csv';
-
-        header('Content-Type: text/csv; charset=UTF-8');
-        header('Content-Disposition: attachment; filename="' . $nombreArchivo . '"');
-        header('Pragma: no-cache');
-
-        $out = fopen('php://output', 'w');
-        fwrite($out, "\xEF\xBB\xBF"); // BOM para que Excel respete UTF-8
-
-        fputcsv($out, ['Fecha', 'Numero', 'Proveedor', 'Total listado', 'Numero XML', 'Total XML', 'Diferencia', 'Estado'], ';');
-
-        $etiquetas = [
-            'respaldada' => 'Respaldada',
-            'con_diferencia' => 'Con diferencia',
-            'sin_respaldo' => 'Sin respaldo',
-        ];
-
-        foreach ($lineas as $linea) {
-            fputcsv($out, [
-                (string) ($linea['fecha'] ?? ''),
-                (string) $linea['numero'],
-                (string) $linea['proveedor_texto'],
-                number_format((float) $linea['total'], 2, '.', ''),
-                (string) ($linea['xml_numero'] ?? ''),
-                $linea['xml_total'] !== null ? number_format((float) $linea['xml_total'], 2, '.', '') : '',
-                $linea['diferencia'] !== null ? number_format((float) $linea['diferencia'], 2, '.', '') : '',
-                $etiquetas[$linea['estado']] ?? $linea['estado'],
-            ], ';');
-        }
-
-        fclose($out);
-        exit;
     }
 
     // ── Matching listado ↔ facturas XML ────────────────────────────
 
     /**
      * Cruza cada línea del listado con la mejor factura XML disponible.
-     * El proveedor y el número identifican la factura; el monto solo
-     * clasifica (respaldada / con_diferencia). NC y ND quedan fuera.
+     * La lógica vive en PorPagarVerificador: es compartida con la
+     * re-verificación automática que corre al asignar facturas a una
+     * semana (desde Facturas, la subida directa o la cola del correo).
      */
     private function ejecutarMatching($listadoId, $modelo)
     {
-        @set_time_limit(120);
-
-        $lineas = $modelo->getLineas($listadoId);
-
-        // El universo de candidatas es la semana del listado (si tiene):
-        // la verificación no es contra el acumulado de todo el sistema
-        $registro = $modelo->getListado($listadoId);
-        $semanaId = $registro ? (int) ($registro['semana_id'] ?? 0) : 0;
-        $facturas = $modelo->getFacturasParaMatching($semanaId);
-
-        $stats = ['respaldada' => 0, 'con_diferencia' => 0, 'sin_respaldo' => 0];
-        $usadas = [];
-
-        foreach ($lineas as $linea) {
-            $mejor = null;
-            $mejorScore = 0;
-            $mejorNumero = 0;
-            $mejorProveedor = 0;
-
-            // Rescate: candidata con proveedor que NO se parece pero con
-            // número contundente y monto exacto (ver NUMERO_RESCATE).
-            $rescate = null;
-            $rescateNumero = 0;
-            $rescateProveedor = 0;
-
-            foreach ($facturas as $factura) {
-                $fid = (int) $factura['id'];
-                if (isset($usadas[$fid])) {
-                    continue;
-                }
-
-                // El número del listado puede ser el corto ("FACT-26546") o el
-                // consecutivo de 20 dígitos: se compara contra ambos campos
-                $scoreNumero = max(
-                    FacturaMatcher::similaridadNumero($linea['numero'], (string) $factura['numero_factura_asistente']),
-                    FacturaMatcher::similaridadNumero($linea['numero'], (string) $factura['consecutivo_completo'])
-                );
-                if ($scoreNumero < self::UMBRAL_NUMERO) {
-                    continue;
-                }
-
-                $scoreProveedor = FacturaMatcher::similaridadTexto(
-                    (string) $linea['proveedor_texto'],
-                    (string) $factura['proveedor_nombre']
-                );
-
-                if ($scoreProveedor < self::UMBRAL_PROVEEDOR) {
-                    // Proveedor distinto (nombre comercial vs razón social):
-                    // solo rescatable si el número es contundente Y el monto
-                    // cuadra al colón. Gana el número más fuerte.
-                    if ($scoreNumero >= self::NUMERO_RESCATE
-                        && abs(round((float) $linea['total'] - (float) $factura['total'], 2)) <= self::TOLERANCIA_CRC
-                        && $scoreNumero > $rescateNumero) {
-                        $rescate = $factura;
-                        $rescateNumero = $scoreNumero;
-                        $rescateProveedor = $scoreProveedor;
-                    }
-                    continue;
-                }
-
-                $score = ($scoreNumero * 0.6) + ($scoreProveedor * 0.4);
-                if ($score > $mejorScore) {
-                    $mejorScore = $score;
-                    $mejor = $factura;
-                    $mejorNumero = $scoreNumero;
-                    $mejorProveedor = $scoreProveedor;
-                }
-            }
-
-            // Sin candidata normal: usar el rescate si lo hubo
-            if ($mejor === null && $rescate !== null) {
-                $mejor = $rescate;
-                $mejorNumero = $rescateNumero;
-                $mejorProveedor = $rescateProveedor;
-            }
-
-            if ($mejor === null) {
-                $modelo->actualizarMatch((int) $linea['id'], null, 'sin_respaldo', null, null, null);
-                $stats['sin_respaldo']++;
-                continue;
-            }
-
-            $usadas[(int) $mejor['id']] = true;
-
-            $diferencia = round((float) $linea['total'] - (float) $mejor['total'], 2);
-            $estado = abs($diferencia) <= self::TOLERANCIA_CRC ? 'respaldada' : 'con_diferencia';
-
-            $modelo->actualizarMatch(
-                (int) $linea['id'],
-                (int) $mejor['id'],
-                $estado,
-                $estado === 'con_diferencia' ? $diferencia : null,
-                round($mejorNumero, 1),
-                round($mejorProveedor, 1)
-            );
-            $stats[$estado]++;
-        }
-
-        return $stats;
+        require_once __DIR__ . '/../helpers/PorPagarVerificador.php';
+        return PorPagarVerificador::verificarListado($listadoId, $modelo);
     }
 
     /**

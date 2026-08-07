@@ -14,6 +14,8 @@ class PorPagar extends Model
 
     public function __construct()
     {
+        require_once __DIR__ . '/Semana.php';
+        new Semana();
         $this->ensureTables();
     }
 
@@ -42,6 +44,7 @@ class PorPagar extends Model
                 `diferencia` DECIMAL(18,2) NULL DEFAULT NULL,
                 `score_numero` DECIMAL(5,1) NULL DEFAULT NULL,
                 `score_proveedor` DECIMAL(5,1) NULL DEFAULT NULL,
+                `match_manual` TINYINT(1) NOT NULL DEFAULT 0,
                 `actualizado_en` DATETIME NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
                 PRIMARY KEY (`id`),
                 KEY `idx_listado` (`listado_id`),
@@ -49,6 +52,15 @@ class PorPagar extends Model
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
         } catch (Throwable $e) {
             // La migración manual las crea si aquí no hay permisos DDL
+        }
+
+        // Columna añadida después del despliegue inicial (instalaciones previas)
+        try {
+            if (!$this->fetchOne("SHOW COLUMNS FROM porpagar_facturas LIKE 'match_manual'")) {
+                $this->execute("ALTER TABLE porpagar_facturas
+                                ADD COLUMN `match_manual` TINYINT(1) NOT NULL DEFAULT 0 AFTER `score_proveedor`");
+            }
+        } catch (Throwable $e) {
         }
     }
 
@@ -77,7 +89,8 @@ class PorPagar extends Model
             }
         }
 
-        $sql = "SELECT l.*, s.nombre AS sociedad_nombre, sem.nombre AS semana_nombre
+        $sql = "SELECT l.*, s.nombre AS sociedad_nombre, sem.nombre AS semana_nombre,
+                       sem.carpeta_pago AS semana_carpeta_pago
                 FROM porpagar_listados l
                 LEFT JOIN sociedades s ON s.id = l.sociedad_id
                 LEFT JOIN semanas sem ON sem.id = l.semana_id
@@ -89,7 +102,8 @@ class PorPagar extends Model
 
     public function getListado($id)
     {
-        $sql = "SELECT l.*, s.nombre AS sociedad_nombre, sem.nombre AS semana_nombre
+        $sql = "SELECT l.*, s.nombre AS sociedad_nombre, sem.nombre AS semana_nombre,
+                       sem.carpeta_pago AS semana_carpeta_pago
                 FROM porpagar_listados l
                 LEFT JOIN sociedades s ON s.id = l.sociedad_id
                 LEFT JOIN semanas sem ON sem.id = l.semana_id
@@ -130,8 +144,62 @@ class PorPagar extends Model
     /**
      * Líneas del listado con los datos de la factura XML que las respalda.
      */
-    public function getLineas($listadoId)
+    public function getLineas($listadoId, array $filtros = [])
     {
+        $where = ['pf.listado_id = ?'];
+        $params = [(int) $listadoId];
+
+        $buscar = trim((string) ($filtros['q'] ?? ''));
+        if ($buscar !== '') {
+            $like = '%' . $buscar . '%';
+            $where[] = '(pf.numero LIKE ? OR f.numero_factura_asistente LIKE ? OR f.consecutivo_completo LIKE ?)';
+            array_push($params, $like, $like, $like);
+        }
+
+        $proveedor = trim((string) ($filtros['proveedor'] ?? ''));
+        if ($proveedor !== '') {
+            $like = '%' . $proveedor . '%';
+            $where[] = '(pf.proveedor_texto LIKE ? OR p.razon_social LIKE ?)';
+            array_push($params, $like, $like);
+        }
+
+        $estado = (string) ($filtros['estado'] ?? '');
+        if (in_array($estado, ['respaldada', 'con_diferencia', 'sin_respaldo'], true)) {
+            $where[] = 'pf.estado = ?';
+            $params[] = $estado;
+        }
+
+        $desde = trim((string) ($filtros['fecha_desde'] ?? ''));
+        if ($desde !== '') {
+            $where[] = 'pf.fecha >= ?';
+            $params[] = $desde;
+        }
+        $hasta = trim((string) ($filtros['fecha_hasta'] ?? ''));
+        if ($hasta !== '') {
+            $where[] = 'pf.fecha <= ?';
+            $params[] = $hasta;
+        }
+
+        if (isset($filtros['monto_desde']) && $filtros['monto_desde'] !== ''
+            && $filtros['monto_desde'] !== null && is_numeric($filtros['monto_desde'])) {
+            $where[] = 'pf.total >= ?';
+            $params[] = (float) $filtros['monto_desde'];
+        }
+        if (isset($filtros['monto_hasta']) && $filtros['monto_hasta'] !== ''
+            && $filtros['monto_hasta'] !== null && is_numeric($filtros['monto_hasta'])) {
+            $where[] = 'pf.total <= ?';
+            $params[] = (float) $filtros['monto_hasta'];
+        }
+
+        $vinculo = (string) ($filtros['vinculo'] ?? '');
+        if ($vinculo === 'manual') {
+            $where[] = 'pf.factura_xml_id IS NOT NULL AND pf.match_manual = 1';
+        } elseif ($vinculo === 'automatico') {
+            $where[] = 'pf.factura_xml_id IS NOT NULL AND pf.match_manual = 0';
+        } elseif ($vinculo === 'sin_vinculo') {
+            $where[] = 'pf.factura_xml_id IS NULL';
+        }
+
         $sql = "SELECT pf.*,
                        f.numero_factura_asistente AS xml_numero,
                        f.total AS xml_total,
@@ -140,16 +208,17 @@ class PorPagar extends Model
                 FROM porpagar_facturas pf
                 LEFT JOIN facturas_xml f ON f.id = pf.factura_xml_id
                 LEFT JOIN proveedores p ON p.id = f.proveedor_id
-                WHERE pf.listado_id = ?
+                WHERE " . implode(' AND ', $where) . "
                 ORDER BY FIELD(pf.estado, 'con_diferencia', 'sin_respaldo', 'respaldada'),
                          pf.proveedor_texto ASC, pf.id ASC";
-        return $this->fetchAll($sql, [(int) $listadoId]) ?: [];
+        return $this->fetchAll($sql, $params) ?: [];
     }
 
     public function actualizarMatch($lineaId, $facturaXmlId, $estado, $diferencia, $scoreNumero, $scoreProveedor)
     {
         $sql = "UPDATE porpagar_facturas
-                SET factura_xml_id = ?, estado = ?, diferencia = ?, score_numero = ?, score_proveedor = ?
+                SET factura_xml_id = ?, estado = ?, diferencia = ?, score_numero = ?, score_proveedor = ?,
+                    match_manual = 0
                 WHERE id = ?";
         return $this->execute($sql, [
             $facturaXmlId ?: null,
@@ -159,6 +228,63 @@ class PorPagar extends Model
             $scoreProveedor,
             (int) $lineaId,
         ]);
+    }
+
+    /**
+     * Vínculo manual (botón "Sin coincidencia"): número y proveedor no
+     * coincidieron, la persona decidió el respaldo y solo cuenta el monto.
+     * La marca match_manual evita que "Verificar de nuevo" lo deshaga.
+     */
+    public function actualizarMatchManual($lineaId, $facturaXmlId, $estado, $diferencia)
+    {
+        $sql = "UPDATE porpagar_facturas
+                SET factura_xml_id = ?, estado = ?, diferencia = ?,
+                    score_numero = NULL, score_proveedor = NULL, match_manual = 1
+                WHERE id = ?";
+        return $this->execute($sql, [(int) $facturaXmlId, $estado, $diferencia, (int) $lineaId]);
+    }
+
+    public function getLinea($id)
+    {
+        $fila = $this->fetchOne("SELECT * FROM porpagar_facturas WHERE id = ? LIMIT 1", [(int) $id]);
+        return $fila ?: null;
+    }
+
+    /**
+     * Elimina solo una factura del listado y mantiene sincronizado el total
+     * mostrado en porpagar_listados. La factura XML vinculada no se elimina.
+     *
+     * @return array|null La linea eliminada, o null si ya no existia.
+     */
+    public function eliminarLinea($id)
+    {
+        $linea = $this->getLinea((int) $id);
+        if ($linea === null) {
+            return null;
+        }
+
+        $eliminadas = $this->execute(
+            "DELETE FROM porpagar_facturas WHERE id = ? AND listado_id = ?",
+            [(int) $id, (int) $linea['listado_id']]
+        );
+        if ($eliminadas < 1) {
+            return null;
+        }
+
+        $this->actualizarTotalLineas((int) $linea['listado_id']);
+        return $linea;
+    }
+
+    /**
+     * Líneas del listado aún sin respaldo: las candidatas al vínculo manual.
+     */
+    public function getLineasSinRespaldo($listadoId)
+    {
+        $sql = "SELECT id, numero, proveedor_texto, total
+                FROM porpagar_facturas
+                WHERE listado_id = ? AND estado = 'sin_respaldo'
+                ORDER BY proveedor_texto ASC, id ASC";
+        return $this->fetchAll($sql, [(int) $listadoId]) ?: [];
     }
 
     /**
@@ -172,17 +298,90 @@ class PorPagar extends Model
     {
         $params = [];
         $sql = "SELECT f.id, f.numero_factura_asistente, f.consecutivo_completo, f.total,
-                       p.razon_social AS proveedor_nombre
+                       f.semana_id, p.razon_social AS proveedor_nombre
                 FROM facturas_xml f
                 LEFT JOIN proveedores p ON p.id = f.proveedor_id
                 WHERE (f.tipo_documento IS NULL OR f.tipo_documento = 'FE')";
 
         if ((int) $semanaId > 0) {
-            $sql .= " AND f.semana_id = ?";
+            $sql .= " AND (f.semana_id = ? OR f.semana_id IS NULL)";
             $params[] = (int) $semanaId;
+            $sql .= " ORDER BY CASE WHEN f.semana_id = ? THEN 0 ELSE 1 END, f.id ASC";
+            $params[] = (int) $semanaId;
+        } else {
+            $sql .= " ORDER BY f.id ASC";
         }
 
         return $this->fetchAll($sql, $params) ?: [];
+    }
+
+    /** Facturas enlazadas antes o después de verificar, para reordenar sus archivos. */
+    public function getFacturaIdsVinculadas($listadoId, $soloRespaldadas = false)
+    {
+        $estado = $soloRespaldadas ? " AND estado = 'respaldada'" : '';
+        $rows = $this->fetchAll(
+            "SELECT DISTINCT factura_xml_id AS id
+             FROM porpagar_facturas
+             WHERE listado_id = ? AND factura_xml_id IS NOT NULL{$estado}",
+            [(int) $listadoId]
+        ) ?: [];
+        return array_values(array_map('intval', array_column($rows, 'id')));
+    }
+
+    /**
+     * Una coincidencia automática por número+proveedor pasa a pertenecer a
+     * la semana aunque el monto sea distinto. Los vínculos manuales con
+     * diferencia no se incluyen. Nunca se reasigna desde otra semana.
+     */
+    public function asignarRespaldadasASemana($listadoId, $semanaId)
+    {
+        if ((int) $semanaId <= 0) {
+            return 0;
+        }
+        $sql = "UPDATE facturas_xml f
+                JOIN porpagar_facturas pf ON pf.factura_xml_id = f.id
+                SET f.semana_id = ?
+                WHERE pf.listado_id = ?
+                  AND (pf.estado = 'respaldada'
+                       OR (pf.estado = 'con_diferencia' AND pf.match_manual = 0))
+                  AND (f.semana_id IS NULL OR f.semana_id = ?)";
+        return $this->execute($sql, [(int) $semanaId, (int) $listadoId, (int) $semanaId]);
+    }
+
+    /**
+     * Una factura de la semana para el chequeo de coincidencia (mismos
+     * campos que getFacturasParaMatching). NULL si no existe o es NC/ND.
+     */
+    public function getFacturaParaMatching($facturaId)
+    {
+        $sql = "SELECT f.id, f.numero_factura_asistente, f.consecutivo_completo, f.total,
+                       p.razon_social AS proveedor_nombre
+                FROM facturas_xml f
+                LEFT JOIN proveedores p ON p.id = f.proveedor_id
+                WHERE f.id = ? AND (f.tipo_documento IS NULL OR f.tipo_documento = 'FE')
+                LIMIT 1";
+        $fila = $this->fetchOne($sql, [(int) $facturaId]);
+        return $fila ?: null;
+    }
+
+    /**
+     * Facturas XML de la semana que no respaldan ninguna línea del listado:
+     * quedaron fuera del último matching (número/proveedor no coincidió).
+     */
+    public function getFacturasSinCoincidencia($semanaId, $listadoId)
+    {
+        $sql = "SELECT f.id, f.numero_factura_asistente, f.consecutivo_completo, f.total,
+                       f.fecha_emision, p.razon_social AS proveedor_nombre
+                FROM facturas_xml f
+                LEFT JOIN proveedores p ON p.id = f.proveedor_id
+                WHERE (f.tipo_documento IS NULL OR f.tipo_documento = 'FE')
+                  AND f.semana_id = ?
+                  AND f.id NOT IN (
+                      SELECT factura_xml_id FROM porpagar_facturas
+                      WHERE listado_id = ? AND factura_xml_id IS NOT NULL
+                  )
+                ORDER BY p.razon_social ASC, f.id ASC";
+        return $this->fetchAll($sql, [(int) $semanaId, (int) $listadoId]) ?: [];
     }
 
     public function resumenPorEstado($listadoId)
