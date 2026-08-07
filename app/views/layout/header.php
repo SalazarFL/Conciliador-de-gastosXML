@@ -34,22 +34,36 @@ function navActive(string $segment, string $uri): string {
     return (strpos($uri, '/' . $segment) !== false) ? 'active' : '';
 }
 
-// Determinar el título de la página actual para el topbar
+// Título de la página actual para el topbar (sin descripción: solo el nombre)
 $pageLabels = [
-    'facturas'     => ['Carga de Facturas XML',  ''],
-    'correo'       => ['Facturas desde Correo',   'Captura automática de XML y PDF del buzón'],
-    'por-pagar'    => ['Facturas por pagar',      'Verificación del listado del pago semanal'],
-    'gastos'       => ['Carga de Gastos CSV',     ''],
-    'conciliacion' => ['Conciliación',             ''],
-    'reportes'     => ['Reportes y Exportación',  ''],
-    'usuarios'     => ['Gestión de Usuarios',      'Administra las cuentas de acceso al sistema'],
+    'facturas'     => 'Carga de Facturas XML',
+    'correo'       => 'Correo',
+    'por-pagar'    => 'Facturas por pagar',
+    'notas-credito'=> 'Notas de crédito',
+    'devoluciones' => 'Devoluciones',
+    'notas-xml'    => 'Notas XML',
+    'gastos'       => 'Carga de Gastos CSV',
+    'conciliacion' => 'Conciliación',
+    'reportes'     => 'Reportes y Exportación',
+    'usuarios'     => 'Gestión de Usuarios',
 ];
 
-$currentLabel    = ['Panel Principal', ''];
-foreach ($pageLabels as $seg => $labels) {
+$currentLabel = 'Panel Principal';
+foreach ($pageLabels as $seg => $label) {
     if (strpos($uriClean, '/' . $seg) !== false) {
-        $currentLabel = $labels;
+        $currentLabel = $label;
         break;
+    }
+}
+
+// Sociedad activa: algunos controladores ya la cargan para su propia vista
+// (Home, Correo, Por-pagar); en las demás páginas se busca aquí para que
+// el nombre siempre aparezca en la topbar.
+if (!isset($sociedadActiva)) {
+    $sociedadActiva = null;
+    try {
+        $sociedadActiva = $this->loadModel('Sociedad')->getActiva();
+    } catch (Throwable $e) {
     }
 }
 ?>
@@ -75,26 +89,47 @@ foreach ($pageLabels as $seg => $labels) {
                     <span style="color:var(--gold);">X</span><span style="color:#fff;">C</span>
                 </div>
             </a>
-            <div class="sidebar-logo-subtitle">Sistema de Conciliación</div>
+        </div>
+
+        <div class="sidebar-bottom">
+            <a href="<?= $baseUrl ?>/" title="Ir al inicio">
+                <span class="nav-icon"><i class="fas fa-house"></i></span>
+                <span class="nav-label">Inicio</span>
+            </a>
         </div>
 
         <!-- Navegación -->
         <nav class="sidebar-nav">
             <div class="sidebar-section-label">Módulos</div>
 
+            <a href="<?= $baseUrl ?>/por-pagar" class="<?= navActive('por-pagar', $uriClean) ?>" title="Facturas por pagar">
+                <span class="nav-icon"><i class="fas fa-file-invoice-dollar"></i></span>
+                <span class="nav-label">Facturas por pagar</span>
+            </a>
+
+            <a href="<?= $baseUrl ?>/notas-credito" class="<?= navActive('notas-credito', $uriClean) ?>" title="Notas de crédito">
+                <span class="nav-icon"><i class="fas fa-file-circle-minus"></i></span>
+                <span class="nav-label">Notas de crédito</span>
+            </a>
+
+            <a href="<?= $baseUrl ?>/devoluciones" class="<?= navActive('devoluciones', $uriClean) ?>" title="Devoluciones">
+                <span class="nav-icon"><i class="fas fa-rotate-left"></i></span>
+                <span class="nav-label">Devoluciones</span>
+            </a>
+
+            <a href="<?= $baseUrl ?>/correo" class="<?= navActive('correo', $uriClean) ?>" title="Correo">
+                <span class="nav-icon"><i class="fas fa-envelope-open-text"></i></span>
+                <span class="nav-label">Correo</span>
+            </a>
+
             <a href="<?= $baseUrl ?>/facturas" class="<?= navActive('facturas', $uriClean) ?>" title="Carga de Facturas XML">
                 <span class="nav-icon"><i class="fas fa-file-invoice"></i></span>
                 <span class="nav-label">Carga de Facturas XML</span>
             </a>
 
-            <a href="<?= $baseUrl ?>/correo" class="<?= navActive('correo', $uriClean) ?>" title="Facturas desde Correo">
-                <span class="nav-icon"><i class="fas fa-envelope-open-text"></i></span>
-                <span class="nav-label">Facturas desde Correo</span>
-            </a>
-
-            <a href="<?= $baseUrl ?>/por-pagar" class="<?= navActive('por-pagar', $uriClean) ?>" title="Facturas por pagar">
-                <span class="nav-icon"><i class="fas fa-file-invoice-dollar"></i></span>
-                <span class="nav-label">Facturas por pagar</span>
+            <a href="<?= $baseUrl ?>/notas-xml" class="<?= navActive('notas-xml', $uriClean) ?>" title="Notas XML">
+                <span class="nav-icon"><i class="fas fa-file-code"></i></span>
+                <span class="nav-label">Notas XML</span>
             </a>
 
             <a href="<?= $baseUrl ?>/reportes" class="<?= navActive('reportes', $uriClean) ?>" title="Reportes">
@@ -112,34 +147,30 @@ foreach ($pageLabels as $seg => $labels) {
         </nav>
 
         <!-- Footer del sidebar -->
-        <div class="sidebar-bottom">
-            <a href="<?= $baseUrl ?>/" title="Ir al inicio">
-                <span class="nav-icon"><i class="fas fa-house"></i></span>
-                <span class="nav-label">Inicio</span>
-            </a>
-        </div>
 
     </aside>
     <!-- ── /sidebar ── -->
 
     <script>
-    // Sidebar mini: clic en la barra la expande (flotando sobre el contenido);
-    // clic fuera o de nuevo sobre ella la colapsa. En móvil manda el hamburger.
+    // En escritorio se expande al posar el cursor; en móvil manda el botón.
     (function () {
-        var sb = document.getElementById('sidebar');
-        if (!sb) return;
+        var sidebar = document.getElementById('sidebar');
+        if (!sidebar) return;
 
-        sb.addEventListener('click', function (e) {
+        var hoverTimer = null;
+        var hoverDelay = 500;
+
+        sidebar.addEventListener('mouseenter', function () {
             if (window.innerWidth <= 900) return;
-            if (e.target.closest('a')) return; // los enlaces navegan
-            sb.classList.toggle('expanded');
+
+            hoverTimer = setTimeout(function () {
+                sidebar.classList.add('expanded');
+            }, hoverDelay);
         });
 
-        document.addEventListener('click', function (e) {
-            if (window.innerWidth <= 900) return;
-            if (!sb.classList.contains('expanded')) return;
-            if (e.target.closest('#sidebar')) return;
-            sb.classList.remove('expanded');
+        sidebar.addEventListener('mouseleave', function () {
+            clearTimeout(hoverTimer);
+            sidebar.classList.remove('expanded');
         });
     })();
     </script>
@@ -150,10 +181,7 @@ foreach ($pageLabels as $seg => $labels) {
         <!-- Topbar -->
         <div class="topbar">
             <div class="topbar-left">
-                <h2><?= htmlspecialchars($currentLabel[0]) ?></h2>
-                <?php if (!empty($currentLabel[1])): ?>
-                <p><?= htmlspecialchars($currentLabel[1]) ?></p>
-                <?php endif; ?>
+                <h2><?= htmlspecialchars($currentLabel) ?></h2>
             </div>
             <div class="topbar-right" style="display:flex;align-items:center;gap:14px;">
                 <?php if (!empty($_SESSION['user_id'])): ?>
@@ -164,6 +192,13 @@ foreach ($pageLabels as $seg => $labels) {
                         title="Configuración: carpeta destino y cédula de la empresa">
                     <i class="fas fa-gear"></i>
                 </button>
+                <?php endif; ?>
+                <?php if ($sociedadActiva): ?>
+                <span style="font-size:12px;color:var(--navy);background:var(--gold-pale);border:1px solid var(--gold-light);border-radius:999px;padding:5px 12px;display:flex;align-items:center;gap:6px;font-weight:600;"
+                      title="Sociedad activa">
+                    <i class="fas fa-building" style="color:var(--gold-dark);font-size:13px;"></i>
+                    <?= htmlspecialchars($sociedadActiva['nombre']) ?>
+                </span>
                 <?php endif; ?>
                 <span style="font-size:12px;color:#4a5568;display:flex;align-items:center;gap:6px;">
                     <i class="fas fa-user-circle" style="color:#0C2461;font-size:16px;"></i>

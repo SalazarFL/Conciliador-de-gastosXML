@@ -21,7 +21,7 @@ class HomeController extends Controller
         $resumenListado = [];
 
         try {
-            $stats['total_facturas'] = $this->loadModel('Factura')->count();
+            $stats['total_facturas'] = $this->loadModel('Factura')->contarFacturas();
         } catch (Throwable $e) {
         }
 

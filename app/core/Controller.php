@@ -77,7 +77,17 @@ class Controller
     {
         http_response_code($statusCode);
         header('Content-Type: application/json; charset=utf-8');
-        echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+        $json = json_encode(
+            $data,
+            JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_INVALID_UTF8_SUBSTITUTE
+        );
+
+        if ($json === false) {
+            http_response_code(500);
+            $json = '{"ok":false,"message":"No fue posible generar la respuesta JSON."}';
+        }
+
+        echo $json;
         exit;
     }
     

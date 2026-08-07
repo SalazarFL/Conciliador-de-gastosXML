@@ -12,20 +12,6 @@ $sinRespaldo   = (int) ($resumenListado['sin_respaldo'] ?? 0);
 $totalLineas   = $respaldadas + $conDiferencia + $sinRespaldo;
 ?>
 
-<div class="page-header">
-    <div>
-        <h1>Panel Principal</h1>
-        <p>
-            <?php if ($sociedadActiva): ?>
-            Trabajando con <strong><?= htmlspecialchars($sociedadActiva['nombre']) ?></strong>
-            (cédula <?= htmlspecialchars($sociedadActiva['cedula']) ?>).
-            <?php else: ?>
-            Registra una sociedad y márcala como activa para empezar.
-            <?php endif; ?>
-        </p>
-    </div>
-</div>
-
 <!-- Estadísticas -->
 <div class="stats-grid mb-20">
     <div class="stat-card navy">
@@ -151,7 +137,7 @@ $totalLineas   = $respaldadas + $conDiferencia + $sinRespaldo;
     </div>
 
     <!-- ── Accesos rápidos ── -->
-    <div style="display:flex;flex-direction:column;gap:12px;">
+    <div style="display:flex;flex-direction:column;gap:8px;">
         <?php
         $accesos = [
             ['/por-pagar', 'fa-file-invoice-dollar', 'Facturas por pagar', 'Verificar el listado del pago semanal', 'rgba(15,118,110,.09)', '#0f766e'],
@@ -161,10 +147,10 @@ $totalLineas   = $respaldadas + $conDiferencia + $sinRespaldo;
         ];
         ?>
         <?php foreach ($accesos as $a): ?>
-        <a href="<?= $baseUrl . $a[0] ?>" class="card" style="text-decoration:none;transition:transform .14s,box-shadow .14s;padding:14px 18px;"
+        <a href="<?= $baseUrl . $a[0] ?>" class="card" style="text-decoration:none;transition:transform .14s,box-shadow .14s;padding:14px 18px;margin-top:0;"
            onmouseover="this.style.transform='translateY(-3px)';this.style.boxShadow='0 12px 32px rgba(27,58,107,.14)'"
            onmouseout="this.style.transform='';this.style.boxShadow=''">
-            <div style="display:flex;align-items:center;gap:14px;">
+            <div style="display:flex;align-items:center;gap:5px;">
                 <div style="width:42px;height:42px;border-radius:11px;background:<?= $a[4] ?>;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
                     <i class="fas <?= $a[1] ?>" style="font-size:18px;color:<?= $a[5] ?>;"></i>
                 </div>

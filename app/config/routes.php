@@ -33,6 +33,13 @@ $router->get('/facturas/cola/estado/{id}', 'FacturasController@colaEstado');
 $router->get('/facturas/ver/{id}', 'FacturasController@ver');
 $router->post('/facturas/semana', 'FacturasController@semanaAsignar');
 
+// --- RUTAS DE NOTAS DE CRÉDITO XML ---
+$router->get('/notas-xml', 'NotasXmlController@index');
+$router->post('/notas-xml/subir', 'NotasXmlController@subir');
+$router->get('/notas-xml/ver/{id}', 'NotasXmlController@ver');
+$router->get('/documentos/xml/{id}', 'DocumentosController@xml');
+$router->get('/documentos/pdf/{id}', 'DocumentosController@pdf');
+
 // --- RUTAS DE CORREO (captura IMAP de facturas, solo local) ---
 $router->get('/correo', 'CorreoController@index');
 $router->post('/correo/listar', 'CorreoController@listar');
@@ -44,23 +51,62 @@ $router->post('/correo/cuentas/usar', 'CorreoController@cuentaUsar');
 $router->post('/correo/semana/usar', 'CorreoController@semanaUsar');
 $router->post('/correo/cuentas/probar', 'CorreoController@cuentaProbar');
 $router->post('/correo/carpetas', 'CorreoController@carpetas');
+$router->post('/correo/carpetas-buzon', 'CorreoController@carpetasBuzon');
 $router->post('/correo/selector/abrir', 'CorreoController@selectorAbrir');
 $router->post('/correo/selector/estado', 'CorreoController@selectorEstado');
 $router->post('/correo/auto/estado', 'CorreoController@autoSyncEstado');
 $router->post('/correo/auto/activar', 'CorreoController@autoSyncActivar');
 $router->post('/correo/auto/desactivar', 'CorreoController@autoSyncDesactivar');
 $router->post('/correo/contenido', 'CorreoController@contenido');
+$router->post('/correo/adjunto', 'CorreoController@adjunto');
 $router->post('/correo/procesar', 'CorreoController@procesar');
 $router->post('/correo/importar', 'CorreoController@importar');
 $router->post('/correo/descartar', 'CorreoController@descartar');
+$router->post('/correo/general/estimar', 'CorreoController@generalEstimar');
+$router->post('/correo/general/crear', 'CorreoController@generalCrear');
+$router->post('/correo/general/estado', 'CorreoController@generalEstado');
+$router->post('/correo/general/incidencias', 'CorreoController@generalIncidencias');
+$router->post('/correo/general/procesar', 'CorreoController@generalProcesar');
+$router->post('/correo/general/pausar', 'CorreoController@generalPausar');
+$router->post('/correo/general/reanudar', 'CorreoController@generalReanudar');
+$router->post('/correo/general/cancelar', 'CorreoController@generalCancelar');
 
 // --- RUTAS DE FACTURAS POR PAGAR (listado del pago semanal) ---
 $router->get('/por-pagar', 'PorPagarController@index');
 $router->post('/por-pagar/subir', 'PorPagarController@subir');
 $router->post('/por-pagar/previsualizar', 'PorPagarController@previsualizar');
+$router->post('/por-pagar/comparar-listado', 'PorPagarController@compararListado');
 $router->post('/por-pagar/verificar/{id}', 'PorPagarController@verificar');
 $router->post('/por-pagar/eliminar/{id}', 'PorPagarController@eliminar');
+$router->post('/por-pagar/factura/eliminar/{id}', 'PorPagarController@eliminarFactura');
 $router->get('/por-pagar/exportar', 'PorPagarController@exportar');
+$router->get('/por-pagar/sin-coincidencia', 'PorPagarController@sinCoincidencia');
+$router->post('/por-pagar/forzar', 'PorPagarController@forzar');
+
+// --- RUTAS DE NOTAS DE CRÉDITO (listados por período) ---
+$router->get('/notas-credito', 'NotasCreditoController@index');
+$router->get('/notas-credito/buscar', 'NotasCreditoController@buscar');
+$router->post('/notas-credito/previsualizar', 'NotasCreditoController@previsualizar');
+$router->post('/notas-credito/subir', 'NotasCreditoController@subir');
+$router->post('/notas-credito/verificar/{id}', 'NotasCreditoController@verificar');
+$router->get('/notas-credito/historial/{id}', 'NotasCreditoController@historial');
+$router->get('/notas-credito/candidatas', 'NotasCreditoController@candidatas');
+$router->post('/notas-credito/vincular', 'NotasCreditoController@vincular');
+$router->post('/notas-credito/desvincular', 'NotasCreditoController@desvincular');
+$router->post('/notas-credito/eliminar/{id}', 'NotasCreditoController@eliminar');
+
+// --- RUTAS DE DEVOLUCIONES (reportes PDF del ERP ↔ NC electrónicas) ---
+$router->get('/devoluciones', 'DevolucionesController@index');
+$router->post('/devoluciones/subir', 'DevolucionesController@subir');
+$router->get('/devoluciones/detalle/{id}', 'DevolucionesController@detalle');
+$router->post('/devoluciones/verificar', 'DevolucionesController@verificar');
+$router->post('/devoluciones/verificar/{id}', 'DevolucionesController@verificar');
+$router->post('/devoluciones/confirmar', 'DevolucionesController@confirmar');
+$router->post('/devoluciones/descartar', 'DevolucionesController@descartar');
+$router->post('/devoluciones/vincular', 'DevolucionesController@vincular');
+$router->post('/devoluciones/desvincular', 'DevolucionesController@desvincular');
+$router->post('/devoluciones/eliminar/{id}', 'DevolucionesController@eliminar');
+$router->get('/devoluciones/pdf/{id}', 'DevolucionesController@pdf');
 
 // --- RUTAS DE GASTOS (legado: fuera del menú, accesible por URL) ---
 $router->get('/gastos', 'GastosController@index');

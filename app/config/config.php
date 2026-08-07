@@ -52,6 +52,10 @@ return [
     'log_path'  => dirname(__DIR__, 2) . '/storage/logs',
     'log_level' => $isLocal ? 'debug' : 'error',
 
+    // Extracción de texto de reportes PDF del ERP (Poppler).
+    // Vacío = buscar 'pdftotext' en el PATH del sistema.
+    'pdftotext_path' => $isLocal ? 'C:\\tools\\poppler-25.12.0\\Library\\bin\\pdftotext.exe' : '',
+
     // Configuración de conciliación
     'conciliacion' => [
         'peso_numero_factura'  => 60,
