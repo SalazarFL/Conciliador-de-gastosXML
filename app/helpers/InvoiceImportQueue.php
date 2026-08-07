@@ -8,6 +8,7 @@ require_once __DIR__ . '/../models/ImportacionItem.php';
 require_once __DIR__ . '/../models/Factura.php';
 require_once __DIR__ . '/../models/Proveedor.php';
 require_once __DIR__ . '/FileUploader.php';
+require_once __DIR__ . '/XmlDocumentImporter.php';
 
 if (!class_exists('XmlInvoiceParser', false)) {
     require_once __DIR__ . '/XmlParser.php';
@@ -59,6 +60,8 @@ class InvoiceImportQueue
         if (!empty($data['semana_id'])) {
             $metadata['semana_id'] = (int) $data['semana_id'];
         }
+        $metadata['tipo_documento'] = strtoupper((string) ($data['tipo_documento'] ?? 'FE'));
+        $metadata['cedula_receptor'] = (string) ($data['cedula_receptor'] ?? '');
 
         $importacionId = (int) $this->importacionModel->crear([
             'tipo' => 'xml',
@@ -136,6 +139,7 @@ class InvoiceImportQueue
 
         foreach ($rutas as $entrada) {
             $ruta = is_array($entrada) ? (string) ($entrada['ruta'] ?? '') : (string) $entrada;
+            $rutaPdf = is_array($entrada) ? (string) ($entrada['ruta_pdf'] ?? '') : '';
             $nombreOriginal = is_array($entrada) && !empty($entrada['nombre'])
                 ? (string) $entrada['nombre']
                 : basename($ruta);
@@ -168,6 +172,12 @@ class InvoiceImportQueue
                 'metadata' => [
                     'subido_en' => date('Y-m-d H:i:s'),
                     'origen' => 'correo',
+                    'ruta_pdf' => $rutaPdf !== '' && is_file($rutaPdf) ? $rutaPdf : null,
+                    'correo_cuenta_id' => is_array($entrada) ? (int) ($entrada['correo_cuenta_id'] ?? 0) : 0,
+                    'correo_carpeta' => is_array($entrada) ? (string) ($entrada['correo_carpeta'] ?? '') : '',
+                    'correo_uidvalidity' => is_array($entrada) ? (int) ($entrada['correo_uidvalidity'] ?? 0) : 0,
+                    'correo_uid' => is_array($entrada) ? (int) ($entrada['correo_uid'] ?? 0) : 0,
+                    'fecha_correo' => is_array($entrada) ? ($entrada['fecha_correo'] ?? null) : null,
                 ],
             ]);
 
@@ -220,6 +230,7 @@ class InvoiceImportQueue
 
         $estado = $this->persistirEstadoImportacion((int) $importacion['id'], [
             'estado_cola' => empty($processed) ? 'en_cola' : 'procesando',
+            'semanas_afectadas' => $this->resolverSemanasAfectadas($importacion, $processed),
         ]);
 
         return [
@@ -238,6 +249,7 @@ class InvoiceImportQueue
 
         $processed = [];
         $importaciones = [];
+        $procesadosPorImportacion = [];
         $startedAt = microtime(true);
         $maxItems = max(1, min(50, (int) $limit));
 
@@ -252,8 +264,11 @@ class InvoiceImportQueue
             }
 
             $item = $claimedItems[0];
-            $processed[] = $this->procesarItem($item);
-            $importaciones[(int) $item['importacion_id']] = true;
+            $resultadoItem = $this->procesarItem($item);
+            $processed[] = $resultadoItem;
+            $iid = (int) $item['importacion_id'];
+            $importaciones[$iid] = true;
+            $procesadosPorImportacion[$iid][] = $resultadoItem;
 
             if ($this->shouldStopCurrentBatch($startedAt)) {
                 break;
@@ -262,8 +277,13 @@ class InvoiceImportQueue
 
         $summaries = [];
         foreach (array_keys($importaciones) as $importacionId) {
+            $importacion = $this->getImportacionOrFail((int) $importacionId);
             $summaries[] = $this->persistirEstadoImportacion((int) $importacionId, [
                 'estado_cola' => 'procesando',
+                'semanas_afectadas' => $this->resolverSemanasAfectadas(
+                    $importacion,
+                    $procesadosPorImportacion[(int) $importacionId] ?? []
+                ),
             ]);
         }
 
@@ -288,6 +308,42 @@ class InvoiceImportQueue
 
     /** Cache por petición: semana asignada a cada importación (metadata). */
     private $semanaPorImportacion = [];
+
+    /**
+     * Semana de la importación, pública para la re-verificación automática
+     * de los listados por pagar al completarse la cola.
+     */
+    public function semanaImportacion($importacionId)
+    {
+        return $this->semanaDeImportacion($importacionId);
+    }
+
+    /** Semanas que deben revalidarse porque recibieron o perdieron facturas. */
+    public function semanasAfectadasImportacion($importacionId)
+    {
+        $importacion = $this->getImportacionOrFail((int) $importacionId);
+        return $this->resolverSemanasAfectadas($importacion, []);
+    }
+
+    private function resolverSemanasAfectadas(array $importacion, array $resultados)
+    {
+        $metadata = $this->decodeMetadata($importacion['metadata'] ?? null);
+        $semanas = array_map('intval', (array) ($metadata['semanas_afectadas'] ?? []));
+        if (!empty($metadata['semana_id'])) {
+            $semanas[] = (int) $metadata['semana_id'];
+        }
+        foreach ($resultados as $resultado) {
+            if (!empty($resultado['semana_anterior'])) {
+                $semanas[] = (int) $resultado['semana_anterior'];
+            }
+            if (!empty($resultado['semana_id'])) {
+                $semanas[] = (int) $resultado['semana_id'];
+            }
+        }
+        return array_values(array_unique(array_filter($semanas, static function ($id) {
+            return $id > 0;
+        })));
+    }
 
     /**
      * Semana de trabajo de la importación (metadata.semana_id) o null.
@@ -317,6 +373,88 @@ class InvoiceImportQueue
     }
 
     private function procesarItem(array $item)
+    {
+        $itemId = (int) ($item['id'] ?? 0);
+        $importacionId = (int) ($item['importacion_id'] ?? 0);
+        $originalName = (string) ($item['archivo_original'] ?? '');
+        $filePath = (string) ($item['ruta_archivo'] ?? '');
+
+        try {
+            $this->extendExecutionWindow();
+            $importacion = $this->importacionModel->findById($importacionId);
+            $metaImportacion = $this->decodeMetadata($importacion['metadata'] ?? null);
+            $metaItem = $this->decodeMetadata($item['metadata'] ?? null);
+            $tipoPermitido = strtoupper((string) ($metaImportacion['tipo_documento'] ?? 'FE'));
+
+            $pdfPath = (string) ($metaItem['ruta_pdf'] ?? '');
+            $resultado = (new XmlDocumentImporter())->importar($filePath, $pdfPath !== '' ? $pdfPath : null, [
+                'origen' => 'cola_xml',
+                'importacion_id' => $importacionId,
+                'semana_id' => $this->semanaDeImportacion($importacionId),
+                'tipos_permitidos' => [$tipoPermitido],
+                'validar_receptor' => !empty($metaImportacion['cedula_receptor']),
+                'cedula_receptor' => (string) ($metaImportacion['cedula_receptor'] ?? ''),
+                'correo_cuenta_id' => $metaItem['correo_cuenta_id'] ?? null,
+                'correo_carpeta' => $metaItem['correo_carpeta'] ?? null,
+                'correo_uidvalidity' => $metaItem['correo_uidvalidity'] ?? null,
+                'correo_uid' => $metaItem['correo_uid'] ?? null,
+                'fecha_correo' => $metaItem['fecha_correo'] ?? null,
+            ]);
+
+            $facturaId = (int) ($resultado['id'] ?? 0);
+            $docData = $resultado['documento'] ?? [];
+            $estadoDocumento = (string) ($resultado['estado'] ?? '');
+            $estado = in_array($estadoDocumento, ['importado', 'movida_semana'], true)
+                ? 'importado'
+                : 'duplicado';
+            $this->importacionItemModel->marcarResultado($itemId, $estado, null, $facturaId ?: null, [
+                'proveedor' => $docData['razon_social_emisor'] ?? null,
+                'consecutivo' => $docData['consecutivo_completo'] ?? null,
+                'resultado_documento' => $estadoDocumento,
+                'semana_anterior' => $resultado['semana_anterior'] ?? null,
+                'semana_id' => $resultado['semana_id'] ?? $this->semanaDeImportacion($importacionId),
+            ]);
+
+            if ($filePath && is_file($filePath)) {
+                @unlink($filePath);
+            }
+            if (!empty($pdfPath) && is_file($pdfPath)) {
+                @unlink($pdfPath);
+            }
+
+            return [
+                'item_id' => $itemId,
+                'archivo' => $originalName,
+                'estado' => $estado,
+                'factura_id' => $facturaId,
+                'resultado_documento' => $estadoDocumento,
+                'semana_anterior' => $resultado['semana_anterior'] ?? null,
+                'semana_id' => $resultado['semana_id'] ?? $this->semanaDeImportacion($importacionId),
+            ];
+        } catch (Throwable $e) {
+            $estado = $this->clasificarError($e->getMessage());
+            $this->importacionItemModel->marcarResultado($itemId, $estado, $e->getMessage(), null, [
+                'exception_class' => get_class($e),
+            ]);
+            if ($filePath && is_file($filePath)) {
+                @unlink($filePath);
+            }
+            $metaItem = isset($metaItem) ? $metaItem : $this->decodeMetadata($item['metadata'] ?? null);
+            $pdfPath = (string) ($metaItem['ruta_pdf'] ?? '');
+            if ($pdfPath !== '' && is_file($pdfPath)) {
+                @unlink($pdfPath);
+            }
+            return [
+                'item_id' => $itemId,
+                'archivo' => $originalName,
+                'estado' => $estado,
+                'error' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /** Implementación anterior conservada solo como referencia de migración. */
+    private function procesarItemLegado(array $item)
     {
         $itemId = (int) ($item['id'] ?? 0);
         $importacionId = (int) ($item['importacion_id'] ?? 0);

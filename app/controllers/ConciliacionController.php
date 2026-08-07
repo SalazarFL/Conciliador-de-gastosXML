@@ -2,6 +2,7 @@
 /**
  * Controlador de conciliación de facturas y gastos
  */
+require_once __DIR__ . '/../helpers/DocumentoArchivo.php';
 
 class ConciliacionController extends Controller
 {
@@ -61,7 +62,7 @@ class ConciliacionController extends Controller
 		// Historial siempre se carga (incluso con ?limpiar)
 		try {
 			$importacionModel    = $this->loadModel('Importacion');
-			$importacionesXml    = $importacionModel->getAllByTipo('xml');
+			$importacionesXml    = $importacionModel->getAllXmlPorDocumento('FE');
 			$importacionesGastos = $importacionModel->getAllByTipo('gastos');
 		} catch (Throwable $e) {
 			// historial no crítico
@@ -279,24 +280,27 @@ class ConciliacionController extends Controller
 			$agregados = 0;
 
 			foreach ($facturas as $f) {
-				$contenido = (string) ($f['xml_contenido'] ?? '');
+				$rutaXml = (string) ($f['ruta_xml'] ?? '');
+				$rutaReal = $rutaXml !== '' ? realpath($rutaXml) : false;
+				$contenido = (string) ($f['xml_contenido'] ?? ''); // compatibilidad durante migración
 				$nombre = $this->nombreArchivoFactura($f);
 
-				if ($contenido === '') {
-					$avisos[] = "{$nombre}: omitida, la factura no tiene contenido XML almacenado.";
+				if ($rutaReal === false && $contenido === '') {
+					$avisos[] = "{$nombre}: omitida, el archivo XML local no está disponible.";
 					continue;
 				}
 
 				// Integridad: el contenido debe corresponder a ESTA factura.
 				// Si el hash guardado al importar no coincide, el registro está corrupto.
 				$hashRow = (string) ($f['hash_xml'] ?? '');
-				if ($hashRow !== '' && !hash_equals($hashRow, hash('sha256', $contenido))) {
+				$hashActual = $rutaReal !== false ? hash_file('sha256', $rutaReal) : hash('sha256', $contenido);
+				if ($hashRow !== '' && !hash_equals($hashRow, $hashActual)) {
 					$avisos[] = "{$nombre}: omitida, el contenido XML no corresponde a esta factura (hash no coincide).";
 					continue;
 				}
 
 				// Dos facturas distintas jamás deben compartir el mismo XML.
-				$firmaContenido = md5($contenido);
+				$firmaContenido = $hashActual;
 				if (isset($porContenido[$firmaContenido])) {
 					$avisos[] = "{$nombre}: omitida, su contenido XML es idéntico al de {$porContenido[$firmaContenido]} (registro duplicado/corrupto en BD).";
 					continue;
@@ -311,7 +315,11 @@ class ConciliacionController extends Controller
 				$usados[$final] = true;
 				$porContenido[$firmaContenido] = $final;
 
-				$zip->addFromString($final . '.xml', $contenido);
+				if ($rutaReal !== false) {
+					$zip->addFile($rutaReal, $final . '.xml');
+				} else {
+					$zip->addFromString($final . '.xml', $contenido);
+				}
 				$agregados++;
 			}
 
@@ -393,7 +401,7 @@ class ConciliacionController extends Controller
 		));
 
 		$tokenProv = !empty($tokens) ? implode('_', $tokens) : 'PROVEEDOR';
-		$tokenProv = trim(mb_substr($tokenProv, 0, 60, 'UTF-8'), '_');
+		$tokenProv = trim(mb_substr($tokenProv, 0, DocumentoArchivo::MAX_TOKEN_PROVEEDOR, 'UTF-8'), '_');
 
 		$ts = strtotime((string) ($f['fecha_emision'] ?? ''));
 		$fechaStr = $ts !== false ? date('dmy', $ts) : '000000';

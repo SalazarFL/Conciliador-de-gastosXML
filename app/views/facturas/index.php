@@ -5,26 +5,22 @@ $historial         = $historial ?? [];
 $importacionActiva = $importacionActiva ?? null;
 $semanas           = is_array($semanas ?? null) ? $semanas : [];
 $semanaFiltro      = (int) ($semanaFiltro ?? 0);
+$filtros           = array_merge([
+    'q' => '', 'proveedor' => '', 'fecha_desde' => '', 'fecha_hasta' => '',
+    'monto_desde' => '', 'monto_hasta' => '', 'respaldo' => '', 'alcance' => '',
+], is_array($filtros ?? null) ? $filtros : []);
+$filtrosActivos = 0;
+foreach ($filtros as $valorFiltro) {
+    if ((string) $valorFiltro !== '') { $filtrosActivos++; }
+}
+$hayFiltros = $filtrosActivos > 0;
+$parametrosLimpiar = $importacionActiva
+    ? ['importacion_id' => (int) $importacionActiva['id']]
+    : ['semana_id' => $semanaFiltro];
+$urlLimpiarFiltros = $baseUrl . '/facturas?' . http_build_query($parametrosLimpiar);
 ?>
 
 <!-- CARGA DE FACTURAS XML -->
-
-<div class="page-header">
-    <div>
-        <h1 style="font-size:20px;font-weight:800;color:var(--navy);">
-            <i class="fas fa-file-invoice" style="color:var(--gold);margin-right:8px;"></i>Carga de Facturas
-        </h1>
-    </div>
-    <?php if (!empty($facturas)): ?>
-    <span class="badge badge-navy" style="font-size:12px;padding:6px 14px;">
-        <i class="fas fa-layer-group"></i>
-        <?= count($facturas) ?> factura<?= count($facturas) !== 1 ? 's' : '' ?>
-        <?php if ($importacionActiva): ?>
-        <span style="font-weight:400;opacity:.75;margin-left:4px;">— <?= htmlspecialchars($importacionActiva['archivo_origen']) ?></span>
-        <?php endif; ?>
-    </span>
-    <?php endif; ?>
-</div>
 
 <!-- Subir Facturas XML -->
 <div class="card" style="margin-bottom:14px;">
@@ -59,11 +55,7 @@ $semanaFiltro      = (int) ($semanaFiltro ?? 0);
                        placeholder="Semana <?= date('d/m/Y') ?>"
                        class="form-control" style="max-width:300px;font-size:12.5px;">
             </div>
-            <span style="display:block;font-size:11px;color:var(--text-muted);margin-top:3px;">
-                Abajo se muestran las facturas de la opción elegida
-                (<strong><?= count($facturas) ?></strong> en esta vista);
-                las que subas quedarán asignadas a ella.
-            </span>
+
         </div>
 
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:space-between;">
@@ -74,14 +66,23 @@ $semanaFiltro      = (int) ($semanaFiltro ?? 0);
                 <span id="files-selected-name" style="font-size:12px;color:var(--text-muted);font-style:italic;">
                     Ningún archivo seleccionado
                 </span>
-                <span style="font-size:11px;color:var(--text-muted);flex-basis:100%;">
-                    Sin límite de cantidad: los archivos se suben y procesan por lotes automáticamente.
-                </span>
+
             </div>
 
-            <button type="submit" class="btn btn-primary btn-lg" id="btn-procesar-xml" style="margin-left:auto;">
-                <i class="fas fa-cogs"></i> Procesar XML
-            </button>
+            <div style="display:flex;align-items:center;gap:12px;margin-left:auto;">
+                <?php if (!empty($facturas)): ?>
+                <span class="badge badge-navy" style="font-size:12px;padding:6px 14px;">
+                    <i class="fas fa-layer-group"></i>
+                    <?= count($facturas) ?> factura<?= count($facturas) !== 1 ? 's' : '' ?>
+                    <?php if ($importacionActiva): ?>
+                    <span style="font-weight:400;opacity:.75;margin-left:4px;">— <?= htmlspecialchars($importacionActiva['archivo_origen']) ?></span>
+                    <?php endif; ?>
+                </span>
+                <?php endif; ?>
+                <button type="submit" class="btn btn-primary btn-lg" id="btn-procesar-xml">
+                    <i class="fas fa-cogs"></i> Procesar XML
+                </button>
+            </div>
         </div>
     </form>
 
@@ -113,7 +114,12 @@ function semanaCambio(sel) {
     // "Sin semana" navega con semana_id=0 explícito para que se recuerde
     // como selección (y no se confunda con una llegada sin parámetro).
     var base = '<?= $baseUrl ?>/facturas';
-    window.location.href = base + '?semana_id=' + (sel.value === '' ? '0' : sel.value);
+    var params = new URLSearchParams(window.location.search);
+    params.set('semana_id', sel.value === '' ? '0' : sel.value);
+    params.delete('importacion_id');
+    params.delete('limpiar');
+    params.delete('alcance');
+    window.location.href = base + '?' + params.toString();
 }
 </script>
 
@@ -134,10 +140,79 @@ function semanaCambio(sel) {
             <a href="<?= $baseUrl ?>/conciliacion" class="btn btn-outline btn-sm">
                 <i class="fas fa-check-double"></i> Ir a Conciliación
             </a>
-            <a href="<?= $baseUrl ?>/facturas?limpiar=1" class="btn btn-outline btn-sm">
-                <i class="fas fa-broom"></i> Limpiar
-            </a>
         </div>
+    </div>
+
+    <form method="get" action="<?= $baseUrl ?>/facturas" class="filter-bar">
+        <?php if ($importacionActiva): ?>
+        <input type="hidden" name="importacion_id" value="<?= (int) $importacionActiva['id'] ?>">
+        <?php else: ?>
+        <input type="hidden" name="semana_id" value="<?= $semanaFiltro ?>">
+        <?php endif; ?>
+        <div class="filter-span-2">
+            <label class="filter-label">Buscar</label>
+            <input type="search" class="form-control" name="q"
+                   value="<?= htmlspecialchars((string) $filtros['q']) ?>"
+                   placeholder="Número, clave, proveedor o archivo">
+        </div>
+        <div>
+            <label class="filter-label">Proveedor</label>
+            <input type="search" class="form-control" name="proveedor"
+                   value="<?= htmlspecialchars((string) $filtros['proveedor']) ?>"
+                   placeholder="Nombre o cédula">
+        </div>
+        <div>
+            <label class="filter-label">Fecha desde</label>
+            <input type="date" class="form-control" name="fecha_desde"
+                   value="<?= htmlspecialchars((string) $filtros['fecha_desde']) ?>">
+        </div>
+        <div>
+            <label class="filter-label">Fecha hasta</label>
+            <input type="date" class="form-control" name="fecha_hasta"
+                   value="<?= htmlspecialchars((string) $filtros['fecha_hasta']) ?>">
+        </div>
+        <div>
+            <label class="filter-label">Monto desde</label>
+            <input type="number" min="0" step="0.01" class="form-control" name="monto_desde"
+                   value="<?= htmlspecialchars((string) $filtros['monto_desde']) ?>" placeholder="0.00">
+        </div>
+        <div>
+            <label class="filter-label">Monto hasta</label>
+            <input type="number" min="0" step="0.01" class="form-control" name="monto_hasta"
+                   value="<?= htmlspecialchars((string) $filtros['monto_hasta']) ?>" placeholder="Sin límite">
+        </div>
+        <div>
+            <label class="filter-label">Respaldo</label>
+            <select class="form-control" name="respaldo" onchange="this.form.submit()">
+                <option value="">Todos</option>
+                <option value="con_par" <?= $filtros['respaldo'] === 'con_par' ? 'selected' : '' ?>>Con XML y PDF</option>
+                <option value="sin_par" <?= $filtros['respaldo'] === 'sin_par' ? 'selected' : '' ?>>Sin par completo</option>
+            </select>
+        </div>
+        <?php if (!$importacionActiva): ?>
+        <div>
+            <label class="filter-label">Alcance</label>
+            <select class="form-control" name="alcance" onchange="this.form.submit()">
+                <option value="">Semana seleccionada</option>
+                <option value="todas" <?= $filtros['alcance'] === 'todas' ? 'selected' : '' ?>>Todas las semanas</option>
+            </select>
+        </div>
+        <?php endif; ?>
+        <div class="filter-actions">
+            <button type="submit" class="btn btn-primary btn-sm"><i class="fas fa-search"></i> Buscar</button>
+            <?php if ($hayFiltros): ?>
+            <a href="<?= htmlspecialchars($urlLimpiarFiltros) ?>" class="btn btn-outline btn-sm"><i class="fas fa-broom"></i> Limpiar</a>
+            <?php endif; ?>
+        </div>
+    </form>
+
+    <div class="filter-results">
+        <i class="fas fa-filter" style="color:var(--navy-light);"></i>
+        Mostrando <strong><?= count($facturas) ?></strong> factura<?= count($facturas) !== 1 ? 's' : '' ?>
+        <?= $hayFiltros ? 'con los filtros seleccionados' : 'en esta vista' ?>
+        <?php if ($hayFiltros): ?>
+        <span class="badge badge-navy" style="font-size:10px;"><?= $filtrosActivos ?> filtro<?= $filtrosActivos === 1 ? '' : 's' ?></span>
+        <?php endif; ?>
     </div>
 
     <div class="table-wrap">
@@ -150,7 +225,7 @@ function semanaCambio(sel) {
                     <th class="center">Semana</th>
                     <th class="right">IVA</th>
                     <th class="right">Monto</th>
-                    <th class="center">Estado</th>
+                    <th class="center">Respaldo</th>
                     <th class="center">Acciones</th>
                 </tr>
             </thead>
@@ -159,8 +234,8 @@ function semanaCambio(sel) {
                     <tr class="empty-row">
                         <td colspan="8">
                             <i class="fas fa-inbox" style="font-size:28px;color:var(--border);display:block;margin-bottom:8px;"></i>
-                            No hay facturas importadas todavía.<br>
-                            <span style="font-size:12px;">Usa el formulario de arriba para subir archivos XML.</span>
+                            <?= $hayFiltros ? 'No se encontraron facturas con estos filtros.' : 'No hay facturas importadas todavía.' ?><br>
+                            <span style="font-size:12px;"><?= $hayFiltros ? 'Cambia o limpia los criterios de búsqueda.' : 'Usa el formulario de arriba para subir archivos XML.' ?></span>
                         </td>
                     </tr>
                 <?php else: ?>
@@ -189,7 +264,15 @@ function semanaCambio(sel) {
                         <td class="right muted"><?= number_format((float)($f['iva'] ?? 0), 2) ?></td>
                         <td class="right" style="font-weight:700;"><?= number_format((float)($f['total'] ?? 0), 2) ?></td>
                         <td class="center">
-                            <span class="badge badge-green"><i class="fas fa-check-circle"></i> Importado</span>
+                            <?php if (!empty($f['_par_completo'])): ?>
+                            <span class="badge badge-green"><i class="fas fa-check-circle"></i> XML + PDF</span>
+                            <?php elseif (empty($f['_xml_disponible']) && empty($f['_pdf_disponible'])): ?>
+                            <span class="badge" style="background:#fee2e2;color:#991b1b;"><i class="fas fa-triangle-exclamation"></i> Sin archivos</span>
+                            <?php elseif (empty($f['_xml_disponible'])): ?>
+                            <span class="badge" style="background:#fef3c7;color:#92400e;"><i class="fas fa-file-circle-xmark"></i> Falta XML</span>
+                            <?php else: ?>
+                            <span class="badge" style="background:#fef3c7;color:#92400e;"><i class="fas fa-file-pdf"></i> Falta PDF</span>
+                            <?php endif; ?>
                         </td>
                         <td class="center">
                             <a href="<?= $baseUrl ?>/facturas/ver/<?= (int)$f['id'] ?>"
@@ -337,7 +420,7 @@ function updateFileDisplay(input) {
         var s = (estado && estado.stats) || {};
         elCounts.textContent =
             'Importadas: ' + (s.importado || 0) +
-            ' · Duplicadas: ' + (s.duplicado || 0) +
+            ' · Ya en esta semana: ' + (s.duplicado || 0) +
             ' · Errores: ' + (s.error || 0) +
             ' · Pendientes: ' + (s.pendiente || 0);
     }
@@ -424,7 +507,8 @@ function updateFileDisplay(input) {
             setBar(100);
             var s = (estado && estado.stats) || {};
             var importadas = s.importado || 0;
-            var problemas  = (s.duplicado || 0) + (s.error || 0);
+            var repetidas = s.duplicado || 0;
+            var erroresImportacion = s.error || 0;
 
             // Mostrar los primeros problemas reales (archivo + motivo)
             var issues = (estado && estado.recent_issues) || [];
@@ -437,7 +521,11 @@ function updateFileDisplay(input) {
             }
 
             if (importadas === 0) {
-                setStatus('⚠ La importación terminó pero NO se importó ninguna factura (' + problemas + ' con problema). Revisa el detalle.');
+                if (repetidas > 0 && erroresImportacion === 0) {
+                    setStatus('Las ' + repetidas + ' facturas ya estaban en la semana seleccionada; no se duplicaron.');
+                } else {
+                    setStatus('⚠ La importación terminó sin facturas nuevas (' + erroresImportacion + ' con error). Revisa el detalle.');
+                }
                 btn.disabled = false;
                 return;
             }
@@ -445,8 +533,9 @@ function updateFileDisplay(input) {
             // Volver a la vista de la semana elegida: ahí quedan las recién subidas
             var urlDestino = BASE + '/facturas' + (semanaDestino ? '?semana_id=' + semanaDestino : '');
 
-            if (problemas > 0) {
-                setStatus('Importación completada con avisos: ' + importadas + ' importadas, ' + problemas + ' con problema.');
+            if (repetidas > 0 || erroresImportacion > 0) {
+                setStatus('Importación completada: ' + importadas + ' importadas, '
+                    + repetidas + ' ya estaban en esta semana y ' + erroresImportacion + ' con error.');
                 setTimeout(function () {
                     window.location.href = urlDestino;
                 }, 3500);
@@ -460,7 +549,7 @@ function updateFileDisplay(input) {
         })
         .catch(function (err) {
             setStatus('Error: ' + err.message);
-            elDetail.textContent = 'Puedes reintentar con los mismos archivos: los ya importados se marcarán como duplicados y no se repetirán.';
+            elDetail.textContent = 'Puedes reintentar: solo se bloquearán las facturas que ya estén en la semana seleccionada.';
             btn.disabled = false;
         });
     });

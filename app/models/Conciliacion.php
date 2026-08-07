@@ -131,13 +131,15 @@ class Conciliacion extends Model
                        f.numero_factura_asistente,
                        f.fecha_emision,
                        f.archivo_xml,
+                       f.ruta_xml,
                        f.hash_xml,
                        f.xml_contenido,
                        p.razon_social AS proveedor_nombre
                 FROM {$this->table} c
                 INNER JOIN facturas_xml f ON c.factura_xml_id = f.id
                 LEFT JOIN proveedores p ON f.proveedor_id = p.id
-                WHERE c.gasto_consolidado_id IS NOT NULL";
+                WHERE c.gasto_consolidado_id IS NOT NULL
+                  AND (f.tipo_documento IS NULL OR f.tipo_documento = 'FE')";
         $params = [];
 
         if ($corridaId !== null && (int) $corridaId > 0 && $this->hasColumn('corrida_id')) {

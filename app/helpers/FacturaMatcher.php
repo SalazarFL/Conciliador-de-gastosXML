@@ -11,6 +11,53 @@
 
 class FacturaMatcher
 {
+    /** Diferencia de monto tolerada por redondeo (colones). */
+    public const TOLERANCIA_CRC = 1.00;
+
+    /** Umbral mínimo de similitud de proveedor para considerar candidato. */
+    public const UMBRAL_PROVEEDOR = 60;
+
+    /** El número identifica la factura: solo matches fuertes (núcleo exacto
+     *  = 100, incrustado en consecutivo = 95). */
+    public const UMBRAL_NUMERO = 90;
+
+    /** Rescate cuando el proveedor NO se parece (nombre comercial en el XML
+     *  vs razón social en el listado, p. ej. "CENTRO DE PLASTICO DE PEREZ"
+     *  vs "WILLIAM PEREZ QUESADA"): con número contundente (≥95) Y monto
+     *  que cuadra al colón, la factura se acepta igual — esa combinación
+     *  identifica mejor que cualquier nombre. */
+    public const NUMERO_RESCATE = 95;
+
+    /**
+     * ¿La factura XML puede respaldar esta línea del listado? Mismas reglas
+     * del matching de por-pagar: número fuerte y proveedor parecido, o
+     * rescate (número contundente + monto al colón).
+     *
+     * $linea:   numero, proveedor_texto, total
+     * $factura: numero_factura_asistente, consecutivo_completo, proveedor_nombre, total
+     */
+    public static function facturaRespaldaLinea(array $linea, array $factura)
+    {
+        $scoreNumero = max(
+            self::similaridadNumero($linea['numero'], (string) $factura['numero_factura_asistente']),
+            self::similaridadNumero($linea['numero'], (string) $factura['consecutivo_completo'])
+        );
+        if ($scoreNumero < self::UMBRAL_NUMERO) {
+            return false;
+        }
+
+        $scoreProveedor = self::similaridadTexto(
+            (string) $linea['proveedor_texto'],
+            (string) $factura['proveedor_nombre']
+        );
+        if ($scoreProveedor >= self::UMBRAL_PROVEEDOR) {
+            return true;
+        }
+
+        return $scoreNumero >= self::NUMERO_RESCATE
+            && abs(round((float) $linea['total'] - (float) $factura['total'], 2)) <= self::TOLERANCIA_CRC;
+    }
+
     /** Sufijos corporativos y stopwords para normalizar nombres de proveedor. */
     private const STOPWORDS_PROVEEDOR = [
         // Sufijos corporativos
@@ -186,6 +233,33 @@ class FacturaMatcher
     }
 
     /**
+     * Comparación conservadora de identidad de proveedor.
+     *
+     * A diferencia de similaridadTexto(), esta función no acepta nombres que
+     * solamente comparten palabras genéricas o que se parecen por ortografía
+     * (por ejemplo CIAMESA y COAMESA). Se utiliza cuando una asociación
+     * automática exige que ambos documentos pertenezcan al mismo proveedor.
+     */
+    public static function mismoProveedor($a, $b)
+    {
+        $tokensA = self::tokenizarProveedor($a);
+        $tokensB = self::tokenizarProveedor($b);
+
+        if (empty($tokensA) || empty($tokensB)) {
+            return false;
+        }
+
+        if ($tokensA === $tokensB) {
+            return true;
+        }
+
+        // También admite el mismo nombre con sus palabras en otro orden.
+        sort($tokensA, SORT_STRING);
+        sort($tokensB, SORT_STRING);
+        return $tokensA === $tokensB;
+    }
+
+    /**
      * Compara dos tokens: igual=100; letra sola prefijo=90; abreviatura ≤3
      * chars prefijo=85; similar_text ≥75 devuelve %; menor descarta (0).
      */
@@ -224,8 +298,16 @@ class FacturaMatcher
     {
         $text = strtoupper(trim((string) $value));
         $text = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $text) ?: $text;
+
+        // Los puntos de abreviaturas deben desaparecer antes que el resto de
+        // la puntuación. Así "S.A." se convierte en "SA" (stopword), no en
+        // dos tokens muy cortos "S" y "A" que inflaban la similitud.
+        $text = str_replace('.', '', $text);
         $text = preg_replace('/[^A-Z0-9 ]/', ' ', $text);
         $text = preg_replace('/\s+/', ' ', trim($text));
+
+        // Cubre variantes espaciadas como "S. A." o "S / A".
+        $text = preg_replace('/\bS\s+A\b/', 'SA', $text);
 
         if ($text === '') {
             return [];

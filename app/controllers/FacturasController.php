@@ -3,6 +3,8 @@
  * Controlador de gestión de facturas
  */
 
+require_once __DIR__ . '/../helpers/FacturaMatcher.php';
+
 class FacturasController extends Controller
 {
 	private $queueService;
@@ -15,6 +17,7 @@ class FacturasController extends Controller
 		$historial         = [];
 		$importacionActiva = null;
 		$semanas           = [];
+		$filtros           = $this->filtrosListado();
 
 		// El selector "Semana de trabajo" define lo que se muestra abajo:
 		// semana_id=N = las facturas de esa semana; 0 = "Sin semana".
@@ -30,19 +33,37 @@ class FacturasController extends Controller
 			$facturaModel     = $this->loadModel('Factura');
 			$importacionModel = $this->loadModel('Importacion');
 
-			$historial = $importacionModel->getAllByTipo('xml');
+			$historial = $importacionModel->getAllXmlPorDocumento('FE');
 			$semanas = $this->loadModel('Semana')->getAll();
 
-			if (empty($_GET['limpiar'])) {
-				$importacionId = max(0, (int) ($_GET['importacion_id'] ?? 0));
+			$importacionId = max(0, (int) ($_GET['importacion_id'] ?? 0));
+			$consulta = $filtros;
 
-				if ($importacionId > 0) {
-					$facturas          = $facturaModel->getByImportacion($importacionId);
-					$importacionActiva = $importacionModel->findById($importacionId);
-				} else {
-					$facturas = $facturaModel->getAllWithImportacion($semanaFiltro);
-				}
+			if ($importacionId > 0) {
+				$consulta['importacion_id'] = $importacionId;
+				$importacionActiva = $importacionModel->findById($importacionId);
+			} elseif (($filtros['alcance'] ?? '') !== 'todas') {
+				$consulta['semana_id'] = $semanaFiltro;
 			}
+
+			$facturas = $facturaModel->buscarConImportacion($consulta);
+			$respaldo = (string) ($filtros['respaldo'] ?? '');
+			$facturas = array_values(array_filter(array_map(static function ($factura) {
+				$factura['_xml_disponible'] = !empty($factura['ruta_xml'])
+					&& is_file((string) $factura['ruta_xml']);
+				$factura['_pdf_disponible'] = !empty($factura['ruta_pdf'])
+					&& is_file((string) $factura['ruta_pdf']);
+				$factura['_par_completo'] = $factura['_xml_disponible'] && $factura['_pdf_disponible'];
+				return $factura;
+			}, $facturas), static function ($factura) use ($respaldo) {
+				if ($respaldo === 'con_par') {
+					return !empty($factura['_par_completo']);
+				}
+				if ($respaldo === 'sin_par') {
+					return empty($factura['_par_completo']);
+				}
+				return true;
+			}));
 		} catch (Exception $e) {
 			$this->redirectWithMessage($this->url('/facturas'), 'No fue posible cargar facturas: ' . $e->getMessage(), 'warning');
 		}
@@ -54,7 +75,58 @@ class FacturasController extends Controller
 			'importacionActiva' => $importacionActiva,
 			'semanas'           => $semanas,
 			'semanaFiltro'      => $semanaFiltro,
+			'filtros'           => $filtros,
 		]);
+	}
+
+	/** Normaliza los buscadores de la tabla de Facturas XML. */
+	private function filtrosListado()
+	{
+		$q = mb_substr(trim((string) $this->get('q', '')), 0, 150, 'UTF-8');
+		$proveedor = mb_substr(trim((string) $this->get('proveedor', '')), 0, 120, 'UTF-8');
+		$desde = $this->fechaFiltro((string) $this->get('fecha_desde', ''));
+		$hasta = $this->fechaFiltro((string) $this->get('fecha_hasta', ''));
+		if ($desde !== '' && $hasta !== '' && $desde > $hasta) {
+			$tmp = $desde;
+			$desde = $hasta;
+			$hasta = $tmp;
+		}
+
+		$montoDesde = trim((string) $this->get('monto_desde', ''));
+		$montoHasta = trim((string) $this->get('monto_hasta', ''));
+		$montoDesde = is_numeric($montoDesde) && (float) $montoDesde >= 0 ? $montoDesde : '';
+		$montoHasta = is_numeric($montoHasta) && (float) $montoHasta >= 0 ? $montoHasta : '';
+		if ($montoDesde !== '' && $montoHasta !== '' && (float) $montoDesde > (float) $montoHasta) {
+			$tmp = $montoDesde;
+			$montoDesde = $montoHasta;
+			$montoHasta = $tmp;
+		}
+
+		$respaldo = strtolower(trim((string) $this->get('respaldo', '')));
+		if (!in_array($respaldo, ['', 'con_par', 'sin_par'], true)) {
+			$respaldo = '';
+		}
+		$alcance = strtolower(trim((string) $this->get('alcance', ''))) === 'todas' ? 'todas' : '';
+
+		return [
+			'q' => $q,
+			'proveedor' => $proveedor,
+			'fecha_desde' => $desde,
+			'fecha_hasta' => $hasta,
+			'monto_desde' => $montoDesde,
+			'monto_hasta' => $montoHasta,
+			'respaldo' => $respaldo,
+			'alcance' => $alcance,
+		];
+	}
+
+	private function fechaFiltro($valor)
+	{
+		$valor = trim((string) $valor);
+		if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $valor, $m)) {
+			return '';
+		}
+		return checkdate((int) $m[2], (int) $m[3], (int) $m[1]) ? $valor : '';
 	}
 
 	/**
@@ -87,16 +159,120 @@ class FacturasController extends Controller
 
 		try {
 			$facturaModel = $this->loadModel('Factura');
-			if ($facturaId <= 0 || empty($facturaModel->findById($facturaId))) {
+			$factura = $facturaModel->findById($facturaId);
+			if ($facturaId <= 0 || empty($factura)) {
 				$this->json(['ok' => false, 'message' => 'La factura no existe.'], 404);
 			}
 
 			$semanaId = $this->resolverSemana();
+			$semanaAnterior = (int) ($factura['semana_id'] ?? 0);
 			$facturaModel->asignarSemana($facturaId, $semanaId);
 
-			$this->json(['ok' => true, 'semana_id' => !empty($semanaId) ? (int) $semanaId : '']);
+			// La verificación del listado por pagar corre sola: al entrar a
+			// la semana nueva y al salir de la anterior (su línea pierde el
+			// respaldo). Reemplaza al botón "Verificar de nuevo".
+			$this->verificarSemanasPorPagar([$semanaAnterior, (int) $semanaId]);
+
+			// Si la semana ya tiene listado del pago y la factura no coincide
+			// con ninguna de sus líneas, se avisa: el toast aparece tras el
+			// reload gracias al flash de sesión.
+			$advertencia = null;
+			if (!empty($semanaId)) {
+				$advertencia = $this->advertenciaSinCoincidencia($facturaId, (int) $semanaId);
+				if ($advertencia !== null) {
+					if (session_status() === PHP_SESSION_NONE) {
+						session_start();
+					}
+					$_SESSION['flash_message'] = [
+						'message' => $advertencia,
+						'type' => 'warning',
+						'details' => [],
+					];
+					session_write_close();
+				}
+			}
+
+			$this->json([
+				'ok' => true,
+				'semana_id' => !empty($semanaId) ? (int) $semanaId : '',
+				'warning' => $advertencia,
+			]);
 		} catch (Throwable $e) {
 			$this->json(['ok' => false, 'message' => 'No se pudo asignar la semana: ' . $e->getMessage()], 500);
+		}
+	}
+
+	/**
+	 * ¿La factura respalda alguna línea del listado del pago de esa semana?
+	 * Devuelve el texto de advertencia si no coincide con ninguna, o null si
+	 * coincide, no hay listado o la factura es NC/ND (esas no respaldan pagos).
+	 */
+	private function advertenciaSinCoincidencia($facturaId, $semanaId)
+	{
+		try {
+			$porPagar = $this->loadModel('PorPagar');
+
+			$listados = $porPagar->getListados(1, $semanaId);
+			if (empty($listados)) {
+				return null; // sin listado aún: nada contra qué comparar
+			}
+
+			$factura = $porPagar->getFacturaParaMatching((int) $facturaId);
+			if ($factura === null) {
+				return null;
+			}
+
+			foreach ($porPagar->getLineas((int) $listados[0]['id']) as $linea) {
+				if (FacturaMatcher::facturaRespaldaLinea($linea, $factura)) {
+					return null;
+				}
+			}
+
+			return 'La factura quedó asignada a la semana, pero no coincide con ninguna línea del listado "'
+				. $listados[0]['nombre'] . '". Revísala en Facturas por pagar con el botón "Sin coincidencia".';
+		} catch (Throwable $e) {
+			return null; // el aviso nunca debe romper la asignación
+		}
+	}
+
+	/**
+	 * Re-verifica los listados por pagar de las semanas indicadas. Corre
+	 * sola cada vez que facturas entran o salen de una semana (asignación
+	 * manual, subida directa o cola de importación) y reemplaza al botón
+	 * "Verificar de nuevo". Nunca lanza: la verificación automática no
+	 * debe romper la operación que la disparó.
+	 */
+	private function verificarSemanasPorPagar(array $semanaIds)
+	{
+		try {
+			require_once __DIR__ . '/../helpers/PorPagarVerificador.php';
+			$modelo = $this->loadModel('PorPagar');
+			foreach (array_unique(array_map('intval', $semanaIds)) as $sid) {
+				if ($sid > 0) {
+					PorPagarVerificador::verificarSemana($sid, $modelo);
+				}
+			}
+		} catch (Throwable $e) {
+			// Best effort: la próxima asignación o importación la repite
+		}
+	}
+
+	/**
+	 * Revalida los listados por período después de importar NC XML, tanto por
+	 * carga directa como por la cola usada desde Correo.
+	 */
+	private function verificarListadosNotasCredito()
+	{
+		try {
+			$sociedad = $this->loadModel('Sociedad')->getActiva();
+			if (!$sociedad) {
+				return;
+			}
+			require_once __DIR__ . '/../helpers/NotasCreditoVerificador.php';
+			$modelo = $this->loadModel('NotaCredito');
+			NotasCreditoVerificador::verificarTodosSociedad((int) $sociedad['id'], $modelo);
+		} catch (Throwable $e) {
+			// Best effort: el botón "Verificar nuevamente" permite reintentarlo.
 		}
 	}
 
@@ -125,9 +301,7 @@ class FacturasController extends Controller
 		}
 
 		require_once __DIR__ . '/../helpers/FileUploader.php';
-		if (!class_exists('XmlInvoiceParser', false)) {
-			require_once __DIR__ . '/../helpers/XmlParser.php';
-		}
+		require_once __DIR__ . '/../helpers/XmlDocumentImporter.php';
 
 		$config = require __DIR__ . '/../config/config.php';
 		$uploadDir = rtrim($config['uploads_path'], '/\\') . DIRECTORY_SEPARATOR . 'xml';
@@ -142,8 +316,8 @@ class FacturasController extends Controller
 			$uploadedFiles = FileUploader::uploadMultiple('xml_files', $uploadDir, $allowed, $maxSize);
 
 			$importacionModel = $this->loadModel('Importacion');
-			$facturaModel = $this->loadModel('Factura');
-			$proveedorModel = $this->loadModel('Proveedor');
+			$documentImporter = new XmlDocumentImporter();
+			$sociedad = $this->loadModel('Sociedad')->getActiva();
 
 			$importacionId = $importacionModel->crear([
 				'tipo' => 'xml',
@@ -157,61 +331,29 @@ class FacturasController extends Controller
 			$exitosos = 0;
 			$duplicados = 0;
 			$fallidos = 0;
+			$semanasAfectadas = !empty($semanaId) ? [(int) $semanaId] : [];
 			$errores = [];
 			$archivosError = [];
 			$archivosDup = [];
 
 			foreach ($uploadedFiles as $file) {
 				try {
-					$docData = XmlInvoiceParser::parseCfdiFromFile($file['path']);
-
-					$proveedorId = $proveedorModel->obtenerOCrear($docData['rfc_emisor'] ?? '', $docData['razon_social_emisor'] ?? '');
-
-					$metadata = $docData['metadata'] ?? [];
-					if (!is_array($metadata)) {
-						$metadata = [];
+					$resultado = $documentImporter->importar($file['path'], null, [
+						'origen' => 'facturas_xml',
+						'importacion_id' => $importacionId,
+						'semana_id' => $semanaId,
+						'tipos_permitidos' => ['FE'],
+						'validar_receptor' => !empty($sociedad),
+						'cedula_receptor' => $sociedad['cedula'] ?? '',
+					]);
+					if (!empty($resultado['semana_anterior'])) {
+						$semanasAfectadas[] = (int) $resultado['semana_anterior'];
 					}
 
-					$hashDocumento = (string) ($docData['hash_documento'] ?? ($docData['hash_xml'] ?? null));
-
-					// Verificar duplicado por hash o consecutivo antes de insertar
-					$esDuplicadoPrevio = false;
-					if ($hashDocumento !== '') {
-						$esDuplicadoPrevio = $facturaModel->existsByHash($hashDocumento);
-					}
-					if (!$esDuplicadoPrevio && !empty($docData['consecutivo_completo'])) {
-						$esDuplicadoPrevio = $facturaModel->existsByConsecutivo(
-							$docData['consecutivo_completo'],
-							$proveedorId,
-							$docData['fecha_emision'] ?? ''
-						);
-					}
-
-					if ($esDuplicadoPrevio) {
+					if (in_array(($resultado['estado'] ?? ''), ['duplicado', 'duplicado_semana', 'pdf_completado'], true)) {
 						$duplicados++;
 						$archivosDup[] = $file['original_name'];
 					} else {
-						$facturaModel->crear([
-							'importacion_id' => $importacionId,
-							'semana_id' => $semanaId,
-							'consecutivo_completo' => $docData['consecutivo_completo'],
-							'clave' => $docData['clave'] ?? null,
-							'tipo_documento' => $docData['tipo_documento'] ?? null,
-							'receptor_id' => $docData['receptor_id'] ?? null,
-							'numero_factura_asistente' => $docData['numero_factura_asistente'],
-							'proveedor_id' => $proveedorId,
-							'fecha_emision' => $docData['fecha_emision'],
-							'subtotal' => $docData['subtotal'],
-							'iva' => $docData['iva'],
-							'total' => $docData['total'],
-							'moneda' => $docData['moneda'],
-							'tipo_comprobante' => $docData['tipo_comprobante'] ?? null,
-							'archivo_xml' => $file['original_name'],
-							'ruta_xml' => $file['path'],
-							'hash_xml' => $hashDocumento !== '' ? $hashDocumento : null,
-							'xml_contenido' => $docData['xml_contenido'] ?? null,
-							'metadata' => json_encode($metadata, JSON_UNESCAPED_UNICODE)
-						]);
 						$exitosos++;
 					}
 				} catch (Throwable $e) {
@@ -240,6 +382,11 @@ class FacturasController extends Controller
 			}
 
 			$importacionModel->cerrar($importacionId, $recibidos, $exitosos, $fallidos + $duplicados, $errores);
+
+			// Facturas nuevas en la semana → re-verificar su listado por pagar
+			if ($exitosos > 0 && !empty($semanasAfectadas)) {
+				$this->verificarSemanasPorPagar($semanasAfectadas);
+			}
 
 			$avisoLimite = '';
 			if ($limitePhp > 0 && $recibidos >= $limitePhp) {
@@ -286,10 +433,13 @@ class FacturasController extends Controller
 			$nombre = $this->nombreImportacionAuto($semanaId);
 
 			$service = $this->getQueueService();
+			$sociedad = $this->loadModel('Sociedad')->getActiva();
 			$result = $service->iniciarImportacion([
 				'archivo_origen' => $nombre,
 				'total_esperado' => (int) $this->post('total_esperado', 0),
 				'semana_id' => $semanaId,
+				'tipo_documento' => 'FE',
+				'cedula_receptor' => $sociedad['cedula'] ?? '',
 			]);
 
 			$this->json([
@@ -358,6 +508,26 @@ class FacturasController extends Controller
 
 			$result = $this->getQueueService()->procesarBatch($importacionId, $limit);
 
+			// Cola terminada: re-verificar los listados de la semana para
+			// que las facturas recién importadas queden cruzadas solas
+			// (sin el botón "Verificar de nuevo")
+			if (!empty($result['completed'])) {
+				$semanasCola = $this->getQueueService()->semanasAfectadasImportacion($importacionId);
+				if (!empty($semanasCola)) {
+					$this->verificarSemanasPorPagar($semanasCola);
+				}
+
+				// Una cola de facturas FE no cambia ninguna nota de crédito. Evita
+				// revalidar todos los listados de NC (miles de líneas) al terminar
+				// cada importación de facturas. Las colas NC conservan la revisión.
+				$tipoDocumento = strtoupper((string) (
+					$result['estado']['metadata']['tipo_documento'] ?? 'FE'
+				));
+				if ($tipoDocumento === 'NC') {
+					$this->verificarListadosNotasCredito();
+				}
+			}
+
 			$this->json([
 				'ok' => true,
 				'importacion_id' => $importacionId,
@@ -398,9 +568,9 @@ class FacturasController extends Controller
 	{
 		try {
 			$facturaModel = $this->loadModel('Factura');
-			$factura = $facturaModel->findById((int) $id);
+			$factura = $facturaModel->getOneWithProvider((int) $id);
 
-			if (!$factura) {
+			if (!$factura || !in_array(strtoupper((string) ($factura['tipo_documento'] ?? 'FE')), ['FE', ''], true)) {
 				$this->redirectWithMessage($this->url('/facturas'), 'Factura no encontrada.', 'warning');
 			}
 

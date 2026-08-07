@@ -119,6 +119,7 @@ class Proveedor extends Model
                 LEFT JOIN (
                     SELECT proveedor_id, COUNT(*) as total_facturas, COALESCE(SUM(total), 0) as monto_facturas
                     FROM facturas_xml
+                    WHERE tipo_documento IS NULL OR tipo_documento = 'FE'
                     GROUP BY proveedor_id
                 ) f ON p.id = f.proveedor_id
                 LEFT JOIN (

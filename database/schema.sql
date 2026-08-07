@@ -92,7 +92,7 @@ CREATE TABLE `facturas_xml` (
     `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
     `importacion_id` INT UNSIGNED NULL DEFAULT NULL COMMENT 'FK a importaciones',
     `consecutivo_completo` VARCHAR(255) NOT NULL COMMENT 'Folio fiscal o UUID completo del XML',
-    `numero_factura_asistente` VARCHAR(20) NOT NULL COMMENT 'Últimos 10 dígitos sin ceros a la izq.',
+    `numero_factura_asistente` VARCHAR(8) NOT NULL COMMENT 'Número XML corto normalizado a 8 dígitos',
     `proveedor_id` INT UNSIGNED NOT NULL COMMENT 'FK a proveedores',
     `fecha_emision` DATE NOT NULL COMMENT 'Fecha de emisión de la factura',
     `subtotal` DECIMAL(18,2) NOT NULL DEFAULT 0.00 COMMENT 'Base gravable',

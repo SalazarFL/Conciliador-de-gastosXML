@@ -3,6 +3,8 @@
  * Helper para parsear archivos XML de facturas
  */
 
+require_once __DIR__ . '/NumeroFactura.php';
+
 if (!class_exists('XmlInvoiceParser', false)) {
 class XmlInvoiceParser
 {
@@ -76,6 +78,156 @@ class XmlInvoiceParser
 			'hash_xml' => hash_file('sha256', $filePath),
 			'xml_contenido' => file_get_contents($filePath)
 		];
+	}
+
+	/**
+	 * Detalle interno del comprobante: bloques InformacionReferencia (la NC
+	 * cita ahí la clave de la factura que acredita) y LineaDetalle. Cubre
+	 * FE 4.2/4.3 de Costa Rica; en un MensajeHacienda no existe nada de esto
+	 * y se devuelven listas vacías.
+	 */
+	public static function parseDetalleFromFile($filePath)
+	{
+		if (!file_exists($filePath)) {
+			throw new Exception('Archivo XML no encontrado: ' . $filePath);
+		}
+
+		libxml_use_internal_errors(true);
+		$xml = simplexml_load_file($filePath);
+		if ($xml === false) {
+			throw new Exception('No fue posible parsear el XML.');
+		}
+
+		return [
+			'referencias' => self::getReferencias($xml),
+			'lineas' => self::getLineasDetalle($xml),
+		];
+	}
+
+	private static function getReferencias(SimpleXMLElement $xml)
+	{
+		$referencias = [];
+		$nodes = $xml->xpath('//*[local-name()="InformacionReferencia"]');
+		if (!is_array($nodes)) {
+			return $referencias;
+		}
+
+		foreach ($nodes as $nodo) {
+			$numero = self::childText($nodo, 'Numero');
+			if ($numero === '') {
+				continue;
+			}
+
+			$digits = preg_replace('/\D+/', '', $numero);
+			$esClave = strlen($digits) === 50;
+
+			// v4.3 usa FechaEmision/TipoDoc/Codigo; v4.4 los sufija con IR.
+			$fecha = self::childText($nodo, 'FechaEmision');
+			if ($fecha === '') {
+				$fecha = self::childText($nodo, 'FechaEmisionIR');
+			}
+			if ($fecha === '' && $esClave) {
+				// La clave trae la fecha de emisión en sus dígitos 4-9 (ddmmaa).
+				$fecha = substr($digits, 3, 2) . '/' . substr($digits, 5, 2) . '/20' . substr($digits, 7, 2);
+			}
+			$tipoDoc = self::childText($nodo, 'TipoDoc');
+			if ($tipoDoc === '') {
+				$tipoDoc = self::childText($nodo, 'TipoDocIR');
+			}
+			$codigo = self::childText($nodo, 'Codigo');
+			if ($codigo === '') {
+				$codigo = self::childText($nodo, 'CodigoIR');
+			}
+
+			$referencias[] = [
+				'tipo_doc_ref' => $tipoDoc !== '' ? substr($tipoDoc, 0, 4) : null,
+				'numero_ref' => substr($numero, 0, 60),
+				'clave_ref' => $esClave ? $digits : null,
+				'consecutivo_ref' => $esClave ? substr($digits, 21, 20) : null,
+				'fecha_ref' => $fecha !== '' ? self::normalizeDate($fecha) : null,
+				'codigo_ref' => $codigo !== '' ? substr($codigo, 0, 4) : null,
+				'razon' => self::childText($nodo, 'Razon') !== ''
+					? mb_substr(self::childText($nodo, 'Razon'), 0, 255)
+					: null,
+			];
+		}
+
+		return $referencias;
+	}
+
+	private static function getLineasDetalle(SimpleXMLElement $xml)
+	{
+		$lineas = [];
+		$nodes = $xml->xpath('//*[local-name()="LineaDetalle"]');
+		if (!is_array($nodes)) {
+			return $lineas;
+		}
+
+		$secuencia = 0;
+		foreach ($nodes as $nodo) {
+			$secuencia++;
+			$numeroLinea = (int) self::childText($nodo, 'NumeroLinea');
+
+			// v4.3: <Codigo> directo es el CABYS y <CodigoComercial> anida el
+			// código del proveedor; v4.2: <Codigo> anida <Tipo> y <Codigo>.
+			$cabys = '';
+			$codigoComercial = '';
+			$codigoNodos = $nodo->xpath('*[local-name()="Codigo" or local-name()="CodigoComercial"]');
+			foreach (is_array($codigoNodos) ? $codigoNodos : [] as $codigoNodo) {
+				$anidado = self::childText($codigoNodo, 'Codigo');
+				if ($anidado !== '') {
+					if ($codigoComercial === '') {
+						$codigoComercial = $anidado;
+					}
+				} elseif ($cabys === '') {
+					$cabys = trim((string) $codigoNodo);
+				}
+			}
+
+			$impuesto = 0.0;
+			$impuestoNodos = $nodo->xpath('*[local-name()="Impuesto"]/*[local-name()="Monto"]');
+			foreach (is_array($impuestoNodos) ? $impuestoNodos : [] as $monto) {
+				$impuesto += (float) ((string) $monto);
+			}
+
+			$descuento = (float) self::childText($nodo, 'MontoDescuento');
+			if ($descuento === 0.0) {
+				$descuentoNodos = $nodo->xpath('*[local-name()="Descuento"]/*[local-name()="MontoDescuento"]');
+				foreach (is_array($descuentoNodos) ? $descuentoNodos : [] as $monto) {
+					$descuento += (float) ((string) $monto);
+				}
+			}
+
+			$lineas[] = [
+				'numero_linea' => $numeroLinea > 0 ? $numeroLinea : $secuencia,
+				'codigo_cabys' => $cabys !== '' ? substr($cabys, 0, 20) : null,
+				'codigo_comercial' => $codigoComercial !== '' ? substr($codigoComercial, 0, 30) : null,
+				'detalle' => self::childText($nodo, 'Detalle') !== ''
+					? mb_substr(self::childText($nodo, 'Detalle'), 0, 255)
+					: null,
+				'cantidad' => (float) self::childText($nodo, 'Cantidad'),
+				'unidad' => self::childText($nodo, 'UnidadMedida') !== ''
+					? substr(self::childText($nodo, 'UnidadMedida'), 0, 15)
+					: null,
+				'precio_unitario' => (float) self::childText($nodo, 'PrecioUnitario'),
+				'monto_descuento' => $descuento,
+				'subtotal' => (float) self::childText($nodo, 'SubTotal'),
+				'impuesto' => $impuesto,
+				'total_linea' => (float) self::childText($nodo, 'MontoTotalLinea'),
+			];
+		}
+
+		return $lineas;
+	}
+
+	private static function childText(SimpleXMLElement $nodo, $localName)
+	{
+		$hijos = $nodo->xpath('*[local-name()="' . $localName . '"]');
+		if (is_array($hijos) && isset($hijos[0])) {
+			return trim((string) $hijos[0]);
+		}
+
+		return '';
 	}
 
 	private static function normalizeDate($datetime)
@@ -309,17 +461,7 @@ class XmlInvoiceParser
 
 	private static function buildNumeroAsistente($value)
 	{
-		$digits = preg_replace('/\D+/', '', (string) $value);
-		$digits = ltrim($digits, '0');
-		if ($digits === '') {
-			$digits = preg_replace('/[^A-Za-z0-9]/', '', (string) $value);
-		}
-
-		if ($digits === '') {
-			$digits = '0';
-		}
-
-		return substr($digits, -10);
+		return NumeroFactura::xmlOchoDigitos($value);
 	}
 
 	/**

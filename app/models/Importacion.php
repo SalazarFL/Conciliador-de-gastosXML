@@ -129,6 +129,22 @@ class Importacion extends Model
         return $this->fetchAll($sql, [$tipo]) ?: [];
     }
 
+    public function getAllXmlPorDocumento(string $tipoDocumento, int $limit = 50): array
+    {
+        $limit = max(1, min(1000, $limit));
+        $tipoDocumento = strtoupper($tipoDocumento);
+        if ($tipoDocumento === 'NC') {
+            $condicion = "(i.metadata LIKE '%\"tipo_documento\":\"NC\"%'
+                         OR EXISTS (SELECT 1 FROM facturas_xml f WHERE f.importacion_id=i.id AND f.tipo_documento='NC'))";
+        } else {
+            $condicion = "(i.metadata IS NULL OR i.metadata NOT LIKE '%\"tipo_documento\":\"NC\"%')
+                         AND NOT EXISTS (SELECT 1 FROM facturas_xml f WHERE f.importacion_id=i.id AND f.tipo_documento='NC')";
+        }
+        $sql = "SELECT i.* FROM {$this->table} i WHERE i.tipo='xml' AND {$condicion}
+                ORDER BY i.fecha_importacion DESC, i.id DESC LIMIT {$limit}";
+        return $this->fetchAll($sql) ?: [];
+    }
+
     public function clearByTipo(string $tipo): int
     {
         $sql = "DELETE FROM {$this->table} WHERE tipo = ?";

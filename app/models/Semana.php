@@ -23,9 +23,17 @@ class Semana extends Model
             $this->execute("CREATE TABLE IF NOT EXISTS {$this->table} (
                 `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
                 `nombre` VARCHAR(100) NOT NULL,
+                `carpeta_pago` VARCHAR(100) NULL DEFAULT NULL,
                 `creado_en` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (`id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+        } catch (Throwable $e) {
+        }
+        try {
+            if (!$this->fetchOne("SHOW COLUMNS FROM {$this->table} LIKE 'carpeta_pago'")) {
+                $this->execute("ALTER TABLE {$this->table}
+                                ADD COLUMN `carpeta_pago` VARCHAR(100) NULL DEFAULT NULL AFTER `nombre`");
+            }
         } catch (Throwable $e) {
         }
     }
@@ -44,6 +52,15 @@ class Semana extends Model
             $nombre = 'Semana ' . date('d/m/Y');
         }
         return $this->insert("INSERT INTO {$this->table} (nombre) VALUES (?)", [mb_substr($nombre, 0, 100, 'UTF-8')]);
+    }
+
+    public function configurarCarpetaPago($semanaId, $carpeta)
+    {
+        $carpeta = trim((string) $carpeta);
+        return $this->execute(
+            "UPDATE {$this->table} SET carpeta_pago = ? WHERE id = ?",
+            [$carpeta !== '' ? mb_substr($carpeta, 0, 100, 'UTF-8') : null, (int) $semanaId]
+        );
     }
 
     /**
