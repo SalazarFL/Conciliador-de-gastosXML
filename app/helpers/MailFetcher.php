@@ -10,6 +10,7 @@
 class MailFetcher
 {
     private const EXTENSIONES_FACTURA = ['xml', 'pdf', 'zip'];
+    private const MAX_VISTA_PREVIA_BYTES = 15728640; // 15 MB en memoria
 
     private $config;
     private $stream = null;
@@ -158,7 +159,9 @@ class MailFetcher
             return [$this->carpetaBase];
         }
 
-        $excluidas = ['spam', 'junk', 'trash', 'papelera', 'deleted', 'borrador', 'draft', 'sent', 'enviado'];
+        // Papelera sí se incluye: Roundcube busca globalmente allí y una
+        // factura borrada por error todavía puede necesitar recuperarse.
+        $excluidas = ['spam', 'junk', 'borrador', 'draft', 'sent', 'enviado'];
 
         $carpetas = [];
         foreach ($buzones as $buzon) {
@@ -198,6 +201,62 @@ class MailFetcher
         });
 
         return array_values(array_unique($carpetas));
+    }
+
+    /**
+     * Devuelve todas las carpetas visibles del buzón, incluidas las especiales
+     * que no forman parte del índice de facturas (Borradores, Enviados, SPAM).
+     * Solo lista nombres: no ejecuta STATUS por carpeta.
+     */
+    public function listarCarpetasCorreo()
+    {
+        if (!$this->stream) {
+            $this->conectar();
+        }
+
+        $buzones = @imap_getmailboxes($this->stream, $this->mailboxRef, '*');
+        if (!is_array($buzones)) {
+            imap_errors();
+            return [];
+        }
+
+        $estadoEntrada = @imap_status($this->stream, $this->mailboxRef . 'INBOX', SA_UNSEEN);
+        $noLeidosEntrada = $estadoEntrada ? (int) ($estadoEntrada->unseen ?? 0) : null;
+
+        $carpetas = [];
+        foreach ($buzones as $buzon) {
+            $nombreCompleto = (string) ($buzon->name ?? '');
+            $pos = strpos($nombreCompleto, '}');
+            $nombre = $pos !== false ? substr($nombreCompleto, $pos + 1) : $nombreCompleto;
+            if ($nombre === '') {
+                continue;
+            }
+
+            $atributos = (int) ($buzon->attributes ?? 0);
+            $noSeleccionable = defined('LATT_NOSELECT')
+                && (($atributos & constant('LATT_NOSELECT')) !== 0);
+
+            $carpetas[] = [
+                'carpeta' => $nombre,
+                'nombre' => $this->nombreLegibleCarpeta($nombre),
+                'delimitador' => (string) ($buzon->delimiter ?? '.'),
+                'seleccionable' => !$noSeleccionable,
+                'no_leidos' => strcasecmp($nombre, 'INBOX') === 0 ? $noLeidosEntrada : null,
+            ];
+        }
+        imap_errors();
+
+        usort($carpetas, function ($a, $b) {
+            if ($a['carpeta'] === 'INBOX') {
+                return -1;
+            }
+            if ($b['carpeta'] === 'INBOX') {
+                return 1;
+            }
+            return strcasecmp($a['nombre'], $b['nombre']);
+        });
+
+        return $carpetas;
     }
 
     /**
@@ -269,6 +328,15 @@ class MailFetcher
                 'clave'     => $this->claveMensaje($uid),
                 'asunto'    => mb_substr($this->decodificarTexto((string) ($ov->subject ?? '')), 0, 255, 'UTF-8'),
                 'remitente' => mb_substr($this->decodificarTexto((string) ($ov->from ?? '')), 0, 255, 'UTF-8'),
+                // La extensión IMAP normalmente no incluye CC en el overview.
+                // Si el servidor sí lo entrega lo aprovechamos; null indica que
+                // la fase de metadatos debe leerlo del encabezado completo.
+                'cc'        => isset($ov->cc)
+                    ? mb_substr($this->decodificarTexto((string) $ov->cc), 0, 1000, 'UTF-8')
+                    : null,
+                'reply_to'  => isset($ov->reply_to)
+                    ? mb_substr($this->decodificarTexto((string) $ov->reply_to), 0, 1000, 'UTF-8')
+                    : null,
                 'fecha'     => $ts > 0 ? date('Y-m-d H:i:s', $ts) : null,
                 'timestamp' => $ts,
             ];
@@ -304,10 +372,56 @@ class MailFetcher
     }
 
     /**
+     * Destinatarios CC de un mensaje como texto buscable para el índice.
+     * Lee únicamente los encabezados; no descarga el cuerpo ni los adjuntos.
+     * null significa que la carpeta no se pudo abrir y debe reintentarse.
+     */
+    public function ccDeMensaje($uid, $carpeta)
+    {
+        $destinatarios = $this->destinatariosDeMensaje($uid, $carpeta);
+        return $destinatarios === null ? null : $destinatarios['cc'];
+    }
+
+    /** Lee CC y Reply-To en un solo viaje IMAP. */
+    public function destinatariosDeMensaje($uid, $carpeta)
+    {
+        if (!$this->stream) {
+            $this->conectar();
+        }
+
+        if (!$this->abrirCarpeta($carpeta)) {
+            return null;
+        }
+
+        $raw = @imap_fetchheader($this->stream, (int) $uid, FT_UID);
+        imap_errors();
+        if (!is_string($raw) || $raw === '') {
+            return ['cc' => '', 'reply_to' => ''];
+        }
+
+        $encabezados = @imap_rfc822_parse_headers($raw);
+        if (!$encabezados) {
+            return ['cc' => '', 'reply_to' => ''];
+        }
+
+        $cc = $this->decodificarTexto((string) ($encabezados->ccaddress ?? ''));
+        $replyTo = $this->decodificarTexto((string) ($encabezados->reply_toaddress ?? ''));
+        return [
+            'cc' => mb_substr($cc, 0, 1000, 'UTF-8'),
+            'reply_to' => mb_substr($replyTo, 0, 1000, 'UTF-8'),
+        ];
+    }
+
+    /**
      * Nombre legible de una carpeta IMAP (decodifica UTF-7 y quita el
      * prefijo INBOX.): 'INBOX.2026.A FACTURAS MG' → '2026/A FACTURAS MG'.
      */
     public function nombreLegibleCarpeta($carpeta)
+    {
+        return self::nombreLegibleEstatico($carpeta);
+    }
+
+    public static function nombreLegibleEstatico($carpeta)
     {
         $nombre = function_exists('imap_mutf7_to_utf8') ? @imap_mutf7_to_utf8((string) $carpeta) : (string) $carpeta;
         if (!is_string($nombre) || $nombre === '') {
@@ -316,6 +430,12 @@ class MailFetcher
 
         $nombre = preg_replace('/^INBOX\./i', '', $nombre);
         return str_replace('.', '/', $nombre);
+    }
+
+    /** true si hay una conexión IMAP abierta (para reutilizar entre tandas). */
+    public function estaConectado()
+    {
+        return (bool) $this->stream;
     }
 
     public function cerrar()
@@ -336,7 +456,7 @@ class MailFetcher
     // ── Listado ligero (solo encabezados, sin bajar adjuntos) ──────
 
     /**
-     * Lista correos con SOLO sus encabezados (remitente, asunto, fecha).
+     * Lista correos con SOLO sus encabezados (remitente, CC, asunto, fecha).
      *
      * La búsqueda por $texto corre EN el servidor de correo (IMAP SEARCH)
      * y recorre TODAS las carpetas del buzón (menos spam/papelera/enviados/
@@ -345,10 +465,10 @@ class MailFetcher
      * de fecha.
      *
      * Devuelve ['total' => coincidencias, 'correos' => [...]]; cada correo:
-     *   ['uid', 'clave', 'carpeta', 'carpeta_nombre', 'asunto', 'remitente',
+     *   ['uid', 'clave', 'carpeta', 'carpeta_nombre', 'asunto', 'remitente', 'cc',
      *    'fecha', 'procesado'] — del más reciente al más viejo, máx $limite.
      */
-    public function listarMensajes($limite = 500, $texto = '', $ambito = 'asunto_remitente')
+    public function listarMensajes($limite = 500, $texto = '', $ambito = 'asunto_remitente', $carpetaFiltro = '', $offset = 0)
     {
         if (!$this->stream) {
             $this->conectar();
@@ -357,9 +477,19 @@ class MailFetcher
         $texto = trim(str_replace('"', ' ', (string) $texto));
 
         $sufijo = '';
-        $diasAtras = (int) ($this->config['dias_atras'] ?? 14);
-        if ($diasAtras > 0) {
-            $sufijo .= ' SINCE "' . date('d-M-Y', strtotime("-{$diasAtras} days")) . '"';
+        $fechaDesde = trim((string) ($this->config['fecha_desde'] ?? ''));
+        $fechaHasta = trim((string) ($this->config['fecha_hasta'] ?? ''));
+        if ($fechaDesde !== '' && strtotime($fechaDesde) !== false) {
+            $sufijo .= ' SINCE "' . date('d-M-Y', strtotime($fechaDesde)) . '"';
+        }
+        if ($fechaHasta !== '' && strtotime($fechaHasta) !== false) {
+            $sufijo .= ' BEFORE "' . date('d-M-Y', strtotime($fechaHasta)) . '"';
+        }
+        if ($fechaDesde === '' && $fechaHasta === '') {
+            $diasAtras = (int) ($this->config['dias_atras'] ?? 14);
+            if ($diasAtras > 0) {
+                $sufijo .= ' SINCE "' . date('d-M-Y', strtotime("-{$diasAtras} days")) . '"';
+            }
         }
         // solo_no_leidos aplica al monitoreo sin término: una búsqueda
         // explícita debe encontrar también los correos ya leídos
@@ -367,30 +497,44 @@ class MailFetcher
             $sufijo .= ' UNSEEN';
         }
 
-        // Ámbitos: 'asunto' (SUBJECT), 'remitente' (FROM, sirve para el
+        // Ámbitos: 'asunto' (SUBJECT), 'remitente' (FROM y CC, sirve para el
         // correo del proveedor), 'asunto_remitente' o 'todo' (agrega BODY:
         // el número de factura a veces viene en la descripción del correo).
         // c-client no soporta OR en el string de criterios: se hace una
         // búsqueda por campo y se une el resultado.
         $campos = [];
-        if (in_array($ambito, ['asunto', 'asunto_remitente', 'todo'], true)) {
+        if ($ambito === 'texto_mime') {
+            // TEXT incluye encabezados y cuerpo MIME; por eso encuentra el
+            // número aunque solo exista en filename= del XML/PDF adjunto.
+            $campos[] = 'TEXT';
+        } elseif ($ambito === 'reply_to') {
+            $campos[] = 'HEADER "Reply-To"';
+        } elseif (in_array($ambito, ['asunto', 'asunto_remitente', 'todo'], true)) {
             $campos[] = 'SUBJECT';
         }
-        if (in_array($ambito, ['remitente', 'asunto_remitente', 'todo'], true)) {
+        if (!in_array($ambito, ['texto_mime', 'reply_to'], true)
+            && in_array($ambito, ['remitente', 'asunto_remitente', 'todo'], true)) {
             $campos[] = 'FROM';
+            $campos[] = 'CC';
+            $campos[] = 'HEADER "Reply-To"';
         }
         if ($ambito === 'todo') {
             $campos[] = 'BODY';
         }
         if (empty($campos)) {
-            $campos = ['SUBJECT', 'FROM'];
+            $campos = ['SUBJECT', 'FROM', 'CC', 'HEADER "Reply-To"'];
         }
 
         $correos = [];
         $totalCoincidencias = 0;
-        $maxOverview = max((int) $limite, 1500);
+        $limite = max(1, (int) $limite);
+        $offset = max(0, (int) $offset);
+        $maxOverview = max($limite + $offset, 1500);
 
-        foreach ($this->carpetasABuscar() as $carpeta) {
+        $carpetaFiltro = trim((string) $carpetaFiltro);
+        $carpetas = $carpetaFiltro !== '' ? [$carpetaFiltro] : $this->carpetasABuscar();
+
+        foreach ($carpetas as $carpeta) {
             if (!$this->abrirCarpeta($carpeta)) {
                 continue;
             }
@@ -444,6 +588,12 @@ class MailFetcher
                         'carpeta_nombre' => $nombreCarpeta,
                         'asunto'         => mb_substr($this->decodificarTexto((string) ($ov->subject ?? '')), 0, 255, 'UTF-8'),
                         'remitente'      => mb_substr($this->decodificarTexto((string) ($ov->from ?? '')), 0, 255, 'UTF-8'),
+                        'cc'             => isset($ov->cc)
+                            ? mb_substr($this->decodificarTexto((string) $ov->cc), 0, 1000, 'UTF-8')
+                            : '',
+                        'reply_to'       => isset($ov->reply_to)
+                            ? mb_substr($this->decodificarTexto((string) $ov->reply_to), 0, 1000, 'UTF-8')
+                            : '',
                         'fecha'          => $ts > 0 ? date('Y-m-d H:i:s', $ts) : null,
                         'timestamp'      => $ts,
                         'procesado'      => $this->yaProcesado($clave),
@@ -456,10 +606,7 @@ class MailFetcher
             return $b['timestamp'] - $a['timestamp'];
         });
 
-        $limite = max(1, (int) $limite);
-        if (count($correos) > $limite) {
-            $correos = array_slice($correos, 0, $limite);
-        }
+        $correos = array_slice($correos, $offset, $limite);
 
         return [
             'total'   => $totalCoincidencias,
@@ -559,6 +706,190 @@ class MailFetcher
 
         $estructura = @imap_fetchstructure($this->stream, (int) $uid, FT_UID);
         return $estructura ? $this->recolectarNombres($estructura) : [];
+    }
+
+    /**
+     * Metadatos de adjuntos sin descargar su contenido. La sección MIME
+     * identifica exactamente qué parte se leerá si el usuario pide verla.
+     */
+    public function listarAdjuntos($uid, $carpeta = '')
+    {
+        if (!$this->stream) {
+            $this->conectar();
+        }
+
+        if ($carpeta !== '' && !$this->abrirCarpeta($carpeta)) {
+            return [];
+        }
+
+        $estructura = @imap_fetchstructure($this->stream, (int) $uid, FT_UID);
+        return $estructura ? $this->recolectarAdjuntos($estructura) : [];
+    }
+
+    /**
+     * Lee una sola parte MIME para visualizarla. El contenido vive únicamente
+     * durante la petición: no pasa por guardarTemp() ni se escribe en disco.
+     */
+    public function obtenerAdjuntoParaVista($uid, $carpeta, $seccion)
+    {
+        if (!$this->stream) {
+            $this->conectar();
+        }
+
+        if ($carpeta !== '' && !$this->abrirCarpeta($carpeta)) {
+            throw new RuntimeException('No se pudo abrir la carpeta del correo.');
+        }
+
+        $uid = (int) $uid;
+        $seccion = trim((string) $seccion);
+        if ($uid <= 0 || !preg_match('/^\d+(?:\.\d+)*$/', $seccion)) {
+            throw new InvalidArgumentException('El adjunto solicitado no es válido.');
+        }
+
+        $estructura = @imap_fetchstructure($this->stream, $uid, FT_UID);
+        if (!$estructura) {
+            throw new RuntimeException('No se pudo leer la estructura del correo.');
+        }
+
+        $parte = $this->buscarPartePorSeccion($estructura, $seccion);
+        if ($parte === null) {
+            throw new RuntimeException('El adjunto ya no está disponible en el correo.');
+        }
+
+        $nombre = mb_substr($this->nombreDeParte($parte), 0, 255, 'UTF-8');
+        $tipoVista = $this->tipoVistaAdjunto($nombre);
+        if ($tipoVista === '') {
+            throw new RuntimeException('Este tipo de archivo no admite vista previa segura.');
+        }
+
+        $bytesDeclarados = max(0, (int) ($parte->bytes ?? 0));
+        if ($bytesDeclarados > self::MAX_VISTA_PREVIA_BYTES) {
+            throw new RuntimeException('El archivo supera el límite de vista previa de 15 MB.');
+        }
+
+        $contenido = @imap_fetchbody($this->stream, $uid, $seccion, FT_UID | FT_PEEK);
+        if ($contenido === false || $contenido === '') {
+            throw new RuntimeException('No se pudo leer el contenido del adjunto.');
+        }
+
+        $encoding = (int) ($parte->encoding ?? 0);
+        if ($encoding === ENCBASE64) {
+            $contenido = base64_decode($contenido, true);
+        } elseif ($encoding === ENCQUOTEDPRINTABLE) {
+            $contenido = quoted_printable_decode($contenido);
+        }
+
+        if ($contenido === false || $contenido === '') {
+            throw new RuntimeException('El adjunto está vacío o usa una codificación no válida.');
+        }
+        if (strlen($contenido) > self::MAX_VISTA_PREVIA_BYTES) {
+            throw new RuntimeException('El archivo supera el límite de vista previa de 15 MB.');
+        }
+
+        if ($tipoVista === 'pdf') {
+            if (strpos(substr($contenido, 0, 1024), '%PDF-') === false) {
+                throw new RuntimeException('El archivo no contiene un PDF válido.');
+            }
+            $mime = 'application/pdf';
+        } else {
+            $inicio = ltrim(substr($contenido, 0, 1024), "\xEF\xBB\xBF\x00\x09\x0A\x0D\x20");
+            if ($inicio === '' || $inicio[0] !== '<') {
+                throw new RuntimeException('El archivo no contiene XML legible.');
+            }
+            $mime = 'text/plain; charset=utf-8';
+        }
+
+        return [
+            'nombre' => $nombre,
+            'tipo_vista' => $tipoVista,
+            'mime' => $mime,
+            'contenido' => $contenido,
+        ];
+    }
+
+    private function recolectarAdjuntos($estructura, $prefijoSeccion = '')
+    {
+        $adjuntos = [];
+
+        if (empty($estructura->parts)) {
+            $seccion = $prefijoSeccion !== '' ? $prefijoSeccion : '1';
+            $nombre = mb_substr($this->nombreDeParte($estructura), 0, 255, 'UTF-8');
+            if ($nombre !== '') {
+                $bytes = max(0, (int) ($estructura->bytes ?? 0));
+                $tipoVista = $this->tipoVistaAdjunto($nombre);
+                $adjuntos[] = [
+                    'nombre' => $nombre,
+                    'seccion' => $seccion,
+                    'bytes' => $bytes,
+                    'tipo_vista' => $tipoVista,
+                    'visualizable' => $tipoVista !== ''
+                        && ($bytes === 0 || $bytes <= self::MAX_VISTA_PREVIA_BYTES),
+                ];
+            }
+            return $adjuntos;
+        }
+
+        foreach ($estructura->parts as $i => $parte) {
+            $seccion = $prefijoSeccion !== ''
+                ? $prefijoSeccion . '.' . ($i + 1)
+                : (string) ($i + 1);
+
+            if (!empty($parte->parts)) {
+                $adjuntos = array_merge($adjuntos, $this->recolectarAdjuntos($parte, $seccion));
+                continue;
+            }
+
+            $nombre = mb_substr($this->nombreDeParte($parte), 0, 255, 'UTF-8');
+            if ($nombre === '') {
+                continue;
+            }
+
+            $bytes = max(0, (int) ($parte->bytes ?? 0));
+            $tipoVista = $this->tipoVistaAdjunto($nombre);
+            $adjuntos[] = [
+                'nombre' => $nombre,
+                'seccion' => $seccion,
+                'bytes' => $bytes,
+                'tipo_vista' => $tipoVista,
+                'visualizable' => $tipoVista !== ''
+                    && ($bytes === 0 || $bytes <= self::MAX_VISTA_PREVIA_BYTES),
+            ];
+        }
+
+        return $adjuntos;
+    }
+
+    private function buscarPartePorSeccion($estructura, $objetivo, $prefijoSeccion = '')
+    {
+        if (empty($estructura->parts)) {
+            $seccion = $prefijoSeccion !== '' ? $prefijoSeccion : '1';
+            return $seccion === $objetivo && $this->nombreDeParte($estructura) !== ''
+                ? $estructura
+                : null;
+        }
+
+        foreach ($estructura->parts as $i => $parte) {
+            $seccion = $prefijoSeccion !== ''
+                ? $prefijoSeccion . '.' . ($i + 1)
+                : (string) ($i + 1);
+
+            if (!empty($parte->parts)) {
+                $encontrada = $this->buscarPartePorSeccion($parte, $objetivo, $seccion);
+                if ($encontrada !== null) {
+                    return $encontrada;
+                }
+            } elseif ($seccion === $objetivo && $this->nombreDeParte($parte) !== '') {
+                return $parte;
+            }
+        }
+
+        return null;
+    }
+
+    private function tipoVistaAdjunto($nombre)
+    {
+        $extension = strtolower(pathinfo((string) $nombre, PATHINFO_EXTENSION));
+        return in_array($extension, ['pdf', 'xml'], true) ? $extension : '';
     }
 
     private function recolectarNombres($estructura)
@@ -703,11 +1034,10 @@ class MailFetcher
             }
         }
 
-        if ($charset !== '' && $charset !== 'UTF-8' && $charset !== 'US-ASCII' && $charset !== 'DEFAULT') {
-            $cuerpo = $this->convertirAUtf8($cuerpo, $charset);
-        }
-
-        return $cuerpo;
+        // Algunos proveedores declaran UTF-8 (o no declaran charset), pero
+        // envían bytes Windows-1252. Normalizar siempre antes de llevar el
+        // cuerpo a JSON para que un solo carácter inválido no vacíe la respuesta.
+        return $this->convertirAUtf8($cuerpo, $charset);
     }
 
     // ── Deduplicación entre corridas (tabla correo_procesados) ─────
@@ -946,7 +1276,7 @@ class MailFetcher
             }
         }
 
-        return $resultado;
+        return $this->convertirAUtf8($resultado, 'UTF-8');
     }
 
     /**
@@ -960,10 +1290,11 @@ class MailFetcher
         $texto = (string) $texto;
         $charset = trim((string) $charset);
 
-        if ($charset !== '' && strtoupper($charset) !== 'UTF-8') {
+        if ($charset !== '' && strtoupper($charset) !== 'UTF-8'
+            && strtoupper($charset) !== 'US-ASCII' && strtoupper($charset) !== 'DEFAULT') {
             try {
                 $convertido = @mb_convert_encoding($texto, 'UTF-8', $charset);
-                if (is_string($convertido) && $convertido !== '') {
+                if (is_string($convertido) && mb_check_encoding($convertido, 'UTF-8')) {
                     return $convertido;
                 }
             } catch (Throwable $e) {
@@ -971,7 +1302,22 @@ class MailFetcher
             }
         }
 
-        // Garantizar UTF-8 válido (descarta bytes inválidos, nunca lanza)
+        if (mb_check_encoding($texto, 'UTF-8')) {
+            return $texto;
+        }
+
+        // Charset ausente o declarado incorrectamente: Windows-1252 es el
+        // caso habitual de estos correos en español y conserva tildes/ñ.
+        try {
+            $convertido = @mb_convert_encoding($texto, 'UTF-8', 'Windows-1252');
+            if (is_string($convertido) && mb_check_encoding($convertido, 'UTF-8')) {
+                return $convertido;
+            }
+        } catch (Throwable $e) {
+            // Si tampoco se puede convertir, se descartan solo los bytes malos.
+        }
+
+        // Último respaldo: garantizar UTF-8 válido (nunca lanza).
         $limpio = @mb_convert_encoding($texto, 'UTF-8', 'UTF-8');
         return is_string($limpio) ? $limpio : $texto;
     }

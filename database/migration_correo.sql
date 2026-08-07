@@ -38,12 +38,18 @@ CREATE TABLE IF NOT EXISTS `correo_indice` (
     `uidvalidity` BIGINT UNSIGNED NOT NULL DEFAULT 0,
     `clave` VARCHAR(64) NOT NULL,
     `remitente` VARCHAR(255) NULL DEFAULT NULL,
+    `cc` VARCHAR(1024) NULL DEFAULT NULL,
+    `reply_to` VARCHAR(1024) NULL DEFAULT NULL,
+    `consecutivo` VARCHAR(20) NULL DEFAULT NULL,
+    `numero_corto` VARCHAR(10) NULL DEFAULT NULL,
     `asunto` VARCHAR(255) NULL DEFAULT NULL,
     `fecha` DATETIME NULL DEFAULT NULL,
     `timestamp` INT UNSIGNED NOT NULL DEFAULT 0,
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_carpeta_uid` (`carpeta`(180), `uidvalidity`, `uid`),
-    KEY `idx_timestamp` (`timestamp`)
+    KEY `idx_timestamp` (`timestamp`),
+    KEY `idx_consecutivo` (`consecutivo`),
+    KEY `idx_numero_corto` (`numero_corto`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `correo_carpetas` (

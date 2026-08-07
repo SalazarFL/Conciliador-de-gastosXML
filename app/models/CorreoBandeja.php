@@ -41,8 +41,10 @@ class CorreoBandeja extends Model
     }
 
     /**
-     * Filas visibles en la bandeja: pendientes, ya_existe (grises),
-     * rechazadas por Hacienda y de otra cédula (no importables).
+     * Filas visibles en la bandeja: pendientes, rechazadas por Hacienda y de
+     * otra cédula. Las dos últimas no se pueden importar, pero el usuario
+     * debe enterarse de por qué. Las que ya están en el sistema ni siquiera
+     * llegan a la bandeja (ver CorreoController::procesarMensaje).
      */
     public function getActivas()
     {
@@ -50,9 +52,25 @@ class CorreoBandeja extends Model
         // sin importar la fecha del correo (una factura vieja recién
         // traída del buzón debe salir de primera).
         $sql = "SELECT * FROM {$this->table}
-                WHERE estado IN ('pendiente', 'ya_existe', 'rechazada', 'otra_cedula')
+                WHERE estado IN ('pendiente', 'rechazada', 'otra_cedula')
                 ORDER BY id DESC";
         return $this->fetchAll($sql);
+    }
+
+    /**
+     * Borra las filas 'ya_existe' que dejó la versión anterior de la bandeja,
+     * cuando una factura ya registrada se quedaba ahí en gris sin poder
+     * importarse. Devuelve las filas borradas para que el llamador elimine
+     * también sus archivos.
+     */
+    public function purgarYaExisten()
+    {
+        $filas = $this->fetchAll("SELECT * FROM {$this->table} WHERE estado = 'ya_existe'");
+        if (!empty($filas)) {
+            $this->execute("DELETE FROM {$this->table} WHERE estado = 'ya_existe'");
+        }
+
+        return $filas;
     }
 
     /**
@@ -96,10 +114,9 @@ class CorreoBandeja extends Model
     }
 
     /**
-     * Reactiva una fila descartada con los datos del reprocesamiento
-     * (XML/PDF nuevos): vuelve a la bandeja como si fuera reciente.
-     * Existe porque la tabla tiene UNIQUE (uid_correo, hash_xml) y no
-     * se puede insertar una segunda fila del mismo correo+documento.
+     * Reactiva cualquier captura previa con los XML/PDF recién descargados.
+     * La tabla tiene UNIQUE (uid_correo, hash_xml), por eso reprocesar el
+     * mismo correo reutiliza la fila y la devuelve a estado pendiente.
      */
     public function revivir($id, $data)
     {
@@ -138,6 +155,11 @@ class CorreoBandeja extends Model
     public function marcarImportadas(array $ids, $importacionId)
     {
         return $this->actualizarEstado($ids, 'importada', (int) $importacionId);
+    }
+
+    public function marcarImportadasGeneral(array $ids)
+    {
+        return $this->actualizarEstado($ids, 'importada');
     }
 
     public function marcarDescartadas(array $ids)

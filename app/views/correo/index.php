@@ -10,10 +10,15 @@ $conteo         = $conteo ?? [];
 $configLocal    = is_array($configLocal ?? null) ? $configLocal : ['carpeta_destino' => ''];
 $sociedadActiva = $sociedadActiva ?? null;
 $buscarInicial  = trim((string) ($buscarInicial ?? ''));
+$abrirCorreoUid = max(0, (int) ($abrirCorreoUid ?? 0));
+$abrirCorreoCarpeta = trim((string) ($abrirCorreoCarpeta ?? ''));
 $cuentas        = is_array($cuentas ?? null) ? $cuentas : [];
 $cuentaActivaId = (int) ($cuentaActivaId ?? 0);
 $semanas        = is_array($semanas ?? null) ? $semanas : [];
 $ppNav          = is_array($ppNav ?? null) ? $ppNav : null;
+$carpetasCorreo = is_array($carpetasCorreo ?? null) ? $carpetasCorreo : [];
+$modoCorreo      = in_array(($modoCorreo ?? 'facturas'), ['facturas','notas','general'], true) ? $modoCorreo : 'facturas';
+$loteGeneral     = is_array($loteGeneral ?? null) ? $loteGeneral : null;
 
 $listo = $imapDisponible && $configurado;
 $pendientes = (int) ($conteo['pendiente'] ?? 0);
@@ -22,7 +27,22 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
 <style>
 /* Esta página aprovecha todo el alto/ancho disponible */
-.page-content { padding: 10px 16px 12px; }
+.page-content { padding: 5px 7px 7px; }
+.correo-modo-notas, .correo-modo-general {
+    grid-template-columns: var(--lista-w) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+}
+.correo-modo-notas .correo-lista, .correo-modo-general .correo-lista { grid-row: 1; }
+.correo-modo-notas .correo-facturas-panel, .correo-modo-general .correo-facturas-panel,
+.correo-modo-notas .rz-bandeja, .correo-modo-general .rz-bandeja,
+.correo-modo-notas .rz-inferior, .correo-modo-general .rz-inferior { display:none; }
+.correo-modo-notas #btn-procesar-sel, .correo-modo-general #btn-procesar-sel,
+.correo-modo-notas #btn-procesar-uno, .correo-modo-general #btn-procesar-uno,
+.correo-modo-notas #cb-correos-visibles, .correo-modo-general #cb-correos-visibles { display:none; }
+@media (max-width:1100px) {
+    .correo-modo-notas, .correo-modo-general { grid-template-columns:1fr; grid-template-rows:none; }
+    .correo-modo-notas .rz-lista, .correo-modo-general .rz-lista { display:none; }
+}
 </style>
 
 <?php if (!$listo): ?>
@@ -38,7 +58,38 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 </div>
 <?php endif; ?>
 
-<div class="correo-layout" id="correo-layout">
+<div class="card" style="margin-bottom:8px;padding:8px 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+    <strong style="font-size:12px;color:var(--navy);margin-right:4px;">Modo:</strong>
+    <a href="<?= $baseUrl ?>/correo?modo=facturas" class="btn <?= $modoCorreo === 'facturas' ? 'btn-primary' : 'btn-outline' ?> btn-sm"><i class="fas fa-file-invoice"></i> Facturas</a>
+    <a href="<?= $baseUrl ?>/correo?modo=notas" class="btn <?= $modoCorreo === 'notas' ? 'btn-primary' : 'btn-outline' ?> btn-sm"><i class="fas fa-file-circle-minus"></i> Notas de crédito</a>
+    <a href="<?= $baseUrl ?>/correo?modo=general" class="btn <?= $modoCorreo === 'general' ? 'btn-primary' : 'btn-outline' ?> btn-sm"><i class="fas fa-layer-group"></i> General</a>
+    <span style="font-size:11px;color:var(--text-muted);margin-left:auto;">El buzón y su árbol de carpetas se mantienen en los tres modos.</span>
+</div>
+
+<?php if ($modoCorreo === 'notas'): ?>
+<div style="margin-bottom:8px;padding:9px 12px;background:#f8fafc;border:1px solid var(--border);border-radius:8px;color:var(--text-muted);font-size:12px;">
+    <i class="fas fa-circle-info" style="color:var(--navy-light);margin-right:5px;"></i>El flujo manual de correo para notas de crédito queda reservado y vacío por ahora. Puedes navegar y visualizar el buzón; el procesamiento automático de NC está disponible en <strong>General</strong>.
+</div>
+<?php elseif ($modoCorreo === 'general'): ?>
+<div class="card" id="general-box" style="margin-bottom:8px;padding:10px 12px;">
+    <div style="display:flex;align-items:end;gap:9px;flex-wrap:wrap;">
+        <label style="font-size:11px;font-weight:700;">Desde (fecha del correo)<input type="date" id="general-desde" class="form-control" value="<?= date('Y-m-01') ?>"></label>
+        <label style="font-size:11px;font-weight:700;">Hasta<input type="date" id="general-hasta" class="form-control" value="<?= date('Y-m-d') ?>"></label>
+        <label style="font-size:11px;font-weight:700;">Correo a buscar (opcional)<input type="email" id="general-correo" class="form-control" placeholder="proveedor@dominio.com" autocomplete="off" style="min-width:220px;"></label>
+        <button type="button" id="general-iniciar" class="btn btn-primary btn-sm" <?= $listo ? '' : 'disabled' ?>><i class="fas fa-play"></i> Iniciar búsqueda completa</button>
+        <button type="button" id="general-pausar" class="btn btn-outline btn-sm" style="display:none;"><i class="fas fa-pause"></i> Pausar</button>
+        <button type="button" id="general-reanudar" class="btn btn-primary btn-sm" style="display:none;"><i class="fas fa-play"></i> Reanudar</button>
+        <button type="button" id="general-cancelar" class="btn btn-outline btn-sm" style="display:none;color:#b91c1c;border-color:#fecaca;"><i class="fas fa-stop"></i> Cancelar</button>
+        <button type="button" id="general-historial" class="btn btn-outline btn-sm"><i class="fas fa-clock-rotate-left"></i> Historial de incidencias</button>
+    </div>
+    <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Cuenta seleccionada · todas las carpetas salvo Borradores, Enviados, Spam y Papelera · el correo indicado se busca en remitente, CC y Reply-To · organiza por fecha de emisión del XML.</div>
+    <div id="general-estado" style="margin-top:8px;font-size:12px;color:var(--navy);"></div>
+    <div style="height:8px;background:#e2e8f0;border-radius:8px;overflow:hidden;margin-top:5px;"><div id="general-barra" style="height:100%;width:0;background:linear-gradient(90deg,var(--navy),var(--gold));transition:width .25s;"></div></div>
+    <div id="general-incidencias" style="font-size:11px;color:#9a3412;margin-top:6px;max-height:72px;overflow:auto;"></div>
+</div>
+<?php endif; ?>
+
+<div class="correo-layout correo-modo-<?= htmlspecialchars($modoCorreo) ?>" id="correo-layout">
 
     <!-- Divisores arrastrables (doble clic para restaurar) -->
     <div class="correo-resizer vert rz-lista" data-rz="lista" title="Arrastra para redimensionar · doble clic para restaurar"></div>
@@ -47,19 +98,53 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
     <!-- ── Panel 1: buscador + lista de correos ── -->
     <div class="correo-panel correo-lista">
+        <?php /* El panel de carpetas se pinta según la preferencia guardada ANTES
+                 del primer render: si se dejaba al JS del final de la página, el
+                 navegador alcanzaba a pintarlo abierto y se veía la animación de
+                 cierre en cada recarga. 'correo-sin-animacion' suprime además
+                 cualquier transición hasta que termina el montaje inicial. */ ?>
+        <script>
+        (function () {
+            var panel = document.currentScript.parentElement;
+            panel.classList.add('correo-sin-animacion');
+            try {
+                if (localStorage.getItem('correoCarpetasVisibles') === '0') {
+                    panel.classList.add('carpetas-cerradas');
+                }
+            } catch (e) {}
+        })();
+        </script>
+        <aside class="correo-carpetas-pane" id="correo-carpetas-pane" aria-label="Carpetas del correo">
+            <div class="correo-carpetas-head">
+                <span><i class="fas fa-folder-tree"></i> Carpetas</span>
+                <span style="gap:1px;">
+                    <button type="button" id="btn-colapsar-carpetas" title="Cerrar todas las carpetas" aria-label="Cerrar todas las carpetas">
+                        <i class="fas fa-compress"></i>
+                    </button>
+                    <button type="button" id="btn-cerrar-carpetas" title="Ocultar carpetas" aria-label="Ocultar carpetas">
+                        <i class="fas fa-chevron-left"></i>
+                    </button>
+                </span>
+            </div>
+            <div class="correo-carpetas-tree" id="correo-carpetas-tree">
+                <div class="correo-carpetas-cargando">
+                    <i class="fas fa-spinner fa-spin"></i> Cargando…
+                </div>
+            </div>
+        </aside>
         <?php if ($ppNav): ?>
         <!-- Tarjeta "Facturas por pagar": factura seleccionada + navegación
              (ancho de la columna del correo; persiste al cambiar de cuenta) -->
-        <div id="pp-nav" style="flex-shrink:0;padding:8px 11px;background:#f8fafc;border-bottom:1px solid var(--border);border-left:3px solid var(--gold);">
-            <div style="display:flex;align-items:center;gap:7px;margin-bottom:3px;">
-                <span id="pp-circulo" title="" style="width:12px;height:12px;border-radius:50%;flex:none;background:#94a3b8;box-shadow:0 0 0 3px rgba(148,163,184,.2);"></span>
-                <div id="pp-numero" style="flex:1;min-width:0;font-weight:700;color:var(--navy);font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></div>
+        <div id="pp-nav" style="flex-shrink:0;padding:5px 8px;background:#f8fafc;border-bottom:1px solid var(--border);border-left:3px solid var(--gold);">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
+                <span id="pp-circulo" title="" style="width:10px;height:10px;border-radius:50%;flex:none;background:#94a3b8;box-shadow:0 0 0 2px rgba(148,163,184,.2);"></span>
+                <div id="pp-numero" style="flex:1;min-width:0;font-weight:700;color:var(--navy);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></div>
                 <button type="button" id="pp-cerrar" title="Cerrar" style="background:none;border:none;font-size:18px;color:#94a3b8;cursor:pointer;line-height:1;padding:0 2px;flex:none;">&times;</button>
             </div>
-            <div id="pp-proveedor" style="font-size:12.5px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:4px;"></div>
-            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:7px;">
-                <span id="pp-fecha" style="font-size:12.5px;color:var(--text-muted);"></span>
-                <span id="pp-monto" style="font-weight:700;color:var(--navy);font-size:14px;white-space:nowrap;"></span>
+            <div id="pp-proveedor" style="font-size:11.5px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:2px;"></div>
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:6px;margin-bottom:4px;">
+                <span id="pp-fecha" style="font-size:11.5px;color:var(--text-muted);"></span>
+                <span id="pp-monto" style="font-weight:700;color:var(--navy);font-size:13px;white-space:nowrap;"></span>
             </div>
             <div style="display:flex;align-items:center;gap:6px;">
                 <button type="button" class="btn btn-outline btn-sm" id="pp-prev" title="Factura anterior del listado" style="padding:3px 9px;">
@@ -77,6 +162,11 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         </div>
         <?php endif; ?>
         <div class="correo-buscador">
+            <div class="correo-cuenta-fila">
+                <button type="button" class="btn btn-outline btn-sm" id="btn-carpetas-toggle"
+                        title="Mostrar u ocultar las carpetas del correo" aria-label="Mostrar u ocultar carpetas">
+                    <i class="fas fa-folder-tree"></i>
+                </button>
             <?php if (count($cuentas) > 1): ?>
             <select id="sel-cuenta" class="form-control" style="font-size:11.5px;padding:4px 8px;"
                     title="Cuenta de correo con la que trabajas">
@@ -92,22 +182,32 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                 📧 <?= htmlspecialchars($cuentas[0]['usuario']) ?>
             </div>
             <?php endif; ?>
+                <div class="correo-carpeta-actual" id="correo-carpeta-actual" title="Carpeta seleccionada">
+                    <i class="fas fa-inbox"></i>
+                    <span>Entrada</span>
+                </div>
+            </div>
             <input type="text" id="buscar-texto" class="form-control"
-                   placeholder="Buscar… (Enter = buzón completo)"
-                   style="font-size:12.5px;padding:6px 10px;" autocomplete="off" <?= $listo ? '' : 'disabled' ?>>
-            <div class="fila">
+                   placeholder="Buscar correos…"
+                   style="font-size:12px;padding:5px 8px;" autocomplete="off" <?= $listo ? '' : 'disabled' ?>>
+            <div class="fila correo-filtros">
                 <select id="sel-ambito" class="form-control" <?= $listo ? '' : 'disabled' ?>
-                        title="Dónde buscar: asunto y remitente son rápidos; contenido es más lento.">
-                    <option value="asunto_remitente" selected>asunto + remitente + archivo</option>
-                    <option value="asunto">solo asunto</option>
-                    <option value="remitente">remitente (proveedor)</option>
-                    <option value="todo">+ contenido (lento)</option>
+                        title="Qué partes del correo se revisarán">
+                    <option value="asunto_remitente" selected>General</option>
+                    <option value="asunto">Solo asunto</option>
+                    <option value="remitente">Por correo</option>
+                    <option value="todo">Todo (más lento)</option>
+                </select>
+                <select id="sel-alcance" class="form-control" <?= $listo ? '' : 'disabled' ?>
+                        title="Buscar solo en la carpeta seleccionada o en todo el buzón">
+                    <option value="carpeta">Esta carpeta</option>
+                    <option value="buzon" selected>Todo el buzón</option>
                 </select>
                 <select id="sel-dias" class="form-control" <?= $listo ? '' : 'disabled' ?>>
                     <?php foreach ([7, 14, 30, 60, 90, 180, 365] as $d): ?>
                     <option value="<?= $d ?>" <?= $d === $diasDefault ? 'selected' : '' ?>><?= $d ?> días</option>
                     <?php endforeach; ?>
-                    <option value="0">todo el buzón</option>
+                    <option value="0">Todas las fechas</option>
                 </select>
                 <button type="button" class="btn btn-primary btn-sm" id="btn-cargar" title="Buscar en el buzón" <?= $listo ? '' : 'disabled' ?>>
                     <i class="fas fa-magnifying-glass"></i>
@@ -145,8 +245,8 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         <div class="correo-contenido-meta" id="contenido-meta" style="display:none;">
             <div id="ct-asunto" style="font-size:13px;font-weight:700;color:var(--navy);"></div>
             <div id="ct-meta" style="font-size:11px;color:var(--text-muted);margin-top:2px;"></div>
-            <div id="ct-adjuntos" style="margin-top:6px;display:flex;gap:5px;flex-wrap:wrap;"></div>
-            <div style="margin-top:8px;display:flex;gap:6px;align-items:center;">
+            <div id="ct-adjuntos" style="margin-top:4px;display:flex;gap:3px;flex-wrap:wrap;"></div>
+            <div style="margin-top:5px;display:flex;gap:4px;align-items:center;">
                 <button type="button" class="btn btn-primary btn-sm" id="btn-procesar-uno">
                     <i class="fas fa-download"></i> Procesar este correo
                 </button>
@@ -159,15 +259,15 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     </div>
 
     <!-- ── Panel 3: bandeja de revisión ── -->
-    <div class="correo-panel">
+    <div class="correo-panel correo-facturas-panel">
         <div class="correo-panel-head">
             <i class="fas fa-inbox" style="color:var(--navy-light);"></i> Bandeja de revisión
             <?php if ($pendientes > 0): ?>
-            <span class="badge badge-navy" style="font-size:10px;padding:2px 8px;"><?= $pendientes ?></span>
+            <span class="badge badge-navy" style="font-size:9px;padding:1px 5px;"><?= $pendientes ?></span>
             <?php endif; ?>
-            <div style="margin-left:auto;display:flex;gap:5px;align-items:center;">
+            <div class="correo-bandeja-acciones" style="margin-left:auto;display:flex;gap:3px;align-items:center;">
                 <select id="sel-semana-imp" class="form-control" title="Semana a la que se asignan las facturas al importar"
-                        style="font-size:10.5px;padding:3px 6px;max-width:130px;" <?= $pendientes === 0 ? 'disabled' : '' ?>>
+                        style="font-size:10px;padding:2px 4px;max-width:112px;" <?= $pendientes === 0 ? 'disabled' : '' ?>>
                     <option value="" <?= (int) ($semanaActiva ?? 0) === 0 ? 'selected' : '' ?>>Semana…</option>
                     <?php foreach ($semanas as $sem): ?>
                     <option value="<?= (int) $sem['id'] ?>" <?= (int) ($semanaActiva ?? 0) === (int) $sem['id'] ? 'selected' : '' ?>><?= htmlspecialchars($sem['nombre']) ?></option>
@@ -193,8 +293,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             </div>
             <?php else: ?>
                 <?php foreach ($bandeja as $fila): ?>
-                <?php $esGris = $fila['estado'] === 'ya_existe'; ?>
-                <div class="bandeja-item <?= $esGris ? 'gris' : '' ?>">
+                <div class="bandeja-item">
                     <input type="checkbox" class="cb-row" value="<?= (int) $fila['id'] ?>"
                            data-estado="<?= htmlspecialchars($fila['estado']) ?>">
                     <div class="bandeja-item-main"
@@ -212,8 +311,6 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                     <i class="fas fa-ban" style="color:#dc2626;" title="Rechazada por Hacienda — no se puede importar"></i>
                     <?php elseif ($fila['estado'] === 'otra_cedula'): ?>
                     <i class="fas fa-user-slash" style="color:#ea580c;" title="El receptor no es la cédula de la empresa — no se puede importar"></i>
-                    <?php elseif ($esGris): ?>
-                    <i class="fas fa-copy" style="color:#94a3b8;" title="Ya está en el sistema"></i>
                     <?php else: ?>
                     <i class="fas fa-clock" style="color:var(--navy-light);" title="Pendiente de importar"></i>
                     <?php endif; ?>
@@ -224,30 +321,30 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     </div>
 
     <!-- ── Panel 4: actividad (progreso, resumen, historial) ── -->
-    <div class="correo-panel correo-inferior">
+    <div class="correo-panel correo-inferior correo-facturas-panel">
         <div class="correo-panel-head">
             <i class="fas fa-wave-square" style="color:var(--navy-light);"></i> Actividad
             <?php if (!empty($historial)): ?>
             <span style="font-weight:400;font-size:11px;color:var(--text-muted);">— historial: <?= count($historial) ?></span>
             <?php endif; ?>
         </div>
-        <div class="correo-panel-body" style="padding:10px 14px;">
+        <div class="correo-panel-body correo-actividad-body" style="padding:6px 8px;">
 
-            <div id="buscar-resumen" style="display:none;background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:8px 12px;font-size:12px;color:#166534;margin-bottom:10px;"></div>
+            <div id="buscar-resumen" style="display:none;background:#f0fdf4;border:1px solid #86efac;border-radius:6px;padding:5px 8px;font-size:11px;color:#166534;margin-bottom:6px;"></div>
 
-            <div id="correo-progress" style="display:none;margin-bottom:10px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;font-size:11.5px;margin-bottom:5px;flex-wrap:wrap;gap:6px;">
+            <div id="correo-progress" style="display:none;margin-bottom:6px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;margin-bottom:3px;flex-wrap:wrap;gap:4px;">
                     <span id="cor-status" style="font-weight:700;color:var(--navy);">Preparando…</span>
                     <span id="cor-counts" style="color:var(--text-muted);"></span>
                 </div>
-                <div style="background:#e2e8f0;border-radius:8px;height:12px;overflow:hidden;">
+                <div style="background:#e2e8f0;border-radius:6px;height:8px;overflow:hidden;">
                     <div id="cor-bar" style="background:linear-gradient(90deg,#0c2461,#1e3a8a);height:100%;width:0%;transition:width .3s;"></div>
                 </div>
-                <div id="cor-detail" style="font-size:11px;color:var(--text-muted);margin-top:5px;"></div>
+                <div id="cor-detail" style="font-size:10.5px;color:var(--text-muted);margin-top:3px;"></div>
             </div>
 
             <?php if (!empty($historial)): ?>
-            <table class="data-table" style="font-size:12px;">
+            <table class="data-table correo-actividad-tabla" style="font-size:11.5px;">
                 <thead>
                     <tr>
                         <th>Número</th>
@@ -295,7 +392,74 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
 </div>
 
-<!-- ── Modal de configuración (⚙ en la barra superior) ── -->
+<!-- Visor en memoria: el servidor transmite el adjunto y no guarda copias. -->
+<div id="modal-adjunto" role="dialog" aria-modal="true" aria-labelledby="visor-adjunto-nombre"
+     style="display:none;position:fixed;inset:0;background:rgba(12,36,97,.62);z-index:500;align-items:center;justify-content:center;padding:18px;">
+    <div style="background:#fff;border-radius:12px;width:min(1100px,96vw);height:min(820px,94vh);display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(12,36,97,.35);overflow:hidden;">
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--border);background:#f8fafc;">
+            <i class="fas fa-eye" style="color:var(--gold);"></i>
+            <div id="visor-adjunto-nombre" style="font-size:13px;font-weight:700;color:var(--navy);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;"></div>
+            <button type="button" class="btn btn-outline btn-sm" id="visor-adjunto-descargar" disabled
+                    title="Guardar voluntariamente una copia en el equipo">
+                <i class="fas fa-download"></i> Descargar
+            </button>
+            <button type="button" id="visor-adjunto-cerrar" aria-label="Cerrar vista previa"
+                    style="background:none;border:none;font-size:24px;color:#64748b;cursor:pointer;line-height:1;padding:0 3px;">&times;</button>
+        </div>
+        <div id="visor-adjunto-contenido" style="position:relative;flex:1;min-height:0;background:#e2e8f0;">
+            <div id="visor-adjunto-estado" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:8px;color:#475569;font-size:13px;">
+                <i class="fas fa-spinner fa-spin"></i> Leyendo el archivo desde el correo…
+            </div>
+            <iframe id="visor-adjunto-pdf" title="Vista previa PDF"
+                    style="display:none;border:0;width:100%;height:100%;background:#fff;"></iframe>
+            <pre id="visor-adjunto-xml"
+                 style="display:none;margin:0;width:100%;height:100%;box-sizing:border-box;overflow:auto;padding:16px;background:#fff;color:#0f172a;font:12px/1.5 Consolas,Monaco,monospace;white-space:pre-wrap;word-break:break-word;"></pre>
+        </div>
+        <div style="padding:6px 12px;border-top:1px solid var(--border);font-size:10.5px;color:var(--text-muted);background:#fff;">
+            Vista temporal: no se guarda en la base de datos ni se crea una copia en el servidor.
+        </div>
+    </div>
+</div>
+
+<?php if ($modoCorreo === 'general'): ?>
+<div id="modal-incidencias" role="dialog" aria-modal="true" aria-labelledby="incidencias-titulo"
+     style="display:none;position:fixed;inset:0;background:rgba(12,36,97,.55);z-index:520;align-items:center;justify-content:center;padding:18px;">
+    <div style="background:#fff;border-radius:12px;width:min(1250px,97vw);height:min(800px,94vh);display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(12,36,97,.35);overflow:hidden;">
+        <div style="display:flex;align-items:center;gap:10px;padding:12px 15px;border-bottom:1px solid var(--border);background:#f8fafc;">
+            <i class="fas fa-triangle-exclamation" style="color:var(--gold);"></i>
+            <div style="flex:1;min-width:0;">
+                <div id="incidencias-titulo" style="font-size:14px;font-weight:800;color:var(--navy);">Historial de incidencias</div>
+                <div id="incidencias-resumen" style="font-size:10.5px;color:var(--text-muted);">Cargando…</div>
+            </div>
+            <button type="button" id="incidencias-cerrar" aria-label="Cerrar"
+                    style="background:none;border:none;font-size:24px;color:#64748b;cursor:pointer;line-height:1;padding:0 3px;">&times;</button>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);flex-wrap:wrap;">
+            <input type="text" id="incidencias-q" class="form-control" style="min-width:260px;flex:1;font-size:12px;"
+                   placeholder="Buscar por asunto, motivo, remitente o carpeta">
+            <select id="incidencias-tipo" class="form-control" style="width:auto;min-width:170px;font-size:12px;">
+                <option value="">Todos los tipos</option>
+            </select>
+            <button type="button" id="incidencias-buscar" class="btn btn-primary btn-sm"><i class="fas fa-search"></i> Buscar</button>
+        </div>
+        <div style="flex:1;min-height:0;overflow:auto;">
+            <table class="data-table" style="min-width:1050px;">
+                <thead style="position:sticky;top:0;z-index:2;background:#f3f7fb;">
+                    <tr><th>Fecha</th><th>Lote</th><th>Tipo</th><th>Asunto del correo</th><th>Motivo</th><th>Carpeta</th><th></th></tr>
+                </thead>
+                <tbody id="incidencias-body"><tr><td colspan="7" style="padding:30px;text-align:center;color:var(--text-muted);">Cargando…</td></tr></tbody>
+            </table>
+        </div>
+        <div style="display:flex;justify-content:center;align-items:center;gap:8px;padding:9px 14px;border-top:1px solid var(--border);background:#f8fafc;">
+            <button type="button" id="incidencias-prev" class="btn btn-outline btn-sm"><i class="fas fa-chevron-left"></i> Anterior</button>
+            <span id="incidencias-pagina" style="font-size:11.5px;color:var(--text-muted);min-width:110px;text-align:center;">Página 1 de 1</span>
+            <button type="button" id="incidencias-next" class="btn btn-outline btn-sm">Siguiente <i class="fas fa-chevron-right"></i></button>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
+<!-- Modal de configuración (engranaje de la barra superior). -->
 <div id="modal-config" style="display:none;position:fixed;inset:0;background:rgba(12,36,97,.45);z-index:400;align-items:center;justify-content:center;">
     <div style="background:#fff;border-radius:12px;max-width:540px;width:92%;padding:20px 22px;box-shadow:0 16px 48px rgba(12,36,97,.3);max-height:92vh;overflow-y:auto;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
@@ -306,7 +470,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         </div>
 
         <label style="display:block;font-size:12px;font-weight:700;color:var(--navy);margin-bottom:4px;">
-            <i class="fas fa-folder-open" style="margin-right:4px;color:var(--gold);"></i>Carpeta destino de XML y PDF
+            <i class="fas fa-folder-open" style="margin-right:4px;color:var(--gold);"></i>Carpeta raíz de XML y PDF
         </label>
         <div style="display:flex;gap:6px;">
             <input type="text" id="cfg-carpeta" class="form-control" style="font-size:13px;flex:1;"
@@ -340,8 +504,9 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         </div>
 
         <div style="font-size:11px;color:var(--text-muted);margin:6px 0 14px;">
-            Al importar, cada factura deja aquí su XML y su PDF ya renombrados
-            (<code>FE_PROVEEDOR_120726_00004354</code>; <code>NC_</code> si es nota de crédito).
+            Dentro de esta raíz se crea <code>AAAA/MM MES/Facturas</code> o
+            <code>AAAA/MM MES/Notas de crédito</code>. El nombre se mantiene como
+            <code>FE_PROVEEDOR_120726_00004354</code> o <code>NC_...</code>.
         </div>
 
         <!-- ── Actualización automática del índice (Tarea Programada de Windows) ── -->
@@ -482,19 +647,27 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 <script>
 (function () {
     var BASE = '<?= $baseUrl ?>';
+    var MODO_CORREO = '<?= $modoCorreo ?>';
     var CHUNK_PROCESAR = 8;
     var BATCH_LIMIT = 10;
+    var CARPETAS_INICIALES = <?= json_encode(array_values($carpetasCorreo), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
 
     // ── Elementos ──
     var btnCargar    = document.getElementById('btn-cargar');
     var inputBuscar  = document.getElementById('buscar-texto');
     var selAmbito    = document.getElementById('sel-ambito');
+    var selAlcance   = document.getElementById('sel-alcance');
     var selDias      = document.getElementById('sel-dias');
     var listaEl      = document.getElementById('lista-correos');
     var infoCorreos  = document.getElementById('correos-info');
     var btnProcesar  = document.getElementById('btn-procesar-sel');
     var selCount     = document.getElementById('sel-count');
     var cbVisibles   = document.getElementById('cb-correos-visibles');
+    var listaPanel   = document.querySelector('.correo-lista');
+    var carpetasTree = document.getElementById('correo-carpetas-tree');
+    var carpetaActualEl = document.getElementById('correo-carpeta-actual');
+    var btnCarpetasToggle = document.getElementById('btn-carpetas-toggle');
+    var btnCerrarCarpetas = document.getElementById('btn-cerrar-carpetas');
 
     var ctVacio      = document.getElementById('contenido-vacio');
     var ctMetaBox    = document.getElementById('contenido-meta');
@@ -505,6 +678,13 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     var ctCuerpo     = document.getElementById('ct-cuerpo');
     var ctBadge      = document.getElementById('ct-badge');
     var btnProcUno   = document.getElementById('btn-procesar-uno');
+    var modalAdjunto = document.getElementById('modal-adjunto');
+    var visorNombre  = document.getElementById('visor-adjunto-nombre');
+    var visorEstado  = document.getElementById('visor-adjunto-estado');
+    var visorPdf     = document.getElementById('visor-adjunto-pdf');
+    var visorXml     = document.getElementById('visor-adjunto-xml');
+    var visorCerrar  = document.getElementById('visor-adjunto-cerrar');
+    var visorDescargar = document.getElementById('visor-adjunto-descargar');
 
     var btnImportar  = document.getElementById('btn-importar');
     var btnDescartar = document.getElementById('btn-descartar');
@@ -521,6 +701,19 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     var seleccion = {};      // clave -> {uid, carpeta} (el UID solo es único por carpeta)
     var totalBuzon = 0;
     var correoActual = null;
+    var textoBusquedaCargada = '';
+    var carpetaActiva = 'INBOX';
+    var carpetaNombreActiva = 'Entrada';
+    var carpetasDatos = Array.isArray(CARPETAS_INICIALES) ? CARPETAS_INICIALES : [];
+    var carpetasExpandidas = {};
+    var paginaActual = 1;
+    var paginasTotal = 1;
+    var porPagina = 500;
+    var contextoBusquedaActivo = {};
+    var visorObjectUrl = '';
+    var visorAbort = null;
+    var visorArchivoNombre = '';
+    var visorSolicitud = 0;
 
     function setStatus(t) { elStatus.textContent = t; }
     function setBar(p) { elBar.style.width = Math.max(0, Math.min(100, p)) + '%'; }
@@ -528,6 +721,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
     // Cuenta de correo con la que se trabaja: viaja en cada petición
     var CUENTA_ID = <?= (int) $cuentaActivaId ?>;
+    var CLAVE_CARPETAS = 'correoCarpetasAbiertas_' + CUENTA_ID;
 
     function postJson(url, data) {
         var fd = new FormData();
@@ -541,6 +735,310 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                     }
                     return body;
                 });
+            });
+    }
+
+    function etiquetaEspecial(ruta, etiqueta) {
+        var r = String(ruta || '').toLowerCase();
+        if (r === 'inbox') return 'Entrada';
+        if (/(^|[.\/])(drafts?|borradores?)$/.test(r)) return 'Borradores';
+        if (/(^|[.\/])(sent|sent items|enviados?)$/.test(r)) return 'Enviados';
+        if (/(^|[.\/])(spam|junk)$/.test(r)) return 'SPAM';
+        if (/(^|[.\/])(trash|papelera)$/.test(r)) return 'Papelera';
+        if (/(^|[.\/])(archive|archivo)$/.test(r)) return 'Archivo';
+        return etiqueta;
+    }
+
+    function iconoCarpeta(ruta, abierto) {
+        var r = String(ruta || '').toLowerCase();
+        if (ruta === '') return 'fa-layer-group';
+        if (r === 'inbox') return 'fa-inbox';
+        if (/(draft|borrador)/.test(r)) return 'fa-pen';
+        if (/(sent|enviado)/.test(r)) return 'fa-paper-plane';
+        if (/(spam|junk)/.test(r)) return 'fa-fire';
+        if (/(trash|papelera)/.test(r)) return 'fa-trash-can';
+        if (/(archive|archivo)/.test(r)) return 'fa-box-archive';
+        return abierto ? 'fa-folder-open' : 'fa-folder';
+    }
+
+    function prioridadCarpeta(nodo) {
+        var r = String(nodo.ruta || '').toLowerCase();
+        if (r === 'inbox') return 0;
+        if (/(draft|borrador)/.test(r)) return 1;
+        if (/(sent|enviado)/.test(r)) return 2;
+        if (/(spam|junk)/.test(r)) return 3;
+        if (/(trash|papelera)/.test(r)) return 4;
+        if (/(archive|archivo)/.test(r)) return 5;
+        return 10;
+    }
+
+    function ordenarNodos(a, b) {
+        var pa = prioridadCarpeta(a);
+        var pb = prioridadCarpeta(b);
+        if (pa !== pb) return pa - pb;
+        return String(a.etiqueta).localeCompare(String(b.etiqueta), 'es', {
+            numeric: true,
+            sensitivity: 'base'
+        });
+    }
+
+    function construirArbolCarpetas(datos) {
+        var nodos = {};
+        var raices = [];
+
+        function asegurar(ruta, etiqueta, padre) {
+            if (!nodos[ruta]) {
+                nodos[ruta] = {
+                    ruta: ruta,
+                    etiqueta: etiqueta,
+                    padre: padre || null,
+                    hijos: [],
+                    item: null
+                };
+                if (padre && nodos[padre]) nodos[padre].hijos.push(nodos[ruta]);
+                else raices.push(nodos[ruta]);
+            }
+            return nodos[ruta];
+        }
+
+        (datos || []).forEach(function (item) {
+            var ruta = String(item.carpeta || '');
+            if (!ruta) return;
+            var delimitador = String(item.delimitador || '.');
+            var partes = ruta.split(delimitador);
+            var nombreLegible = String(item.nombre || '').split('/');
+            var inicio = partes[0].toUpperCase() === 'INBOX' && partes.length > 1 ? 1 : 0;
+            var prefijo = inicio === 1 ? 'INBOX' : '';
+            var padre = null;
+
+            for (var i = inicio; i < partes.length; i++) {
+                var actual = prefijo ? prefijo + delimitador + partes[i] : partes[i];
+                var etiqueta = partes[i];
+                if (i === partes.length - 1 && nombreLegible.length) {
+                    etiqueta = nombreLegible[nombreLegible.length - 1] || etiqueta;
+                }
+                etiqueta = etiquetaEspecial(actual, etiqueta);
+                var nodo = asegurar(actual, etiqueta, padre);
+                padre = actual;
+                prefijo = actual;
+                if (i === partes.length - 1) nodo.item = item;
+            }
+        });
+
+        raices.sort(ordenarNodos);
+        Object.keys(nodos).forEach(function (k) { nodos[k].hijos.sort(ordenarNodos); });
+        return raices;
+    }
+
+    // Solo se persisten las carpetas ABIERTAS. Guardar un mapa ruta→bool hacía
+    // que "cerrada" dependiera de que existiera la clave en false, y cualquier
+    // pérdida del registro reabría el árbol al recargar. Con una lista de
+    // abiertas, lo que no está en la lista está cerrado: no hay forma de que
+    // una carpeta cerrada vuelva a abrirse sola.
+    function guardarExpandidas() {
+        try {
+            var abiertas = Object.keys(carpetasExpandidas).filter(function (ruta) {
+                return carpetasExpandidas[ruta];
+            });
+            localStorage.setItem(CLAVE_CARPETAS, JSON.stringify(abiertas));
+        } catch (e) {}
+    }
+
+    /**
+     * Abre o cierra una carpeta. Al cerrar se BORRA la clave (no se guarda
+     * false): el estado persistido es exactamente la lista de abiertas.
+     */
+    function alternarCarpeta(ruta, abrir) {
+        if (abrir) {
+            carpetasExpandidas[ruta] = true;
+        } else {
+            delete carpetasExpandidas[ruta];
+        }
+        guardarExpandidas();
+        renderCarpetas();
+    }
+
+    /** Abre los ancestros de una ruta para que quede visible en el árbol. */
+    function expandirAncestros(ruta) {
+        var partes = String(ruta || '').split('.');
+        var cambio = false;
+        for (var i = 1; i < partes.length; i++) {
+            var ancestro = partes.slice(0, i).join('.');
+            if (ancestro && !carpetasExpandidas[ancestro]) {
+                carpetasExpandidas[ancestro] = true;
+                cambio = true;
+            }
+        }
+        return cambio;
+    }
+
+    function filaCarpeta(nodo, profundidad) {
+        var contenedor = document.createElement('div');
+        var tieneHijos = nodo.hijos.length > 0;
+        var abierto = tieneHijos && !!carpetasExpandidas[nodo.ruta];
+        var row = document.createElement('div');
+        row.className = 'correo-folder-row' + (carpetaActiva === nodo.ruta ? ' active' : '');
+        row.style.paddingLeft = (4 + profundidad * 13) + 'px';
+        row.title = nodo.etiqueta;
+        if (nodo.item && nodo.item.mensajes !== null && nodo.item.mensajes !== undefined) {
+            row.title += ' · ' + nodo.item.mensajes + ' mensajes';
+        }
+
+        var toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'correo-folder-toggle' + (tieneHijos ? '' : ' sin-hijos');
+        toggle.innerHTML = '<i class="fas fa-chevron-' + (abierto ? 'down' : 'right') + '"></i>';
+        toggle.addEventListener('click', function (e) {
+            e.stopPropagation();
+            alternarCarpeta(nodo.ruta, !abierto);
+        });
+        row.appendChild(toggle);
+
+        var icon = document.createElement('i');
+        icon.className = 'fas ' + iconoCarpeta(nodo.ruta, abierto) + ' correo-folder-icon';
+        row.appendChild(icon);
+
+        var label = document.createElement('span');
+        label.className = 'correo-folder-label';
+        label.textContent = nodo.etiqueta;
+        row.appendChild(label);
+
+        if (nodo.item && nodo.ruta === 'INBOX'
+            && nodo.item.no_leidos !== null && nodo.item.no_leidos !== undefined) {
+            var count = document.createElement('span');
+            count.className = 'correo-folder-count';
+            count.textContent = nodo.item.no_leidos;
+            count.title = 'No leídos';
+            row.appendChild(count);
+        }
+
+        row.addEventListener('click', function () {
+            if (nodo.item && nodo.item.seleccionable !== false) {
+                seleccionarCarpeta(nodo.ruta, nodo.etiqueta);
+            } else if (tieneHijos) {
+                alternarCarpeta(nodo.ruta, !abierto);
+            }
+        });
+        contenedor.appendChild(row);
+
+        if (tieneHijos) {
+            var hijos = document.createElement('div');
+            hijos.className = 'correo-folder-children';
+            hijos.hidden = !abierto;
+            nodo.hijos.forEach(function (hijo) {
+                hijos.appendChild(filaCarpeta(hijo, profundidad + 1));
+            });
+            contenedor.appendChild(hijos);
+        }
+        return contenedor;
+    }
+
+    function renderCarpetas() {
+        if (!carpetasTree) return;
+        carpetasTree.innerHTML = '';
+
+        construirArbolCarpetas(carpetasDatos).forEach(function (raiz) {
+            carpetasTree.appendChild(filaCarpeta(raiz, 0));
+        });
+    }
+
+    function seleccionarCarpeta(ruta, nombre) {
+        carpetaActiva = String(ruta || 'INBOX');
+        carpetaNombreActiva = nombre || 'Entrada';
+        // Una carpeta a la que se llega desde fuera (lupa de por-pagar) puede
+        // estar dentro de ramas cerradas: se abren sus ancestros para que se
+        // vea seleccionada, y esa apertura sí queda guardada.
+        if (expandirAncestros(carpetaActiva)) {
+            guardarExpandidas();
+        }
+        if (selAlcance) selAlcance.value = 'carpeta';
+        if (carpetaActualEl) {
+            carpetaActualEl.querySelector('i').className =
+                'fas ' + iconoCarpeta(carpetaActiva, false);
+            carpetaActualEl.querySelector('span').textContent = carpetaNombreActiva;
+            carpetaActualEl.title = carpetaNombreActiva;
+        }
+        renderCarpetas();
+        cargarCorreos();
+    }
+
+    function mostrarPanelCarpetas(mostrar) {
+        if (!listaPanel) return;
+        listaPanel.classList.toggle('carpetas-cerradas', !mostrar);
+        if (btnCarpetasToggle) {
+            btnCarpetasToggle.classList.toggle('active', mostrar);
+            btnCarpetasToggle.title = mostrar ? 'Ocultar carpetas' : 'Mostrar carpetas';
+        }
+        try { localStorage.setItem('correoCarpetasVisibles', mostrar ? '1' : '0'); } catch (e) {}
+    }
+
+    // Estado del árbol: lista de rutas abiertas. La clave v2 distingue "nunca
+    // configurado" (null → se sugiere el año en curso, y se guarda de una vez)
+    // de "el usuario cerró todo" (lista vacía → se respeta y el árbol queda
+    // cerrado en cada recarga).
+    try {
+        var guardadoCarpetas = localStorage.getItem(CLAVE_CARPETAS);
+        if (guardadoCarpetas === null) {
+            // Migración del formato viejo (mapa ruta→bool), si existe.
+            var previo = localStorage.getItem('correoCarpetasExpandidas_' + CUENTA_ID);
+            if (previo) {
+                var mapa = JSON.parse(previo) || {};
+                Object.keys(mapa).forEach(function (ruta) {
+                    if (mapa[ruta]) carpetasExpandidas[ruta] = true;
+                });
+            } else {
+                carpetasExpandidas['INBOX.' + String(new Date().getFullYear())] = true;
+            }
+            guardarExpandidas(); // se persiste ya: no se re-sugiere en cada recarga
+        } else {
+            (JSON.parse(guardadoCarpetas) || []).forEach(function (ruta) {
+                if (ruta) carpetasExpandidas[String(ruta)] = true;
+            });
+        }
+    } catch (e) {
+        carpetasExpandidas = {};
+    }
+
+    var carpetasVisibles = true;
+    try { carpetasVisibles = localStorage.getItem('correoCarpetasVisibles') !== '0'; } catch (e) {}
+    mostrarPanelCarpetas(carpetasVisibles);
+    renderCarpetas();
+
+    // Montaje terminado: se devuelven las transiciones para que el botón de
+    // mostrar/ocultar carpetas sí anime cuando el usuario lo pulse.
+    requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+            if (listaPanel) listaPanel.classList.remove('correo-sin-animacion');
+        });
+    });
+
+    if (btnCarpetasToggle) {
+        btnCarpetasToggle.addEventListener('click', function () {
+            mostrarPanelCarpetas(listaPanel.classList.contains('carpetas-cerradas'));
+        });
+    }
+    if (btnCerrarCarpetas) {
+        btnCerrarCarpetas.addEventListener('click', function () { mostrarPanelCarpetas(false); });
+    }
+    var btnColapsarCarpetas = document.getElementById('btn-colapsar-carpetas');
+    if (btnColapsarCarpetas) {
+        btnColapsarCarpetas.addEventListener('click', function () {
+            carpetasExpandidas = {};
+            guardarExpandidas();
+            renderCarpetas();
+        });
+    }
+
+    if (CUENTA_ID > 0) {
+        postJson(BASE + '/correo/carpetas-buzon', {})
+            .then(function (r) {
+                if (Array.isArray(r.carpetas) && r.carpetas.length) {
+                    carpetasDatos = r.carpetas;
+                    renderCarpetas();
+                }
+            })
+            .catch(function () {
+                // El árbol local sigue disponible si IMAP está ocupado.
             });
     }
 
@@ -572,6 +1070,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                 var u = JSON.parse(ultima);
                 if (inputBuscar) inputBuscar.value = u.texto || '';
                 if (selAmbito && u.ambito) selAmbito.value = u.ambito;
+                if (selAlcance && u.alcance) selAlcance.value = u.alcance;
                 if (selDias && u.dias !== undefined) selDias.value = String(u.dias);
             }
             // Con la tarjeta de por-pagar abierta NO se relanza la búsqueda
@@ -587,20 +1086,30 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
     // Búsqueda prellenada (?buscar= — llega desde "Facturas por pagar")
     var BUSCAR_INICIAL = <?= json_encode($buscarInicial) ?>;
+    var ABRIR_CORREO_UID = <?= (int) $abrirCorreoUid ?>;
+    var ABRIR_CORREO_CARPETA = <?= json_encode($abrirCorreoCarpeta) ?>;
+    var ABRIR_CORREO_PENDIENTE = ABRIR_CORREO_UID > 0;
     if (BUSCAR_INICIAL && inputBuscar && btnCargar && !btnCargar.disabled) {
         inputBuscar.value = BUSCAR_INICIAL;
-        if (selDias) selDias.value = '0'; // todo el buzón: la factura puede ser vieja
         setTimeout(function () {
-            // Si la tarjeta de por-pagar está abierta, arrancar acotado al
-            // mes de su factura (PP_NAV ya quedó asignado a estas alturas).
-            var mes = '';
+            // Un enlace procedente de por-pagar usa el mismo motor propio de
+            // la lupa de la tarjeta (PP_NAV ya está asignado al ejecutarse).
+            var origenBusqueda = 'bandeja';
+            var fechaReferencia = '';
+            var numeroContexto = '';
             try {
                 if (PP_NAV && PP_NAV.lineas && PP_NAV.lineas.length) {
                     var i = Math.max(0, Math.min(PP_NAV.lineas.length - 1, PP_NAV.idx || 0));
-                    mes = ppMesDe(PP_NAV.lineas[i]);
+                    origenBusqueda = 'tarjeta';
+                    fechaReferencia = PP_NAV.lineas[i].fecha || '';
+                    numeroContexto = PP_NAV.lineas[i].numero || '';
                 }
             } catch (e) {}
-            cargarCorreos({ mes: mes });
+            cargarCorreos({
+                origenBusqueda: origenBusqueda,
+                fechaReferencia: fechaReferencia,
+                numeroContexto: numeroContexto
+            });
         }, 200);
     }
 
@@ -611,11 +1120,6 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     var PP_NAV = <?= json_encode($ppNav) ?>;
     var ppCard = document.getElementById('pp-nav');
 
-    // 'YYYY-MM' de la fecha dd/mm/yyyy de una línea de la tarjeta ('' si no hay)
-    function ppMesDe(l) {
-        var p = String((l && l.fecha) || '').split('/');
-        return p.length === 3 ? p[2] + '-' + p[1] : '';
-    }
     // Parámetros pp_* de la factura visible; se arrastran al cambiar de cuenta
     // para que la tarjeta se quede. '' = tarjeta cerrada o sin contexto.
     var ppSuffixActual = '';
@@ -675,17 +1179,20 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             if (!inputBuscar || !btnCargar || btnCargar.disabled) return;
             var l = PP_NAV.lineas[ppIdx];
             inputBuscar.value = l.busqueda || l.numero;
-            if (selDias) selDias.value = '0'; // todo el buzón: la factura puede ser vieja
-            // Prioridad por fecha: primero solo el mes/año de la factura
-            // (mucho más rápido); si ahí no hay nada, el servidor amplía solo.
-            cargarCorreos({ mes: ppMesDe(l) });
+            // Motor de tarjeta: ignora los selectores de la bandeja, busca
+            // 15 días antes/después y amplía a todo el buzón si no encuentra.
+            cargarCorreos({
+                origenBusqueda: 'tarjeta',
+                fechaReferencia: l.fecha || '',
+                numeroContexto: l.numero || ''
+            });
         });
 
         document.getElementById('pp-cerrar').addEventListener('click', function () {
             ppCard.style.display = 'none';
             ppSuffixActual = ''; // ya no se arrastra al cambiar de cuenta
             // Quitar los parámetros pp_* para que un reload no la resucite
-            try { history.replaceState(null, '', BASE + '/correo'); } catch (e) {}
+            try { history.replaceState(null, '', BASE + '/correo' + (MODO_CORREO !== 'facturas' ? '?modo=' + encodeURIComponent(MODO_CORREO) : '')); } catch (e) {}
         });
 
         ppPintar();
@@ -711,6 +1218,12 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     function correosFiltrados() {
         var q = normalizar(inputBuscar.value).trim();
         if (q === '') return correos;
+
+        // La respuesta del servidor ya contiene todas las coincidencias del
+        // término buscado, incluso las halladas solo en adjuntos o contenido.
+        // No volver a descartarlas con el filtro parcial del navegador.
+        if (q === textoBusquedaCargada) return correos;
+
         var terminos = q.split(/\s+/);
         return correos.filter(function (c) {
             return terminos.every(function (t) { return c._haystack.indexOf(t) !== -1; });
@@ -722,6 +1235,11 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         return f.substring(8, 10) + '/' + f.substring(5, 7) + '/' + f.substring(2, 4) + ' ' + f.substring(11, 16);
     }
 
+    function fechaLista(f) {
+        if (!f || f.length < 10) return '';
+        return f.substring(8, 10) + '/' + f.substring(5, 7) + '/' + f.substring(2, 4);
+    }
+
     // Nota junto al contador: mes al que se acotó la búsqueda (tarjeta)
     var mesNota = '';
 
@@ -730,9 +1248,54 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         selCount.textContent = n;
         btnProcesar.disabled = n === 0;
 
-        var txt = filtrados.length + '/' + correos.length;
-        if (totalBuzon > correos.length) txt += ' de ' + totalBuzon;
+        var txt = '';
+        if (correos.length && filtrados.length === correos.length) {
+            var inicio = (paginaActual - 1) * porPagina + 1;
+            var fin = inicio + correos.length - 1;
+            txt = inicio + '–' + fin + ' de ' + totalBuzon;
+        } else if (correos.length) {
+            txt = filtrados.length + ' visibles de ' + totalBuzon;
+        }
+        if (paginasTotal > 1) txt += ' · pág. ' + paginaActual + '/' + paginasTotal;
         infoCorreos.textContent = correos.length ? txt + mesNota : '';
+    }
+
+    function renderPaginacion() {
+        if (paginasTotal <= 1) return;
+
+        var pager = document.createElement('div');
+        pager.className = 'correo-paginacion';
+
+        var anterior = document.createElement('button');
+        anterior.type = 'button';
+        anterior.className = 'btn btn-outline btn-sm';
+        anterior.disabled = paginaActual <= 1;
+        anterior.innerHTML = '<i class="fas fa-chevron-left"></i> Anterior';
+        anterior.addEventListener('click', function () {
+            if (paginaActual > 1) cargarCorreos(Object.assign(
+                {}, contextoBusquedaActivo, { pagina: paginaActual - 1 }
+            ));
+        });
+
+        var estado = document.createElement('span');
+        estado.className = 'correo-paginacion-estado';
+        estado.textContent = 'Página ' + paginaActual + ' de ' + paginasTotal;
+
+        var siguiente = document.createElement('button');
+        siguiente.type = 'button';
+        siguiente.className = 'btn btn-primary btn-sm';
+        siguiente.disabled = paginaActual >= paginasTotal;
+        siguiente.innerHTML = 'Siguiente <i class="fas fa-chevron-right"></i>';
+        siguiente.addEventListener('click', function () {
+            if (paginaActual < paginasTotal) cargarCorreos(Object.assign(
+                {}, contextoBusquedaActivo, { pagina: paginaActual + 1 }
+            ));
+        });
+
+        pager.appendChild(anterior);
+        pager.appendChild(estado);
+        pager.appendChild(siguiente);
+        listaEl.appendChild(pager);
     }
 
     // ── Render de la lista ──
@@ -754,12 +1317,11 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
         filtrados.forEach(function (c) {
             var item = document.createElement('div');
-            item.className = 'correo-item' + (c.procesado ? ' proc' : '')
+            item.className = 'correo-item'
                 + (correoActual && c.clave === correoActual.clave ? ' sel' : '');
 
             var cb = document.createElement('input');
             cb.type = 'checkbox';
-            cb.disabled = !!c.procesado;
             cb.checked = !!seleccion[c.clave];
             cb.addEventListener('click', function (e) { e.stopPropagation(); });
             cb.addEventListener('change', function () {
@@ -778,26 +1340,28 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             var meta = document.createElement('div');
             meta.className = 'correo-item-meta';
             var carpetaTxt = (c.carpeta_nombre && c.carpeta_nombre !== 'INBOX') ? ' · 📁 ' + c.carpeta_nombre : '';
-            meta.textContent = (c.remitente || '—') + ' · ' + fechaCorta(c.fecha) + carpetaTxt;
-            meta.title = (c.remitente || '') + (carpetaTxt ? ' — carpeta: ' + c.carpeta_nombre : '');
+            var ccTxt = c.cc ? ' · CC: ' + c.cc : '';
+            var replyTxt = c.reply_to ? ' · Responder a: ' + c.reply_to : '';
+            meta.textContent = (c.remitente || '—') + ccTxt + replyTxt + carpetaTxt;
+            meta.title = (c.remitente || '') + (c.cc ? ' — CC: ' + c.cc : '')
+                + (c.reply_to ? ' — Responder a: ' + c.reply_to : '')
+                + (carpetaTxt ? ' — carpeta: ' + c.carpeta_nombre : '');
             main.appendChild(asunto);
             main.appendChild(meta);
             item.appendChild(main);
 
-            if (c.procesado) {
-                var chip = document.createElement('i');
-                chip.className = 'fas fa-check';
-                chip.style.color = '#94a3b8';
-                chip.style.fontSize = '11px';
-                chip.style.marginTop = '3px';
-                chip.title = 'Ya procesado';
-                item.appendChild(chip);
-            }
+            var fecha = document.createElement('time');
+            fecha.className = 'correo-item-fecha';
+            fecha.textContent = fechaLista(c.fecha);
+            fecha.title = fechaCorta(c.fecha);
+            if (c.fecha) fecha.dateTime = String(c.fecha).replace(' ', 'T');
+            item.appendChild(fecha);
 
             item.addEventListener('click', function () { seleccionarCorreo(c); });
             listaEl.appendChild(item);
         });
 
+        renderPaginacion();
         actualizarContadores(filtrados);
     }
 
@@ -814,9 +1378,10 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         ctBody.style.display = 'block';
 
         ctAsunto.textContent = c.asunto || '(sin asunto)';
-        ctMeta.textContent = (c.remitente || '—') + ' · ' + fechaCorta(c.fecha);
-        ctBadge.textContent = c.procesado ? 'Ya procesado' : '';
-        btnProcUno.style.display = c.procesado ? 'none' : 'inline-flex';
+        ctMeta.textContent = (c.remitente || '—') + (c.cc ? ' · CC: ' + c.cc : '')
+            + (c.reply_to ? ' · Responder a: ' + c.reply_to : '') + ' · ' + fechaCorta(c.fecha);
+        ctBadge.textContent = '';
+        btnProcUno.style.display = 'inline-flex';
         ctAdjuntos.innerHTML = '';
 
         if (c._cuerpo !== undefined) {
@@ -830,8 +1395,12 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             .then(function (r) {
                 c._cuerpo = r.cuerpo || '(vacío)';
                 c._adjuntos = r.adjuntos || [];
+                c.cc = r.cc || c.cc || '';
+                c.reply_to = r.reply_to || c.reply_to || '';
                 if (!correoActual || correoActual.clave !== c.clave) return; // ya seleccionó otro
                 ctCuerpo.textContent = c._cuerpo;
+                ctMeta.textContent = (c.remitente || '—') + (c.cc ? ' · CC: ' + c.cc : '')
+                    + (c.reply_to ? ' · Responder a: ' + c.reply_to : '') + ' · ' + fechaCorta(c.fecha);
                 pintarAdjuntos(c._adjuntos);
             })
             .catch(function (err) {
@@ -840,22 +1409,141 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             });
     }
 
+    function cerrarVisorAdjunto() {
+        visorSolicitud++;
+        if (visorAbort) {
+            visorAbort.abort();
+            visorAbort = null;
+        }
+        if (visorObjectUrl) {
+            URL.revokeObjectURL(visorObjectUrl);
+            visorObjectUrl = '';
+        }
+        visorPdf.removeAttribute('src');
+        visorPdf.style.display = 'none';
+        visorXml.textContent = '';
+        visorXml.style.display = 'none';
+        visorEstado.style.display = 'flex';
+        visorEstado.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Leyendo el archivo desde el correo…';
+        visorDescargar.disabled = true;
+        visorArchivoNombre = '';
+        modalAdjunto.style.display = 'none';
+    }
+
+    function abrirVisorAdjunto(correo, adjunto) {
+        if (!correo || !adjunto || !adjunto.visualizable || !adjunto.seccion) return;
+
+        cerrarVisorAdjunto();
+        var solicitud = ++visorSolicitud;
+        modalAdjunto.style.display = 'flex';
+        visorNombre.textContent = adjunto.nombre || 'Adjunto';
+        visorArchivoNombre = adjunto.nombre
+            || (adjunto.tipo_vista === 'pdf' ? 'documento.pdf' : 'documento.xml');
+        visorEstado.style.display = 'flex';
+
+        var fd = new FormData();
+        fd.append('cuenta_id', CUENTA_ID);
+        fd.append('uid', correo.uid);
+        fd.append('carpeta', correo.carpeta || '');
+        fd.append('seccion', adjunto.seccion);
+
+        visorAbort = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        fetch(BASE + '/correo/adjunto', {
+            method: 'POST',
+            body: fd,
+            credentials: 'same-origin',
+            cache: 'no-store',
+            signal: visorAbort ? visorAbort.signal : undefined
+        }).then(function (res) {
+            if (res.ok) return res.blob();
+            return res.json().catch(function () { return null; }).then(function (body) {
+                throw new Error((body && body.message) || ('Error HTTP ' + res.status));
+            });
+        }).then(function (blob) {
+            if (solicitud !== visorSolicitud || modalAdjunto.style.display === 'none') return;
+            visorAbort = null;
+            visorObjectUrl = URL.createObjectURL(blob);
+            visorDescargar.disabled = false;
+            visorEstado.style.display = 'none';
+
+            if (adjunto.tipo_vista === 'pdf') {
+                visorPdf.src = visorObjectUrl;
+                visorPdf.style.display = 'block';
+                return;
+            }
+
+            return blob.text().then(function (texto) {
+                if (solicitud !== visorSolicitud || modalAdjunto.style.display === 'none') return;
+                visorXml.textContent = texto;
+                visorXml.style.display = 'block';
+            });
+        }).catch(function (err) {
+            if (err && err.name === 'AbortError') return;
+            if (solicitud !== visorSolicitud) return;
+            visorAbort = null;
+            visorEstado.style.display = 'flex';
+            visorEstado.textContent = 'No se pudo abrir el archivo: '
+                + (err.message || 'error desconocido');
+        });
+    }
+
+    if (visorCerrar) visorCerrar.addEventListener('click', cerrarVisorAdjunto);
+    if (modalAdjunto) {
+        modalAdjunto.addEventListener('click', function (e) {
+            if (e.target === modalAdjunto) cerrarVisorAdjunto();
+        });
+    }
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && modalAdjunto
+            && modalAdjunto.style.display !== 'none') {
+            cerrarVisorAdjunto();
+        }
+    });
+    if (visorDescargar) {
+        visorDescargar.addEventListener('click', function () {
+            if (!visorObjectUrl) return;
+            var enlace = document.createElement('a');
+            enlace.href = visorObjectUrl;
+            enlace.download = visorArchivoNombre || 'adjunto';
+            document.body.appendChild(enlace);
+            enlace.click();
+            enlace.remove();
+        });
+    }
+
     function pintarAdjuntos(adjuntos) {
         ctAdjuntos.innerHTML = '';
-        adjuntos.forEach(function (nombre) {
-            var ext = String(nombre).split('.').pop().toLowerCase();
-            var chip = document.createElement('span');
+        adjuntos.forEach(function (dato) {
+            var adjunto = typeof dato === 'string'
+                ? { nombre: dato, visualizable: false, tipo_vista: '' }
+                : dato;
+            var nombre = String(adjunto.nombre || '');
+            var ext = nombre.split('.').pop().toLowerCase();
+            var chip = document.createElement(adjunto.visualizable ? 'button' : 'span');
+            if (adjunto.visualizable) chip.type = 'button';
             chip.className = 'badge';
             chip.style.fontSize = '10px';
             chip.style.padding = '2px 8px';
+            chip.style.border = '0';
             chip.style.background = ext === 'xml' ? '#dbe9ff' : (ext === 'pdf' ? '#fee2e2' : '#f1f5f9');
             chip.style.color = ext === 'xml' ? '#1a4db3' : (ext === 'pdf' ? '#b91c1c' : '#475569');
+            chip.style.cursor = adjunto.visualizable ? 'pointer' : 'default';
             var ic = document.createElement('i');
             ic.className = 'fas ' + (ext === 'pdf' ? 'fa-file-pdf' : (ext === 'xml' ? 'fa-file-code' : 'fa-paperclip'));
             ic.style.marginRight = '4px';
             chip.appendChild(ic);
             chip.appendChild(document.createTextNode(nombre));
-            chip.title = nombre;
+            chip.title = adjunto.visualizable
+                ? nombre + ' · Clic para visualizar sin guardar'
+                : nombre + (['pdf', 'xml'].indexOf(ext) !== -1
+                    ? ' · Supera el límite de 15 MB'
+                    : ' · Vista previa no disponible');
+            if (adjunto.visualizable) {
+                var correo = correoActual;
+                chip.addEventListener('click', function () {
+                    abrirVisorAdjunto(correo, adjunto);
+                });
+            }
             ctAdjuntos.appendChild(chip);
         });
     }
@@ -867,13 +1555,22 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     }
 
     // ── Buscar en el buzón (servidor IMAP) ──
-    // opts.mes ('YYYY-MM') = mes prioritario de la tarjeta de por-pagar:
-    // el servidor busca primero solo en ese mes y amplía solo si no hay nada.
+    // opts.origenBusqueda distingue la lupa de la tarjeta de la lupa y los
+    // filtros propios de la bandeja.
     function cargarCorreos(opts) {
         opts = (opts && typeof opts === 'object' && !(opts instanceof Event)) ? opts : {};
         var texto = inputBuscar ? inputBuscar.value.trim() : '';
+        var paginaSolicitada = Math.max(1, parseInt(opts.pagina || 1, 10) || 1);
+        var buscarEnCarpeta = selAlcance && selAlcance.value === 'carpeta';
 
-        if (selDias.value === '0' && texto === '') {
+        var esTarjeta = opts.origenBusqueda === 'tarjeta';
+        contextoBusquedaActivo = esTarjeta ? {
+            origenBusqueda: 'tarjeta',
+            fechaReferencia: opts.fechaReferencia || '',
+            numeroContexto: opts.numeroContexto || ''
+        } : {};
+
+        if (selDias.value === '0' && texto === '' && !buscarEnCarpeta) {
             if (!confirm('Vas a listar TODO el buzón sin término de búsqueda; puede tardar y solo se muestran los 500 más recientes. ¿Continuar?')) {
                 return;
             }
@@ -881,7 +1578,10 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
         try {
             sessionStorage.setItem('correoUltimaBusqueda', JSON.stringify({
-                texto: texto, ambito: selAmbito.value, dias: selDias.value
+                texto: texto,
+                ambito: selAmbito.value,
+                alcance: selAlcance ? selAlcance.value : 'buzon',
+                dias: selDias.value
             }));
         } catch (e) {}
 
@@ -893,15 +1593,30 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             dias: selDias.value,
             texto: texto,
             ambito: selAmbito ? selAmbito.value : 'asunto_remitente',
-            mes: opts.mes || ''
+            carpeta: buscarEnCarpeta ? carpetaActiva : '',
+            pagina: paginaSolicitada,
+            origen_busqueda: esTarjeta ? 'tarjeta' : 'bandeja',
+            fecha_referencia: esTarjeta ? (opts.fechaReferencia || '') : '',
+            numero_contexto: esTarjeta ? (opts.numeroContexto || '') : ''
         })
             .then(function (r) {
+                textoBusquedaCargada = normalizar(texto).trim();
                 correos = (r.correos || []).map(function (c) {
-                    c._haystack = normalizar((c.asunto || '') + ' ' + (c.remitente || '') + ' ' + (c.fecha || ''));
+                    c._haystack = normalizar((c.asunto || '') + ' ' + (c.remitente || '') + ' '
+                        + (c.cc || '') + ' ' + (c.reply_to || '') + ' ' + (c.adjuntos || '') + ' ' + (c.fecha || ''));
                     return c;
                 });
                 totalBuzon = r.total || correos.length;
-                if (r.mes) {
+                paginaActual = parseInt(r.pagina || paginaSolicitada, 10);
+                paginasTotal = Math.max(1, parseInt(r.paginas || 1, 10));
+                porPagina = Math.max(1, parseInt(r.por_pagina || 500, 10));
+                if (r.origen_busqueda === 'tarjeta' && r.fecha_desde && r.fecha_hasta) {
+                    var desde = r.fecha_desde.substring(8, 10) + '/' + r.fecha_desde.substring(5, 7);
+                    var hasta = r.fecha_hasta.substring(8, 10) + '/' + r.fecha_hasta.substring(5, 7);
+                    mesNota = r.rango_aplicado
+                        ? ' · rango ' + desde + '–' + hasta
+                        : ' · sin resultados en ' + desde + '–' + hasta + ', todo el buzón';
+                } else if (r.mes) {
                     mesNota = ' · ' + r.mes.substring(5, 7) + '/' + r.mes.substring(0, 4);
                 } else if (r.mes_probado) {
                     mesNota = ' · nada en ' + r.mes_probado.substring(5, 7) + '/' + r.mes_probado.substring(0, 4) + ', todas las fechas';
@@ -911,6 +1626,17 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                 seleccion = {};
                 cbVisibles.checked = false;
                 renderCorreos();
+                if (ABRIR_CORREO_PENDIENTE) {
+                    var correoObjetivo = correos.find(function (correo) {
+                        return Number(correo.uid || 0) === ABRIR_CORREO_UID
+                            && (ABRIR_CORREO_CARPETA === '' || String(correo.carpeta || '') === ABRIR_CORREO_CARPETA);
+                    });
+                    if (correoObjetivo) {
+                        ABRIR_CORREO_PENDIENTE = false;
+                        seleccionarCorreo(correoObjetivo);
+                    }
+                }
+                listaEl.scrollTop = 0;
             })
             .catch(function (err) { mostrarError(err.message); })
             .then(function () {
@@ -920,6 +1646,11 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     }
 
     if (btnCargar) btnCargar.addEventListener('click', cargarCorreos);
+    if (selAlcance) {
+        selAlcance.addEventListener('change', function () {
+            if (btnCargar && !btnCargar.disabled) cargarCorreos();
+        });
+    }
 
     // ── Cambio de cuenta de correo (recarga con la cuenta elegida) ──
     var selCuenta = document.getElementById('sel-cuenta');
@@ -935,6 +1666,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                 sessionStorage.setItem('correoUltimaBusqueda', JSON.stringify({
                     texto: textoActual,
                     ambito: selAmbito ? selAmbito.value : 'asunto_remitente',
+                    alcance: selAlcance ? selAlcance.value : 'buzon',
                     dias: selDias ? selDias.value : '0'
                 }));
                 if (textoActual !== '') sessionStorage.setItem('correoAutoListar', '1');
@@ -944,7 +1676,10 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                 .then(function () {
                     // Arrastrar la tarjeta de por-pagar (si está abierta) a la
                     // nueva cuenta para que no se pierda al cambiar de correo.
-                    window.location.href = BASE + '/correo' + (ppSuffixActual ? '?' + ppSuffixActual : '');
+                    var qsCuenta = [];
+                    if (MODO_CORREO !== 'facturas') qsCuenta.push('modo=' + encodeURIComponent(MODO_CORREO));
+                    if (ppSuffixActual) qsCuenta.push(ppSuffixActual);
+                    window.location.href = BASE + '/correo' + (qsCuenta.length ? '?' + qsCuenta.join('&') : '');
                 })
                 .catch(function (err) {
                     alert('No se pudo cambiar de cuenta: ' + err.message);
@@ -978,7 +1713,9 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
         if (!forzar) {
             try {
-                var ts = parseInt(localStorage.getItem('correoSyncTs_' + CUENTA_ID) || '0', 10);
+                // Clave versionada: fuerza una primera sincronización al
+                // desplegar el índice con destinatarios CC.
+                var ts = parseInt(localStorage.getItem('correoSyncTsV2_' + CUENTA_ID) || '0', 10);
                 if (ts && Date.now() - ts < SYNC_CADA_MS) {
                     pintarSyncInfo('Índice actualizado hace ' + Math.max(1, Math.round((Date.now() - ts) / 60000)) + ' min');
                     return;
@@ -989,21 +1726,27 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         syncEnCurso = true;
         var acumNuevos = 0;
         var tandas = 0;
+        var backlogMeta = 0; // mayor rezago visto: da un % de avance honesto
 
         function paso() {
             return postJson(BASE + '/correo/sincronizar', {}).then(function (r) {
                 var s = r.stats || {};
                 acumNuevos += s.nuevos || 0;
                 tandas++;
+                var pendientesMeta = (s.adjuntos_pendientes || 0) + (s.cc_pendientes || 0);
+                if (pendientesMeta > backlogMeta) backlogMeta = pendientesMeta;
 
                 if (!r.completado && tandas < 60) {
                     if (s.restantes) {
                         syncInfo.innerHTML = '<i class="fas fa-rotate fa-spin"></i> actualizando índice… ('
                             + (r.total_indexados || 0) + ' correos, quedan ' + s.restantes + ' carpetas)';
                     } else {
-                        // Fase 2: leyendo nombres de adjuntos (para buscar por número de factura)
-                        syncInfo.innerHTML = '<i class="fas fa-rotate fa-spin"></i> indexando nombres de archivos… (quedan '
-                            + (s.adjuntos_pendientes || '?') + ')';
+                        // Fase 2: adjuntos, CC y Reply-To.
+                        var avance = backlogMeta > pendientesMeta
+                            ? ' · ' + Math.round((backlogMeta - pendientesMeta) * 100 / backlogMeta) + '%'
+                            : '';
+                        syncInfo.innerHTML = '<i class="fas fa-rotate fa-spin"></i> indexando archivos, CC y Responder a… (quedan '
+                            + (pendientesMeta || '?') + avance + ')';
                     }
                     return paso();
                 }
@@ -1015,7 +1758,14 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                     return;
                 }
 
-                try { localStorage.setItem('correoSyncTs_' + CUENTA_ID, String(Date.now())); } catch (e) {}
+                try { localStorage.setItem('correoSyncTsV2_' + CUENTA_ID, String(Date.now())); } catch (e) {}
+                if (!r.completado && pendientesMeta > 0) {
+                    // Tope de tandas alcanzado con rezago: decirlo tal cual,
+                    // la tarea programada (o la próxima visita) lo continuará.
+                    pintarSyncInfo('Índice: ' + (r.total_indexados || 0) + ' correos · '
+                        + pendientesMeta + ' por indexar (continúa en segundo plano)');
+                    return;
+                }
                 pintarSyncInfo('Índice: ' + (r.total_indexados || 0) + ' correos'
                     + (acumNuevos ? ' · +' + acumNuevos + ' nuevos' : ' · al día'));
             });
@@ -1400,7 +2150,11 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                             })
                             .catch(function (err) {
                                 detenerSelector();
-                                cfgMostrarMsg(err.message, true);
+                                // El lanzador falló en segundo plano: mismo
+                                // respaldo que si /selector/abrir fallara
+                                cfgMostrarMsg('No se pudo abrir el explorador de Windows (' + err.message + '). Elige la carpeta aquí:', true);
+                                cfgExplor.style.display = 'block';
+                                cargarExplorador((cfgCarpeta.value || '').trim());
                             });
                     }
 
@@ -1456,7 +2210,6 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     if (cbVisibles) {
         cbVisibles.addEventListener('change', function () {
             correosFiltrados().forEach(function (c) {
-                if (c.procesado) return;
                 if (cbVisibles.checked) seleccion[c.clave] = { uid: c.uid, carpeta: c.carpeta || '' };
                 else delete seleccion[c.clave];
             });
@@ -1478,7 +2231,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         elCounts.textContent = '';
         elDetail.textContent = '';
 
-        var totales = { procesados: 0, nuevas: 0, ya_existentes: 0, aceptadas: 0, rechazadas: 0, otra_cedula: 0, pdfs_guardados: 0, pdfs_sin_identificar: 0, sin_adjuntos: 0, omitidos: 0 };
+        var totales = { procesados: 0, nuevas: 0, ya_existentes: 0, aceptadas: 0, rechazadas: 0, otra_cedula: 0, pdfs_guardados: 0, pdfs_sin_identificar: 0, sin_adjuntos: 0 };
         var errores = [];
         var hechos = 0;
 
@@ -1498,7 +2251,6 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                         totales.pdfs_guardados += r.pdfs_guardados || 0;
                         totales.pdfs_sin_identificar += r.pdfs_sin_identificar || 0;
                         totales.sin_adjuntos += r.sin_adjuntos || 0;
-                        totales.omitidos += r.omitidos || 0;
                         (r.errores || []).forEach(function (e) { errores.push(e); });
 
                         setBar((hechos / items.length) * 100);
@@ -1516,16 +2268,14 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                 setBar(100);
                 var partes = [
                     '<i class="fas fa-check-circle" style="margin-right:5px;"></i>',
-                    '<strong>' + totales.nuevas + '</strong> factura' + (totales.nuevas !== 1 ? 's' : '') + ' nueva' + (totales.nuevas !== 1 ? 's' : '') + ' en bandeja',
-                    '· ' + totales.ya_existentes + ' ya existente' + (totales.ya_existentes !== 1 ? 's' : ''),
-                    '· ' + totales.pdfs_guardados + ' PDF' + (totales.pdfs_guardados !== 1 ? 's' : '')
+                    '<strong>' + totales.nuevas + '</strong> factura' + (totales.nuevas !== 1 ? 's' : '') + ' nueva' + (totales.nuevas !== 1 ? 's' : '') + ' en bandeja'
                 ];
+                partes.push('· ' + totales.pdfs_guardados + ' PDF' + (totales.pdfs_guardados !== 1 ? 's' : ''));
                 if (totales.aceptadas > 0) partes.push('· ' + totales.aceptadas + ' verificada' + (totales.aceptadas !== 1 ? 's' : '') + ' por Hacienda');
                 if (totales.rechazadas > 0) partes.push('· <strong style="color:#b91c1c;">' + totales.rechazadas + ' rechazada' + (totales.rechazadas !== 1 ? 's' : '') + ' por Hacienda</strong>');
                 if (totales.otra_cedula > 0) partes.push('· <strong style="color:#ea580c;">' + totales.otra_cedula + ' con otra cédula (no son de la empresa)</strong>');
                 if (totales.pdfs_sin_identificar > 0) partes.push('· ' + totales.pdfs_sin_identificar + ' PDF sin identificar');
                 if (totales.sin_adjuntos > 0) partes.push('· ' + totales.sin_adjuntos + ' sin adjuntos');
-                if (totales.omitidos > 0) partes.push('· ' + totales.omitidos + ' ya procesados');
 
                 var html = partes.join(' ');
                 if (errores.length) {
@@ -1543,7 +2293,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             })
             .catch(function (err) {
                 setStatus('Error: ' + err.message);
-                elDetail.textContent = 'Puedes reintentar: los correos ya procesados no se repiten.';
+                elDetail.textContent = 'Puedes volver a intentarlo con los mismos correos.';
                 btnProcesar.disabled = false;
                 btnCargar.disabled = false;
             });
@@ -1607,6 +2357,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             var importacionId = 0;
             var archivosGuardados = 0;
             var avisoCarpeta = '';
+            var avisosArchivos = [];
 
             postJson(BASE + '/correo/importar', {
                 ids: ids.join(','),
@@ -1617,6 +2368,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                     importacionId = r.importacion_id;
                     archivosGuardados = r.archivos_guardados || 0;
                     avisoCarpeta = r.aviso_carpeta || '';
+                    avisosArchivos = r.avisos || [];
                     setBar(15);
                     setStatus('Procesando facturas…');
 
@@ -1631,7 +2383,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                             setBar(15 + ((estado.progress_percent || 0) * 0.85));
                             elCounts.textContent =
                                 'Importadas: ' + (s.importado || 0) +
-                                ' · Duplicadas: ' + (s.duplicado || 0) +
+                                ' · Ya en esta semana: ' + (s.duplicado || 0) +
                                 ' · Errores: ' + (s.error || 0) +
                                 ' · Pendientes: ' + (s.pendiente || 0);
 
@@ -1656,15 +2408,28 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                     setBar(100);
                     var s = (estado && estado.stats) || {};
                     var importadas = s.importado || 0;
-                    var problemas  = (s.duplicado || 0) + (s.error || 0);
+                    var repetidas = s.duplicado || 0;
+                    var erroresImportacion = s.error || 0;
 
                     var html = '<i class="fas fa-check-circle" style="margin-right:5px;"></i>'
                         + '<strong>' + importadas + '</strong> factura' + (importadas !== 1 ? 's' : '') + ' importada' + (importadas !== 1 ? 's' : '')
-                        + (problemas > 0 ? ' · ' + problemas + ' con problema' : '')
+                        + (repetidas > 0 ? ' · ' + repetidas + ' ya estaba' + (repetidas !== 1 ? 'n' : '') + ' en esta semana' : '')
+                        + (erroresImportacion > 0 ? ' · ' + erroresImportacion + ' con error' : '')
                         + (archivosGuardados > 0 ? ' · ' + archivosGuardados + ' archivo' + (archivosGuardados !== 1 ? 's' : '') + ' renombrado' + (archivosGuardados !== 1 ? 's' : '') + ' en la carpeta' : '')
                         + ' — <a href="' + BASE + '/facturas?importacion_id=' + importacionId + '" style="color:#166534;font-weight:700;">Ver en Facturas</a>';
                     if (avisoCarpeta) {
                         html += '<div style="margin-top:6px;color:#b45309;">⚠ ' + avisoCarpeta + '</div>';
+                    }
+                    // Archivos que NO llegaron completos a la carpeta destino
+                    // (XML/PDF con copia fallida o factura sin PDF)
+                    if (avisosArchivos.length) {
+                        html += '<div style="margin-top:6px;color:#b45309;">'
+                             + avisosArchivos.slice(0, 8).map(function (a) {
+                                   var div = document.createElement('div');
+                                   div.textContent = '⚠ ' + String(a).substring(0, 160);
+                                   return div.innerHTML;
+                               }).join('<br>')
+                             + '</div>';
                     }
 
                     setStatus('¡Listo! Actualizando…');
@@ -1672,7 +2437,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                 })
                 .catch(function (err) {
                     setStatus('Error: ' + err.message);
-                    elDetail.textContent = 'Puedes reintentar: las facturas ya importadas se marcarán como duplicadas y no se repetirán.';
+                    elDetail.textContent = 'Puedes reintentar: solo se bloquearán las facturas que ya estén en la semana seleccionada.';
                     btnImportar.disabled = false;
                     if (btnDescartar) btnDescartar.disabled = false;
                 });
@@ -1720,6 +2485,12 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         });
     } catch (e) {}
 
+    var listaPanelRz = layout.querySelector('.correo-lista');
+    if (listaPanelRz && !listaPanelRz.classList.contains('carpetas-cerradas')) {
+        var anchoLista = parseFloat(getComputedStyle(layout).getPropertyValue('--lista-w')) || 0;
+        if (anchoLista < 470) layout.style.setProperty('--lista-w', '470px');
+    }
+
     function guardar(rz, valor) {
         try {
             var g = JSON.parse(localStorage.getItem(LS) || '{}');
@@ -1743,7 +2514,8 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             function mover(ev) {
                 var valor;
                 if (tipo === 'lista') {
-                    valor = clamp(ev.clientX - rect.left, 220, rect.width * 0.55);
+                    var minLista = listaPanelRz && !listaPanelRz.classList.contains('carpetas-cerradas') ? 470 : 220;
+                    valor = clamp(ev.clientX - rect.left, minLista, rect.width * 0.55);
                     layout.style.setProperty('--lista-w', valor + 'px');
                 } else if (tipo === 'bandeja') {
                     valor = clamp(rect.right - ev.clientX, 200, rect.width * 0.55);
@@ -1779,3 +2551,187 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     });
 })();
 </script>
+
+<?php if ($modoCorreo === 'general'): ?>
+<script>
+(function () {
+    var BASE = '<?= $baseUrl ?>';
+    var CUENTA = <?= (int) $cuentaActivaId ?>;
+    var lote = <?= json_encode($loteGeneral, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
+    var ejecutandoPeticion = false;
+    var detenido = false;
+    var estado = document.getElementById('general-estado');
+    var barra = document.getElementById('general-barra');
+    var inc = document.getElementById('general-incidencias');
+    var iniciar = document.getElementById('general-iniciar');
+    var pausar = document.getElementById('general-pausar');
+    var reanudar = document.getElementById('general-reanudar');
+    var cancelar = document.getElementById('general-cancelar');
+    var historialBtn = document.getElementById('general-historial');
+    var historialModal = document.getElementById('modal-incidencias');
+    var historialCerrar = document.getElementById('incidencias-cerrar');
+    var historialBody = document.getElementById('incidencias-body');
+    var historialResumen = document.getElementById('incidencias-resumen');
+    var historialQ = document.getElementById('incidencias-q');
+    var historialTipo = document.getElementById('incidencias-tipo');
+    var historialBuscar = document.getElementById('incidencias-buscar');
+    var historialPrev = document.getElementById('incidencias-prev');
+    var historialNext = document.getElementById('incidencias-next');
+    var historialPaginaEl = document.getElementById('incidencias-pagina');
+    var historialPagina = 1;
+    var historialPaginas = 1;
+
+    function post(ruta, datos) {
+        var fd = new FormData();
+        Object.keys(datos || {}).forEach(function (k) { fd.append(k, datos[k]); });
+        fd.append('cuenta_id', CUENTA);
+        return fetch(BASE + ruta, {method:'POST', body:fd, credentials:'same-origin'})
+            .then(function (res) { return res.json().catch(function(){return null;}).then(function(body){
+                if (!res.ok || !body || body.ok === false) throw new Error((body && body.message) || ('Error HTTP ' + res.status));
+                return body;
+            }); });
+    }
+
+    function escapeHtml(value) {
+        var div = document.createElement('div');
+        div.textContent = String(value == null ? '' : value);
+        return div.innerHTML;
+    }
+
+    function fechaHistorial(value) {
+        var text = String(value || '');
+        if (text.length < 16) return text || '—';
+        return text.substring(8,10) + '/' + text.substring(5,7) + '/' + text.substring(0,4)
+            + ' ' + text.substring(11,16);
+    }
+
+    function cargarHistorial(pagina) {
+        historialPagina = Math.max(1, Number(pagina || 1));
+        historialBody.innerHTML = '<tr><td colspan="7" style="padding:30px;text-align:center;color:#64748b;"><i class="fas fa-spinner fa-spin"></i> Cargando incidencias…</td></tr>';
+        post('/correo/general/incidencias', {
+            pagina: historialPagina,
+            q: historialQ.value || '',
+            tipo: historialTipo.value || ''
+        }).then(function (r) {
+            historialPagina = Number(r.page || 1);
+            historialPaginas = Number(r.pages || 1);
+            historialResumen.textContent = Number(r.total || 0) + ' incidencias guardadas para esta cuenta';
+            historialPaginaEl.textContent = 'Página ' + historialPagina + ' de ' + historialPaginas;
+            historialPrev.disabled = historialPagina <= 1;
+            historialNext.disabled = historialPagina >= historialPaginas;
+
+            var tipoActual = historialTipo.value;
+            var tiposExistentes = {};
+            Array.prototype.forEach.call(historialTipo.options, function (option) { tiposExistentes[option.value] = true; });
+            (r.tipos || []).forEach(function (tipo) {
+                if (tiposExistentes[tipo]) return;
+                var option = document.createElement('option');
+                option.value = tipo;
+                option.textContent = tipo;
+                historialTipo.appendChild(option);
+            });
+            historialTipo.value = tipoActual;
+
+            if (!(r.rows || []).length) {
+                historialBody.innerHTML = '<tr><td colspan="7" style="padding:30px;text-align:center;color:#64748b;">No hay incidencias con estos filtros.</td></tr>';
+                return;
+            }
+            historialBody.innerHTML = (r.rows || []).map(function (row) {
+                var asunto = String(row.asunto || '').trim();
+                var termino = asunto || String(row.remitente || '').trim();
+                var puedeAbrir = Number(row.uid || 0) > 0 && termino !== '';
+                var url = BASE + '/correo?modo=general&buscar=' + encodeURIComponent(termino)
+                    + '&abrir_uid=' + encodeURIComponent(row.uid || '')
+                    + '&abrir_carpeta=' + encodeURIComponent(row.carpeta || '');
+                var accion = puedeAbrir
+                    ? '<a class="btn btn-outline btn-sm" href="'+escapeHtml(url)+'" title="Buscar y abrir el correo original"><i class="fas fa-envelope-open-text"></i> Ver correo</a>'
+                    : '<span style="font-size:10.5px;color:#94a3b8;">Sin referencia</span>';
+                return '<tr>'+
+                    '<td style="white-space:nowrap;font-size:11px;">'+escapeHtml(fechaHistorial(row.creado_en))+'</td>'+
+                    '<td style="font-weight:700;color:var(--navy);">#'+Number(row.lote_id || 0)+'</td>'+
+                    '<td><span class="badge" style="background:#fff7ed;color:#9a3412;">'+escapeHtml(row.tipo || 'incidencia')+'</span></td>'+
+                    '<td style="max-width:260px;"><div style="font-weight:700;color:var(--navy);white-space:normal;">'+escapeHtml(asunto || '(Sin asunto)')+'</div>'+
+                    '<div style="font-size:10.5px;color:#64748b;">'+escapeHtml(row.remitente || '')+'</div></td>'+
+                    '<td style="max-width:390px;white-space:normal;font-size:11.5px;">'+escapeHtml(row.mensaje || '')+'</td>'+
+                    '<td style="max-width:190px;overflow-wrap:anywhere;font-size:10.5px;color:#64748b;">'+escapeHtml(row.carpeta || '—')+'</td>'+
+                    '<td style="white-space:nowrap;">'+accion+'</td></tr>';
+            }).join('');
+        }).catch(function (e) {
+            historialBody.innerHTML = '<tr><td colspan="7" style="padding:30px;text-align:center;color:#b91c1c;">'+escapeHtml(e.message)+'</td></tr>';
+        });
+    }
+
+    historialBtn.addEventListener('click', function () {
+        historialModal.style.display = 'flex';
+        cargarHistorial(1);
+    });
+    historialCerrar.addEventListener('click', function () { historialModal.style.display = 'none'; });
+    historialModal.addEventListener('click', function (event) {
+        if (event.target === historialModal) historialModal.style.display = 'none';
+    });
+    historialBuscar.addEventListener('click', function () { cargarHistorial(1); });
+    historialQ.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter') { event.preventDefault(); cargarHistorial(1); }
+    });
+    historialTipo.addEventListener('change', function () { cargarHistorial(1); });
+    historialPrev.addEventListener('click', function () { if (historialPagina > 1) cargarHistorial(historialPagina - 1); });
+    historialNext.addEventListener('click', function () { if (historialPagina < historialPaginas) cargarHistorial(historialPagina + 1); });
+
+    function render(l, incidencias) {
+        lote = l || lote;
+        if (!lote) { estado.textContent = 'Define el rango y pulsa Iniciar.'; return; }
+        var total = Number(lote.total_mensajes || 0), hechos = Number(lote.procesados || 0);
+        var pct = total ? Math.min(100, Math.round(hechos * 100 / total)) : (lote.estado === 'completado' ? 100 : 0);
+        barra.style.width = pct + '%';
+        estado.innerHTML = '<strong>Lote #' + lote.id + ' · ' + lote.estado + '</strong> — '
+            + hechos + '/' + total + ' correos · ' + Number(lote.documentos_importados || 0) + ' documentos importados'
+            + ' · ' + Number(lote.duplicados || 0) + ' duplicados · ' + Number(lote.pdf_pendientes || 0) + ' PDF pendientes';
+        iniciar.style.display = ['ejecutando','pausado'].indexOf(lote.estado) >= 0 ? 'none' : '';
+        pausar.style.display = lote.estado === 'ejecutando' ? '' : 'none';
+        reanudar.style.display = lote.estado === 'pausado' ? '' : 'none';
+        cancelar.style.display = ['ejecutando','pausado','pendiente'].indexOf(lote.estado) >= 0 ? '' : 'none';
+        if (Array.isArray(incidencias)) {
+            inc.innerHTML = incidencias.slice(0, 8).map(function(x){
+                var d=document.createElement('div'); d.textContent='⚠ ' + x.tipo + ': ' + x.mensaje; return d.innerHTML;
+            }).join('<br>');
+        }
+    }
+
+    function paso() {
+        if (detenido || ejecutandoPeticion || !lote || lote.estado !== 'ejecutando') return;
+        ejecutandoPeticion = true;
+        post('/correo/general/procesar', {lote_id:lote.id, limit:6})
+            .then(function(r){ render(r.lote, r.incidencias || []); })
+            .catch(function(e){ estado.textContent = 'Error: ' + e.message; })
+            .then(function(){
+                ejecutandoPeticion = false;
+                if (lote && lote.estado === 'ejecutando' && !detenido) setTimeout(paso, 500);
+            });
+    }
+
+    iniciar.addEventListener('click', function(){
+        var desde=document.getElementById('general-desde').value, hasta=document.getElementById('general-hasta').value;
+        var correo=document.getElementById('general-correo').value.trim();
+        if (!desde || !hasta) { alert('Indica ambas fechas.'); return; }
+        if (correo && !document.getElementById('general-correo').checkValidity()) { alert('Indica un correo válido.'); return; }
+        iniciar.disabled=true; estado.textContent='Calculando correos candidatos…';
+        post('/correo/general/estimar', {fecha_desde:desde, fecha_hasta:hasta, correo_busqueda:correo})
+            .then(function(r){
+                var filtro = correo ? ' que coinciden con ' + correo : '';
+                if (!confirm('Se revisarán ' + r.total + ' correos candidatos' + filtro + ' de la cuenta seleccionada. ¿Iniciar?')) throw new Error('__cancelado__');
+                estado.textContent='Creando el lote…';
+                return post('/correo/general/crear', {fecha_desde:desde, fecha_hasta:hasta, correo_busqueda:correo});
+            })
+            .then(function(r){ detenido=false; render(r.lote, []); paso(); })
+            .catch(function(e){ if(e.message!=='__cancelado__') estado.textContent='No se pudo iniciar: '+e.message; })
+            .then(function(){ iniciar.disabled=false; });
+    });
+    pausar.addEventListener('click', function(){ detenido=true; post('/correo/general/pausar',{lote_id:lote.id}).then(function(r){render(r.lote,[]);}); });
+    reanudar.addEventListener('click', function(){ detenido=false; post('/correo/general/reanudar',{lote_id:lote.id}).then(function(r){render(r.lote,[]);paso();}); });
+    cancelar.addEventListener('click', function(){ if(!confirm('Se detendrá lo pendiente; lo ya importado se conserva.'))return; detenido=true; post('/correo/general/cancelar',{lote_id:lote.id}).then(function(r){render(r.lote,[]);}); });
+
+    render(lote, []);
+    if (lote && lote.estado === 'ejecutando') paso();
+})();
+</script>
+<?php endif; ?>

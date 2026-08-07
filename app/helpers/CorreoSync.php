@@ -12,9 +12,10 @@
  * viaje extra por los encabezados nuevos; renumerada o con movidos/eliminados
  * = reindexado de esa carpeta. Se procesan primero las nunca sincronizadas y
  * las más viejas; las sincronizadas hace <2 min se saltan (ya están al día en
- * esta ronda). La fase 2 rellena los nombres de adjuntos por tandas.
+ * esta ronda). La fase 2 rellena los nombres de adjuntos y destinatarios CC
+ * por tandas.
  *
- * Devuelve stats con 'completado' = false cuando quedan carpetas o adjuntos
+ * Devuelve stats con 'completado' = false cuando quedan carpetas o metadatos
  * pendientes, para que el disparador vuelva a llamar hasta terminar.
  */
 
@@ -58,12 +59,20 @@ class CorreoSync
         }
     }
 
-    public static function ejecutar(array $config, $indice, $presupuestoSegundos = 20)
+    /**
+     * @param MailFetcher|null $fetcherCompartido Conexión IMAP a reutilizar
+     *        entre tandas (la usa el CLI para no pagar el saludo TLS cada
+     *        12 s). Si se pasa, el que llama es responsable de cerrarla.
+     */
+    public static function ejecutar(array $config, $indice, $presupuestoSegundos = 20, $fetcherCompartido = null)
     {
         $inicio = microtime(true);
 
-        $fetcher = new MailFetcher($config);
-        $fetcher->conectar();
+        $fetcherPropio = !($fetcherCompartido instanceof MailFetcher);
+        $fetcher = $fetcherPropio ? new MailFetcher($config) : $fetcherCompartido;
+        if ($fetcherPropio || !$fetcher->estaConectado()) {
+            $fetcher->conectar();
+        }
 
         $stats = ['carpetas' => 0, 'nuevos' => 0, 'reindexadas' => 0, 'restantes' => 0, 'completado' => true];
 
@@ -106,11 +115,18 @@ class CorreoSync
 
                 if ($resync) {
                     // Carpeta nueva o renumerada por el servidor: completa
-                    $indice->vaciarCarpeta($carpeta);
-                    if ($estado['mensajes'] > 0) {
-                        $filas = $fetcher->overviewCarpeta($carpeta, '1:*');
-                        $stats['nuevos'] += $indice->insertarLote($carpeta, $nombre, $estado['uidvalidity'], $filas);
+                    $filas = $estado['mensajes'] > 0
+                        ? $fetcher->overviewCarpeta($carpeta, '1:*')
+                        : [];
+                    if ($estado['mensajes'] > 0 && empty($filas)) {
+                        throw new RuntimeException("IMAP no devolvió encabezados para reconstruir {$nombre}.");
                     }
+                    $stats['nuevos'] += $indice->reemplazarCarpeta(
+                        $carpeta,
+                        $nombre,
+                        $estado['uidvalidity'],
+                        $filas
+                    );
                     $stats['reindexadas']++;
                 } elseif ($estado['uidnext'] > $ultimoUid + 1) {
                     // Solo lo nuevo. Nota IMAP: 'n:*' devuelve al menos el
@@ -124,48 +140,77 @@ class CorreoSync
 
                 // Movidos/eliminados: si el conteo no cuadra, reindexar
                 if (!$resync && $indice->contarCarpeta($carpeta) !== $estado['mensajes']) {
-                    $indice->vaciarCarpeta($carpeta);
-                    if ($estado['mensajes'] > 0) {
-                        $filas = $fetcher->overviewCarpeta($carpeta, '1:*');
-                        $indice->insertarLote($carpeta, $nombre, $estado['uidvalidity'], $filas);
+                    $filas = $estado['mensajes'] > 0
+                        ? $fetcher->overviewCarpeta($carpeta, '1:*')
+                        : [];
+                    if ($estado['mensajes'] > 0 && empty($filas)) {
+                        throw new RuntimeException("IMAP no devolvió encabezados para reconstruir {$nombre}.");
                     }
+                    $indice->reemplazarCarpeta(
+                        $carpeta,
+                        $nombre,
+                        $estado['uidvalidity'],
+                        $filas
+                    );
                     $stats['reindexadas']++;
                 }
 
                 $indice->guardarEstadoCarpeta($carpeta, $estado['uidvalidity'], max(0, $estado['uidnext'] - 1), $estado['mensajes']);
             }
 
-            // ── Fase 2: nombres de adjuntos ──
-            // imap_fetchstructure es un viaje por mensaje (lo lento), así que
-            // se rellena por tandas con el presupuesto que quede; el que llama
-            // repite hasta que no queden pendientes. Esto también completa los
-            // correos indexados antes de existir esta columna.
+            // ── Fase 2: nombres de adjuntos y destinatarios CC/Reply-To ──
+            // Se rellenan en UNA sola pasada (antes eran dos colas separadas:
+            // un mensaje con ambos pendientes cambiaba de carpeta y se
+            // procesaba dos veces). pendientesMetadatos agrupa por carpeta,
+            // así cada carpeta IMAP se abre una vez por tanda y del mensaje
+            // se leen estructura y encabezados en el mismo viaje.
             $stats['adjuntos'] = 0;
+            $stats['cc'] = 0;
             if ($stats['completado']) {
                 $agotado = false;
-                foreach ($indice->pendientesAdjuntos(400) as $fila) {
+
+                foreach ($indice->pendientesMetadatos(500) as $fila) {
                     if ((microtime(true) - $inicio) > $presupuestoSegundos) {
                         $agotado = true;
                         break;
                     }
-                    $texto = $fetcher->adjuntosDeMensaje((int) $fila['uid'], (string) $fila['carpeta']);
-                    if ($texto === null) {
-                        continue; // carpeta inaccesible: queda para la próxima ronda
+
+                    if (!empty($fila['adjuntos_pendiente'])) {
+                        $texto = $fetcher->adjuntosDeMensaje((int) $fila['uid'], (string) $fila['carpeta']);
+                        if ($texto !== null) {
+                            $indice->guardarAdjuntos((int) $fila['id'], $texto);
+                            $stats['adjuntos']++;
+                        }
                     }
-                    $indice->guardarAdjuntos((int) $fila['id'], $texto);
-                    $stats['adjuntos']++;
+
+                    if (!empty($fila['cc_pendiente'])) {
+                        $destinatarios = $fetcher->destinatariosDeMensaje((int) $fila['uid'], (string) $fila['carpeta']);
+                        if ($destinatarios !== null) {
+                            $indice->guardarDestinatarios(
+                                (int) $fila['id'],
+                                $destinatarios['cc'],
+                                $destinatarios['reply_to']
+                            );
+                            $stats['cc']++;
+                        }
+                    }
                 }
 
                 // Sigue habiendo pendientes → el que llama repite; pero si en
                 // toda la tanda no se avanzó nada (solo carpetas inaccesibles),
                 // se da por completado para no ciclar.
                 $stats['adjuntos_pendientes'] = $indice->contarPendientesAdjuntos();
-                if ($stats['adjuntos_pendientes'] > 0 && ($stats['adjuntos'] > 0 || $agotado)) {
+                $stats['cc_pendientes'] = $indice->contarPendientesCc();
+                $pendientes = $stats['adjuntos_pendientes'] + $stats['cc_pendientes'];
+                $procesados = $stats['adjuntos'] + $stats['cc'];
+                if ($pendientes > 0 && ($procesados > 0 || $agotado)) {
                     $stats['completado'] = false;
                 }
             }
         } finally {
-            $fetcher->cerrar();
+            if ($fetcherPropio) {
+                $fetcher->cerrar();
+            }
         }
 
         $stats['segundos'] = round(microtime(true) - $inicio, 1);
