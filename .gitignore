@@ -6,12 +6,14 @@ public/uploads/xml/*
 public/uploads/gastos/*
 public/uploads/xml_queue/*
 public/uploads/porpagar/*
+public/uploads/notas_credito/*
 
 # Keep upload directories in repo structure if needed
 !public/uploads/xml/.gitkeep
 !public/uploads/gastos/.gitkeep
 !public/uploads/xml_queue/.gitkeep
 !public/uploads/porpagar/.gitkeep
+!public/uploads/notas_credito/.gitkeep
 
 # Temporary/scratch scripts
 .tmp_*
@@ -22,9 +24,16 @@ storage/cache/*.json
 # Session files (runtime)
 storage/sessions/
 
+# Locks de procesos (runtime)
+storage/locks/
+
+# PDFs de devoluciones archivados por la app (runtime)
+storage/devoluciones/
+
 # Correo IMAP: credenciales reales y archivos capturados del buzón
 app/config/correo.php
 storage/correo/
+storage/backups/
 
 # Local-only utilities and notes (never deploy/commit)
 public/create_admin.php
