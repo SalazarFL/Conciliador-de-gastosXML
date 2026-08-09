@@ -23,6 +23,21 @@ class PorPagarVerificador
     {
         @set_time_limit(120);
 
+        $registro = $modelo->getListado($listadoId);
+        if ($registro && ($registro['estado'] ?? 'abierto') === 'cerrado') {
+            $resumen = method_exists($modelo, 'resumenPorEstado')
+                ? $modelo->resumenPorEstado($listadoId)
+                : [];
+            return [
+                'respaldada' => (int) ($resumen['respaldada'] ?? 0),
+                'con_diferencia' => (int) ($resumen['con_diferencia'] ?? 0),
+                'sin_respaldo' => (int) ($resumen['sin_respaldo'] ?? 0),
+                'archivos_movidos' => 0,
+                'archivos_revisar' => 0,
+                'archivos_errores' => 0,
+            ];
+        }
+
         $lineas = $modelo->getLineas($listadoId);
         $idsAntes = method_exists($modelo, 'getFacturaIdsVinculadas')
             ? $modelo->getFacturaIdsVinculadas($listadoId)
@@ -30,7 +45,6 @@ class PorPagarVerificador
 
         // El universo de candidatas es la semana del listado (si tiene):
         // la verificación no es contra el acumulado de todo el sistema
-        $registro = $modelo->getListado($listadoId);
         $semanaId = $registro ? (int) ($registro['semana_id'] ?? 0) : 0;
         $facturas = $modelo->getFacturasParaMatching($semanaId);
 
@@ -169,6 +183,9 @@ class PorPagarVerificador
 
         try {
             foreach ($modelo->getListados(30, $semanaId) as $listado) {
+                if (($listado['estado'] ?? 'abierto') === 'cerrado') {
+                    continue;
+                }
                 self::verificarListado((int) $listado['id'], $modelo);
             }
         } catch (Throwable $e) {

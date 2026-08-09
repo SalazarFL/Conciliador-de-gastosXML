@@ -30,6 +30,9 @@ $urlLimpiarFiltros = $baseUrl . '/facturas?' . http_build_query($parametrosLimpi
                 <i class="fas fa-upload" style="margin-right:6px;color:var(--navy-light);"></i>Subir Facturas XML
             </div>
         </div>
+        <a href="<?= $baseUrl ?>/facturas-erp" class="btn btn-outline btn-sm" style="margin-left:auto;">
+            <i class="fas fa-arrow-left" style="margin-right:4px;"></i>Volver a Facturas ERP
+        </a>
     </div>
 
     <form method="post" action="<?= $baseUrl ?>/facturas/subir" enctype="multipart/form-data" id="form-xml-upload">

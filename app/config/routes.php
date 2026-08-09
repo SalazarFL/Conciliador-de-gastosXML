@@ -17,6 +17,11 @@ $router->get('/logout', 'AuthController@logout');
 $router->get('/', 'HomeController@index');
 $router->get('/home', 'HomeController@index');
 
+// --- DIAGNÓSTICO DE LA INSTALACIÓN ---
+// La aplicación corre en la computadora de cada persona: esta página dice qué
+// le falta a ESTA instalación, para no depender de acceso remoto.
+$router->get('/diagnostico', 'DiagnosticoController@index');
+
 // --- RUTAS DE SOCIEDADES (se administran desde Inicio) ---
 $router->post('/sociedades/crear', 'SociedadesController@crear');
 $router->post('/sociedades/editar/{id}', 'SociedadesController@editar');
@@ -77,11 +82,20 @@ $router->post('/por-pagar/subir', 'PorPagarController@subir');
 $router->post('/por-pagar/previsualizar', 'PorPagarController@previsualizar');
 $router->post('/por-pagar/comparar-listado', 'PorPagarController@compararListado');
 $router->post('/por-pagar/verificar/{id}', 'PorPagarController@verificar');
+$router->post('/por-pagar/cerrar/{id}', 'PorPagarController@cerrar');
 $router->post('/por-pagar/eliminar/{id}', 'PorPagarController@eliminar');
 $router->post('/por-pagar/factura/eliminar/{id}', 'PorPagarController@eliminarFactura');
 $router->get('/por-pagar/exportar', 'PorPagarController@exportar');
 $router->get('/por-pagar/sin-coincidencia', 'PorPagarController@sinCoincidencia');
 $router->post('/por-pagar/forzar', 'PorPagarController@forzar');
+
+// --- RUTAS DE FACTURAS ERP (reporte "Facturas por Proveedor", saldos) ---
+$router->get('/facturas-erp', 'FacturasErpController@index');
+$router->post('/facturas-erp/subir', 'FacturasErpController@subir');
+$router->get('/facturas-erp/incidencias', 'FacturasErpController@incidencias');
+$router->post('/facturas-erp/incidencias/descartar', 'FacturasErpController@descartarIncidencias');
+$router->post('/facturas-erp/incidencias/restaurar', 'FacturasErpController@restaurarIncidencias');
+$router->get('/facturas-erp/exportar', 'FacturasErpController@exportar');
 
 // --- RUTAS DE NOTAS DE CRÉDITO (listados por período) ---
 $router->get('/notas-credito', 'NotasCreditoController@index');

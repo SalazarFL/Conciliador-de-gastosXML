@@ -229,7 +229,7 @@ class FacturasController extends Controller
 			}
 
 			return 'La factura quedó asignada a la semana, pero no coincide con ninguna línea del listado "'
-				. $listados[0]['nombre'] . '". Revísala en Facturas por pagar con el botón "Sin coincidencia".';
+				. $listados[0]['nombre'] . '". Revísala en Pagos semanales con el botón "Sin coincidencia".';
 		} catch (Throwable $e) {
 			return null; // el aviso nunca debe romper la asignación
 		}
@@ -345,6 +345,7 @@ class FacturasController extends Controller
 						'tipos_permitidos' => ['FE'],
 						'validar_receptor' => !empty($sociedad),
 						'cedula_receptor' => $sociedad['cedula'] ?? '',
+						'sociedad_id' => (int) ($sociedad['id'] ?? 0),
 					]);
 					if (!empty($resultado['semana_anterior'])) {
 						$semanasAfectadas[] = (int) $resultado['semana_anterior'];
@@ -440,6 +441,7 @@ class FacturasController extends Controller
 				'semana_id' => $semanaId,
 				'tipo_documento' => 'FE',
 				'cedula_receptor' => $sociedad['cedula'] ?? '',
+				'sociedad_id' => (int) ($sociedad['id'] ?? 0),
 			]);
 
 			$this->json([

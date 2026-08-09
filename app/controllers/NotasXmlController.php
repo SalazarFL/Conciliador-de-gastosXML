@@ -18,7 +18,7 @@ class NotasXmlController extends Controller
         $page = min($page, $paginas);
 
         $this->render('notasxml/index', [
-            'title' => 'Notas XML - XMLConcilia',
+            'title' => 'Notas de crédito · Carga XML - XMLConcilia',
             'notas' => $modelo->getNotasXml($desde, $hasta, $buscar, $page, $perPage),
             'desde' => $desde, 'hasta' => $hasta, 'buscar' => $buscar,
             'pagina' => $page, 'paginas' => $paginas, 'total' => $total,
@@ -54,6 +54,7 @@ class NotasXmlController extends Controller
                         'origen' => 'notas_xml', 'importacion_id' => $importacionId,
                         'tipos_permitidos' => ['NC'], 'validar_receptor' => !empty($sociedad),
                         'cedula_receptor' => $sociedad['cedula'] ?? '',
+                        'sociedad_id' => (int) ($sociedad['id'] ?? 0),
                     ]);
                     if (($r['estado'] ?? '') === 'importado') { $ok++; } else { $duplicados++; }
                 } catch (Throwable $e) {

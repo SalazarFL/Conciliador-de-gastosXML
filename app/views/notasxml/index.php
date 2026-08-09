@@ -8,7 +8,12 @@ foreach ([$desde ?? '', $hasta ?? '', $buscar ?? ''] as $valorFiltro) {
 }
 ?>
 <div class="card" style="margin-bottom:14px;">
-    <div class="card-header"><div class="card-title"><i class="fas fa-file-circle-minus" style="color:var(--gold);margin-right:6px;"></i>Notas de crédito XML</div></div>
+    <div class="card-header" style="flex-wrap:wrap;">
+        <div class="card-title"><i class="fas fa-file-circle-minus" style="color:var(--gold);margin-right:6px;"></i>Notas de crédito XML</div>
+        <a href="<?= $baseUrl ?>/notas-credito" class="btn btn-outline btn-sm" style="margin-left:auto;">
+            <i class="fas fa-arrow-left" style="margin-right:4px;"></i>Volver a Notas de crédito
+        </a>
+    </div>
     <form method="post" action="<?= $baseUrl ?>/notas-xml/subir" enctype="multipart/form-data" style="padding:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
         <input type="file" name="xml_files[]" accept=".xml" multiple required class="form-control" style="max-width:520px;">
         <button class="btn btn-primary" type="submit"><i class="fas fa-upload"></i> Importar NC XML</button>

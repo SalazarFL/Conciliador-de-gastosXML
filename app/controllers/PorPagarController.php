@@ -90,7 +90,7 @@ class PorPagarController extends Controller
         }
 
         $this->render('porpagar/index', [
-            'title'           => 'Facturas por pagar - XMLConcilia',
+            'title'           => 'Pagos semanales - XMLConcilia',
             'listados'        => $listados,
             'listado'         => $listado,
             'lineas'          => $lineas,
@@ -253,6 +253,9 @@ class PorPagarController extends Controller
             $listadoExistente = $analisis['listado_existente'];
 
             if ($listadoExistente !== null) {
+                if (($listadoExistente['estado'] ?? 'abierto') === 'cerrado') {
+                    throw new Exception('El pago de esta semana ya está cerrado. Crea otra semana para cargar más facturas.');
+                }
                 $listadoId = (int) $listadoExistente['id'];
                 $nombre = (string) $listadoExistente['nombre'];
             } else {
@@ -626,6 +629,13 @@ class PorPagarController extends Controller
             if ($registro === null) {
                 $this->redirectWithMessage($this->url('/por-pagar'), 'El listado no existe.', 'error');
             }
+            if (($registro['estado'] ?? 'abierto') === 'cerrado') {
+                $this->redirectWithMessage(
+                    $this->url('/por-pagar?listado_id=' . (int) $id . '&semana_id=' . (int) ($registro['semana_id'] ?? 0)),
+                    'El pago semanal ya está cerrado; sus coincidencias quedaron congeladas.',
+                    'warning'
+                );
+            }
 
             $stats = $this->ejecutarMatching((int) $id, $modelo);
 
@@ -638,6 +648,52 @@ class PorPagarController extends Controller
             );
         } catch (Throwable $e) {
             $this->redirectWithMessage($this->url('/por-pagar'),'No se pudo verificar: ' . $e->getMessage(), 'error');
+        }
+    }
+
+    /**
+     * Cierra el pago y refleja sus facturas emparejadas en Facturas ERP con
+     * el estado "Asignada a una semana".
+     */
+    public function cerrar($id)
+    {
+        if (!$this->isPost()) {
+            $this->redirect($this->url('/por-pagar'));
+        }
+
+        $modelo = $this->loadModel('PorPagar');
+        $listado = $modelo->getListado((int) $id);
+        if ($listado === null) {
+            $this->redirectWithMessage($this->url('/por-pagar'), 'El pago semanal no existe.', 'error');
+        }
+
+        $destino = $this->url(
+            '/por-pagar?listado_id=' . (int) $id . '&semana_id=' . (int) ($listado['semana_id'] ?? 0)
+        );
+
+        try {
+            if (($listado['estado'] ?? 'abierto') !== 'cerrado') {
+                // Toma la foto final de coincidencias justo antes del cierre.
+                $this->ejecutarMatching((int) $id, $modelo);
+            }
+            $resultado = $this->loadModel('FacturaErp')->cerrarPagoSemanal(
+                (int) $id,
+                $_SESSION['usuario_id'] ?? null
+            );
+
+            if (!empty($resultado['ya_cerrado'])) {
+                $mensaje = 'El pago semanal ya estaba cerrado.';
+                $tipo = 'warning';
+            } else {
+                $mensaje = sprintf(
+                    'Pago semanal cerrado: %s factura(s) quedaron como "Asignada a una semana" en Facturas ERP.',
+                    number_format((int) $resultado['asignadas'], 0, ',', '.')
+                );
+                $tipo = 'success';
+            }
+            $this->redirectWithMessage($destino, $mensaje, $tipo);
+        } catch (Throwable $e) {
+            $this->redirectWithMessage($destino, 'No se pudo cerrar el pago semanal: ' . $e->getMessage(), 'error');
         }
     }
 
@@ -777,6 +833,9 @@ class PorPagarController extends Controller
             if ($linea === null || $factura === null) {
                 $this->json(['ok' => false, 'message' => 'La línea o la factura no existen.'], 404);
             }
+            if (($linea['listado_estado'] ?? 'abierto') === 'cerrado') {
+                $this->json(['ok' => false, 'message' => 'El pago semanal está cerrado y ya no se puede modificar.'], 409);
+            }
 
             // Una factura solo puede respaldar una línea del listado
             foreach ($modelo->getLineas((int) $linea['listado_id']) as $otra) {
@@ -796,11 +855,28 @@ class PorPagarController extends Controller
                 $estado === 'con_diferencia' ? $diferencia : null
             );
 
+            // Si los nombres no se parecían, esta vinculación acaba de
+            // enseñar una equivalencia que nadie podía deducir. Se guarda para
+            // que valga en todas las demás facturas del mismo proveedor.
+            $aprendido = $this->aprenderAliasProveedor($linea, $factura);
+
             // Asigna la semana y mueve el par XML/PDF si el vínculo manual
             // quedó respaldado correctamente.
             $this->ejecutarMatching((int) $linea['listado_id'], $modelo);
 
-            $this->json(['ok' => true, 'estado' => $estado, 'diferencia' => $diferencia]);
+            // Con un alias nuevo hay que revisar de nuevo lo que quedó sin
+            // respaldo: puede que varias líneas se resuelvan de una vez.
+            $reprocesadas = $aprendido
+                ? $this->reprocesarListadosAbiertos($modelo, (int) $linea['listado_id'])
+                : 0;
+
+            $this->json([
+                'ok' => true,
+                'estado' => $estado,
+                'diferencia' => $diferencia,
+                'alias_aprendido' => $aprendido,
+                'lineas_resueltas' => $reprocesadas,
+            ]);
         } catch (Throwable $e) {
             $this->json(['ok' => false, 'message' => 'No se pudo vincular: ' . $e->getMessage()], 500);
         }
@@ -852,7 +928,7 @@ class PorPagarController extends Controller
             $nombreArchivo = 'por_pagar_' . $nombreBase . '_' . date('Ymd_His') . '.xlsx';
             $anchos = [13, 20, 38, 16, 22, 16, 16, 18];
 
-            $tmpFile = XlsxWriter::generate($headers, $rows, 'Facturas por pagar', $cellStyles, $anchos);
+            $tmpFile = XlsxWriter::generate($headers, $rows, 'Pagos semanales', $cellStyles, $anchos);
             XlsxWriter::send($tmpFile, $nombreArchivo);
         } catch (Throwable $e) {
             $this->redirectWithMessage(
@@ -875,6 +951,82 @@ class PorPagarController extends Controller
     {
         require_once __DIR__ . '/../helpers/PorPagarVerificador.php';
         return PorPagarVerificador::verificarListado($listadoId, $modelo);
+    }
+
+    /**
+     * Aprende la equivalencia de nombre que acaba de revelar un
+     * emparejamiento manual.
+     *
+     * El caso: el ERP dice "COOPEAGRI" y el XML dice "COOPERATIVA AGRICOLA
+     * INDUSTRIAL Y DE SERVICIOS MULTIPLES EL GENERAL". No comparten ni una
+     * palabra, así que ninguna comparación por parecido los va a juntar —
+     * tampoco bajando el umbral, que solo traería falsos positivos. La única
+     * fuente válida es la persona que emparejó a mano.
+     *
+     * Solo se aprende cuando hacía falta: si los nombres YA se parecían lo
+     * suficiente, el vínculo manual fue por otra razón (un número raro, por
+     * ejemplo) y guardar un alias no aportaría nada.
+     */
+    private function aprenderAliasProveedor(array $linea, array $factura)
+    {
+        $textoErp = trim((string) ($linea['proveedor_texto'] ?? ''));
+        $proveedorId = (int) ($factura['proveedor_id'] ?? 0);
+        if ($textoErp === '' || $proveedorId <= 0) {
+            return false;
+        }
+
+        $score = FacturaMatcher::similaridadTexto(
+            $textoErp,
+            (string) ($factura['proveedor_nombre'] ?? '')
+        );
+        if ($score >= FacturaMatcher::UMBRAL_PROVEEDOR) {
+            return false; // se parecían; no hay nada que enseñar
+        }
+
+        try {
+            return (bool) $this->loadModel('ProveedorAlias')->aprender(
+                $proveedorId,
+                $textoErp,
+                (int) ($_SESSION['user_id'] ?? 0)
+            );
+        } catch (Throwable $e) {
+            // Que no se pueda aprender no debe tumbar el vínculo manual, que
+            // es lo que la persona pidió.
+            return false;
+        }
+    }
+
+    /**
+     * Vuelve a verificar los listados abiertos después de aprender un alias.
+     *
+     * Es la mitad que hace útil lo anterior: enseñar la equivalencia una vez
+     * tiene que resolver TODAS las facturas del mismo proveedor que estaban
+     * sin respaldo, no solo la que se emparejó a mano. Devuelve cuántas
+     * líneas pasaron a tener respaldo.
+     *
+     * Los listados cerrados no se tocan: un pago ya cerrado no se recalcula.
+     */
+    private function reprocesarListadosAbiertos($modelo, $listadoYaProcesado = 0)
+    {
+        $resueltas = 0;
+        try {
+            foreach ($modelo->getListados(60) as $l) {
+                $id = (int) $l['id'];
+                if ($id === (int) $listadoYaProcesado || ($l['estado'] ?? 'abierto') === 'cerrado') {
+                    continue;
+                }
+                $antes = (int) ($modelo->resumenPorEstado($id)['sin_respaldo'] ?? 0);
+                if ($antes === 0) {
+                    continue; // nada que rescatar en este listado
+                }
+                $this->ejecutarMatching($id, $modelo);
+                $despues = (int) ($modelo->resumenPorEstado($id)['sin_respaldo'] ?? 0);
+                $resueltas += max(0, $antes - $despues);
+            }
+        } catch (Throwable $e) {
+            // El vínculo manual ya quedó guardado; esto es un extra.
+        }
+        return $resueltas;
     }
 
     /**

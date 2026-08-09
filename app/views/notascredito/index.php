@@ -53,8 +53,12 @@ function ncQuery(array $changes = []) {
 </style>
 
 <div class="card mb-20">
-    <div class="card-header mb-12">
+    <div class="card-header mb-12" style="flex-wrap:wrap;">
         <div class="card-title"><i class="fas fa-file-circle-minus" style="color:var(--gold);margin-right:6px;"></i>Cargar listado de notas de crédito</div>
+        <a href="<?= $baseUrl ?>/notas-xml" class="btn btn-primary btn-sm" style="margin-left:auto;"
+           title="Importar comprobantes XML de notas de crédito">
+            <i class="fas fa-file-code" style="margin-right:4px;"></i>Cargar notas XML
+        </a>
     </div>
     <?php if (empty($sociedadActiva)): ?>
         <div class="alert alert-warning">Debes registrar y activar una sociedad desde Inicio antes de cargar un listado.</div>

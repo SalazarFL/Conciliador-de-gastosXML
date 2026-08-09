@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS `porpagar_listados` (
     `sociedad_id` INT UNSIGNED NULL DEFAULT NULL,
     `archivo_origen` VARCHAR(255) NULL DEFAULT NULL,
     `total_lineas` INT UNSIGNED NOT NULL DEFAULT 0,
+    `estado` ENUM('abierto','cerrado') NOT NULL DEFAULT 'abierto',
+    `cerrado_en` DATETIME NULL DEFAULT NULL,
+    `cerrado_por` INT UNSIGNED NULL DEFAULT NULL,
     `fecha_subida` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -49,6 +52,7 @@ CREATE TABLE IF NOT EXISTS `porpagar_facturas` (
     `proveedor_texto` VARCHAR(255) NOT NULL,
     `total` DECIMAL(18,2) NOT NULL DEFAULT 0,
     `factura_xml_id` INT UNSIGNED NULL DEFAULT NULL,
+    `factura_erp_id` INT UNSIGNED NULL DEFAULT NULL,
     `estado` ENUM('sin_respaldo','respaldada','con_diferencia') NOT NULL DEFAULT 'sin_respaldo',
     `diferencia` DECIMAL(18,2) NULL DEFAULT NULL,
     `score_numero` DECIMAL(5,1) NULL DEFAULT NULL,
@@ -57,6 +61,7 @@ CREATE TABLE IF NOT EXISTS `porpagar_facturas` (
     PRIMARY KEY (`id`),
     KEY `idx_listado` (`listado_id`),
     KEY `idx_estado` (`estado`),
+    KEY `idx_factura_erp` (`factura_erp_id`),
     CONSTRAINT `fk_porpagar_listado` FOREIGN KEY (`listado_id`)
         REFERENCES `porpagar_listados` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -31,12 +31,16 @@ foreach ($casos as $entrada => $esperado) {
 class FacturaNumeroFalsa extends Factura
 {
     public $paramsInsertados = [];
+    public $sqlInsertado = '';
     public function __construct() {}
     protected function insert($sql, $params = [])
     {
+        $this->sqlInsertado = $sql;
         $this->paramsInsertados = $params;
         return 1;
     }
+    // Sin base de datos no hay sociedad que resolver.
+    public static function sociedadSeleccionadaId() { return 0; }
 }
 
 $modelo = new FacturaNumeroFalsa();
@@ -45,8 +49,18 @@ $modelo->crear([
     'proveedor_id' => 1,
     'fecha_emision' => '2026-07-29',
 ]);
+
+// La posición se deduce de la lista de columnas del INSERT: agregar una
+// columna nueva no debe romper esta prueba, que es sobre el número.
+$columnas = [];
+if (preg_match('/\(([^)]*)\)\s*VALUES/i', $modelo->sqlInsertado, $m)) {
+    $columnas = array_map('trim', explode(',', preg_replace('/\s+/', ' ', $m[1])));
+}
+$indice = array_search('numero_factura_asistente', $columnas, true);
+
+assertNumeroFactura($indice !== false, 'el INSERT incluye la columna del número');
 assertNumeroFactura(
-    ($modelo->paramsInsertados[6] ?? null) === '00017662',
+    ($modelo->paramsInsertados[$indice] ?? null) === '00017662',
     'el modelo guarda el numero XML con ocho digitos'
 );
 
