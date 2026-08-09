@@ -64,7 +64,15 @@ class SociedadesController extends Controller
         try {
             $modelo = $this->loadModel('Sociedad');
             $sociedad = $modelo->findById((int) $id);
+            $eraLaEnUso = (int) ($_SESSION['sociedad_id'] ?? 0) === (int) $id;
             $modelo->eliminar((int) $id);
+
+            // La selección de la sesión apuntaría a una empresa que ya no
+            // existe: se limpia para que vuelva a resolverse desde cero.
+            if ($eraLaEnUso) {
+                unset($_SESSION['sociedad_id']);
+                Sociedad::olvidarSeleccion();
+            }
 
             // Si se eliminó la activa, avisar que hay que elegir otra
             if ($sociedad && !empty($sociedad['activa']) && $modelo->getActiva() === null) {

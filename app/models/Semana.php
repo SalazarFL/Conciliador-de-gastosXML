@@ -10,6 +10,10 @@
 
 class Semana extends Model
 {
+    // Decidido con el usuario: las semanas de pago son de cada sociedad, no
+    // del grupo. Al cambiar de empresa cambia la lista de semanas.
+    use AlcanceSociedad;
+
     protected $table = 'semanas';
 
     public function __construct()
@@ -38,20 +42,27 @@ class Semana extends Model
         }
     }
 
-    /** Semanas de la más reciente a la más vieja. */
+    /** Semanas de la más reciente a la más vieja, de la sociedad en curso. */
     public function getAll($limite = 60)
     {
-        $sql = "SELECT * FROM {$this->table} ORDER BY id DESC LIMIT " . max(1, (int) $limite);
-        return $this->fetchAll($sql) ?: [];
+        $params = [];
+        $sql = "SELECT * FROM {$this->table} WHERE 1=1"
+             . $this->condicionSociedad('', $params)
+             . " ORDER BY id DESC LIMIT " . max(1, (int) $limite);
+        return $this->fetchAll($sql, $params) ?: [];
     }
 
-    public function crear($nombre)
+    public function crear($nombre, $sociedadId = 0)
     {
         $nombre = trim((string) $nombre);
         if ($nombre === '') {
             $nombre = 'Semana ' . date('d/m/Y');
         }
-        return $this->insert("INSERT INTO {$this->table} (nombre) VALUES (?)", [mb_substr($nombre, 0, 100, 'UTF-8')]);
+        $sociedadId = (int) $sociedadId > 0 ? (int) $sociedadId : $this->sociedadId();
+        return $this->insert(
+            "INSERT INTO {$this->table} (nombre, sociedad_id) VALUES (?, ?)",
+            [mb_substr($nombre, 0, 100, 'UTF-8'), $sociedadId > 0 ? $sociedadId : null]
+        );
     }
 
     public function configurarCarpetaPago($semanaId, $carpeta)
@@ -76,11 +87,22 @@ class Semana extends Model
             return (int) $this->crear($nombreNueva);
         }
 
+        // Se valida contra las semanas de la sociedad en curso: un id de otra
+        // empresa no se acepta aunque llegue en el formulario.
         $id = (int) $valor;
-        if ($id > 0 && !empty($this->findById($id))) {
+        if ($id > 0 && !empty($this->existePara($id))) {
             return $id;
         }
 
         return null;
+    }
+
+    /** ¿Esa semana es de la sociedad en la que se está trabajando? */
+    public function existePara($semanaId)
+    {
+        $params = [(int) $semanaId];
+        $sql = "SELECT 1 FROM {$this->table} WHERE id = ?"
+             . $this->condicionSociedad('', $params) . ' LIMIT 1';
+        return (bool) $this->fetchColumn($sql, $params);
     }
 }

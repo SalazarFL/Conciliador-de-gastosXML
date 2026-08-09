@@ -3,6 +3,12 @@ $baseUrl        = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 $stats          = $stats ?? ['total_facturas' => 0, 'bandeja_pendientes' => 0];
 $sociedades     = $sociedades ?? [];
 $sociedadActiva = $sociedadActiva ?? null;
+
+// La empresa marcada es la de ESTE usuario, no la columna `activa` de la
+// tabla. `activa` es solo el valor por omisión del sistema: con dos personas
+// en empresas distintas, leerla aquí marcaba la fila equivocada y dejaba sin
+// botón —imposible de seleccionar— justamente a la que había que elegir.
+$sociedadEnUsoId = (int) ($sociedadActiva['id'] ?? 0);
 $ultimoListado  = $ultimoListado ?? null;
 $resumenListado = $resumenListado ?? [];
 
@@ -45,7 +51,7 @@ $totalLineas   = $respaldadas + $conDiferencia + $sinRespaldo;
         <div class="stat-sub"><?= $sinRespaldo ?> sin respaldo · <?= $conDiferencia ?> con diferencia</div>
         <?php else: ?>
         <div class="stat-value" style="color:var(--text-muted);">—</div>
-        <div class="stat-sub">Sube el listado en Facturas por pagar</div>
+        <div class="stat-sub">Sube el listado en Pagos semanales</div>
         <?php endif; ?>
     </div>
 </div>
@@ -63,25 +69,26 @@ $totalLineas   = $respaldadas + $conDiferencia + $sinRespaldo;
 
         <?php if (empty($sociedades)): ?>
         <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:12px;">
-            Registra las sociedades del grupo. La <strong>activa</strong> es con la que trabajas:
+            Registra las sociedades del grupo. La que <strong>elijas</strong> es con la que trabajas:
             su cédula se compara contra el receptor de cada factura del correo.
         </div>
         <?php else: ?>
         <table class="data-table" style="font-size:12.5px;margin-bottom:12px;">
             <thead>
                 <tr>
-                    <th style="width:34px;" title="Sociedad activa"></th>
+                    <th style="width:34px;" title="Sociedad con la que estás trabajando"></th>
                     <th>Nombre</th>
                     <th>Cédula</th>
                     <th class="center" style="width:90px;"></th>
                 </tr>
             </thead>
             <tbody>
-                <?php foreach ($sociedades as $soc): ?>
+                <?php foreach ($sociedades as $soc):
+                    $enUso = (int) $soc['id'] === $sociedadEnUsoId; ?>
                 <tr id="soc-fila-<?= (int) $soc['id'] ?>">
                     <td class="center">
-                        <?php if (!empty($soc['activa'])): ?>
-                        <i class="fas fa-circle-check" style="color:var(--ok);" title="Sociedad activa"></i>
+                        <?php if ($enUso): ?>
+                        <i class="fas fa-circle-check" style="color:var(--ok);" title="Trabajando con esta sociedad"></i>
                         <?php else: ?>
                         <form method="POST" action="<?= $baseUrl ?>/sociedades/activar/<?= (int) $soc['id'] ?>" style="display:inline;">
                             <button type="submit" title="Trabajar con esta sociedad"
@@ -91,8 +98,15 @@ $totalLineas   = $respaldadas + $conDiferencia + $sinRespaldo;
                         </form>
                         <?php endif; ?>
                     </td>
-                    <td style="font-weight:<?= !empty($soc['activa']) ? '700' : '400' ?>;color:var(--navy);">
+                    <td style="font-weight:<?= $enUso ? '700' : '400' ?>;color:var(--navy);">
                         <span class="soc-ver"><?= htmlspecialchars($soc['nombre']) ?></span>
+                        <?php if (!empty($soc['activa'])): ?>
+                        <span style="margin-left:6px;font-size:10.5px;font-weight:600;color:var(--text-light);
+                                     text-transform:uppercase;letter-spacing:.04em;"
+                              title="Con esta empresa arranca quien nunca ha elegido, y con ella trabajan las tareas automáticas">
+                            por omisión
+                        </span>
+                        <?php endif; ?>
                     </td>
                     <td><span class="soc-ver"><?= htmlspecialchars($soc['cedula']) ?></span></td>
                     <td class="center" style="white-space:nowrap;">
@@ -140,9 +154,9 @@ $totalLineas   = $respaldadas + $conDiferencia + $sinRespaldo;
     <div style="display:flex;flex-direction:column;gap:8px;">
         <?php
         $accesos = [
-            ['/por-pagar', 'fa-file-invoice-dollar', 'Facturas por pagar', 'Verificar el listado del pago semanal', 'rgba(15,118,110,.09)', '#0f766e'],
+            ['/por-pagar', 'fa-file-invoice-dollar', 'Pagos semanales', 'Verificar el listado del pago semanal', 'rgba(15,118,110,.09)', '#0f766e'],
             ['/correo', 'fa-envelope-open-text', 'Facturas desde Correo', 'Buscar e importar XML y PDF del buzón', 'rgba(240,165,0,.10)', 'var(--gold-dark)'],
-            ['/facturas', 'fa-file-invoice', 'Carga de Facturas XML', 'Importar y gestionar facturas', 'rgba(27,58,107,.09)', 'var(--navy)'],
+            ['/facturas-erp', 'fa-file-invoice-dollar', 'Facturas ERP', 'Consultar el ERP y cargar facturas XML', 'rgba(27,58,107,.09)', 'var(--navy)'],
             ['/reportes', 'fa-chart-bar', 'Reportes', 'Filtrar y exportar datos', 'rgba(27,58,107,.07)', 'var(--navy-light)'],
         ];
         ?>

@@ -8,6 +8,9 @@ class Conciliacion extends Model
 {
     protected $table = 'conciliaciones';
 
+    // Las consultas traen f.ruta_xml de la factura conciliada.
+    protected $camposRuta = ['ruta_xml'];
+
     private $columnCache = [];
     
     /**
@@ -122,8 +125,8 @@ class Conciliacion extends Model
 
     /**
      * Facturas XML de una corrida que SÍ tienen gasto asociado
-     * (excluye pendientes y gasto_sin_xml). Incluye el contenido XML
-     * para generar el ZIP de descarga.
+     * (excluye pendientes y gasto_sin_xml). El ZIP se arma leyendo cada XML
+     * de la carpeta compartida: la base guarda dónde está, nunca el contenido.
      */
     public function getFacturasParaZip($corridaId = null)
     {
@@ -133,7 +136,6 @@ class Conciliacion extends Model
                        f.archivo_xml,
                        f.ruta_xml,
                        f.hash_xml,
-                       f.xml_contenido,
                        p.razon_social AS proveedor_nombre
                 FROM {$this->table} c
                 INNER JOIN facturas_xml f ON c.factura_xml_id = f.id

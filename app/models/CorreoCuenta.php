@@ -15,11 +15,76 @@
 
 class CorreoCuenta extends Model
 {
+    // Un buzón puede servir a VARIAS sociedades y una sociedad tener varios
+    // buzones, así que la relación vive en correo_cuenta_sociedades y no en
+    // una columna. Decidido con los datos: los tres buzones del grupo
+    // (grupobmsp, automercado, cedi) reciben facturas a nombre de GRUPO BM SP.
+    use AlcanceSociedad;
+
     protected $table = 'correo_cuentas';
 
     public function __construct()
     {
         $this->ensureTable();
+    }
+
+    /**
+     * Cuentas visibles en la sociedad en curso. Sin acotar (0) devuelve todas,
+     * que es lo que necesita el ⚙ para administrarlas y el worker de cli/.
+     */
+    public function getVisibles()
+    {
+        $sociedadId = $this->sociedadId();
+        if ($sociedadId <= 0) {
+            return $this->getAll();
+        }
+        return $this->fetchAll(
+            "SELECT c.* FROM {$this->table} c
+               JOIN correo_cuenta_sociedades cs ON cs.cuenta_id = c.id
+              WHERE cs.sociedad_id = ?
+              ORDER BY c.id ASC",
+            [$sociedadId]
+        ) ?: [];
+    }
+
+    /** ¿Este buzón está habilitado para la sociedad en curso? */
+    public function perteneceASociedad($cuentaId, $sociedadId = 0)
+    {
+        $sociedadId = (int) $sociedadId > 0 ? (int) $sociedadId : $this->sociedadId();
+        if ($sociedadId <= 0) {
+            return true;
+        }
+        return (bool) $this->fetchColumn(
+            "SELECT 1 FROM correo_cuenta_sociedades WHERE cuenta_id = ? AND sociedad_id = ? LIMIT 1",
+            [(int) $cuentaId, $sociedadId]
+        );
+    }
+
+    /** Sociedades a las que sirve un buzón (para el ⚙). */
+    public function sociedadesDe($cuentaId)
+    {
+        return array_map('intval', array_column(
+            $this->fetchAll(
+                'SELECT sociedad_id FROM correo_cuenta_sociedades WHERE cuenta_id = ? ORDER BY sociedad_id',
+                [(int) $cuentaId]
+            ) ?: [],
+            'sociedad_id'
+        ));
+    }
+
+    /** Reemplaza por completo las sociedades de un buzón. */
+    public function asignarSociedades($cuentaId, array $sociedadIds)
+    {
+        $cuentaId = (int) $cuentaId;
+        $ids = array_values(array_unique(array_filter(array_map('intval', $sociedadIds))));
+        $this->execute('DELETE FROM correo_cuenta_sociedades WHERE cuenta_id = ?', [$cuentaId]);
+        foreach ($ids as $sociedadId) {
+            $this->execute(
+                'INSERT IGNORE INTO correo_cuenta_sociedades (cuenta_id, sociedad_id) VALUES (?, ?)',
+                [$cuentaId, $sociedadId]
+            );
+        }
+        return count($ids);
     }
 
     private function ensureTable()
@@ -62,7 +127,7 @@ class CorreoCuenta extends Model
     {
         $sql = "INSERT INTO {$this->table} (nombre, host, puerto, usuario, password, carpeta, dias_atras, solo_no_leidos)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
-        return $this->insert($sql, [
+        $id = (int) $this->insert($sql, [
             (string) $datos['nombre'],
             (string) $datos['host'],
             max(1, (int) ($datos['puerto'] ?? 993)),
@@ -72,6 +137,17 @@ class CorreoCuenta extends Model
             max(0, (int) ($datos['dias_atras'] ?? 0)),
             !empty($datos['solo_no_leidos']) ? 1 : 0,
         ]);
+
+        // Un buzón nuevo queda disponible para las sociedades indicadas o, por
+        // omisión, para aquella en la que se está trabajando: si no quedara
+        // ligado a ninguna, no aparecería en ningún lado al crearlo.
+        $sociedades = isset($datos['sociedades']) && is_array($datos['sociedades'])
+            ? $datos['sociedades']
+            : [$this->sociedadId()];
+        if ($id > 0) {
+            $this->asignarSociedades($id, $sociedades);
+        }
+        return $id;
     }
 
     /**

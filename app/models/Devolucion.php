@@ -7,7 +7,14 @@
 
 class Devolucion extends Model
 {
+    // Las devoluciones ya guardaban su sociedad, pero las NC contra las que
+    // se emparejan salían de toda la tabla de XML.
+    use AlcanceSociedad;
+
     protected $table = 'devoluciones';
+
+    // El PDF del reporte se archiva en la carpeta compartida.
+    protected $camposRuta = ['ruta_pdf'];
 
     public function begin() { return self::getDB()->beginTransaction(); }
     public function commit() { return self::getDB()->commit(); }
@@ -45,7 +52,8 @@ class Devolucion extends Model
                 $d['proveedor_id'], $d['fecha'], $d['estado_erp'],
                 $d['usuario_erp'], $d['observaciones'], $d['cantidad_total'],
                 $d['total'], $d['nc_esperada_cantidad'], $d['nc_esperada_costo'],
-                $d['estado'] ?? 'pendiente', $d['archivo_pdf'], $d['ruta_pdf'],
+                $d['estado'] ?? 'pendiente', $d['archivo_pdf'],
+                RutaDocumento::relativa($d['ruta_pdf'] ?? '') ?: null,
                 $d['hash_pdf'], $d['advertencias'],
             ]
         );
@@ -108,9 +116,12 @@ class Devolucion extends Model
         $where = ['1=1'];
         $params = [];
 
-        if (!empty($filtros['sociedad_id'])) {
-            $where[] = '(d.sociedad_id = ? OR d.sociedad_id IS NULL)';
-            $params[] = (int) $filtros['sociedad_id'];
+        // Si el controlador no indica sociedad, manda la seleccionada: nunca
+        // se listan devoluciones de todas las empresas por descuido.
+        $sociedadFiltro = (int) ($filtros['sociedad_id'] ?? 0) ?: $this->sociedadId();
+        if ($sociedadFiltro > 0) {
+            $where[] = 'd.sociedad_id = ?';
+            $params[] = $sociedadFiltro;
         }
         if (!empty($filtros['tipo'])) {
             $where[] = 'd.tipo = ?';
@@ -298,12 +309,14 @@ class Devolucion extends Model
         if (strlen($digits) !== 20) {
             return null;
         }
+        $params = [$digits];
         return $this->fetchOne(
             'SELECT id, clave, consecutivo_completo, proveedor_id, total, fecha_emision
              FROM facturas_xml
-             WHERE tipo_documento = \'FE\' AND consecutivo_completo = ?
+             WHERE tipo_documento = \'FE\' AND consecutivo_completo = ?'
+             . $this->condicionSociedad('', $params) . '
              ORDER BY id DESC LIMIT 1',
-            [$digits]
+            $params
         ) ?: null;
     }
 
@@ -314,6 +327,7 @@ class Devolucion extends Model
         if ($digits === '') {
             return [];
         }
+        $params = [$digits];
         return $this->fetchAll(
             'SELECT f.id, f.consecutivo_completo, f.clave, f.proveedor_id,
                     f.fecha_emision, f.total, f.moneda,
@@ -321,15 +335,25 @@ class Devolucion extends Model
                       WHERE r2.factura_xml_id = f.id AND r2.clave_ref IS NOT NULL) AS total_referencias
              FROM facturas_xml_referencias r
              INNER JOIN facturas_xml f ON f.id = r.factura_xml_id
-             WHERE r.clave_ref = ? AND f.tipo_documento = \'NC\'
+             WHERE r.clave_ref = ? AND f.tipo_documento = \'NC\''
+             . $this->condicionSociedad('f.', $params) . '
              ORDER BY f.fecha_emision, f.id',
-            [$digits]
+            $params
         );
     }
 
     /** NC del proveedor cercanas en fecha y monto (camino sin referencia). */
     public function ncPorProveedorYMonto($proveedorId, $monto, $fechaDesde, $fechaHasta, $tolerancia)
     {
+        $params = [
+            (int) $proveedorId,
+            (string) $fechaDesde,
+            (string) $fechaHasta,
+            (float) $monto - (float) $tolerancia,
+            (float) $monto + (float) $tolerancia,
+        ];
+        $filtroSociedad = $this->condicionSociedad('f.', $params);
+        $params[] = (float) $monto; // el de ORDER BY va de último
         return $this->fetchAll(
             'SELECT f.id, f.consecutivo_completo, f.clave, f.proveedor_id,
                     f.fecha_emision, f.total, f.moneda
@@ -337,17 +361,11 @@ class Devolucion extends Model
              WHERE f.tipo_documento = \'NC\'
                AND f.proveedor_id = ?
                AND f.fecha_emision BETWEEN ? AND ?
-               AND f.total BETWEEN ? AND ?
+               AND f.total BETWEEN ? AND ?'
+             . $filtroSociedad . '
              ORDER BY ABS(f.total - ?), f.fecha_emision
              LIMIT 10',
-            [
-                (int) $proveedorId,
-                (string) $fechaDesde,
-                (string) $fechaHasta,
-                (float) $monto - (float) $tolerancia,
-                (float) $monto + (float) $tolerancia,
-                (float) $monto,
-            ]
+            $params
         );
     }
 
@@ -357,6 +375,7 @@ class Devolucion extends Model
      */
     public function ncPorProveedorEnVentana($proveedorId, $fechaDesde, $fechaHasta, $limite = 30)
     {
+        $params = [(int) $proveedorId, (string) $fechaDesde, (string) $fechaHasta];
         return $this->fetchAll(
             'SELECT f.id, f.consecutivo_completo, f.clave, f.proveedor_id,
                     f.fecha_emision, f.total, f.moneda,
@@ -365,10 +384,11 @@ class Devolucion extends Model
              FROM facturas_xml f
              WHERE f.tipo_documento = \'NC\'
                AND f.proveedor_id = ?
-               AND f.fecha_emision BETWEEN ? AND ?
+               AND f.fecha_emision BETWEEN ? AND ?'
+             . $this->condicionSociedad('f.', $params) . '
              ORDER BY f.fecha_emision, f.id
              LIMIT ' . max(1, (int) $limite),
-            [(int) $proveedorId, (string) $fechaDesde, (string) $fechaHasta]
+            $params
         );
     }
 
@@ -419,25 +439,31 @@ class Devolucion extends Model
 
     public function getNc($facturaXmlId)
     {
+        $params = [(int) $facturaXmlId];
         return $this->fetchOne(
             'SELECT id, consecutivo_completo, clave, proveedor_id, fecha_emision, total, moneda
-             FROM facturas_xml WHERE id = ? AND tipo_documento = \'NC\' LIMIT 1',
-            [(int) $facturaXmlId]
+             FROM facturas_xml WHERE id = ? AND tipo_documento = \'NC\''
+             . $this->condicionSociedad('', $params) . ' LIMIT 1',
+            $params
         ) ?: null;
     }
 
     /** Candidatas para vinculación manual: NC del proveedor ordenadas por cercanía de monto. */
     public function ncCandidatas($proveedorId, $monto, $limite = 15)
     {
+        $params = $proveedorId ? [(int) $proveedorId] : [];
+        $filtroSociedad = $this->condicionSociedad('f.', $params);
+        $params[] = (float) $monto; // el de ORDER BY va de último
         return $this->fetchAll(
             'SELECT f.id, f.consecutivo_completo, f.fecha_emision, f.total, f.moneda,
                     p.razon_social AS proveedor
              FROM facturas_xml f
              LEFT JOIN proveedores p ON p.id = f.proveedor_id
-             WHERE f.tipo_documento = \'NC\'' . ($proveedorId ? ' AND f.proveedor_id = ?' : '') . '
+             WHERE f.tipo_documento = \'NC\'' . ($proveedorId ? ' AND f.proveedor_id = ?' : '')
+             . $filtroSociedad . '
              ORDER BY ABS(f.total - ?) ASC, f.fecha_emision DESC
              LIMIT ' . max(1, (int) $limite),
-            $proveedorId ? [(int) $proveedorId, (float) $monto] : [(float) $monto]
+            $params
         );
     }
 }
