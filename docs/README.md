@@ -18,10 +18,14 @@ Aplicación web desarrollada en PHP con arquitectura MVC para la gestión y conc
 - XAMPP (Apache + MySQL)
 
 ## Instalación
-1. Clonar/copiar el proyecto en `htdocs/xmlconcilia`
-2. Configurar la base de datos en `app/config/database.php`
-3. Importar el esquema desde `database/schema.sql`
-4. Acceder via `http://localhost/xmlconcilia/public/`
+
+Ver **[INSTALACION.md](INSTALACION.md)**: la aplicación se instala en la
+computadora de cada persona, la base de datos es una sola en el servidor y los
+documentos viven en una carpeta de SharePoint sincronizada. Ese documento
+explica cómo se monta, cómo se actualiza y qué hacer cuando alguien reporta un
+problema.
+
+Comprobación rápida de cualquier instalación: `php cli/diagnostico.php`
 
 ## Características
 - Carga de facturas XML (CFDI)
