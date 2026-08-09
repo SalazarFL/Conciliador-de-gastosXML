@@ -1,12 +1,15 @@
 # Runtime logs
 storage/logs/*.log
 
-# User-uploaded files (runtime artifacts)
+# Archivos que sube la gente (artefactos de ejecución).
+# Son reportes reales del ERP: proveedores, cédulas y montos de la empresa.
+# El repositorio es público — nada de esto se versiona.
 public/uploads/xml/*
 public/uploads/gastos/*
 public/uploads/xml_queue/*
 public/uploads/porpagar/*
 public/uploads/notas_credito/*
+public/uploads/facturas_erp/*
 
 # Keep upload directories in repo structure if needed
 !public/uploads/xml/.gitkeep
@@ -14,6 +17,7 @@ public/uploads/notas_credito/*
 !public/uploads/xml_queue/.gitkeep
 !public/uploads/porpagar/.gitkeep
 !public/uploads/notas_credito/.gitkeep
+!public/uploads/facturas_erp/.gitkeep
 
 # Temporary/scratch scripts
 .tmp_*
