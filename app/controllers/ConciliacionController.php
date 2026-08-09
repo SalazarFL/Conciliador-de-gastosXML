@@ -280,20 +280,21 @@ class ConciliacionController extends Controller
 			$agregados = 0;
 
 			foreach ($facturas as $f) {
+				// La ruta llega ya resuelta al disco de esta máquina (el modelo
+				// la expande desde la carpeta compartida).
 				$rutaXml = (string) ($f['ruta_xml'] ?? '');
 				$rutaReal = $rutaXml !== '' ? realpath($rutaXml) : false;
-				$contenido = (string) ($f['xml_contenido'] ?? ''); // compatibilidad durante migración
 				$nombre = $this->nombreArchivoFactura($f);
 
-				if ($rutaReal === false && $contenido === '') {
-					$avisos[] = "{$nombre}: omitida, el archivo XML local no está disponible.";
+				if ($rutaReal === false) {
+					$avisos[] = "{$nombre}: omitida, el archivo XML no está disponible en la carpeta compartida.";
 					continue;
 				}
 
 				// Integridad: el contenido debe corresponder a ESTA factura.
 				// Si el hash guardado al importar no coincide, el registro está corrupto.
 				$hashRow = (string) ($f['hash_xml'] ?? '');
-				$hashActual = $rutaReal !== false ? hash_file('sha256', $rutaReal) : hash('sha256', $contenido);
+				$hashActual = hash_file('sha256', $rutaReal);
 				if ($hashRow !== '' && !hash_equals($hashRow, $hashActual)) {
 					$avisos[] = "{$nombre}: omitida, el contenido XML no corresponde a esta factura (hash no coincide).";
 					continue;
@@ -315,11 +316,7 @@ class ConciliacionController extends Controller
 				$usados[$final] = true;
 				$porContenido[$firmaContenido] = $final;
 
-				if ($rutaReal !== false) {
-					$zip->addFile($rutaReal, $final . '.xml');
-				} else {
-					$zip->addFromString($final . '.xml', $contenido);
-				}
+				$zip->addFile($rutaReal, $final . '.xml');
 				$agregados++;
 			}
 
@@ -336,7 +333,7 @@ class ConciliacionController extends Controller
 				@unlink($tmpFile);
 				$this->redirectWithMessage(
 					$this->url('/conciliacion'),
-					'Las facturas de esta conciliación no tienen contenido XML almacenado.',
+					'Ningún XML de esta conciliación está disponible en la carpeta compartida.',
 					'warning'
 				);
 			}

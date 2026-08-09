@@ -7,6 +7,11 @@ class ImportacionItem extends Model
 {
     protected $table = 'importacion_items';
 
+    // Copia del XML a la espera de su turno en la cola, en la carpeta
+    // compartida: la cola se procesa en varias peticiones y puede continuarla
+    // otra persona desde otra computadora.
+    protected $camposRuta = ['ruta_archivo'];
+
     public function __construct()
     {
         $this->ensureTable();
@@ -22,7 +27,7 @@ class ImportacionItem extends Model
             (int) ($data['importacion_id'] ?? 0),
             (string) ($data['archivo_original'] ?? ''),
             $data['archivo_guardado'] ?? null,
-            (string) ($data['ruta_archivo'] ?? ''),
+            RutaDocumento::relativa($data['ruta_archivo'] ?? ''),
             strtolower((string) ($data['extension'] ?? '')),
             (int) ($data['tamano'] ?? 0),
             (string) ($data['estado'] ?? 'pendiente'),

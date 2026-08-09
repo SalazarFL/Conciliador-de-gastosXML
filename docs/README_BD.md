@@ -89,9 +89,12 @@
 - `fecha_emision` - Fecha de emisión de la factura
 - `subtotal` / `iva` / `total` - Montos (DECIMAL 18,2)
 - `moneda` - Código ISO 4217 (ej: MXN, USD)
-- `archivo_xml` - Nombre del archivo
+- `archivo_xml` / `archivo_pdf` - Nombre del archivo (sin la ruta)
+- `ruta_xml` / `ruta_pdf` - Dónde está el documento, **relativo a la carpeta
+  compartida** de cada computadora (ej. `2026/07 JULIO/Facturas/EN SISTEMA/FE_….xml`).
+  La base nunca guarda el documento en sí, solo dónde encontrarlo; ver
+  `app/helpers/RutaDocumento.php`.
 - `hash_xml` - SHA-256 del contenido (opcional, para detectar duplicados)
-- `xml_contenido` - Contenido completo del XML (opcional)
 
 **Índices:**
 - `uk_consecutivo` - Único, evita duplicados
@@ -693,7 +696,8 @@ Consideraciones Importantes de MySQL 5.7
 
 1. **Limpieza periódica de logs:**
    - Purgar registros antiguos de `importaciones` después de 1 año
-   - Opcional: archivar XML antiguos y limpiar campo `xml_contenido`
+   - Los XML y PDF no ocupan espacio en la base: viven en la carpeta
+     compartida y aquí solo queda la ruta relativa
 
 2. **Monitoreo de índices:**
    - Revisar uso de índices con `EXPLAIN` en consultas lentas

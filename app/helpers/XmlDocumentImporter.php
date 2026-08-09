@@ -72,6 +72,10 @@ class XmlDocumentImporter
             $id = (int) $this->facturas->crear([
                 'importacion_id' => !empty($contexto['importacion_id']) ? (int) $contexto['importacion_id'] : null,
                 'semana_id' => $tipo === 'FE' && !empty($contexto['semana_id']) ? (int) $contexto['semana_id'] : null,
+                // Quien importa manda: el worker de un lote de correo trabaja
+                // con la sociedad DEL LOTE, que puede no ser la seleccionada
+                // en pantalla si alguien cambió de empresa mientras corría.
+                'sociedad_id' => !empty($contexto['sociedad_id']) ? (int) $contexto['sociedad_id'] : 0,
                 'consecutivo_completo' => $doc['consecutivo_completo'],
                 'clave' => $doc['clave'] ?? null,
                 'tipo_documento' => $tipo,
@@ -97,7 +101,6 @@ class XmlDocumentImporter
                 'fecha_correo' => $contexto['fecha_correo'] ?? null,
                 'archivado_en' => $archivado['archivado_en'],
                 'hash_xml' => $archivado['hash_xml'],
-                'xml_contenido' => null,
                 'metadata' => json_encode($metadata, JSON_UNESCAPED_UNICODE),
             ]);
             $this->facturas->commit();
@@ -112,7 +115,7 @@ class XmlDocumentImporter
             $this->extraerDetalle((int) $id, (string) $archivado['ruta_xml']);
         }
 
-        unset($doc['xml_contenido']);
+
         return [
             'estado' => 'importado',
             'id' => $id,
@@ -178,7 +181,7 @@ class XmlDocumentImporter
             $this->extraerDetalle((int) $existente['id'], $ruta);
         }
 
-        unset($doc['xml_contenido']);
+
         $pdfDisponible = !empty($cambios['ruta_pdf']) || (!empty($existente['ruta_pdf']) && is_file((string) $existente['ruta_pdf']));
         $estado = $moverSemana
             ? 'movida_semana'

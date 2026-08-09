@@ -10,6 +10,11 @@
 
 class PorPagar extends Model
 {
+    // El listado ya guardaba su sociedad_id, pero las facturas XML contra las
+    // que se cruza salían de toda la tabla. Con dos empresas, el matching
+    // semanal de una podía emparejar con una factura de la otra.
+    use AlcanceSociedad;
+
     protected $table = 'porpagar_listados';
 
     public function __construct()
@@ -28,6 +33,9 @@ class PorPagar extends Model
                 `sociedad_id` INT UNSIGNED NULL DEFAULT NULL,
                 `archivo_origen` VARCHAR(255) NULL DEFAULT NULL,
                 `total_lineas` INT UNSIGNED NOT NULL DEFAULT 0,
+                `estado` ENUM('abierto','cerrado') NOT NULL DEFAULT 'abierto',
+                `cerrado_en` DATETIME NULL DEFAULT NULL,
+                `cerrado_por` INT UNSIGNED NULL DEFAULT NULL,
                 `fecha_subida` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (`id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
@@ -45,10 +53,12 @@ class PorPagar extends Model
                 `score_numero` DECIMAL(5,1) NULL DEFAULT NULL,
                 `score_proveedor` DECIMAL(5,1) NULL DEFAULT NULL,
                 `match_manual` TINYINT(1) NOT NULL DEFAULT 0,
+                `factura_erp_id` INT UNSIGNED NULL DEFAULT NULL,
                 `actualizado_en` DATETIME NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
                 PRIMARY KEY (`id`),
                 KEY `idx_listado` (`listado_id`),
-                KEY `idx_estado` (`estado`)
+                KEY `idx_estado` (`estado`),
+                KEY `idx_factura_erp` (`factura_erp_id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
         } catch (Throwable $e) {
             // La migración manual las crea si aquí no hay permisos DDL
@@ -59,6 +69,35 @@ class PorPagar extends Model
             if (!$this->fetchOne("SHOW COLUMNS FROM porpagar_facturas LIKE 'match_manual'")) {
                 $this->execute("ALTER TABLE porpagar_facturas
                                 ADD COLUMN `match_manual` TINYINT(1) NOT NULL DEFAULT 0 AFTER `score_proveedor`");
+            }
+        } catch (Throwable $e) {
+        }
+        try {
+            if (!$this->fetchOne("SHOW COLUMNS FROM porpagar_listados LIKE 'estado'")) {
+                $this->execute("ALTER TABLE porpagar_listados
+                                ADD COLUMN `estado` ENUM('abierto','cerrado') NOT NULL DEFAULT 'abierto' AFTER `total_lineas`,
+                                ADD COLUMN `cerrado_en` DATETIME NULL DEFAULT NULL AFTER `estado`,
+                                ADD COLUMN `cerrado_por` INT UNSIGNED NULL DEFAULT NULL AFTER `cerrado_en`,
+                                ADD KEY `idx_estado_pago` (`estado`)");
+            }
+        } catch (Throwable $e) {
+        }
+        foreach ([
+            'cerrado_en' => "ADD COLUMN `cerrado_en` DATETIME NULL DEFAULT NULL AFTER `estado`",
+            'cerrado_por' => "ADD COLUMN `cerrado_por` INT UNSIGNED NULL DEFAULT NULL AFTER `cerrado_en`",
+        ] as $columna => $definicion) {
+            try {
+                if (!$this->fetchOne("SHOW COLUMNS FROM porpagar_listados LIKE '{$columna}'")) {
+                    $this->execute("ALTER TABLE porpagar_listados {$definicion}");
+                }
+            } catch (Throwable $e) {
+            }
+        }
+        try {
+            if (!$this->fetchOne("SHOW COLUMNS FROM porpagar_facturas LIKE 'factura_erp_id'")) {
+                $this->execute("ALTER TABLE porpagar_facturas
+                                ADD COLUMN `factura_erp_id` INT UNSIGNED NULL DEFAULT NULL AFTER `factura_xml_id`,
+                                ADD KEY `idx_factura_erp` (`factura_erp_id`)");
             }
         } catch (Throwable $e) {
         }
@@ -78,14 +117,15 @@ class PorPagar extends Model
      */
     public function getListados($limite = 30, $semanaId = null)
     {
-        $where = '';
+        $where = ['1=1'];
         $params = [];
+        $this->filtrarPorSociedad($where, $params, 'l.');
         if ($semanaId !== null && $semanaId !== '') {
             if ((int) $semanaId > 0) {
-                $where = " WHERE l.semana_id = ?";
+                $where[] = 'l.semana_id = ?';
                 $params[] = (int) $semanaId;
             } else {
-                $where = " WHERE l.semana_id IS NULL";
+                $where[] = 'l.semana_id IS NULL';
             }
         }
 
@@ -94,7 +134,7 @@ class PorPagar extends Model
                 FROM porpagar_listados l
                 LEFT JOIN sociedades s ON s.id = l.sociedad_id
                 LEFT JOIN semanas sem ON sem.id = l.semana_id
-                {$where}
+                WHERE " . implode(' AND ', $where) . "
                 ORDER BY l.id DESC
                 LIMIT " . max(1, (int) $limite);
         return $this->fetchAll($sql, $params) ?: [];
@@ -102,13 +142,14 @@ class PorPagar extends Model
 
     public function getListado($id)
     {
+        $params = [(int) $id];
         $sql = "SELECT l.*, s.nombre AS sociedad_nombre, sem.nombre AS semana_nombre,
                        sem.carpeta_pago AS semana_carpeta_pago
                 FROM porpagar_listados l
                 LEFT JOIN sociedades s ON s.id = l.sociedad_id
                 LEFT JOIN semanas sem ON sem.id = l.semana_id
-                WHERE l.id = ? LIMIT 1";
-        $fila = $this->fetchOne($sql, [(int) $id]);
+                WHERE l.id = ?" . $this->condicionSociedad('l.', $params) . " LIMIT 1";
+        $fila = $this->fetchOne($sql, $params);
         return $fila ?: null;
     }
 
@@ -122,6 +163,10 @@ class PorPagar extends Model
 
     public function eliminarListado($id)
     {
+        $listado = $this->getListado((int) $id);
+        if ($listado !== null && ($listado['estado'] ?? 'abierto') === 'cerrado') {
+            throw new Exception('El pago semanal está cerrado y no se puede eliminar.');
+        }
         $this->execute("DELETE FROM porpagar_facturas WHERE listado_id = ?", [(int) $id]);
         return $this->execute("DELETE FROM porpagar_listados WHERE id = ?", [(int) $id]);
     }
@@ -246,7 +291,13 @@ class PorPagar extends Model
 
     public function getLinea($id)
     {
-        $fila = $this->fetchOne("SELECT * FROM porpagar_facturas WHERE id = ? LIMIT 1", [(int) $id]);
+        $fila = $this->fetchOne(
+            "SELECT pf.*, l.estado AS listado_estado
+               FROM porpagar_facturas pf
+               JOIN porpagar_listados l ON l.id = pf.listado_id
+              WHERE pf.id = ? LIMIT 1",
+            [(int) $id]
+        );
         return $fila ?: null;
     }
 
@@ -261,6 +312,9 @@ class PorPagar extends Model
         $linea = $this->getLinea((int) $id);
         if ($linea === null) {
             return null;
+        }
+        if (($linea['listado_estado'] ?? 'abierto') === 'cerrado') {
+            throw new Exception('El pago semanal está cerrado y sus facturas ya no se pueden eliminar.');
         }
 
         $eliminadas = $this->execute(
@@ -289,7 +343,7 @@ class PorPagar extends Model
 
     /**
      * Facturas candidatas para el matching: solo FE (NC/ND no respaldan
-     * pagos) y solo las columnas necesarias (sin xml_contenido, que pesa).
+     * pagos) y solo las columnas necesarias (sin el detalle pesado).
      *
      * Con $semanaId > 0 se limita a las facturas asignadas a ESA semana:
      * la verificación del listado no es contra el acumulado del sistema.
@@ -301,7 +355,8 @@ class PorPagar extends Model
                        f.semana_id, p.razon_social AS proveedor_nombre
                 FROM facturas_xml f
                 LEFT JOIN proveedores p ON p.id = f.proveedor_id
-                WHERE (f.tipo_documento IS NULL OR f.tipo_documento = 'FE')";
+                WHERE (f.tipo_documento IS NULL OR f.tipo_documento = 'FE')"
+             . $this->condicionSociedad('f.', $params);
 
         if ((int) $semanaId > 0) {
             $sql .= " AND (f.semana_id = ? OR f.semana_id IS NULL)";
@@ -354,13 +409,17 @@ class PorPagar extends Model
      */
     public function getFacturaParaMatching($facturaId)
     {
+        $params = [(int) $facturaId];
+        // proveedor_id se usa al aprender un alias de nombre en el
+        // emparejamiento manual (ver PorPagarController::forzar).
         $sql = "SELECT f.id, f.numero_factura_asistente, f.consecutivo_completo, f.total,
-                       p.razon_social AS proveedor_nombre
+                       f.proveedor_id, p.razon_social AS proveedor_nombre
                 FROM facturas_xml f
                 LEFT JOIN proveedores p ON p.id = f.proveedor_id
-                WHERE f.id = ? AND (f.tipo_documento IS NULL OR f.tipo_documento = 'FE')
+                WHERE f.id = ? AND (f.tipo_documento IS NULL OR f.tipo_documento = 'FE')"
+             . $this->condicionSociedad('f.', $params) . "
                 LIMIT 1";
-        $fila = $this->fetchOne($sql, [(int) $facturaId]);
+        $fila = $this->fetchOne($sql, $params);
         return $fila ?: null;
     }
 
@@ -370,6 +429,7 @@ class PorPagar extends Model
      */
     public function getFacturasSinCoincidencia($semanaId, $listadoId)
     {
+        $params = [(int) $semanaId, (int) $listadoId];
         $sql = "SELECT f.id, f.numero_factura_asistente, f.consecutivo_completo, f.total,
                        f.fecha_emision, p.razon_social AS proveedor_nombre
                 FROM facturas_xml f
@@ -379,9 +439,10 @@ class PorPagar extends Model
                   AND f.id NOT IN (
                       SELECT factura_xml_id FROM porpagar_facturas
                       WHERE listado_id = ? AND factura_xml_id IS NOT NULL
-                  )
+                  )"
+             . $this->condicionSociedad('f.', $params) . "
                 ORDER BY p.razon_social ASC, f.id ASC";
-        return $this->fetchAll($sql, [(int) $semanaId, (int) $listadoId]) ?: [];
+        return $this->fetchAll($sql, $params) ?: [];
     }
 
     public function resumenPorEstado($listadoId)

@@ -8,8 +8,20 @@ require_once __DIR__ . '/../helpers/NumeroFactura.php';
 
 class Factura extends Model
 {
+    // Listados, conteos y totales quedan acotados a la sociedad seleccionada.
+    // Las búsquedas por hash/consecutivo NO se acotan a propósito: sirven para
+    // detectar que un documento ya existe, y un mismo XML tiene un solo
+    // receptor, así que verlo en otra empresa es una anomalía que conviene
+    // encontrar, no ocultar.
+    use AlcanceSociedad;
+
     protected $table = 'facturas_xml';
-    
+
+    // El XML y el PDF viven en la carpeta compartida, no dentro del proyecto
+    // ni en la base: aquí solo se guarda dónde encontrarlos, relativo a esa
+    // carpeta, para que la fila sirva en cualquier computadora del grupo.
+    protected $camposRuta = ['ruta_xml', 'ruta_pdf'];
+
     /**
      * Obtener todas las facturas con información de importación.
      * Filtro por semana: null = todas · 0 = sin semana (no asignadas) ·
@@ -29,6 +41,7 @@ class Factura extends Model
     {
         $where = ["(f.tipo_documento IS NULL OR f.tipo_documento = 'FE')"];
         $params = [];
+        $this->filtrarPorSociedad($where, $params, 'f.');
 
         if (array_key_exists('semana_id', $filtros)
             && $filtros['semana_id'] !== null && $filtros['semana_id'] !== '') {
@@ -109,44 +122,53 @@ class Factura extends Model
      */
     public function findByProveedor($proveedorId)
     {
+        $params = [$proveedorId];
         $sql = "SELECT * FROM {$this->table} WHERE proveedor_id = ?
-                AND (tipo_documento IS NULL OR tipo_documento = 'FE') ORDER BY fecha_emision DESC";
-        return $this->fetchAll($sql, [$proveedorId]);
+                AND (tipo_documento IS NULL OR tipo_documento = 'FE')"
+             . $this->condicionSociedad('', $params) . " ORDER BY fecha_emision DESC";
+        return $this->fetchAll($sql, $params);
     }
-    
+
     /**
      * Buscar facturas por número
      */
     public function findByNumero($numero)
     {
+        $params = ['%' . $numero . '%'];
         $sql = "SELECT * FROM {$this->table} WHERE numero_factura_asistente LIKE ?
-                AND (tipo_documento IS NULL OR tipo_documento = 'FE') ORDER BY fecha_emision DESC";
-        return $this->fetchAll($sql, ['%' . $numero . '%']);
+                AND (tipo_documento IS NULL OR tipo_documento = 'FE')"
+             . $this->condicionSociedad('', $params) . " ORDER BY fecha_emision DESC";
+        return $this->fetchAll($sql, $params);
     }
-    
+
     /**
      * Obtener facturas por rango de fechas
      */
     public function findByFechaRange($fechaInicio, $fechaFin)
     {
+        $params = [$fechaInicio, $fechaFin];
         $sql = "SELECT f.*, p.razon_social as proveedor_nombre
                 FROM {$this->table} f
                 LEFT JOIN proveedores p ON f.proveedor_id = p.id
                 WHERE f.fecha_emision BETWEEN ? AND ?
-                  AND (f.tipo_documento IS NULL OR f.tipo_documento = 'FE')
+                  AND (f.tipo_documento IS NULL OR f.tipo_documento = 'FE')"
+             . $this->condicionSociedad('f.', $params) . "
                 ORDER BY f.fecha_emision DESC";
-        
-        return $this->fetchAll($sql, [$fechaInicio, $fechaFin]);
+
+        return $this->fetchAll($sql, $params);
     }
-    
+
     /**
      * Asignar o cambiar la semana de trabajo de una factura (null = quitarla).
+     * Acotado: no se puede mover una factura de otra sociedad.
      */
     public function asignarSemana($facturaId, $semanaId)
     {
+        $params = [!empty($semanaId) ? (int) $semanaId : null, (int) $facturaId];
         $sql = "UPDATE {$this->table} SET semana_id = ?
-                WHERE id = ? AND (tipo_documento IS NULL OR tipo_documento = 'FE')";
-        return $this->execute($sql, [!empty($semanaId) ? (int) $semanaId : null, (int) $facturaId]);
+                WHERE id = ? AND (tipo_documento IS NULL OR tipo_documento = 'FE')"
+             . $this->condicionSociedad('', $params);
+        return $this->execute($sql, $params);
     }
 
     /**
@@ -156,12 +178,18 @@ class Factura extends Model
     {
         $sql = "INSERT INTO {$this->table}
                 (importacion_id, semana_id, consecutivo_completo, clave, tipo_documento, receptor_id,
+                 sociedad_id,
                  numero_factura_asistente, proveedor_id, fecha_emision,
                  subtotal, iva, total, moneda, tipo_comprobante, archivo_xml, ruta_xml, ruta_pdf,
                  archivo_pdf, hash_pdf, estado_pdf, correo_cuenta_id, correo_carpeta,
                  correo_uidvalidity, correo_uid, fecha_correo, archivado_en,
-                 hash_xml, xml_contenido, metadata)
+                 hash_xml, metadata)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+        // El sello de sociedad viene de quien importa; si no lo indica, es la
+        // seleccionada. Nunca queda NULL: un documento sin dueño no aparecería
+        // en ningún listado.
+        $sociedadId = !empty($data['sociedad_id']) ? (int) $data['sociedad_id'] : $this->sociedadId();
 
         $params = [
             $data['importacion_id'] ?? null,
@@ -170,6 +198,7 @@ class Factura extends Model
             $data['clave'] ?? null,
             $data['tipo_documento'] ?? null,
             $data['receptor_id'] ?? null,
+            $sociedadId > 0 ? $sociedadId : null,
             NumeroFactura::xmlOchoDigitos($data['numero_factura_asistente'] ?? $data['numero_factura'] ?? ''),
             $data['proveedor_id'],
             $data['fecha_emision'],
@@ -179,8 +208,8 @@ class Factura extends Model
             $data['moneda'] ?? 'CRC',
             $data['tipo_comprobante'] ?? null,
             $data['archivo_xml'] ?? 'sin_archivo.xml',
-            $data['ruta_xml'] ?? null,
-            $data['ruta_pdf'] ?? null,
+            RutaDocumento::relativa($data['ruta_xml'] ?? '') ?: null,
+            RutaDocumento::relativa($data['ruta_pdf'] ?? '') ?: null,
             $data['archivo_pdf'] ?? null,
             $data['hash_pdf'] ?? null,
             $data['estado_pdf'] ?? 'pendiente',
@@ -191,7 +220,6 @@ class Factura extends Model
             $data['fecha_correo'] ?? null,
             $data['archivado_en'] ?? null,
             $data['hash_xml'] ?? null,
-            null, // los archivos XML viven en el árbol local, nunca como blob en BD
             $data['metadata'] ?? null
         ];
         
@@ -203,15 +231,20 @@ class Factura extends Model
      */
     public function getTotalMonto()
     {
+        $params = [];
         $sql = "SELECT COALESCE(SUM(total), 0) FROM {$this->table}
-                WHERE tipo_documento IS NULL OR tipo_documento = 'FE'";
-        return (float) $this->fetchColumn($sql);
+                WHERE (tipo_documento IS NULL OR tipo_documento = 'FE')"
+             . $this->condicionSociedad('', $params);
+        return (float) $this->fetchColumn($sql, $params);
     }
 
     public function contarFacturas()
     {
-        return (int) $this->fetchColumn("SELECT COUNT(*) FROM {$this->table}
-                                        WHERE tipo_documento IS NULL OR tipo_documento = 'FE'");
+        $params = [];
+        $sql = "SELECT COUNT(*) FROM {$this->table}
+                WHERE (tipo_documento IS NULL OR tipo_documento = 'FE')"
+             . $this->condicionSociedad('', $params);
+        return (int) $this->fetchColumn($sql, $params);
     }
 
     /**
@@ -281,10 +314,10 @@ class Factura extends Model
                     archivado_en = COALESCE(?, archivado_en)
                 WHERE id = ?";
         return $this->execute($sql, [
-            $data['ruta_xml'] ?? null,
+            RutaDocumento::relativa($data['ruta_xml'] ?? '') ?: null,
             $data['archivo_xml'] ?? null,
             $data['hash_xml'] ?? null,
-            $data['ruta_pdf'] ?? null,
+            RutaDocumento::relativa($data['ruta_pdf'] ?? '') ?: null,
             $data['archivo_pdf'] ?? null,
             $data['hash_pdf'] ?? null,
             $data['estado_pdf'] ?? null,
@@ -312,19 +345,22 @@ class Factura extends Model
 
     public function getByImportacion(int $importacionId): array
     {
+        $params = [$importacionId];
         $sql = "SELECT f.*, p.razon_social as proveedor_nombre
                 FROM {$this->table} f
                 LEFT JOIN proveedores p ON f.proveedor_id = p.id
                 WHERE f.importacion_id = ?
-                  AND (f.tipo_documento IS NULL OR f.tipo_documento = 'FE')
+                  AND (f.tipo_documento IS NULL OR f.tipo_documento = 'FE')"
+             . $this->condicionSociedad('f.', $params) . "
                 ORDER BY f.fecha_emision DESC";
-        return $this->fetchAll($sql, [$importacionId]) ?: [];
+        return $this->fetchAll($sql, $params) ?: [];
     }
 
     public function getNotasXml($desde = '', $hasta = '', $buscar = '', $page = 1, $perPage = 100)
     {
         $where = ["f.tipo_documento = 'NC'"];
         $params = [];
+        $this->filtrarPorSociedad($where, $params, 'f.');
         if ($desde !== '') {
             $where[] = 'f.fecha_emision >= ?';
             $params[] = $desde;
@@ -353,6 +389,7 @@ class Factura extends Model
     {
         $where = ["f.tipo_documento = 'NC'"];
         $params = [];
+        $this->filtrarPorSociedad($where, $params, 'f.');
         if ($desde !== '') { $where[] = 'f.fecha_emision >= ?'; $params[] = $desde; }
         if ($hasta !== '') { $where[] = 'f.fecha_emision <= ?'; $params[] = $hasta; }
         if ($buscar !== '') {
@@ -364,35 +401,6 @@ class Factura extends Model
                 LEFT JOIN proveedores p ON p.id = f.proveedor_id
                 WHERE " . implode(' AND ', $where);
         return (int) $this->fetchColumn($sql, $params);
-    }
-
-    public function getConContenidoParaMigrar($limit = 100)
-    {
-        $limit = max(1, min(1000, (int) $limit));
-        $sql = "SELECT f.*, p.razon_social AS proveedor_nombre
-                FROM {$this->table} f
-                LEFT JOIN proveedores p ON p.id = f.proveedor_id
-                WHERE f.xml_contenido IS NOT NULL AND f.xml_contenido <> ''
-                ORDER BY f.id ASC LIMIT {$limit}";
-        return $this->fetchAll($sql) ?: [];
-    }
-
-    public function confirmarMigracionArchivo($id, array $archivo)
-    {
-        $sql = "UPDATE {$this->table} SET ruta_xml = ?, archivo_xml = ?, hash_xml = ?,
-                    estado_pdf = CASE WHEN ruta_pdf IS NULL OR ruta_pdf = '' THEN 'no_disponible_historico' ELSE 'disponible' END,
-                    archivado_en = ?, xml_contenido = NULL
-                WHERE id = ? AND xml_contenido IS NOT NULL";
-        return $this->execute($sql, [
-            $archivo['ruta_xml'], $archivo['archivo_xml'], $archivo['hash_xml'],
-            $archivo['archivado_en'] ?? date('Y-m-d H:i:s'), (int) $id,
-        ]);
-    }
-
-    public function contarContenidoEnBase()
-    {
-        return (int) $this->fetchColumn("SELECT COUNT(*) FROM {$this->table}
-                                        WHERE xml_contenido IS NOT NULL AND xml_contenido <> ''");
     }
 
     /** Documentos y estado de conciliación necesarios para ordenar el archivo local. */
@@ -445,18 +453,21 @@ class Factura extends Model
 
     public function actualizarUbicacionArchivos($id, $rutaXml, $rutaPdf)
     {
+        // Entran rutas del disco de esta máquina (quien organiza el archivo
+        // trabaja con rutas reales) y salen guardadas relativas a la carpeta
+        // compartida. archivo_xml/archivo_pdf son solo el nombre, no la ruta.
         $rutaXml = trim((string) $rutaXml);
         $rutaPdf = trim((string) $rutaPdf);
-        $pdfDisponible = $rutaPdf !== '' && is_file($rutaPdf);
+        $pdfDisponible = $rutaPdf !== '' && RutaDocumento::existe($rutaPdf);
         return $this->execute(
             "UPDATE {$this->table}
              SET ruta_xml = ?, archivo_xml = ?, ruta_pdf = ?, archivo_pdf = ?,
                  estado_pdf = ?
              WHERE id = ?",
             [
-                $rutaXml !== '' ? $rutaXml : null,
+                RutaDocumento::relativa($rutaXml) ?: null,
                 $rutaXml !== '' ? basename($rutaXml) : null,
-                $rutaPdf !== '' ? $rutaPdf : null,
+                RutaDocumento::relativa($rutaPdf) ?: null,
                 $rutaPdf !== '' ? basename($rutaPdf) : null,
                 $pdfDisponible ? 'disponible' : 'pendiente',
                 (int) $id,

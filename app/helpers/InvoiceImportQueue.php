@@ -8,6 +8,7 @@ require_once __DIR__ . '/../models/ImportacionItem.php';
 require_once __DIR__ . '/../models/Factura.php';
 require_once __DIR__ . '/../models/Proveedor.php';
 require_once __DIR__ . '/FileUploader.php';
+require_once __DIR__ . '/RutaDocumento.php';
 require_once __DIR__ . '/XmlDocumentImporter.php';
 
 if (!class_exists('XmlInvoiceParser', false)) {
@@ -21,7 +22,7 @@ class InvoiceImportQueue
     private const STALE_PROCESSING_SECONDS = 150;
 
     private $config;
-    private $queueBaseDir;
+    private $queueBaseDir = null;
     private $allowedExtensions;
     private $maxUploadSize;
     private $importacionModel;
@@ -32,7 +33,6 @@ class InvoiceImportQueue
     public function __construct()
     {
         $this->config = require __DIR__ . '/../config/config.php';
-        $this->queueBaseDir = rtrim($this->config['uploads_path'], '/\\') . DIRECTORY_SEPARATOR . 'xml_queue';
         $this->allowedExtensions = $this->config['allowed_extensions']['xml'] ?? ['xml'];
         $this->maxUploadSize = (int) ($this->config['max_upload_size'] ?? 10485760);
         $this->importacionModel = new Importacion();
@@ -61,12 +61,18 @@ class InvoiceImportQueue
             $metadata['semana_id'] = (int) $data['semana_id'];
         }
         $metadata['tipo_documento'] = strtoupper((string) ($data['tipo_documento'] ?? 'FE'));
+        // La cola se procesa en varias peticiones: la sociedad se guarda con
+        // la importación para que el sello no dependa de cuál esté
+        // seleccionada cuando le toque el turno a cada archivo.
         $metadata['cedula_receptor'] = (string) ($data['cedula_receptor'] ?? '');
+        $metadata['sociedad_id'] = (int) ($data['sociedad_id'] ?? 0);
 
         $importacionId = (int) $this->importacionModel->crear([
             'tipo' => 'xml',
             'archivo_origen' => $archivoOrigen !== '' ? $archivoOrigen : 'multiple_xml_files',
-            'ruta_archivo' => $this->queueBaseDir,
+            // La carpeta definitiva se conoce hasta tener el id; se corrige
+            // enseguida con actualizarResumen().
+            'ruta_archivo' => null,
             'total_registros' => $totalEsperado,
             'registros_exitosos' => 0,
             'registros_fallidos' => 0,
@@ -172,7 +178,9 @@ class InvoiceImportQueue
                 'metadata' => [
                     'subido_en' => date('Y-m-d H:i:s'),
                     'origen' => 'correo',
-                    'ruta_pdf' => $rutaPdf !== '' && is_file($rutaPdf) ? $rutaPdf : null,
+                    // Relativa como todo lo que se persiste: esta metadata la
+                    // lee después otra petición, quizá en otra computadora.
+                    'ruta_pdf' => $rutaPdf !== '' && is_file($rutaPdf) ? RutaDocumento::relativa($rutaPdf) : null,
                     'correo_cuenta_id' => is_array($entrada) ? (int) ($entrada['correo_cuenta_id'] ?? 0) : 0,
                     'correo_carpeta' => is_array($entrada) ? (string) ($entrada['correo_carpeta'] ?? '') : '',
                     'correo_uidvalidity' => is_array($entrada) ? (int) ($entrada['correo_uidvalidity'] ?? 0) : 0,
@@ -303,7 +311,23 @@ class InvoiceImportQueue
 
     public function getImportacionDirectory($importacionId)
     {
-        return $this->queueBaseDir . DIRECTORY_SEPARATOR . 'importacion_' . (int) $importacionId;
+        return $this->queueBaseDir() . DIRECTORY_SEPARATOR . 'importacion_' . (int) $importacionId;
+    }
+
+    /**
+     * Carpeta de la cola, dentro de la carpeta compartida y no en
+     * public/uploads/: una importación se procesa a lo largo de varias
+     * peticiones y quien la termine puede ser otra persona desde otra
+     * computadora. Se resuelve al usarla —y no en el constructor— para que
+     * consultar el historial de importaciones siga funcionando aunque la
+     * carpeta compartida todavía no esté configurada en esta máquina.
+     */
+    private function queueBaseDir()
+    {
+        if ($this->queueBaseDir === null) {
+            $this->queueBaseDir = RutaDocumento::carpetaTrabajo('IMPORTACIONES');
+        }
+        return $this->queueBaseDir;
     }
 
     /** Cache por petición: semana asignada a cada importación (metadata). */
@@ -386,7 +410,7 @@ class InvoiceImportQueue
             $metaItem = $this->decodeMetadata($item['metadata'] ?? null);
             $tipoPermitido = strtoupper((string) ($metaImportacion['tipo_documento'] ?? 'FE'));
 
-            $pdfPath = (string) ($metaItem['ruta_pdf'] ?? '');
+            $pdfPath = RutaDocumento::absoluta($metaItem['ruta_pdf'] ?? '');
             $resultado = (new XmlDocumentImporter())->importar($filePath, $pdfPath !== '' ? $pdfPath : null, [
                 'origen' => 'cola_xml',
                 'importacion_id' => $importacionId,
@@ -394,6 +418,7 @@ class InvoiceImportQueue
                 'tipos_permitidos' => [$tipoPermitido],
                 'validar_receptor' => !empty($metaImportacion['cedula_receptor']),
                 'cedula_receptor' => (string) ($metaImportacion['cedula_receptor'] ?? ''),
+                'sociedad_id' => (int) ($metaImportacion['sociedad_id'] ?? 0),
                 'correo_cuenta_id' => $metaItem['correo_cuenta_id'] ?? null,
                 'correo_carpeta' => $metaItem['correo_carpeta'] ?? null,
                 'correo_uidvalidity' => $metaItem['correo_uidvalidity'] ?? null,
@@ -440,133 +465,10 @@ class InvoiceImportQueue
                 @unlink($filePath);
             }
             $metaItem = isset($metaItem) ? $metaItem : $this->decodeMetadata($item['metadata'] ?? null);
-            $pdfPath = (string) ($metaItem['ruta_pdf'] ?? '');
+            $pdfPath = RutaDocumento::absoluta($metaItem['ruta_pdf'] ?? '');
             if ($pdfPath !== '' && is_file($pdfPath)) {
                 @unlink($pdfPath);
             }
-            return [
-                'item_id' => $itemId,
-                'archivo' => $originalName,
-                'estado' => $estado,
-                'error' => $e->getMessage(),
-            ];
-        }
-    }
-
-    /** Implementación anterior conservada solo como referencia de migración. */
-    private function procesarItemLegado(array $item)
-    {
-        $itemId = (int) ($item['id'] ?? 0);
-        $importacionId = (int) ($item['importacion_id'] ?? 0);
-        $originalName = (string) ($item['archivo_original'] ?? '');
-        $filePath = (string) ($item['ruta_archivo'] ?? '');
-
-        try {
-            $this->extendExecutionWindow();
-
-            $docData = XmlInvoiceParser::parseCfdiFromFile($filePath);
-
-            $proveedorId = $this->proveedorModel->obtenerOCrear(
-                $docData['rfc_emisor'] ?? '',
-                $docData['razon_social_emisor'] ?? ''
-            );
-
-            $metadata = $docData['metadata'] ?? [];
-            if (!is_array($metadata)) {
-                $metadata = [];
-            }
-
-            $metadata['queue_item_id'] = $itemId;
-
-            $hashDocumento = (string) ($docData['hash_documento'] ?? ($docData['hash_xml'] ?? null));
-
-            $registro = [
-                'importacion_id' => $importacionId,
-                'semana_id' => $this->semanaDeImportacion($importacionId),
-                'consecutivo_completo' => $docData['consecutivo_completo'],
-                'clave' => $docData['clave'] ?? null,
-                'tipo_documento' => $docData['tipo_documento'] ?? null,
-                'receptor_id' => $docData['receptor_id'] ?? null,
-                'numero_factura_asistente' => $docData['numero_factura_asistente'],
-                'proveedor_id' => $proveedorId,
-                'fecha_emision' => $docData['fecha_emision'],
-                'subtotal' => $docData['subtotal'],
-                'iva' => $docData['iva'],
-                'total' => $docData['total'],
-                'moneda' => $docData['moneda'],
-                'tipo_comprobante' => $docData['tipo_comprobante'] ?? null,
-                'archivo_xml' => $originalName,
-                'ruta_xml' => $filePath,
-                'hash_xml' => $hashDocumento !== '' ? $hashDocumento : null,
-                'xml_contenido' => $docData['xml_contenido'] ?? null,
-                'metadata' => json_encode($metadata, JSON_UNESCAPED_UNICODE),
-            ];
-
-            $facturaId = (int) $this->facturaModel->crear($registro);
-
-            // Verificación anti-hosting: algunos hostings compartidos (InfinityFree/ProxySQL)
-            // responden OK a un INSERT sin ejecutarlo realmente cuando reciben muchas
-            // escrituras seguidas. Verificamos que la fila exista de verdad y, si no,
-            // reintentamos con pausa. Jamás marcar 'importado' sin fila confirmada.
-            if ($hashDocumento !== '') {
-                $confirmada = $this->facturaModel->existsByHash($hashDocumento);
-                $reintentos = 0;
-
-                while (!$confirmada && $reintentos < 3) {
-                    $reintentos++;
-                    usleep(500000); // 0.5s: dejar respirar al proxy de BD
-
-                    try {
-                        $facturaId = (int) $this->facturaModel->crear($registro);
-                    } catch (Throwable $e2) {
-                        if ($this->clasificarError($e2->getMessage()) === 'duplicado') {
-                            // La fila sí quedó (el primer INSERT llegó tarde): confirmado.
-                            break;
-                        }
-                        throw $e2;
-                    }
-
-                    $confirmada = $this->facturaModel->existsByHash($hashDocumento);
-                }
-
-                if (!$this->facturaModel->existsByHash($hashDocumento)) {
-                    throw new Exception(
-                        'La base de datos no confirmó la escritura de esta factura tras '
-                        . (1 + $reintentos) . ' intentos (el hosting descartó el INSERT). Reintenta la importación.'
-                    );
-                }
-            }
-
-            $this->importacionItemModel->marcarResultado($itemId, 'importado', null, $facturaId, [
-                'proveedor' => $docData['razon_social_emisor'] ?? null,
-                'consecutivo' => $docData['consecutivo_completo'] ?? null,
-            ]);
-
-            // Pausa corta entre facturas para no disparar el límite de escrituras
-            // del hosting compartido (sin esto, InfinityFree descarta INSERTs).
-            usleep(250000);
-
-            if ($filePath && is_file($filePath)) {
-                @unlink($filePath);
-            }
-
-            return [
-                'item_id' => $itemId,
-                'archivo' => $originalName,
-                'estado' => 'importado',
-                'factura_id' => $facturaId,
-            ];
-        } catch (Throwable $e) {
-            $estado = $this->clasificarError($e->getMessage());
-
-            $this->importacionItemModel->marcarResultado($itemId, $estado, $e->getMessage(), null, [
-                'exception_class' => get_class($e),
-            ]);
-
-            if ($filePath && is_file($filePath)) {
-                @unlink($filePath);
-            }
-
             return [
                 'item_id' => $itemId,
                 'archivo' => $originalName,

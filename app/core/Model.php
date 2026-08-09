@@ -4,11 +4,28 @@
  * Proporciona acceso a base de datos con PDO
  */
 
+// Alcance por sociedad: lo usan los modelos que guardan documentos de una
+// empresa. Se carga aquí porque Model.php es lo primero que entra siempre.
+require_once __DIR__ . '/AlcanceSociedad.php';
+require_once __DIR__ . '/../helpers/RutaDocumento.php';
+
 class Model
 {
     protected static $db = null;
     protected $table;
-    
+
+    /**
+     * Columnas de este modelo que guardan la ruta de un documento.
+     *
+     * En la base se guardan relativas a la carpeta compartida; al leerlas se
+     * convierten a la ruta real de esta máquina. Declararlo aquí evita que
+     * cada consulta tenga que acordarse: basta con nombrar la columna una vez.
+     * Al escribir sí hay que llamar a RutaDocumento::relativa() en el
+     * INSERT/UPDATE, porque los parámetros van por posición y el modelo no
+     * puede adivinar cuál de ellos es una ruta.
+     */
+    protected $camposRuta = [];
+
     /**
      * Obtener conexión a base de datos
      */
@@ -59,16 +76,22 @@ class Model
     protected function fetchAll($sql, $params = [])
     {
         $stmt = $this->query($sql, $params);
-        return $stmt->fetchAll();
+        $filas = $stmt->fetchAll();
+        return $this->camposRuta
+            ? RutaDocumento::hidratarFilas($filas, $this->camposRuta)
+            : $filas;
     }
-    
+
     /**
      * Obtener un registro
      */
     protected function fetchOne($sql, $params = [])
     {
         $stmt = $this->query($sql, $params);
-        return $stmt->fetch();
+        $fila = $stmt->fetch();
+        return $this->camposRuta && is_array($fila)
+            ? RutaDocumento::hidratarFila($fila, $this->camposRuta)
+            : $fila;
     }
     
     /**

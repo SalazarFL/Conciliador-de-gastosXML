@@ -75,8 +75,9 @@ class XmlInvoiceParser
 			'total' => $total,
 			'moneda' => $moneda,
 			'tipo_comprobante' => $tipoComprobante !== '' ? $tipoComprobante : null,
+			// Sin el contenido del XML: el documento se archiva en la carpeta
+			// compartida y la base guarda dónde está, no una copia.
 			'hash_xml' => hash_file('sha256', $filePath),
-			'xml_contenido' => file_get_contents($filePath)
 		];
 	}
 
@@ -514,7 +515,6 @@ class XmlInvoiceParser
 			'moneda'                   => 'CRC',
 			'tipo_comprobante'         => null,
 			'hash_xml'                 => hash_file('sha256', $filePath),
-			'xml_contenido'            => file_get_contents($filePath),
 		];
 	}
 }

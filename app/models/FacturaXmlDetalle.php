@@ -12,6 +12,9 @@ class FacturaXmlDetalle extends Model
 {
     protected $table = 'facturas_xml_referencias';
 
+    // Los pendientes de extraer se buscan por facturas_xml.ruta_xml.
+    protected $camposRuta = ['ruta_xml'];
+
     /**
      * Extrae referencias y líneas del XML en disco y las guarda,
      * reemplazando lo previo. Si el documento ya fue extraído se omite,

@@ -8,6 +8,9 @@ class Importacion extends Model
 {
     protected $table = 'importaciones';
 
+    // Carpeta de la importación, dentro de la carpeta compartida.
+    protected $camposRuta = ['ruta_archivo'];
+
     public function getLatestByTipo($tipo)
     {
         $sql = "SELECT *
@@ -28,7 +31,7 @@ class Importacion extends Model
         return $this->insert($sql, [
             $data['tipo'],
             $data['archivo_origen'],
-            $data['ruta_archivo'] ?? null,
+            RutaDocumento::relativa($data['ruta_archivo'] ?? '') ?: null,
             $data['total_registros'] ?? 0,
             $data['registros_exitosos'] ?? 0,
             $data['registros_fallidos'] ?? 0,
@@ -58,7 +61,9 @@ class Importacion extends Model
             }
 
             $sets[] = "{$field} = ?";
-            $params[] = $data[$field];
+            $params[] = in_array($field, $this->camposRuta, true)
+                ? (RutaDocumento::relativa($data[$field]) ?: null)
+                : $data[$field];
         }
 
         if (empty($sets)) {

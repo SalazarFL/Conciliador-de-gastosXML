@@ -8,7 +8,17 @@
 
 class CorreoBandeja extends Model
 {
+    // Zona de paso: el XML baja aquí antes de importarse. Aun así el listado
+    // debe respetar la empresa en curso, porque un mismo buzón recibe
+    // documentos de varias.
+    use AlcanceSociedad;
+
     protected $table = 'correo_bandeja';
+
+    // El XML y el PDF capturados esperan en la carpeta compartida, no dentro
+    // del proyecto: si esperaran en storage/ de una computadora, la fila
+    // existiría para todos pero el archivo solo para quien abrió el correo.
+    protected $camposRuta = ['archivo_xml', 'archivo_pdf'];
 
     public function __construct()
     {
@@ -18,18 +28,21 @@ class CorreoBandeja extends Model
     public function crear($data)
     {
         $sql = "INSERT INTO {$this->table}
-                (cuenta_id, uid_correo, remitente, asunto, fecha_correo, archivo_xml, archivo_pdf,
+                (cuenta_id, sociedad_id, uid_correo, remitente, asunto, fecha_correo, archivo_xml, archivo_pdf,
                  numero_corto, tipo_doc, proveedor, fecha_emision, total, hash_xml, estado)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+        $sociedadId = !empty($data['sociedad_id']) ? (int) $data['sociedad_id'] : $this->sociedadId();
 
         return $this->insert($sql, [
             (int) ($data['cuenta_id'] ?? 0),
+            $sociedadId > 0 ? $sociedadId : null,
             (string) ($data['uid_correo'] ?? ''),
             $data['remitente'] ?? null,
             $data['asunto'] ?? null,
             $data['fecha_correo'] ?? null,
-            $data['archivo_xml'] ?? null,
-            $data['archivo_pdf'] ?? null,
+            RutaDocumento::relativa($data['archivo_xml'] ?? '') ?: null,
+            RutaDocumento::relativa($data['archivo_pdf'] ?? '') ?: null,
             $data['numero_corto'] ?? null,
             (string) ($data['tipo_doc'] ?? 'FE'),
             $data['proveedor'] ?? null,
@@ -51,10 +64,12 @@ class CorreoBandeja extends Model
         // Orden por id: lo último cargado a la bandeja aparece arriba,
         // sin importar la fecha del correo (una factura vieja recién
         // traída del buzón debe salir de primera).
+        $params = [];
         $sql = "SELECT * FROM {$this->table}
-                WHERE estado IN ('pendiente', 'rechazada', 'otra_cedula')
+                WHERE estado IN ('pendiente', 'rechazada', 'otra_cedula')"
+             . $this->condicionSociedad('', $params) . "
                 ORDER BY id DESC";
-        return $this->fetchAll($sql);
+        return $this->fetchAll($sql, $params);
     }
 
     /**
@@ -79,11 +94,13 @@ class CorreoBandeja extends Model
     public function getHistorial($limit = 200)
     {
         $limit = max(1, min(1000, (int) $limit));
+        $params = [];
         $sql = "SELECT * FROM {$this->table}
-                WHERE estado IN ('importada', 'descartada')
+                WHERE estado IN ('importada', 'descartada')"
+             . $this->condicionSociedad('', $params) . "
                 ORDER BY id DESC
                 LIMIT {$limit}";
-        return $this->fetchAll($sql);
+        return $this->fetchAll($sql, $params);
     }
 
     public function getByIds(array $ids, $estado = null)
@@ -132,8 +149,8 @@ class CorreoBandeja extends Model
             $data['remitente'] ?? null,
             $data['asunto'] ?? null,
             $data['fecha_correo'] ?? null,
-            $data['archivo_xml'] ?? null,
-            $data['archivo_pdf'] ?? null,
+            RutaDocumento::relativa($data['archivo_xml'] ?? '') ?: null,
+            RutaDocumento::relativa($data['archivo_pdf'] ?? '') ?: null,
             $data['numero_corto'] ?? null,
             (string) ($data['tipo_doc'] ?? 'FE'),
             $data['proveedor'] ?? null,
@@ -191,7 +208,12 @@ class CorreoBandeja extends Model
 
     public function contarPorEstado()
     {
-        $rows = $this->fetchAll("SELECT estado, COUNT(*) AS total FROM {$this->table} GROUP BY estado");
+        $params = [];
+        $rows = $this->fetchAll(
+            "SELECT estado, COUNT(*) AS total FROM {$this->table} WHERE 1=1"
+            . $this->condicionSociedad('', $params) . ' GROUP BY estado',
+            $params
+        );
 
         $conteo = ['pendiente' => 0, 'importada' => 0, 'descartada' => 0, 'ya_existe' => 0, 'rechazada' => 0, 'otra_cedula' => 0];
         foreach ($rows as $row) {

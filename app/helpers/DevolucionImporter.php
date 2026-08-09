@@ -2,11 +2,12 @@
 /**
  * Importa un reporte PDF del ERP (Boleta Local o Devolución a Proveedor):
  * parsea y cuadra con ReporteErpParser, deduplica por hash del PDF, archiva
- * el original en storage/devoluciones/ y corre la verificación contra NC.
+ * el original en la carpeta compartida y corre la verificación contra NC.
  * Un PDF que no cuadra se rechaza completo — nunca se importa a medias.
  */
 
 require_once __DIR__ . '/ReporteErpParser.php';
+require_once __DIR__ . '/RutaDocumento.php';
 require_once __DIR__ . '/DevolucionVerificador.php';
 require_once __DIR__ . '/../models/Devolucion.php';
 
@@ -86,12 +87,10 @@ class DevolucionImporter
 
     private function archivarPdf($rutaPdf, array $parsed, $hash)
     {
-        $anio = date('Y');
-        $dir = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'storage'
-            . DIRECTORY_SEPARATOR . 'devoluciones' . DIRECTORY_SEPARATOR . $anio;
-        if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
-            throw new RuntimeException('No se pudo crear el directorio de archivo de devoluciones.');
-        }
+        // En la carpeta compartida, no en storage/: la fila de la devolución
+        // la consulta todo el grupo y su PDF tiene que abrirse desde cualquier
+        // computadora.
+        $dir = RutaDocumento::carpetaTrabajo('DEVOLUCIONES/' . date('Y'));
 
         $numero = (string) ($parsed['tipo'] === 'boleta_local'
             ? ($parsed['no_boleta'] ?? '0')

@@ -63,6 +63,12 @@ class MailFetcher
 
     /**
      * Ruta bajo storage/correo/ (se crea si no existe).
+     *
+     * Es almacenamiento LOCAL de esta computadora: configuración, bloqueos,
+     * bitácoras y los adjuntos que se están extrayendo en este momento
+     * ('tmp'). Nada que la base de datos vaya a referenciar después puede
+     * quedarse aquí — eso va a la carpeta compartida, ver
+     * RutaDocumento::carpetaTrabajo().
      */
     public static function storagePath($sub = '')
     {
