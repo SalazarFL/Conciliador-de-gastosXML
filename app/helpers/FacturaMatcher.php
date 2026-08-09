@@ -192,9 +192,18 @@ class FacturaMatcher
     /**
      * Similitud de proveedor basada en tokens: iniciales ("M." ≈ "MIGUEL"),
      * abreviaturas ("CIA" ≈ "COMPANIA"), sin sufijos corporativos.
+     *
+     * Antes de comparar se resuelven los alias aprendidos: hay nombres que no
+     * se parecen en nada y aun así son el mismo proveedor ("COOPEAGRI" y
+     * "COOPERATIVA AGRICOLA INDUSTRIAL Y DE SERVICIOS MULTIPLES EL GENERAL").
+     * Eso ningún algoritmo lo adivina; lo dijo una persona al emparejar a mano.
      */
     public static function similaridadTexto($a, $b)
     {
+        if (self::mismoPorAlias($a, $b)) {
+            return 100;
+        }
+
         $tokensA = self::tokenizarProveedor($a);
         $tokensB = self::tokenizarProveedor($b);
 
@@ -242,6 +251,10 @@ class FacturaMatcher
      */
     public static function mismoProveedor($a, $b)
     {
+        if (self::mismoPorAlias($a, $b)) {
+            return true;
+        }
+
         $tokensA = self::tokenizarProveedor($a);
         $tokensB = self::tokenizarProveedor($b);
 
@@ -294,6 +307,46 @@ class FacturaMatcher
      * Nombre de proveedor → tokens significativos (sin acentos, puntuación,
      * sufijos corporativos ni conectores).
      */
+    /**
+     * ¿Los dos textos son el mismo proveedor según una equivalencia que
+     * alguien enseñó al emparejar a mano?
+     *
+     * Resuelve cada lado a su nombre canónico y los compara. Así funciona en
+     * los tres sentidos: alias contra nombre real, nombre real contra alias, y
+     * dos alias distintos del mismo proveedor.
+     *
+     * Si la tabla de alias no existe todavía, el mapa viene vacío y esto
+     * siempre devuelve false: el emparejador se comporta como antes.
+     */
+    private static function mismoPorAlias($a, $b)
+    {
+        if (!class_exists('ProveedorAlias')) {
+            // Este ayudante también se usa suelto, sin la capa de modelos
+            // cargada (pruebas, utilidades de línea de comandos). Ahí no hay
+            // base que consultar: se compara solo por parecido, como antes.
+            $ruta = __DIR__ . '/../models/ProveedorAlias.php';
+            if (!class_exists('Model') || !is_file($ruta)) {
+                return false;
+            }
+            require_once $ruta;
+        }
+
+        $normA = ProveedorAlias::normalizar($a);
+        $normB = ProveedorAlias::normalizar($b);
+        if ($normA === '' || $normB === '' || $normA === $normB) {
+            return false; // iguales ya los resuelve la comparación normal
+        }
+
+        $mapa = ProveedorAlias::mapa();
+        if (!$mapa) {
+            return false;
+        }
+
+        $canonA = $mapa[$normA] ?? $normA;
+        $canonB = $mapa[$normB] ?? $normB;
+        return $canonA === $canonB;
+    }
+
     public static function tokenizarProveedor($value)
     {
         $text = strtoupper(trim((string) $value));

@@ -8,6 +8,7 @@ $semanas        = is_array($semanas ?? null) ? $semanas : [];
 $carpetasPago   = is_array($carpetasPago ?? null) ? $carpetasPago : [];
 $semanaFiltro   = (int) ($semanaFiltro ?? 0);
 $sinCoincidencia = (int) ($sinCoincidencia ?? 0);
+$pagoCerrado = $listado !== null && ($listado['estado'] ?? 'abierto') === 'cerrado';
 $filtros = array_replace([
     'q' => '', 'proveedor' => '', 'estado' => '', 'vinculo' => '',
     'fecha_desde' => '', 'fecha_hasta' => '', 'monto_desde' => '', 'monto_hasta' => '',
@@ -627,7 +628,7 @@ document.addEventListener('keydown', function (e) {
 <!-- ── Resumen del listado ── -->
 <div class="stats-grid mb-20">
     <div class="stat-card navy">
-        <div class="stat-label"><i class="fas fa-list-check" style="margin-right:5px;"></i>Facturas por pagar</div>
+        <div class="stat-label"><i class="fas fa-list-check" style="margin-right:5px;"></i>Pagos semanales</div>
         <div class="stat-value"><?= $totalLineas ?></div>
         <div class="stat-sub">₡<?= number_format($montoTotal, 2) ?></div>
     </div>
@@ -666,10 +667,17 @@ document.addEventListener('keydown', function (e) {
             </span>
             <?php endif; ?>
             <?php endif; ?>
+            <?php if ($pagoCerrado): ?>
+            <span class="badge badge-ok" style="font-size:10px;padding:2px 8px;margin-left:4px;"
+                  title="Las coincidencias y las asignaciones ERP de este pago ya no se modifican">
+                <i class="fas fa-lock"></i> Pago cerrado
+            </span>
+            <?php endif; ?>
             <span style="font-weight:400;font-size:11.5px;color:var(--text-muted);">
                 — subido el <?= ppFecha($listado['fecha_subida']) ?>
                 <?= !empty($listado['sociedad_nombre']) ? ' · ' . htmlspecialchars($listado['sociedad_nombre']) : '' ?>
                 <?= empty($listado['semana_nombre']) ? ' · verificado contra todas las facturas' : '' ?>
+                <?= $pagoCerrado && !empty($listado['cerrado_en']) ? ' · cerrado el ' . date('d/m/Y H:i', strtotime((string) $listado['cerrado_en'])) : '' ?>
             </span>
         </div>
 
@@ -682,7 +690,7 @@ document.addEventListener('keydown', function (e) {
             <select name="listado_id" class="form-control" style="font-size:12px;padding:5px 8px;" onchange="this.form.submit()">
                 <?php foreach ($listados as $l): ?>
                 <option value="<?= (int) $l['id'] ?>" <?= (int) $l['id'] === (int) $listado['id'] ? 'selected' : '' ?>>
-                    <?= htmlspecialchars($l['nombre']) ?><?= !empty($l['semana_nombre']) ? ' · ' . htmlspecialchars($l['semana_nombre']) : '' ?> (<?= (int) $l['total_lineas'] ?>)
+                    <?= htmlspecialchars($l['nombre']) ?><?= !empty($l['semana_nombre']) ? ' · ' . htmlspecialchars($l['semana_nombre']) : '' ?><?= ($l['estado'] ?? 'abierto') === 'cerrado' ? ' · Cerrado' : '' ?> (<?= (int) $l['total_lineas'] ?>)
                 </option>
                 <?php endforeach; ?>
             </select>
@@ -693,7 +701,7 @@ document.addEventListener('keydown', function (e) {
                  corre sola cada vez que una factura entra o sale de la
                  semana (asignación manual, subida de XML o importación
                  del correo). La ruta /por-pagar/verificar sigue viva. */ ?>
-        <?php if (!empty($listado['semana_id']) && !empty($sinCoincidencia)): ?>
+        <?php if (!$pagoCerrado && !empty($listado['semana_id']) && !empty($sinCoincidencia)): ?>
         <button type="button" class="btn btn-sm" onclick="ppsAbrir()"
                 style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;"
                 title="Facturas XML de esta semana que no coinciden con ninguna línea del listado">
@@ -704,12 +712,22 @@ document.addEventListener('keydown', function (e) {
            title="<?= $filtrosActivos ? 'Exportar a Excel solamente los resultados filtrados' : 'Exportar todo el listado a Excel' ?>">
             <i class="fas fa-file-excel"></i> Exportar Excel
         </a>
+        <?php if (!$pagoCerrado): ?>
+        <form method="POST" action="<?= $baseUrl ?>/por-pagar/cerrar/<?= (int) $listado['id'] ?>" style="display:inline;"
+              onsubmit="return confirm('¿Cerrar este pago semanal? Las facturas emparejadas quedarán asignadas a esta semana en Facturas ERP y el listado ya no se podrá modificar.');">
+            <button type="submit" class="btn btn-primary btn-sm"
+                    <?= $sinRespaldo > 0 ? 'disabled' : '' ?>
+                    title="<?= $sinRespaldo > 0 ? 'Primero empareja todas las facturas con su XML' : 'Cerrar y asignar las facturas en el módulo ERP' ?>">
+                <i class="fas fa-lock"></i> Cerrar pago semanal
+            </button>
+        </form>
         <form method="POST" action="<?= $baseUrl ?>/por-pagar/eliminar/<?= (int) $listado['id'] ?>" style="display:inline;"
               onsubmit="return confirm('¿Eliminar este listado y sus resultados?');">
             <button type="submit" class="btn btn-outline btn-sm" title="Eliminar listado" style="color:#b91c1c;border-color:#fed7d7;">
                 <i class="fas fa-trash-can"></i>
             </button>
         </form>
+        <?php endif; ?>
     </div>
 
     <form method="GET" action="<?= $baseUrl ?>/por-pagar" class="filter-bar">
@@ -852,6 +870,7 @@ document.addEventListener('keydown', function (e) {
                             <i class="fas fa-eye"></i>
                         </a>
                         <?php endif; ?>
+                        <?php if (!$pagoCerrado): ?>
                         <form method="POST" action="<?= $baseUrl ?>/por-pagar/factura/eliminar/<?= (int) $linea['id'] ?>?<?= htmlspecialchars($queryRetornoFiltros) ?>"
                               style="display:inline;margin-left:4px;"
                               onsubmit="return confirm('¿Eliminar esta factura del listado? La factura XML asociada no se eliminará.');">
@@ -861,6 +880,7 @@ document.addEventListener('keydown', function (e) {
                                 <i class="fas fa-trash-can"></i>
                             </button>
                         </form>
+                        <?php endif; ?>
                     </td>
                 </tr>
                 <?php endforeach; ?>
@@ -878,7 +898,7 @@ document.addEventListener('keydown', function (e) {
     </div>
 </div>
 
-<?php if (!empty($listado['semana_id'])): ?>
+<?php if (!empty($listado['semana_id']) && !$pagoCerrado): ?>
 <!-- ── Facturas sin coincidencia (de la semana, fuera del listado) ── -->
 <div id="pps-overlay" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:1000;overflow:auto;">
     <div style="background:#fff;border-radius:12px;max-width:860px;width:94%;margin:5vh auto;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.25);">
@@ -1025,6 +1045,20 @@ function ppsVincular(facturaId) {
         .then(function (r) { return r.json(); })
         .then(function (r) {
             if (!r.ok) throw new Error(r.message || 'No se pudo vincular.');
+
+            // Si los nombres no se parecían, el sistema acaba de aprender que
+            // son el mismo proveedor. Conviene decirlo: explica por qué otras
+            // líneas cambiaron solas, y avisa de lo que va a pasar en adelante.
+            if (r.alias_aprendido) {
+                var msg = 'Vinculada.\n\n'
+                    + 'Los nombres no se parecían, así que quedó aprendido que son el mismo '
+                    + 'proveedor. Desde ahora sus facturas se emparejan solas.';
+                if (r.lineas_resueltas > 0) {
+                    msg += '\n\nCon eso se resolvieron ' + r.lineas_resueltas
+                        + ' línea(s) más que estaban sin respaldo.';
+                }
+                alert(msg);
+            }
             window.location.reload();
         })
         .catch(function (err) { alert(err.message); });
