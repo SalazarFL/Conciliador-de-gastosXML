@@ -1,9 +1,39 @@
 <?php
-/** Estado persistente de una ejecución del modo General de Correo. */
+/** Estado persistente de una ejecución del modo Descargas de Correo. */
 class CorreoLote extends Model
 {
     protected $table = 'correo_lotes';
     private static $schemaIncidenciasLista = false;
+
+    /**
+     * Correos del índice que son candidatos del modo Descargas.
+     * adjuntos=NULL entra deliberadamente: un mensaje cuyo índice aún no leyó
+     * la estructura MIME no debe perderse; el worker lo verifica al abrirlo.
+     * Parámetros esperados, en orden: cuenta_id, timestamp desde, hasta.
+     */
+    private const CONDICIONES_CANDIDATO =
+        "i.cuenta_id = ?
+         AND i.timestamp >= ? AND i.timestamp < ?
+         AND (i.adjuntos IS NULL OR LOWER(i.adjuntos) REGEXP '\\.(xml|zip)([[:space:]]|$)')
+         AND LOWER(i.carpeta) NOT REGEXP '(spam|junk|borrador|draft|sent|enviado|trash|papelera)'";
+
+    /**
+     * ¿Este correo ya se procesó en una corrida anterior?
+     *
+     * correo_procesados guarda una marca por mensaje con la llave
+     * "c{cuenta}:{uidvalidity}:{uid}" (ver MailFetcher::claveMensaje), y el
+     * modo Descargas la escribe al terminar cada correo. Antes nadie la
+     * consultaba al armar el lote: rangos que se traslapaban volvían a bajar
+     * los adjuntos por IMAP para descubrir al final que ya estaban. En el
+     * lote #10 eso fueron 1296 de 2490 correos. La llave es PRIMARY KEY, así
+     * que descartarlos aquí no cuesta prácticamente nada.
+     *
+     * Descartar de la bandeja quita la marca (MailFetcher::desmarcarProcesados),
+     * así que reprocesar a propósito sigue funcionando.
+     */
+    private const YA_PROCESADO =
+        "EXISTS (SELECT 1 FROM correo_procesados p
+                  WHERE p.clave = CONCAT('c', i.cuenta_id, ':', i.uidvalidity, ':', i.uid))";
 
     public function __construct()
     {
@@ -62,32 +92,62 @@ class CorreoLote extends Model
                    SELECT ?, i.id, i.carpeta, i.uidvalidity, i.uid,
                           i.asunto, i.remitente, i.fecha
                    FROM correo_indice i
-                   WHERE i.cuenta_id = ?
-                     AND i.timestamp >= ? AND i.timestamp < ?
-                     AND (i.adjuntos IS NULL OR LOWER(i.adjuntos) REGEXP '\\.(xml|zip)([[:space:]]|$)')
-                     AND LOWER(i.carpeta) NOT REGEXP '(spam|junk|borrador|draft|sent|enviado|trash|papelera)'";
+                   WHERE " . self::CONDICIONES_CANDIDATO;
         $params = [$id, (int) $data['cuenta_id'], $desdeTs, $hastaTs];
         $this->agregarFiltroCorreo($insert, $params, $data['correo_busqueda'] ?? '');
+        if (empty($data['incluir_procesados'])) {
+            $insert .= ' AND NOT ' . self::YA_PROCESADO;
+        }
+        $this->prepararTablaProcesados();
         $this->execute($insert, $params);
         $total = (int) $this->fetchColumn('SELECT COUNT(*) FROM correo_lote_items WHERE lote_id = ?', [$id]);
         $this->execute("UPDATE {$this->table} SET total_mensajes = ? WHERE id = ?", [$total, $id]);
         return $this->get($id);
     }
 
+    /**
+     * Cuántos correos entrarían en el lote, separando los que ya se
+     * procesaron antes: es lo que se le muestra al usuario antes de iniciar,
+     * para que sepa si va a trabajar de verdad o a repetir lo mismo.
+     *
+     * @return array{total:int,procesados:int,nuevos:int}
+     */
     public function estimar($cuentaId, $desde, $hasta, $correoBusqueda = '')
     {
         $desdeTs = strtotime($desde . ' 00:00:00');
         $hastaTs = strtotime($hasta . ' +1 day 00:00:00');
         if ($desdeTs === false || $hastaTs === false) {
-            return 0;
+            return ['total' => 0, 'procesados' => 0, 'nuevos' => 0];
         }
-        $sql = "SELECT COUNT(*) FROM correo_indice i
-                WHERE i.cuenta_id = ? AND i.timestamp >= ? AND i.timestamp < ?
-                  AND (i.adjuntos IS NULL OR LOWER(i.adjuntos) REGEXP '\\.(xml|zip)([[:space:]]|$)')
-                  AND LOWER(i.carpeta) NOT REGEXP '(spam|junk|borrador|draft|sent|enviado|trash|papelera)'";
+        $sql = 'SELECT COUNT(*) AS total,
+                       COALESCE(SUM(' . self::YA_PROCESADO . '), 0) AS procesados
+                  FROM correo_indice i
+                 WHERE ' . self::CONDICIONES_CANDIDATO;
         $params = [(int) $cuentaId, $desdeTs, $hastaTs];
         $this->agregarFiltroCorreo($sql, $params, $correoBusqueda);
-        return (int) $this->fetchColumn($sql, $params);
+
+        $this->prepararTablaProcesados();
+        $fila = $this->fetchOne($sql, $params) ?: [];
+        $total = (int) ($fila['total'] ?? 0);
+        $procesados = (int) ($fila['procesados'] ?? 0);
+
+        return ['total' => $total, 'procesados' => $procesados, 'nuevos' => $total - $procesados];
+    }
+
+    /**
+     * correo_procesados la crea CorreoProcesado en su constructor. Se toca
+     * antes de consultarla porque un servidor recién instalado puede no
+     * tenerla todavía y aquí se referencia desde SQL crudo.
+     */
+    protected function prepararTablaProcesados()
+    {
+        static $lista = false;
+        if ($lista) {
+            return;
+        }
+        require_once __DIR__ . '/CorreoProcesado.php';
+        new CorreoProcesado();
+        $lista = true;
     }
 
     private function agregarFiltroCorreo(&$sql, array &$params, $correoBusqueda)
@@ -130,6 +190,23 @@ class CorreoLote extends Model
                                LEFT JOIN sociedades s ON s.id = l.sociedad_id
                                {$where} ORDER BY l.id DESC LIMIT 1", $params);
         return $row ?: null;
+    }
+
+    /**
+     * Lotes que aún tienen trabajo por delante, del más viejo al más nuevo:
+     * uno parado hace días es el que urge. Lo consume cli/procesar_lotes.php.
+     */
+    public function pendientes($loteId = 0)
+    {
+        $sql = "SELECT id, cuenta_id, sociedad_id, total_mensajes, procesados, estado
+                  FROM {$this->table}
+                 WHERE estado IN ('pendiente','ejecutando')";
+        $params = [];
+        if ((int) $loteId > 0) {
+            $sql .= ' AND id = ?';
+            $params[] = (int) $loteId;
+        }
+        return $this->fetchAll($sql . ' ORDER BY id ASC', $params) ?: [];
     }
 
     public function iniciar($id)

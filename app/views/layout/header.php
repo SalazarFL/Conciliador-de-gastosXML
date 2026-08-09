@@ -27,30 +27,41 @@ $baseUrl    = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 $uri        = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
 $uriClean   = rtrim($uri, '/');
 
+/**
+ * El segmento tiene que terminar donde termina la URI o antes de una barra.
+ * Con una comparación por prefijo, /facturas-erp marcaría activo también el
+ * ítem de /facturas.
+ */
+function navCoincide(string $segment, string $uri): bool {
+    return (bool) preg_match('~/' . preg_quote($segment, '~') . '(/|$)~', $uri);
+}
+
 function navActive(string $segment, string $uri): string {
     if ($segment === '') {
         return (str_ends_with($uri, '/public') || str_ends_with($uri, '/public/') || $uri === '' || $uri === '/') ? 'active' : '';
     }
-    return (strpos($uri, '/' . $segment) !== false) ? 'active' : '';
+    return navCoincide($segment, $uri) ? 'active' : '';
 }
 
 // Título de la página actual para el topbar (sin descripción: solo el nombre)
 $pageLabels = [
-    'facturas'     => 'Carga de Facturas XML',
+    'facturas'     => 'Facturas ERP · Carga XML',
+    'facturas-erp' => 'Facturas ERP',
     'correo'       => 'Correo',
-    'por-pagar'    => 'Facturas por pagar',
+    'por-pagar'    => 'Pagos semanales',
     'notas-credito'=> 'Notas de crédito',
     'devoluciones' => 'Devoluciones',
-    'notas-xml'    => 'Notas XML',
+    'notas-xml'    => 'Notas de crédito · Carga XML',
     'gastos'       => 'Carga de Gastos CSV',
     'conciliacion' => 'Conciliación',
     'reportes'     => 'Reportes y Exportación',
     'usuarios'     => 'Gestión de Usuarios',
+    'diagnostico'  => 'Diagnóstico de la instalación',
 ];
 
 $currentLabel = 'Panel Principal';
 foreach ($pageLabels as $seg => $label) {
-    if (strpos($uriClean, '/' . $seg) !== false) {
+    if (navCoincide($seg, $uriClean)) {
         $currentLabel = $label;
         break;
     }
@@ -102,12 +113,14 @@ if (!isset($sociedadActiva)) {
         <nav class="sidebar-nav">
             <div class="sidebar-section-label">Módulos</div>
 
-            <a href="<?= $baseUrl ?>/por-pagar" class="<?= navActive('por-pagar', $uriClean) ?>" title="Facturas por pagar">
+            <a href="<?= $baseUrl ?>/por-pagar" class="<?= navActive('por-pagar', $uriClean) ?>" title="Pagos semanales">
                 <span class="nav-icon"><i class="fas fa-file-invoice-dollar"></i></span>
-                <span class="nav-label">Facturas por pagar</span>
+                <span class="nav-label">Pagos semanales</span>
             </a>
 
-            <a href="<?= $baseUrl ?>/notas-credito" class="<?= navActive('notas-credito', $uriClean) ?>" title="Notas de crédito">
+            <a href="<?= $baseUrl ?>/notas-credito"
+               class="<?= navCoincide('notas-credito', $uriClean) || navCoincide('notas-xml', $uriClean) ? 'active' : '' ?>"
+               title="Notas de crédito y carga de comprobantes XML">
                 <span class="nav-icon"><i class="fas fa-file-circle-minus"></i></span>
                 <span class="nav-label">Notas de crédito</span>
             </a>
@@ -122,14 +135,11 @@ if (!isset($sociedadActiva)) {
                 <span class="nav-label">Correo</span>
             </a>
 
-            <a href="<?= $baseUrl ?>/facturas" class="<?= navActive('facturas', $uriClean) ?>" title="Carga de Facturas XML">
-                <span class="nav-icon"><i class="fas fa-file-invoice"></i></span>
-                <span class="nav-label">Carga de Facturas XML</span>
-            </a>
-
-            <a href="<?= $baseUrl ?>/notas-xml" class="<?= navActive('notas-xml', $uriClean) ?>" title="Notas XML">
-                <span class="nav-icon"><i class="fas fa-file-code"></i></span>
-                <span class="nav-label">Notas XML</span>
+            <a href="<?= $baseUrl ?>/facturas-erp"
+               class="<?= navCoincide('facturas-erp', $uriClean) || navCoincide('facturas', $uriClean) ? 'active' : '' ?>"
+               title="Facturas del ERP y carga de comprobantes XML">
+                <span class="nav-icon"><i class="fas fa-file-invoice-dollar"></i></span>
+                <span class="nav-label">Facturas ERP</span>
             </a>
 
             <a href="<?= $baseUrl ?>/reportes" class="<?= navActive('reportes', $uriClean) ?>" title="Reportes">
@@ -142,6 +152,11 @@ if (!isset($sociedadActiva)) {
             <a href="<?= $baseUrl ?>/usuarios" class="<?= navActive('usuarios', $uriClean) ?>" title="Usuarios">
                 <span class="nav-icon"><i class="fas fa-users-cog"></i></span>
                 <span class="nav-label">Usuarios</span>
+            </a>
+            <a href="<?= $baseUrl ?>/diagnostico" class="<?= navActive('diagnostico', $uriClean) ?>"
+               title="Revisar la instalación de esta computadora">
+                <span class="nav-icon"><i class="fas fa-stethoscope"></i></span>
+                <span class="nav-label">Diagnóstico</span>
             </a>
             <?php endif; ?>
         </nav>
@@ -180,8 +195,29 @@ if (!isset($sociedadActiva)) {
 
         <!-- Topbar -->
         <div class="topbar">
-            <div class="topbar-left">
-                <h2><?= htmlspecialchars($currentLabel) ?></h2>
+            <div class="topbar-left" style="display:flex;align-items:center;gap:14px;min-width:0;">
+                <h2 style="white-space:nowrap;"><?= htmlspecialchars($currentLabel) ?></h2>
+
+                <?php // El modo de Correo va junto al título: es de qué trata la
+                      // pantalla entera, no un control más dentro de ella.
+                if (isset($modoCorreo) && strpos($uriClean, '/correo') !== false): ?>
+                <div style="display:flex;align-items:center;gap:6px;padding-left:14px;
+                            border-left:1px solid var(--border-light);"
+                     title="El buzón y su árbol de carpetas se mantienen en los tres modos.">
+                    <?php foreach ([
+                        'facturas'  => ['fa-file-invoice',   'Facturas'],
+                        'descargas' => ['fa-cloud-arrow-down', 'Descargas'],
+                    ] as $clave => [$icono, $etiqueta]):
+                        $actual = $modoCorreo === $clave; ?>
+                    <a href="<?= $baseUrl ?>/correo?modo=<?= $clave ?>"
+                       class="btn <?= $actual ? 'btn-primary' : 'btn-outline' ?> btn-sm"
+                       style="white-space:nowrap;"
+                       <?= $actual ? 'aria-current="page"' : '' ?>>
+                        <i class="fas <?= $icono ?>"></i> <?= $etiqueta ?>
+                    </a>
+                    <?php endforeach; ?>
+                </div>
+                <?php endif; ?>
             </div>
             <div class="topbar-right" style="display:flex;align-items:center;gap:14px;">
                 <?php if (!empty($_SESSION['user_id'])): ?>

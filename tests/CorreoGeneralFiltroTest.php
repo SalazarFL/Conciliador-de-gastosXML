@@ -19,18 +19,29 @@ class CorreoLoteFiltroFalso extends CorreoLote
     {
     }
 
-    protected function fetchColumn($sql, $params = [])
+    protected function fetchOne($sql, $params = [])
     {
         $this->ultimaConsulta = $sql;
         $this->ultimosParametros = $params;
-        return 7;
+        return ['total' => 7, 'procesados' => 2];
+    }
+
+    // La tabla de marcas la garantiza CorreoProcesado; aquí no hay BD.
+    protected function prepararTablaProcesados()
+    {
     }
 }
 
 $modelo = new CorreoLoteFiltroFalso();
-$total = $modelo->estimar(4, '2026-07-01', '2026-07-31', ' Facturas@Proveedor.test ');
+$conteo = $modelo->estimar(4, '2026-07-01', '2026-07-31', ' Facturas@Proveedor.test ');
 
-assertCorreoGeneralFiltro($total === 7, 'devuelve el total calculado');
+assertCorreoGeneralFiltro($conteo['total'] === 7, 'devuelve el total calculado');
+assertCorreoGeneralFiltro($conteo['procesados'] === 2, 'informa cuántos ya se procesaron antes');
+assertCorreoGeneralFiltro($conteo['nuevos'] === 5, 'los nuevos son el total menos los ya procesados');
+assertCorreoGeneralFiltro(
+    strpos($modelo->ultimaConsulta, 'correo_procesados') !== false,
+    'cuenta las marcas de procesado en la misma consulta'
+);
 assertCorreoGeneralFiltro(substr_count($modelo->ultimaConsulta, 'LIKE ?') === 3, 'filtra remitente, CC y Reply-To');
 assertCorreoGeneralFiltro(
     array_slice($modelo->ultimosParametros, -3) === array_fill(0, 3, '%facturas@proveedor.test%'),

@@ -12,12 +12,15 @@ $sociedadActiva = $sociedadActiva ?? null;
 $buscarInicial  = trim((string) ($buscarInicial ?? ''));
 $abrirCorreoUid = max(0, (int) ($abrirCorreoUid ?? 0));
 $abrirCorreoCarpeta = trim((string) ($abrirCorreoCarpeta ?? ''));
+// $cuentas: con las que se trabaja (las de la empresa en curso).
+// $cuentasAdmin: todas, solo para el ⚙, donde se corrigen las asignaciones.
 $cuentas        = is_array($cuentas ?? null) ? $cuentas : [];
+$cuentasAdmin   = is_array($cuentasAdmin ?? null) ? $cuentasAdmin : $cuentas;
 $cuentaActivaId = (int) ($cuentaActivaId ?? 0);
 $semanas        = is_array($semanas ?? null) ? $semanas : [];
 $ppNav          = is_array($ppNav ?? null) ? $ppNav : null;
 $carpetasCorreo = is_array($carpetasCorreo ?? null) ? $carpetasCorreo : [];
-$modoCorreo      = in_array(($modoCorreo ?? 'facturas'), ['facturas','notas','general'], true) ? $modoCorreo : 'facturas';
+$modoCorreo      = in_array(($modoCorreo ?? 'facturas'), ['facturas','descargas'], true) ? $modoCorreo : 'facturas';
 $loteGeneral     = is_array($loteGeneral ?? null) ? $loteGeneral : null;
 
 $listo = $imapDisponible && $configurado;
@@ -28,20 +31,20 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 <style>
 /* Esta página aprovecha todo el alto/ancho disponible */
 .page-content { padding: 5px 7px 7px; }
-.correo-modo-notas, .correo-modo-general {
+.correo-modo-descargas {
     grid-template-columns: var(--lista-w) minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
 }
-.correo-modo-notas .correo-lista, .correo-modo-general .correo-lista { grid-row: 1; }
-.correo-modo-notas .correo-facturas-panel, .correo-modo-general .correo-facturas-panel,
-.correo-modo-notas .rz-bandeja, .correo-modo-general .rz-bandeja,
-.correo-modo-notas .rz-inferior, .correo-modo-general .rz-inferior { display:none; }
-.correo-modo-notas #btn-procesar-sel, .correo-modo-general #btn-procesar-sel,
-.correo-modo-notas #btn-procesar-uno, .correo-modo-general #btn-procesar-uno,
-.correo-modo-notas #cb-correos-visibles, .correo-modo-general #cb-correos-visibles { display:none; }
+.correo-modo-descargas .correo-lista { grid-row: 1; }
+.correo-modo-descargas .correo-facturas-panel,
+.correo-modo-descargas .rz-bandeja,
+.correo-modo-descargas .rz-inferior { display:none; }
+.correo-modo-descargas #btn-procesar-sel,
+.correo-modo-descargas #btn-procesar-uno,
+.correo-modo-descargas #cb-correos-visibles { display:none; }
 @media (max-width:1100px) {
-    .correo-modo-notas, .correo-modo-general { grid-template-columns:1fr; grid-template-rows:none; }
-    .correo-modo-notas .rz-lista, .correo-modo-general .rz-lista { display:none; }
+    .correo-modo-descargas { grid-template-columns:1fr; grid-template-rows:none; }
+    .correo-modo-descargas .rz-lista { display:none; }
 }
 </style>
 
@@ -50,6 +53,14 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     <i class="fas fa-triangle-exclamation" style="margin-right:6px;"></i>
     <?php if (!$imapDisponible): ?>
     <strong>No disponible en este servidor:</strong> la extensión <code>imap</code> de PHP no está activa.
+    <?php elseif (!$configExiste && !empty($hayCuentasEnSistema)): ?>
+    <?php // Sí hay buzones registrados, pero ninguno atiende a esta empresa.
+          // Decir "agrega la primera cuenta" aquí llevaría a registrar dos
+          // veces el mismo buzón. ?>
+    <strong>Ningún buzón atiende a <?= htmlspecialchars((string) ($sociedadActiva['nombre'] ?? 'esta sociedad')) ?>:</strong>
+    los buzones registrados están asignados a otras empresas. Abre el engranaje
+    <i class="fas fa-gear"></i>, edita el buzón que corresponda y marca esta empresa en
+    <em>Sociedades que atiende</em>. No hace falta registrarlo de nuevo.
     <?php elseif (!$configExiste): ?>
     <strong>No hay cuentas de correo:</strong> pulsa el engranaje <i class="fas fa-gear"></i> (arriba a la derecha) y agrega la primera cuenta.
     <?php else: ?>
@@ -58,19 +69,13 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 </div>
 <?php endif; ?>
 
-<div class="card" style="margin-bottom:8px;padding:8px 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-    <strong style="font-size:12px;color:var(--navy);margin-right:4px;">Modo:</strong>
-    <a href="<?= $baseUrl ?>/correo?modo=facturas" class="btn <?= $modoCorreo === 'facturas' ? 'btn-primary' : 'btn-outline' ?> btn-sm"><i class="fas fa-file-invoice"></i> Facturas</a>
-    <a href="<?= $baseUrl ?>/correo?modo=notas" class="btn <?= $modoCorreo === 'notas' ? 'btn-primary' : 'btn-outline' ?> btn-sm"><i class="fas fa-file-circle-minus"></i> Notas de crédito</a>
-    <a href="<?= $baseUrl ?>/correo?modo=general" class="btn <?= $modoCorreo === 'general' ? 'btn-primary' : 'btn-outline' ?> btn-sm"><i class="fas fa-layer-group"></i> General</a>
-    <span style="font-size:11px;color:var(--text-muted);margin-left:auto;">El buzón y su árbol de carpetas se mantienen en los tres modos.</span>
-</div>
+<?php // El selector de modo vive en el topbar, junto al título del módulo
+      // (app/views/layout/header.php): es de qué trata la pantalla entera. ?>
 
-<?php if ($modoCorreo === 'notas'): ?>
-<div style="margin-bottom:8px;padding:9px 12px;background:#f8fafc;border:1px solid var(--border);border-radius:8px;color:var(--text-muted);font-size:12px;">
-    <i class="fas fa-circle-info" style="color:var(--navy-light);margin-right:5px;"></i>El flujo manual de correo para notas de crédito queda reservado y vacío por ahora. Puedes navegar y visualizar el buzón; el procesamiento automático de NC está disponible en <strong>General</strong>.
-</div>
-<?php elseif ($modoCorreo === 'general'): ?>
+<?php if ($modoCorreo === 'descargas'): ?>
+<?php // Los identificadores del bloque siguen llamándose general-*: son
+      // internos (JS y CSS) y renombrarlos no cambiaría nada para quien usa
+      // la pantalla. El nombre visible del modo es "Descargas". ?>
 <div class="card" id="general-box" style="margin-bottom:8px;padding:10px 12px;">
     <div style="display:flex;align-items:end;gap:9px;flex-wrap:wrap;">
         <label style="font-size:11px;font-weight:700;">Desde (fecha del correo)<input type="date" id="general-desde" class="form-control" value="<?= date('Y-m-01') ?>"></label>
@@ -83,6 +88,10 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         <button type="button" id="general-historial" class="btn btn-outline btn-sm"><i class="fas fa-clock-rotate-left"></i> Historial de incidencias</button>
     </div>
     <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Cuenta seleccionada · todas las carpetas salvo Borradores, Enviados, Spam y Papelera · el correo indicado se busca en remitente, CC y Reply-To · organiza por fecha de emisión del XML.</div>
+    <label style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--text-muted);margin-top:5px;cursor:pointer;">
+        <input type="checkbox" id="general-incluir-procesados" style="margin:0;">
+        Volver a revisar los correos ya procesados <span style="color:#94a3b8;">(normalmente se saltan: son los que ya se leyeron en corridas anteriores)</span>
+    </label>
     <div id="general-estado" style="margin-top:8px;font-size:12px;color:var(--navy);"></div>
     <div style="height:8px;background:#e2e8f0;border-radius:8px;overflow:hidden;margin-top:5px;"><div id="general-barra" style="height:100%;width:0;background:linear-gradient(90deg,var(--navy),var(--gold));transition:width .25s;"></div></div>
     <div id="general-incidencias" style="font-size:11px;color:#9a3412;margin-top:6px;max-height:72px;overflow:auto;"></div>
@@ -421,7 +430,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     </div>
 </div>
 
-<?php if ($modoCorreo === 'general'): ?>
+<?php if ($modoCorreo === 'descargas'): ?>
 <div id="modal-incidencias" role="dialog" aria-modal="true" aria-labelledby="incidencias-titulo"
      style="display:none;position:fixed;inset:0;background:rgba(12,36,97,.55);z-index:520;align-items:center;justify-content:center;padding:18px;">
     <div style="background:#fff;border-radius:12px;width:min(1250px,97vw);height:min(800px,94vh);display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(12,36,97,.35);overflow:hidden;">
@@ -557,8 +566,12 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             <i class="fas fa-at" style="margin-right:4px;color:var(--gold);"></i>Cuentas de correo
         </label>
 
-        <div id="cta-lista" style="border:1px solid var(--border,#e2e8f0);border-radius:8px;overflow:hidden;margin-bottom:8px;<?= empty($cuentas) ? 'display:none;' : '' ?>">
-            <?php foreach ($cuentas as $c): ?>
+        <?php // El ⚙ administra TODOS los buzones —también los de otras
+              // empresas—, porque es el único lugar donde se corrige una
+              // asignación equivocada. El resto del módulo solo ve los de la
+              // empresa en curso. ?>
+        <div id="cta-lista" style="border:1px solid var(--border,#e2e8f0);border-radius:8px;overflow:hidden;margin-bottom:8px;<?= empty($cuentasAdmin) ? 'display:none;' : '' ?>">
+            <?php foreach ($cuentasAdmin as $c): ?>
             <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid #f1f5f9;font-size:12px;">
                 <i class="fas <?= (int) $c['id'] === $cuentaActivaId ? 'fa-circle-check' : 'fa-envelope' ?>"
                    style="color:<?= (int) $c['id'] === $cuentaActivaId ? 'var(--ok,#16a34a)' : '#94a3b8' ?>;width:14px;"
@@ -570,6 +583,22 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                     <div style="font-size:10.5px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
                         <?= htmlspecialchars($c['usuario']) ?> · <?= htmlspecialchars($c['host']) ?>
                     </div>
+                    <?php
+                    // A qué empresas atiende. Es lo que explica que un buzón
+                    // esté aquí y no aparezca en el módulo.
+                    $socNombres = $c['sociedades_nombres'] ?? [];
+                    $atiendeActual = in_array((int) ($sociedadActiva['id'] ?? 0), array_map('intval', $c['sociedades'] ?? []), true);
+                    ?>
+                    <div style="font-size:10px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+                                color:<?= $atiendeActual ? 'var(--ok)' : 'var(--warn)' ?>;">
+                        <i class="fas <?= $atiendeActual ? 'fa-circle-check' : 'fa-circle-exclamation' ?>"
+                           style="margin-right:3px;"></i>
+                        <?php if ($socNombres): ?>
+                        <?= htmlspecialchars(implode(' · ', $socNombres)) ?>
+                        <?php else: ?>
+                        Sin empresa asignada — no aparece en ningún módulo
+                        <?php endif; ?>
+                    </div>
                 </div>
                 <button type="button" class="btn btn-outline btn-sm cta-editar" style="padding:2px 8px;" title="Editar"
                         data-id="<?= (int) $c['id'] ?>"
@@ -577,7 +606,8 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                         data-host="<?= htmlspecialchars($c['host']) ?>"
                         data-puerto="<?= (int) $c['puerto'] ?>"
                         data-usuario="<?= htmlspecialchars($c['usuario']) ?>"
-                        data-carpeta="<?= htmlspecialchars($c['carpeta']) ?>">
+                        data-carpeta="<?= htmlspecialchars($c['carpeta']) ?>"
+                        data-sociedades="<?= htmlspecialchars(implode(',', $c['sociedades'] ?? [])) ?>">
                     <i class="fas fa-pen"></i>
                 </button>
                 <button type="button" class="btn btn-outline btn-sm cta-eliminar" style="padding:2px 8px;color:#b91c1c;border-color:#fed7d7;"
@@ -619,6 +649,20 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                 <div>
                     <label style="font-size:10.5px;font-weight:700;color:var(--navy);">Carpeta inicial</label>
                     <input type="text" id="cta-carpeta" class="form-control" style="font-size:12px;" value="INBOX">
+                </div>
+                <div style="grid-column:1 / -1;">
+                    <label style="font-size:10.5px;font-weight:700;color:var(--navy);">Sociedades que usan este buzón</label>
+                    <div id="cta-sociedades" style="display:flex;flex-wrap:wrap;gap:10px;margin-top:4px;">
+                        <?php foreach (($sociedadesTodas ?? []) as $s): ?>
+                        <label style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;cursor:pointer;">
+                            <input type="checkbox" class="cta-soc" value="<?= (int) $s['id'] ?>" style="margin:0;">
+                            <?= htmlspecialchars($s['nombre']) ?>
+                        </label>
+                        <?php endforeach; ?>
+                    </div>
+                    <div style="font-size:10.5px;color:var(--text-muted);margin-top:3px;">
+                        Un mismo buzón puede recibir facturas de varias empresas del grupo. Solo aparece en las que marque.
+                    </div>
                 </div>
             </div>
             <div id="cta-msg" style="display:none;font-size:11.5px;border-radius:6px;padding:6px 10px;margin-top:8px;"></div>
@@ -721,6 +765,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
     // Cuenta de correo con la que se trabaja: viaja en cada petición
     var CUENTA_ID = <?= (int) $cuentaActivaId ?>;
+    var SOCIEDAD_ACTIVA_ID = <?= (int) ($sociedadActiva['id'] ?? 0) ?>;
     var CLAVE_CARPETAS = 'correoCarpetasAbiertas_' + CUENTA_ID;
 
     function postJson(url, data) {
@@ -1949,12 +1994,25 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         var pass = document.getElementById('cta-password');
         pass.value = '';
         pass.placeholder = datos.id ? '(dejar vacío para no cambiarla)' : '';
+
+        // Buzón existente: se marcan sus sociedades. Buzón nuevo: la que esté
+        // en uso, para que no nazca sin dueño y quede invisible.
+        var asignadas = String(datos.sociedades || '').split(',').filter(Boolean);
+        Array.prototype.forEach.call(document.querySelectorAll('.cta-soc'), function (chk) {
+            chk.checked = datos.id
+                ? asignadas.indexOf(chk.value) >= 0
+                : String(chk.value) === String(SOCIEDAD_ACTIVA_ID);
+        });
+
         document.getElementById('cta-msg').style.display = 'none';
         ctaForm.style.display = 'block';
         document.getElementById('cta-nombre').focus();
     }
 
     function ctaDatosForm() {
+        var sociedades = Array.prototype.filter
+            .call(document.querySelectorAll('.cta-soc'), function (c) { return c.checked; })
+            .map(function (c) { return c.value; });
         return {
             id: document.getElementById('cta-id').value,
             nombre: document.getElementById('cta-nombre').value.trim(),
@@ -1962,7 +2020,8 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             puerto: document.getElementById('cta-puerto').value,
             usuario: document.getElementById('cta-usuario').value.trim(),
             password: document.getElementById('cta-password').value,
-            carpeta: document.getElementById('cta-carpeta').value.trim()
+            carpeta: document.getElementById('cta-carpeta').value.trim(),
+            sociedades: sociedades.join(',')
         };
     }
 
@@ -2552,7 +2611,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 })();
 </script>
 
-<?php if ($modoCorreo === 'general'): ?>
+<?php if ($modoCorreo === 'descargas'): ?>
 <script>
 (function () {
     var BASE = '<?= $baseUrl ?>';
@@ -2714,13 +2773,28 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         var correo=document.getElementById('general-correo').value.trim();
         if (!desde || !hasta) { alert('Indica ambas fechas.'); return; }
         if (correo && !document.getElementById('general-correo').checkValidity()) { alert('Indica un correo válido.'); return; }
+        var incluirProcesados = document.getElementById('general-incluir-procesados').checked;
         iniciar.disabled=true; estado.textContent='Calculando correos candidatos…';
         post('/correo/general/estimar', {fecha_desde:desde, fecha_hasta:hasta, correo_busqueda:correo})
             .then(function(r){
                 var filtro = correo ? ' que coinciden con ' + correo : '';
-                if (!confirm('Se revisarán ' + r.total + ' correos candidatos' + filtro + ' de la cuenta seleccionada. ¿Iniciar?')) throw new Error('__cancelado__');
+                var yaVistos = Number(r.procesados || 0);
+                // Con la casilla marcada se revisa todo el rango; si no, solo
+                // lo que ninguna corrida anterior haya procesado ya.
+                var aRevisar = incluirProcesados ? Number(r.total || 0) : Number(r.nuevos || 0);
+                var mensaje = 'Se revisarán ' + aRevisar + ' correos' + filtro + ' de la cuenta seleccionada.';
+                if (yaVistos > 0) {
+                    mensaje += incluirProcesados
+                        ? '\n\nIncluye ' + yaVistos + ' que ya se habían procesado antes.'
+                        : '\n\nSe omiten ' + yaVistos + ' ya procesados en corridas anteriores.';
+                }
+                if (aRevisar === 0) mensaje += '\n\nNo hay nada nuevo que revisar en este rango.';
+                if (!confirm(mensaje + '\n\n¿Iniciar?')) throw new Error('__cancelado__');
                 estado.textContent='Creando el lote…';
-                return post('/correo/general/crear', {fecha_desde:desde, fecha_hasta:hasta, correo_busqueda:correo});
+                return post('/correo/general/crear', {
+                    fecha_desde:desde, fecha_hasta:hasta, correo_busqueda:correo,
+                    incluir_procesados: incluirProcesados ? '1' : '0'
+                });
             })
             .then(function(r){ detenido=false; render(r.lote, []); paso(); })
             .catch(function(e){ if(e.message!=='__cancelado__') estado.textContent='No se pudo iniciar: '+e.message; })

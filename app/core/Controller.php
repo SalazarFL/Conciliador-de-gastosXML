@@ -128,7 +128,8 @@ class Controller
      */
     protected function isPost()
     {
-        return $_SERVER['REQUEST_METHOD'] === 'POST';
+        // Sin REQUEST_METHOD (workers de cli/) no hay petición: no es POST.
+        return ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST';
     }
 
     /**
@@ -136,7 +137,7 @@ class Controller
      */
     protected function isGet()
     {
-        return $_SERVER['REQUEST_METHOD'] === 'GET';
+        return ($_SERVER['REQUEST_METHOD'] ?? '') === 'GET';
     }
 
     /**
@@ -209,6 +210,13 @@ class Controller
      */
     protected function requireAuth(): void
     {
+        // Los workers de cli/ instancian controladores para reutilizar su
+        // lógica: ahí no hay petición HTTP que proteger ni sesión que abrir,
+        // y el propio script ya se niega a correr fuera de la línea de
+        // comandos. Redirigir a /login desde CLI solo mataría el proceso.
+        if (PHP_SAPI === 'cli') {
+            return;
+        }
         if (session_status() === PHP_SESSION_NONE) session_start();
         if (empty($_SESSION['user_id'])) {
             $this->redirect($this->url('/login'));

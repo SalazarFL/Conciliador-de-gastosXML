@@ -11,6 +11,7 @@
 require_once __DIR__ . '/../helpers/MailFetcher.php';
 require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 require_once __DIR__ . '/../helpers/DocumentoArchivo.php';
+require_once __DIR__ . '/../helpers/RutaDocumento.php';
 require_once __DIR__ . '/../helpers/XmlDocumentImporter.php';
 
 class CorreoController extends Controller
@@ -43,8 +44,15 @@ class CorreoController extends Controller
 
     public function index()
     {
+        // Dos modos: el trabajo correo a correo (facturas) y la descarga por
+        // rango de fechas (descargas, antes "General"). El modo "notas" era un
+        // sitio reservado que nunca tuvo flujo propio — las NC se procesan en
+        // descargas junto con las facturas.
         $modo = strtolower(trim((string) $this->get('modo', 'facturas')));
-        if (!in_array($modo, ['facturas', 'notas', 'general'], true)) {
+        if ($modo === 'general') {
+            $modo = 'descargas'; // enlaces guardados con el nombre anterior
+        }
+        if (!in_array($modo, ['facturas', 'descargas'], true)) {
             $modo = 'facturas';
         }
         // Cuentas de correo: se administran en el ⚙; la activa hace todo
@@ -55,7 +63,9 @@ class CorreoController extends Controller
         try {
             $cuentasModel = $this->loadModel('CorreoCuenta');
             $cuentasModel->seedDesdeArchivo();
-            $cuentas = $cuentasModel->getAll();
+            // Solo los buzones de la sociedad en curso: al cambiar de empresa
+            // cambia la lista de correos con los que se puede trabajar.
+            $cuentas = $cuentasModel->getVisibles();
             $cuentaActivaId = $this->cuentaActivaId($cuentasModel);
             if ($cuentaActivaId > 0) {
                 $config = $cuentasModel->configPara($cuentaActivaId);
@@ -159,17 +169,48 @@ class CorreoController extends Controller
             }
         }
 
+        // El ⚙ administra TODOS los buzones (si solo mostrara los de la
+        // sociedad en curso, uno mal asignado quedaría invisible y sin forma
+        // de corregirlo); el resto del módulo trabaja con los visibles.
+        $sociedadesTodas = [];
+        $cuentasAdmin = $cuentas;
+        try {
+            $sociedadesTodas = $this->loadModel('Sociedad')->getAll();
+            $cuentasAdmin = $cuentasModel->getAll();
+        } catch (Throwable $e) {
+        }
+
         // Al front solo van datos no sensibles de las cuentas
-        $cuentasVista = array_map(function ($c) {
+        $nombrePorSociedad = [];
+        foreach ($sociedadesTodas as $s) {
+            $nombrePorSociedad[(int) $s['id']] = (string) $s['nombre'];
+        }
+        $cuentasVista = array_map(function ($c) use ($cuentasModel, $nombrePorSociedad) {
+            $sociedades = [];
+            try {
+                $sociedades = $cuentasModel->sociedadesDe((int) $c['id']);
+            } catch (Throwable $e) {
+            }
+            // Los nombres se muestran en la lista del ⚙: sin ellos, un buzón
+            // que no aparece en el módulo se ve idéntico a uno que sí, y no
+            // hay forma de adivinar por qué falta.
+            $nombres = [];
+            foreach ($sociedades as $sid) {
+                if (isset($nombrePorSociedad[(int) $sid])) {
+                    $nombres[] = $nombrePorSociedad[(int) $sid];
+                }
+            }
             return [
+                'sociedades_nombres' => $nombres,
                 'id' => (int) $c['id'],
                 'nombre' => (string) $c['nombre'],
                 'usuario' => (string) $c['usuario'],
                 'host' => (string) $c['host'],
                 'puerto' => (int) $c['puerto'],
                 'carpeta' => (string) $c['carpeta'],
+                'sociedades' => $sociedades,
             ];
-        }, $cuentas);
+        }, $cuentasAdmin);
 
         $loteGeneral = null;
         try {
@@ -180,13 +221,26 @@ class CorreoController extends Controller
         $this->render('correo/index', [
             'title'           => 'Correo - XMLConcilia',
             'imapDisponible'  => MailFetcher::extensionDisponible(),
+            // Dos ausencias distintas que antes se contaban igual: no haber
+            // registrado ninguna cuenta, o tenerlas todas asignadas a otra
+            // empresa. La segunda decía "agrega la primera cuenta", que
+            // invitaba a registrar por segunda vez un buzón que ya existía.
             'configExiste'    => !empty($cuentas),
+            'hayCuentasEnSistema' => !empty($cuentasAdmin),
             'configurado'     => MailFetcher::configurado($config),
             'configResumen'   => $this->resumenConfig($config),
             'configLocal'     => $this->configLocal(),
-            'cuentas'         => $cuentasVista,
+            // Dos listas a propósito: con las que se TRABAJA (las de esta
+            // empresa) y las que ADMINISTRA el ⚙ (todas, para poder reasignar
+            // una mal puesta). Mezclarlas ofrecía en el selector buzones de
+            // otras empresas.
+            'cuentas'         => array_values(array_filter($cuentasVista, function ($c) use ($cuentasModel) {
+                return $cuentasModel->perteneceASociedad((int) $c['id']);
+            })),
+            'cuentasAdmin'    => $cuentasVista,
             'cuentaActivaId'  => $cuentaActivaId,
             'sociedadActiva'  => $sociedadActiva,
+            'sociedadesTodas' => $sociedadesTodas,
             'semanas'         => $semanas,
             'semanaActiva'    => $this->semanaActiva(),
             'buscarInicial'   => trim((string) $this->get('buscar', '')),
@@ -946,8 +1000,16 @@ class CorreoController extends Controller
             $cuentaId = (int) ($config['cuenta_id'] ?? $cuentaId);
             [$desde, $hasta] = $this->rangoGeneral();
             $correo = $this->correoBusquedaGeneral();
-            $total = $this->loadModel('CorreoLote')->estimar($cuentaId, $desde, $hasta, $correo);
-            $this->json(['ok' => true, 'total' => $total, 'fecha_desde' => $desde, 'fecha_hasta' => $hasta, 'correo_busqueda' => $correo]);
+            $conteo = $this->loadModel('CorreoLote')->estimar($cuentaId, $desde, $hasta, $correo);
+            $this->json([
+                'ok' => true,
+                'total' => $conteo['total'],
+                'procesados' => $conteo['procesados'],
+                'nuevos' => $conteo['nuevos'],
+                'fecha_desde' => $desde,
+                'fecha_hasta' => $hasta,
+                'correo_busqueda' => $correo,
+            ]);
         } catch (Throwable $e) {
             $this->json(['ok' => false, 'message' => $e->getMessage()], 422);
         }
@@ -979,6 +1041,15 @@ class CorreoController extends Controller
             } catch (Throwable $e) {
             }
 
+            // Por defecto se saltan los correos ya procesados en corridas
+            // anteriores. La casilla "volver a revisar todo" los reincorpora
+            // (p. ej. tras corregir el parser o recuperar documentos).
+            $incluirProcesados = in_array(
+                strtolower(trim((string) $this->post('incluir_procesados', ''))),
+                ['1', 'true', 'on', 'si', 'sí'],
+                true
+            );
+
             $lote = $this->loadModel('CorreoLote')->crear([
                 'cuenta_id' => $cuentaId,
                 'sociedad_id' => (int) $sociedad['id'],
@@ -986,10 +1057,14 @@ class CorreoController extends Controller
                 'fecha_hasta' => $hasta,
                 'carpeta_raiz' => $raiz,
                 'correo_busqueda' => $correo,
+                'incluir_procesados' => $incluirProcesados,
                 'carpetas' => [
                     'incluidas' => 'todas',
                     'excluidas' => ['Borradores','Enviados','Spam','Papelera'],
                     'correo_busqueda' => $correo,
+                    // Queda en carpetas_json para poder explicar después por
+                    // qué un lote tuvo tan pocos (o tantos) correos.
+                    'incluir_procesados' => $incluirProcesados,
                 ],
             ]);
             $lote = $this->loadModel('CorreoLote')->iniciar((int) $lote['id']);
@@ -1040,27 +1115,76 @@ class CorreoController extends Controller
         @set_time_limit(300);
         $loteId = (int) $this->post('lote_id', 0);
         $limit = max(1, min(10, (int) $this->post('limit', 2)));
+
+        $r = $this->procesarTandaLote($loteId, $limit, 25);
+        if (empty($r['ok'])) {
+            $this->json(['ok' => false, 'message' => $r['message'], 'lote' => $r['lote']], (int) $r['status']);
+        }
+        $this->json([
+            'ok' => true,
+            'lote' => $r['lote'],
+            'procesados_ahora' => $r['procesados_ahora'],
+            'incidencias' => $r['incidencias'],
+        ]);
+    }
+
+    /**
+     * Procesa una tanda de correos de un lote del modo Descargas y devuelve el
+     * resultado en un array (no emite JSON ni corta la ejecución).
+     *
+     * Existe separada de generalProcesar() porque el mismo trabajo lo piden
+     * dos frentes: el navegador —una tanda por petición, con presupuesto
+     * corto para no chocar con el timeout de Apache— y cli/procesar_lotes.php,
+     * que encadena tandas sin que nadie tenga el módulo abierto. Antes el
+     * bucle vivía solo en el JavaScript de la vista, así que cerrar la
+     * pestaña dejaba el lote congelado en 'ejecutando' para siempre.
+     *
+     * $fetcherCompartido permite reutilizar una sola conexión IMAP a lo largo
+     * de muchas tandas (el saludo TLS cuesta 1-3 s y antes se pagaba en cada
+     * viaje, por solo 6 correos). Quien lo presta es quien debe cerrarlo.
+     *
+     * @return array{ok:bool,lote:?array,procesados_ahora:int,incidencias:array,message:string,status:int}
+     */
+    public function procesarTandaLote($loteId, $limit = 6, $presupuestoSegundos = 25, $fetcherCompartido = null)
+    {
+        $loteId = (int) $loteId;
+        $limit = max(1, min(10, (int) $limit));
         $lotes = $this->loadModel('CorreoLote');
         $lote = $lotes->get($loteId);
-        if (!$lote) { $this->json(['ok' => false, 'message' => 'Lote no encontrado.'], 404); }
+        if (!$lote) {
+            return ['ok' => false, 'lote' => null, 'procesados_ahora' => 0, 'incidencias' => [],
+                    'message' => 'Lote no encontrado.', 'status' => 404];
+        }
         if ($lote['estado'] === 'pendiente') { $lote = $lotes->iniciar($loteId); }
         if ($lote['estado'] !== 'ejecutando') {
-            $this->json(['ok' => true, 'lote' => $lote, 'procesados_ahora' => 0]);
+            return ['ok' => true, 'lote' => $lote, 'procesados_ahora' => 0, 'incidencias' => [],
+                    'message' => '', 'status' => 200];
         }
 
+        // tomarPendientes() también rescata los items que quedaron en
+        // 'procesando' de una corrida interrumpida y, si ya no queda nada,
+        // marca el lote como completado.
         $items = $lotes->tomarPendientes($loteId, $limit);
         if (empty($items)) {
-            $this->json(['ok' => true, 'lote' => $lotes->get($loteId), 'procesados_ahora' => 0]);
+            return ['ok' => true, 'lote' => $lotes->get($loteId), 'procesados_ahora' => 0, 'incidencias' => [],
+                    'message' => '', 'status' => 200];
         }
 
-        $config = $this->configCuenta((int) $lote['cuenta_id']);
-        $fetcher = new MailFetcher($config);
-        try { $fetcher->conectar(); } catch (Throwable $e) {
+        $fetcherPropio = !($fetcherCompartido instanceof MailFetcher);
+        $fetcher = $fetcherPropio
+            // El lote manda: ya nació con su sociedad y el worker corre sin sesión.
+            ? new MailFetcher($this->configCuenta((int) $lote['cuenta_id'], false))
+            : $fetcherCompartido;
+        try {
+            if ($fetcherPropio || !$fetcher->estaConectado()) { $fetcher->conectar(); }
+        } catch (Throwable $e) {
             foreach ($items as $item) {
                 $lotes->incidencia($loteId, (int) $item['id'], 'conexion', $e->getMessage());
                 $lotes->finalizarItem((int) $item['id'], ['estado' => 'error', 'detalle' => $e->getMessage()]);
             }
-            $this->json(['ok' => false, 'message' => $e->getMessage(), 'lote' => $lotes->get($loteId)], 500);
+            if ($fetcherPropio) { $fetcher->cerrar(); }
+            return ['ok' => false, 'lote' => $lotes->get($loteId), 'procesados_ahora' => 0, 'incidencias' => [],
+                    'message' => $e->getMessage(), 'status' => 500];
         }
 
         $bandeja = $this->loadModel('CorreoBandeja');
@@ -1068,14 +1192,15 @@ class CorreoController extends Controller
         $importer = new XmlDocumentImporter((string) $lote['carpeta_raiz']);
         $notasNuevas = 0;
 
-        // Presupuesto por petición: se procesa lo que quepa en ~25 s y lo no
-        // alcanzado vuelve a 'pendiente' para el siguiente viaje. Así un lote
-        // grande avanza en tandas amplias sin arriesgar el timeout del servidor.
+        // Presupuesto por tanda: se procesa lo que quepa y lo no alcanzado
+        // vuelve a 'pendiente' para el siguiente viaje. Así un lote grande
+        // avanza en tandas amplias sin arriesgar el timeout del servidor.
         $inicioLote = microtime(true);
+        $presupuestoSegundos = max(5, (int) $presupuestoSegundos);
         $procesadosAhora = 0;
 
         foreach ($items as $indiceItem => $item) {
-            if ($procesadosAhora > 0 && (microtime(true) - $inicioLote) > 25) {
+            if ($procesadosAhora > 0 && (microtime(true) - $inicioLote) > $presupuestoSegundos) {
                 $lotes->devolverAPendiente(array_column(array_slice($items, $indiceItem), 'id'));
                 break;
             }
@@ -1115,6 +1240,7 @@ class CorreoController extends Controller
                             $r = $importer->importar((string) $fila['archivo_xml'], (string) ($fila['archivo_pdf'] ?? ''), [
                                 'origen' => 'correo_general', 'tipos_permitidos' => ['FE', 'NC'],
                                 'validar_receptor' => true, 'cedula_receptor' => $lote['sociedad_cedula'],
+                                'sociedad_id' => (int) $lote['sociedad_id'],
                                 'correo_cuenta_id' => (int) $lote['cuenta_id'], 'correo_carpeta' => (string) $item['carpeta'],
                                 'correo_uidvalidity' => (int) $item['uidvalidity'], 'correo_uid' => (int) $item['uid'],
                                 'fecha_correo' => $mensaje['fecha'] ?? null,
@@ -1143,9 +1269,16 @@ class CorreoController extends Controller
             $lotes->finalizarItem((int) $item['id'], $resumen);
             $procesadosAhora++;
         }
-        $fetcher->cerrar();
+        if ($fetcherCompartido === null) { $fetcher->cerrar(); }
         if ($notasNuevas > 0) { $this->revalidarNotasGeneral((int) $lote['sociedad_id']); }
-        $this->json(['ok' => true, 'lote' => $lotes->get($loteId), 'procesados_ahora' => $procesadosAhora, 'incidencias' => $lotes->incidencias($loteId, 20)]);
+        return [
+            'ok' => true,
+            'lote' => $lotes->get($loteId),
+            'procesados_ahora' => $procesadosAhora,
+            'incidencias' => $lotes->incidencias($loteId, 20),
+            'message' => '',
+            'status' => 200,
+        ];
     }
 
     public function generalPausar() { $this->cambiarEstadoGeneral('pausado'); }
@@ -1211,7 +1344,11 @@ class CorreoController extends Controller
 
         $config = $this->configCuenta((int) $this->post('cuenta_id', 0));
         if ($config === null || !MailFetcher::configurado($config)) {
-            $this->json(['ok' => false, 'message' => 'No hay cuentas de correo configuradas: pulsa el engranaje ⚙ y agrega la primera cuenta.'], 422);
+            $this->json([
+                'ok' => false,
+                'message' => 'Ningún buzón atiende a la sociedad en curso. Abre el engranaje ⚙ y marca '
+                    . 'esta empresa en las "Sociedades que atiende" del buzón que corresponda.',
+            ], 422);
         }
 
         return $config;
@@ -1219,14 +1356,24 @@ class CorreoController extends Controller
 
     /**
      * Config de la cuenta indicada (o de la activa si $cuentaId <= 0).
+     *
+     * La cuenta llega del navegador, así que se comprueba que atienda a la
+     * empresa en curso: de lo contrario bastaba mandar el id de un buzón de
+     * otra sociedad para leer su correo.
+     *
+     * $validarSociedad = false lo usan los procesos que NO trabajan con la
+     * empresa de la sesión sino con la del lote (el worker de cli/, que corre
+     * sin sesión y ya trae su sociedad decidida desde que se creó el lote).
      */
-    private function configCuenta($cuentaId = 0)
+    private function configCuenta($cuentaId = 0, $validarSociedad = true)
     {
         $cuentas = $this->loadModel('CorreoCuenta');
         $cuentas->seedDesdeArchivo();
 
         if ($cuentaId <= 0) {
             $cuentaId = $this->cuentaActivaId($cuentas);
+        } elseif ($validarSociedad && !$cuentas->perteneceASociedad($cuentaId)) {
+            return null;
         }
 
         return $cuentaId > 0 ? $cuentas->configPara($cuentaId) : null;
@@ -1238,13 +1385,16 @@ class CorreoController extends Controller
      */
     private function cuentaActivaId($cuentas)
     {
+        // Solo cuentan los buzones habilitados para la sociedad en curso: si
+        // el guardado en config.json es de otra empresa, se cae a la primera
+        // que sí le corresponda en vez de trabajar sobre un buzón ajeno.
         $id = (int) ($this->configLocal()['cuenta_id'] ?? 0);
-        if ($id > 0 && $cuentas->getById($id) !== null) {
+        if ($id > 0 && $cuentas->getById($id) !== null && $cuentas->perteneceASociedad($id)) {
             return $id;
         }
 
-        $todas = $cuentas->getAll();
-        return !empty($todas) ? (int) $todas[0]['id'] : 0;
+        $visibles = $cuentas->getVisibles();
+        return !empty($visibles) ? (int) $visibles[0]['id'] : 0;
     }
 
     /**
@@ -1308,12 +1458,14 @@ class CorreoController extends Controller
             require_once __DIR__ . '/../helpers/InvoiceImportQueue.php';
             $service = new InvoiceImportQueue();
 
+            $sociedadActiva = $this->loadModel('Sociedad')->getActiva();
             $inicio = $service->iniciarImportacion([
                 'archivo_origen' => 'Correo ' . date('d/m/Y H:i'),
                 'total_esperado' => count($rutas),
                 'semana_id' => $semanaId,
                 'tipo_documento' => 'FE',
-                'cedula_receptor' => ($this->loadModel('Sociedad')->getActiva()['cedula'] ?? ''),
+                'cedula_receptor' => $sociedadActiva['cedula'] ?? '',
+                'sociedad_id' => (int) ($sociedadActiva['id'] ?? 0),
             ]);
             $importacionId = (int) $inicio['importacion_id'];
 
@@ -1705,9 +1857,12 @@ class CorreoController extends Controller
                 $estado = 'otra_cedula';
             }
 
-            // Mover el XML de tmp/ a xml/ (nombre con prefijo removible "__")
+            // Mover el XML de tmp/ a la bandeja (nombre con prefijo removible
+            // "__"). La bandeja vive en la carpeta compartida: la fila que se
+            // crea abajo la ve todo el grupo, así que el archivo también tiene
+            // que estar donde todos lleguen.
             $nombreSeguro = preg_replace('/[^A-Za-z0-9._-]+/', '_', $adjunto['nombre']);
-            $rutaXml = MailFetcher::storagePath('xml') . DIRECTORY_SEPARATOR . uniqid('correo_', true) . '__' . $nombreSeguro;
+            $rutaXml = RutaDocumento::carpetaTrabajo('BANDEJA/xml') . DIRECTORY_SEPARATOR . uniqid('correo_', true) . '__' . $nombreSeguro;
             if (!rename($adjunto['ruta'], $rutaXml)) {
                 $resultado['errores'][] = 'No se pudo guardar el XML "' . $adjunto['nombre'] . '".';
                 continue;
@@ -1725,7 +1880,7 @@ class CorreoController extends Controller
                     @unlink($pdfPorIndice[$idx]['ruta']);
                 } else {
                     $numero = $factura['numero_corto'] !== '' ? $factura['numero_corto'] : pathinfo($nombreSeguro, PATHINFO_FILENAME);
-                    $rutaPdf = MailFetcher::storagePath('pdf') . DIRECTORY_SEPARATOR
+                    $rutaPdf = RutaDocumento::carpetaTrabajo('BANDEJA/pdf') . DIRECTORY_SEPARATOR
                         . uniqid('correo_pdf_', true) . '__' . $numero . '.pdf';
                     if (rename($pdfPorIndice[$idx]['ruta'], $rutaPdf)) {
                         $resultado['pdfs_guardados']++;
@@ -1807,7 +1962,7 @@ class CorreoController extends Controller
                 continue;
             }
             $nombreSeguro = preg_replace('/[^A-Za-z0-9._-]+/', '_', $pdf['nombre']);
-            $destino = MailFetcher::storagePath('sin_identificar') . DIRECTORY_SEPARATOR . uniqid('pdf_', true) . '__' . $nombreSeguro;
+            $destino = RutaDocumento::carpetaTrabajo('BANDEJA/sin-identificar') . DIRECTORY_SEPARATOR . uniqid('pdf_', true) . '__' . $nombreSeguro;
             if (rename($pdf['ruta'], $destino)) {
                 $resultado['pdfs_sin_identificar']++;
                 $resultado['archivos_huerfanos'][] = $destino;
@@ -2131,16 +2286,34 @@ POWERSHELL;
 
             $cuentas = $this->loadModel('CorreoCuenta');
 
+            // Sociedades a las que sirve el buzón. Un mismo correo puede
+            // recibir facturas de varias empresas del grupo, así que es una
+            // lista y no un solo valor. Si no viene ninguna, se conserva lo
+            // que ya tenía (o, al crear, la sociedad en curso).
+            $sociedades = $this->post('sociedades', null);
+            if (is_string($sociedades)) {
+                $sociedades = array_filter(array_map('intval', explode(',', $sociedades)));
+            }
+            if (is_array($sociedades)) {
+                $sociedades = array_values(array_filter(array_map('intval', $sociedades)));
+            }
+
             if ($id > 0) {
                 if ($cuentas->getById($id) === null) {
                     $this->json(['ok' => false, 'message' => 'La cuenta no existe.'], 422);
                 }
                 $cuentas->actualizar($id, $datos);
+                if (is_array($sociedades) && $sociedades) {
+                    $cuentas->asignarSociedades($id, $sociedades);
+                }
             } else {
+                if (is_array($sociedades) && $sociedades) {
+                    $datos['sociedades'] = $sociedades;
+                }
                 $id = (int) $cuentas->crear($datos);
             }
 
-            $this->json(['ok' => true, 'id' => $id]);
+            $this->json(['ok' => true, 'id' => $id, 'sociedades' => $cuentas->sociedadesDe($id)]);
         } catch (Throwable $e) {
             $this->json(['ok' => false, 'message' => 'No se pudo guardar la cuenta: ' . $e->getMessage()], 500);
         }
@@ -2195,8 +2368,16 @@ POWERSHELL;
 
         try {
             $id = (int) $this->post('id', 0);
-            if ($this->loadModel('CorreoCuenta')->getById($id) === null) {
+            $cuentas = $this->loadModel('CorreoCuenta');
+            if ($cuentas->getById($id) === null) {
                 $this->json(['ok' => false, 'message' => 'La cuenta no existe.'], 422);
+            }
+            // No se puede quedar "trabajando con" un buzón de otra empresa.
+            if (!$cuentas->perteneceASociedad($id)) {
+                $this->json([
+                    'ok' => false,
+                    'message' => 'Ese buzón no atiende a la sociedad en curso. Asígnaselo primero en el engranaje ⚙.',
+                ], 422);
             }
 
             $configLocal = $this->configLocal();
