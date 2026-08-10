@@ -18,7 +18,7 @@ class Semana extends Model
 
     public function __construct()
     {
-        $this->ensureTable();
+        Esquema::unaVez(static::class, function () { $this->ensureTable(); });
     }
 
     private function ensureTable()

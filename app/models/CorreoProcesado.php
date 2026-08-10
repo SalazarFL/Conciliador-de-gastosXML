@@ -20,7 +20,7 @@ class CorreoProcesado extends Model
 
     public function __construct()
     {
-        $this->ensureTable();
+        Esquema::unaVez(static::class, function () { $this->ensureTable(); });
     }
 
     /** Todas las marcas: ['clave' => fecha, ...] (para cachear en memoria). */

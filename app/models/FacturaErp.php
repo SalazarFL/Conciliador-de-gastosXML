@@ -35,7 +35,7 @@ class FacturaErp extends Model
 
     public function __construct()
     {
-        $this->ensureTables();
+        Esquema::unaVez(static::class, function () { $this->ensureTables(); });
     }
 
     private function ensureTables()

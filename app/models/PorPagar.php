@@ -21,7 +21,7 @@ class PorPagar extends Model
     {
         require_once __DIR__ . '/Semana.php';
         new Semana();
-        $this->ensureTables();
+        Esquema::unaVez(static::class, function () { $this->ensureTables(); });
     }
 
     private function ensureTables()

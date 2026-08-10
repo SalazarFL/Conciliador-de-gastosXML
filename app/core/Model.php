@@ -7,12 +7,65 @@
 // Alcance por sociedad: lo usan los modelos que guardan documentos de una
 // empresa. Se carga aquí porque Model.php es lo primero que entra siempre.
 require_once __DIR__ . '/AlcanceSociedad.php';
+require_once __DIR__ . '/Esquema.php';
 require_once __DIR__ . '/../helpers/RutaDocumento.php';
 
 class Model
 {
     protected static $db = null;
     protected $table;
+
+    /**
+     * Respuestas ya obtenidas durante ESTA petición.
+     *
+     * Una carga de Correo preguntaba once veces lo mismo a
+     * correo_cuenta_sociedades, siete veces la misma fila de correo_cuentas y
+     * cinco veces el mismo COUNT. Con la base al lado eran microsegundos; a
+     * 85 ms de distancia son segundos de espera por respuestas idénticas.
+     */
+    private static $memoria = [];
+
+    private static $recordar = null;
+
+    /**
+     * Solo se recuerda en peticiones web, que duran milisegundos y terminan.
+     * Los comandos de cli/ corren durante minutos junto a otros procesos que
+     * escriben en la misma base: ahí recordar es arriesgarse a trabajar sobre
+     * datos que otro ya cambió.
+     */
+    private static function recordar()
+    {
+        if (self::$recordar === null) {
+            self::$recordar = PHP_SAPI !== 'cli';
+        }
+        return self::$recordar;
+    }
+
+    /** Vaciar lo recordado. La usan las pruebas. */
+    public static function olvidarMemoria()
+    {
+        self::$memoria = [];
+    }
+
+    /**
+     * Responde una pregunta cara una sola vez por petición.
+     *
+     * Para consultas propias de un modelo que se repiten dentro de la misma
+     * carga. Cualquier escritura la invalida sola, porque pasa por query().
+     */
+    protected function recordado($clave, callable $obtener)
+    {
+        $clave = $this->table . '|' . $clave;
+        if (array_key_exists($clave, self::$memoria)) {
+            return self::$memoria[$clave];
+        }
+
+        $valor = $obtener();
+        if (self::recordar()) {
+            self::$memoria[$clave] = $valor;
+        }
+        return $valor;
+    }
 
     /**
      * Columnas de este modelo que guardan la ruta de un documento.
@@ -35,14 +88,16 @@ class Model
             $config = require __DIR__ . '/../config/database.php';
             
             try {
-                $dsn = "mysql:host={$config['host']};dbname={$config['database']};charset={$config['charset']}";
-                
-                self::$db = new PDO($dsn, $config['username'], $config['password'], [
+                self::$db = new PDO($config['dsn'], $config['username'], $config['password'], [
                     PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
                     PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-                    // Emulación activada: necesario para compatibilidad con ProxySQL (InfinityFree)
-                    // y para que lastInsertId() funcione correctamente en hosting compartido.
+                    // Emulación activada: manda la consulta ya armada, en un solo
+                    // viaje. Con la base en el servidor cada viaje cuesta la
+                    // latencia de la red, y las preparadas nativas cuestan dos.
                     PDO::ATTR_EMULATE_PREPARES => true,
+                    // Sin esto, un servidor inalcanzable deja la pantalla colgada
+                    // hasta que el sistema operativo se rinde.
+                    PDO::ATTR_TIMEOUT => 10,
                     PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES {$config['charset']}"
                 ]);
             } catch (PDOException $e) {
@@ -58,8 +113,16 @@ class Model
      */
     protected function query($sql, $params = [])
     {
+        // Cualquier escritura deja obsoleto lo recordado. Se vacía todo y no
+        // solo la tabla escrita: un UPDATE con JOIN toca varias, y equivocarse
+        // aquí significa mostrar datos viejos, que es peor que repetir una
+        // consulta.
+        if (self::$memoria && preg_match('/^\s*\(*\s*(INSERT|UPDATE|DELETE|REPLACE|TRUNCATE|ALTER|DROP|CREATE)\b/i', $sql)) {
+            self::$memoria = [];
+        }
+
         $db = self::getDB();
-        
+
         try {
             $stmt = $db->prepare($sql);
             $stmt->execute($params);
@@ -126,8 +189,16 @@ class Model
      */
     public function findById($id)
     {
-        $sql = "SELECT * FROM {$this->table} WHERE id = ? LIMIT 1";
-        return $this->fetchOne($sql, [$id]);
+        $clave = $this->table . '|id|' . $id;
+        if (array_key_exists($clave, self::$memoria)) {
+            return self::$memoria[$clave];
+        }
+
+        $fila = $this->fetchOne("SELECT * FROM {$this->table} WHERE id = ? LIMIT 1", [$id]);
+        if (self::recordar()) {
+            self::$memoria[$clave] = $fila;
+        }
+        return $fila;
     }
 
     /**
@@ -135,13 +206,22 @@ class Model
      */
     public function count($where = '', $params = [])
     {
+        $clave = $this->table . '|count|' . $where . '|' . json_encode($params);
+        if (array_key_exists($clave, self::$memoria)) {
+            return self::$memoria[$clave];
+        }
+
         $sql = "SELECT COUNT(*) FROM {$this->table}";
 
         if (!empty($where)) {
             $sql .= " WHERE {$where}";
         }
 
-        return (int) $this->fetchColumn($sql, $params);
+        $total = (int) $this->fetchColumn($sql, $params);
+        if (self::recordar()) {
+            self::$memoria[$clave] = $total;
+        }
+        return $total;
     }
 
     /**

@@ -14,7 +14,7 @@ class ImportacionItem extends Model
 
     public function __construct()
     {
-        $this->ensureTable();
+        Esquema::unaVez(static::class, function () { $this->ensureTable(); });
     }
 
     public function crear($data)

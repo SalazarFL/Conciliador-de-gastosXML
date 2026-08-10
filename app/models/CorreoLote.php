@@ -37,7 +37,7 @@ class CorreoLote extends Model
 
     public function __construct()
     {
-        $this->ensureIncidenciasSchema();
+        Esquema::unaVez(static::class, function () { $this->ensureIncidenciasSchema(); });
     }
 
     private function ensureIncidenciasSchema()
