@@ -38,7 +38,7 @@ class CorreoIndice extends Model
 
     public function __construct()
     {
-        $this->ensureTables();
+        Esquema::unaVez(static::class, function () { $this->ensureTables(); });
     }
 
     public function setCuenta($cuentaId)
@@ -113,14 +113,34 @@ class CorreoIndice extends Model
 
             // El mínimo predeterminado de FULLTEXT en MariaDB/MySQL es 3.
             if (mb_strlen($token, 'UTF-8') >= 3) {
-                $like = '%' . addcslashes($textoLimpio, '%_\\') . '%';
-                $where[] = "MATCH(remitente, cc, reply_to) AGAINST (? IN BOOLEAN MODE)
-                            AND (remitente LIKE ? OR cc LIKE ? OR reply_to LIKE ?)";
-                $params[] = '+' . $token;
-                $params[] = $like;
-                $params[] = $like;
-                $params[] = $like;
-                $terminos = [];
+                $booleano = '+' . $token;
+                // FULLTEXT es extraordinario para una dirección rara, pero
+                // en MariaDB resulta más lento que LIKE cuando el token aparece
+                // miles de veces. Un probe acotado evita contar todo el posting
+                // list y permite elegir el plan barato para cada búsqueda.
+                try {
+                    $probe = $this->fetchAll(
+                        "SELECT id FROM {$this->table}
+                         WHERE " . implode(' AND ', $where) . "
+                           AND MATCH(remitente, cc, reply_to)
+                               AGAINST (? IN BOOLEAN MODE)
+                         LIMIT 201",
+                        array_merge($params, [$booleano])
+                    ) ?: [];
+                } catch (Throwable $e) {
+                    $probe = array_fill(0, 201, true);
+                }
+
+                if (count($probe) <= 200) {
+                    $like = '%' . addcslashes($textoLimpio, '%_\\') . '%';
+                    $where[] = "MATCH(remitente, cc, reply_to) AGAINST (? IN BOOLEAN MODE)
+                                AND (remitente LIKE ? OR cc LIKE ? OR reply_to LIKE ?)";
+                    $params[] = $booleano;
+                    $params[] = $like;
+                    $params[] = $like;
+                    $params[] = $like;
+                    $terminos = [];
+                }
             }
         }
 
@@ -282,6 +302,7 @@ class CorreoIndice extends Model
 
     public function guardarAdjuntos($id, $texto)
     {
+        $texto = mb_substr((string) $texto, 0, 1000, 'UTF-8');
         $consecutivo = $this->extraerConsecutivo($texto);
         $numeroCorto = $this->extraerNumeroCorto($consecutivo);
         return $this->execute(
@@ -295,6 +316,7 @@ class CorreoIndice extends Model
     /** Guarda los nombres leídos al abrir un correo y sanea el pendiente. */
     public function guardarAdjuntosPorMensaje($carpeta, $uid, $texto)
     {
+        $texto = mb_substr((string) $texto, 0, 1000, 'UTF-8');
         $consecutivo = $this->extraerConsecutivo($texto);
         $numeroCorto = $this->extraerNumeroCorto($consecutivo);
         return $this->execute(
@@ -352,7 +374,7 @@ class CorreoIndice extends Model
     {
         return $this->execute(
             "UPDATE {$this->table} SET cc = ? WHERE id = ?",
-            [(string) $texto, (int) $id]
+            [mb_substr((string) $texto, 0, 1000, 'UTF-8'), (int) $id]
         );
     }
 
@@ -360,7 +382,8 @@ class CorreoIndice extends Model
     {
         return $this->execute(
             "UPDATE {$this->table} SET cc = ?, reply_to = ? WHERE id = ?",
-            [(string) $cc, (string) $replyTo, (int) $id]
+            [mb_substr((string) $cc, 0, 1000, 'UTF-8'),
+             mb_substr((string) $replyTo, 0, 255, 'UTF-8'), (int) $id]
         );
     }
 
@@ -369,7 +392,9 @@ class CorreoIndice extends Model
         return $this->execute(
             "UPDATE {$this->table} SET cc = ?, reply_to = ?
              WHERE cuenta_id = ? AND carpeta = ? AND uid = ?",
-            [(string) $cc, (string) $replyTo, $this->cuentaId, (string) $carpeta, (int) $uid]
+            [mb_substr((string) $cc, 0, 1000, 'UTF-8'),
+             mb_substr((string) $replyTo, 0, 255, 'UTF-8'),
+             $this->cuentaId, (string) $carpeta, (int) $uid]
         );
     }
 
@@ -382,7 +407,8 @@ class CorreoIndice extends Model
         return $this->execute(
             "UPDATE {$this->table} SET reply_to = ?
              WHERE cuenta_id = ? AND carpeta = ? AND uid = ?",
-            [(string) $replyTo, $this->cuentaId, (string) $carpeta, (int) $uid]
+            [mb_substr((string) $replyTo, 0, 255, 'UTF-8'),
+             $this->cuentaId, (string) $carpeta, (int) $uid]
         );
     }
 
@@ -430,17 +456,101 @@ class CorreoIndice extends Model
         ) ?: [];
     }
 
-    public function guardarEstadoCarpeta($carpeta, $uidvalidity, $ultimoUid, $mensajes)
+    public function guardarEstadoCarpeta($carpeta, $uidvalidity, $ultimoUid, $mensajes,
+                                         $mensajesOmitidos = 0, $retencionDias = 0)
     {
-        $sql = "INSERT INTO correo_carpetas (cuenta_id, carpeta, uidvalidity, ultimo_uid, mensajes, ultima_sync)
-                VALUES (?, ?, ?, ?, ?, NOW())
+        $sql = "INSERT INTO correo_carpetas
+                    (cuenta_id, carpeta, uidvalidity, ultimo_uid, mensajes,
+                     mensajes_omitidos, retencion_dias, ultima_sync)
+                VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
                 ON DUPLICATE KEY UPDATE
                     uidvalidity = VALUES(uidvalidity),
                     ultimo_uid = VALUES(ultimo_uid),
                     mensajes = VALUES(mensajes),
+                    mensajes_omitidos = VALUES(mensajes_omitidos),
+                    retencion_dias = VALUES(retencion_dias),
                     ultima_sync = NOW()";
 
-        return $this->execute($sql, [$this->cuentaId, (string) $carpeta, (int) $uidvalidity, (int) $ultimoUid, (int) $mensajes]);
+        return $this->execute($sql, [
+            $this->cuentaId, (string) $carpeta, (int) $uidvalidity,
+            (int) $ultimoUid, (int) $mensajes, max(0, (int) $mensajesOmitidos),
+            max(0, (int) $retencionDias),
+        ]);
+    }
+
+    /**
+     * Quita una tanda de encabezados vencidos sin tocar mensajes ni documentos.
+     * La cuenta por carpeta queda en mensajes_omitidos para que CorreoSync no
+     * interprete la retención como correos borrados y reconstruya todo el buzón.
+     */
+    public function podarAntesDe($timestampMinimo, $limite = 1000)
+    {
+        $timestampMinimo = (int) $timestampMinimo;
+        $limite = max(1, min(5000, (int) $limite));
+        if ($this->cuentaId <= 0 || $timestampMinimo <= 0) {
+            return 0;
+        }
+
+        $filas = $this->fetchAll(
+            "SELECT id, carpeta FROM {$this->table}
+             WHERE cuenta_id = ? AND timestamp > 0 AND timestamp < ?
+             ORDER BY timestamp, id LIMIT {$limite}",
+            [$this->cuentaId, $timestampMinimo]
+        ) ?: [];
+        if (!$filas) {
+            return 0;
+        }
+
+        $ids = array_map('intval', array_column($filas, 'id'));
+        $marcas = implode(',', array_fill(0, count($ids), '?'));
+        $porCarpeta = [];
+        foreach ($filas as $fila) {
+            $carpeta = (string) $fila['carpeta'];
+            $porCarpeta[$carpeta] = ($porCarpeta[$carpeta] ?? 0) + 1;
+        }
+
+        $db = self::getDB();
+        $propia = !$db->inTransaction();
+        if ($propia) {
+            $db->beginTransaction();
+        }
+
+        try {
+            // El historial del lote conserva una instantánea antes de que el
+            // FK pase a NULL por ON DELETE SET NULL.
+            $this->execute(
+                "UPDATE correo_lote_items li
+                 INNER JOIN {$this->table} i ON i.id = li.correo_indice_id
+                 SET li.asunto = COALESCE(li.asunto, i.asunto),
+                     li.remitente = COALESCE(li.remitente, i.remitente),
+                     li.fecha_correo = COALESCE(li.fecha_correo, i.fecha)
+                 WHERE i.id IN ({$marcas})",
+                $ids
+            );
+
+            foreach ($porCarpeta as $carpeta => $cantidad) {
+                $this->execute(
+                    "UPDATE correo_carpetas
+                     SET mensajes_omitidos = mensajes_omitidos + ?
+                     WHERE cuenta_id = ? AND carpeta = ?",
+                    [(int) $cantidad, $this->cuentaId, $carpeta]
+                );
+            }
+
+            $eliminadas = $this->execute(
+                "DELETE FROM {$this->table} WHERE id IN ({$marcas})",
+                $ids
+            );
+            if ($propia) {
+                $db->commit();
+            }
+            return (int) $eliminadas;
+        } catch (Throwable $e) {
+            if ($propia && $db->inTransaction()) {
+                $db->rollBack();
+            }
+            throw $e;
+        }
     }
 
     public function vaciarCarpeta($carpeta)
@@ -545,13 +655,17 @@ class CorreoIndice extends Model
                 $params[] = $uid;
                 $params[] = (int) $uidvalidity;
                 $params[] = (string) ($fila['clave'] ?? ((int) $uidvalidity . ':' . $uid));
-                $params[] = $fila['remitente'] ?? null;
-                $params[] = $fila['cc'] ?? null;
-                $params[] = $fila['reply_to'] ?? null;
+                $params[] = isset($fila['remitente'])
+                    ? mb_substr((string) $fila['remitente'], 0, 255, 'UTF-8') : null;
+                $params[] = isset($fila['cc'])
+                    ? mb_substr((string) $fila['cc'], 0, 1000, 'UTF-8') : null;
+                $params[] = isset($fila['reply_to'])
+                    ? mb_substr((string) $fila['reply_to'], 0, 255, 'UTF-8') : null;
                 $params[] = $consecutivo;
                 $params[] = $numeroCorto;
                 $params[] = $fila['asunto'] ?? null;
-                $params[] = $fila['adjuntos'] ?? null;
+                $params[] = isset($fila['adjuntos'])
+                    ? mb_substr((string) $fila['adjuntos'], 0, 1000, 'UTF-8') : null;
                 $params[] = $fila['fecha'] ?? null;
                 $params[] = (int) ($fila['timestamp'] ?? 0);
             }
@@ -638,7 +752,9 @@ class CorreoIndice extends Model
 
         $this->fulltextDestinatarios = isset($nombresIndices['ft_destinatarios']);
 
-        if (empty($columnasPorTabla['correo_carpetas'])) {
+        if (empty($columnasPorTabla['correo_carpetas'])
+            || !isset($columnasPorTabla['correo_carpetas']['mensajes_omitidos'])
+            || !isset($columnasPorTabla['correo_carpetas']['retencion_dias'])) {
             return false;
         }
 
@@ -675,7 +791,7 @@ class CorreoIndice extends Model
                     clave VARCHAR(64) NOT NULL,
                     remitente VARCHAR(255) NULL DEFAULT NULL,
                     cc VARCHAR(1024) NULL DEFAULT NULL,
-                    reply_to VARCHAR(1024) NULL DEFAULT NULL,
+                    reply_to VARCHAR(255) NULL DEFAULT NULL,
                     consecutivo VARCHAR(20) NULL DEFAULT NULL,
                     numero_corto VARCHAR(10) NULL DEFAULT NULL,
                     asunto VARCHAR(255) NULL DEFAULT NULL,
@@ -686,7 +802,6 @@ class CorreoIndice extends Model
                     destinatarios_pendientes TINYINT(1) AS (cc IS NULL OR reply_to IS NULL) PERSISTENT,
                     PRIMARY KEY (id),
                     UNIQUE KEY uk_cuenta_carpeta_uid (cuenta_id, carpeta(170), uidvalidity, uid),
-                    KEY idx_timestamp (timestamp),
                     KEY idx_cuenta_timestamp_id (cuenta_id, timestamp, id),
                     KEY idx_cuenta_carpeta_ts (cuenta_id, carpeta(170), timestamp),
                     KEY idx_pend_adjuntos (cuenta_id, adjuntos_pendiente, timestamp, id),
@@ -709,7 +824,7 @@ class CorreoIndice extends Model
             // La columna ya existe o el motor no soporta IF NOT EXISTS: sin efecto.
         }
         try {
-            $this->query("ALTER TABLE {$this->table} ADD COLUMN IF NOT EXISTS reply_to VARCHAR(1024) NULL DEFAULT NULL AFTER cc");
+            $this->query("ALTER TABLE {$this->table} ADD COLUMN IF NOT EXISTS reply_to VARCHAR(255) NULL DEFAULT NULL AFTER cc");
         } catch (Throwable $e) {
             // La columna ya existe o el motor no soporta IF NOT EXISTS: sin efecto.
         }
@@ -770,9 +885,20 @@ class CorreoIndice extends Model
                     uidvalidity BIGINT UNSIGNED NOT NULL DEFAULT 0,
                     ultimo_uid INT UNSIGNED NOT NULL DEFAULT 0,
                     mensajes INT UNSIGNED NOT NULL DEFAULT 0,
+                    mensajes_omitidos INT UNSIGNED NOT NULL DEFAULT 0,
+                    retencion_dias INT UNSIGNED NOT NULL DEFAULT 0,
                     ultima_sync DATETIME NULL DEFAULT NULL,
                     PRIMARY KEY (cuenta_id, carpeta)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+        try {
+            $this->query("ALTER TABLE correo_carpetas
+                          ADD COLUMN IF NOT EXISTS mensajes_omitidos
+                          INT UNSIGNED NOT NULL DEFAULT 0 AFTER mensajes,
+                          ADD COLUMN IF NOT EXISTS retencion_dias
+                          INT UNSIGNED NOT NULL DEFAULT 0 AFTER mensajes_omitidos");
+        } catch (Throwable $e) {
+            // Queda disponible la migración manual para motores antiguos.
+        }
     }
 
     /** Extrae el consecutivo CR de 20 dígitos desde una clave de 50 dígitos. */

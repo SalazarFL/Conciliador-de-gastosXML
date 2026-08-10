@@ -42,9 +42,31 @@ Reiniciar Apache.
 
 ### 2. El proyecto
 
-Copiar el proyecto en `C:\xampp\htdocs\xmlconcilia`.
+```
+git clone <repositorio> C:\xampp\htdocs\xmlconcilia
+```
 
-### 3. La configuración de esta computadora
+> **Antes de clonar, comprobá que lo que hay en GitHub es lo que estás usando.**
+> En la computadora que ya funciona: `git status` (sin cambios pendientes) y
+> `git log origin/<rama>..HEAD` (vacío). Si falta subir algo, la máquina nueva
+> va a instalar una versión distinta y los errores que aparezcan solo le van a
+> pasar a ella.
+
+### 3. La red privada
+
+La base de datos **no está publicada en internet**: escucha únicamente dentro
+de una red privada de Tailscale. Sin este paso, la computadora no llega al
+servidor y nada más funciona.
+
+1. Instalar Tailscale: <https://tailscale.com/download/windows>
+2. Iniciar sesión con **la misma cuenta** que las demás computadoras.
+3. Comprobar que el servidor aparece: `tailscale status` debe listar
+   `xmlconcilia-db`.
+
+Esa es también la razón de que no haga falta VPN de oficina ni IP fija: la
+computadora entra a la red privada desde donde sea.
+
+### 4. La configuración de esta computadora
 
 Copiar la plantilla y llenarla:
 
@@ -59,23 +81,18 @@ instalado `pdftotext`**, que se usa para leer los reportes PDF del ERP.
 `app/config/local.php` **no se versiona**: el repositorio es público y ahí va
 una contraseña. Nunca lo agregues a git.
 
-> **El `host` tiene que ser el del servidor, no `localhost`.** Si apuntás a la
-> base de esta misma computadora la aplicación abre y se ve normal, pero
-> trabajás sobre una base que nadie más lee. El diagnóstico avisa cuando pasa.
+El `host` es la **dirección de Tailscale del servidor** (`100.x.x.x`), que se
+obtiene con `tailscale status`. Pedile la contraseña a quien administra el
+sistema; no está escrita en ningún archivo del repositorio.
 
-**Esa computadora tiene que llegar al servidor**: si está fuera de la oficina,
-con la VPN encendida.
+> **Nunca pongas `localhost` ahí.** Si apuntás a la base de esta misma
+> computadora, la aplicación abre y se ve normal, pero trabajás sobre una base
+> vacía que nadie más lee. El diagnóstico avisa cuando pasa.
 
-En una instalación nueva, además:
+La base **ya existe y tiene los datos**: no hay que crear nada ni correr
+`schema.sql`. Eso es solo para levantar un servidor desde cero.
 
-```
-mysql -u USUARIO -p BASE < database/schema.sql
-```
-
-Y después las migraciones de `database/`, en orden de fecha. El diagnóstico
-(paso 5) dice exactamente cuáles faltan.
-
-### 4. La carpeta compartida
+### 5. La carpeta compartida
 
 Abrir la biblioteca de SharePoint en el navegador y usar **Sincronizar**. Eso
 crea una carpeta local, algo como:
@@ -91,7 +108,7 @@ documentos*. Es lo único que cambia de una computadora a otra.
 > arranca a media sincronización, va a reportar documentos que no encuentra —
 > no están perdidos, todavía no han bajado.
 
-### 5. Comprobar
+### 6. Comprobar
 
 ```
 php cli/diagnostico.php
@@ -145,8 +162,8 @@ modelo, en orden de frecuencia:
 | "No abre ningún documento" | La carpeta compartida apunta al lugar equivocado, o SharePoint aún no termina de bajar los archivos |
 | "No abre *este* documento" | Alguien lo movió fuera de la carpeta compartida — devolvelo adentro y corré `php cli/organizar_documentos.php` |
 | "Me da error al guardar" | Falta una migración en la base, o permiso de solo lectura en SharePoint |
-| "No conecta" | La VPN, o el servidor de base de datos apagado |
-| "Falta app/config/local.php" | Instalación a medias: hacer el paso 3 |
+| "No conecta" | Tailscale apagado en esa computadora, o el servidor caído. `tailscale status` lo dice en un segundo |
+| "Falta app/config/local.php" | Instalación a medias: hacer el paso 4 |
 | "No veo lo que capturó mi compañero" | Su `local.php` apunta a `localhost` en vez del servidor |
 | Todo va lento en una sola computadora | Su conexión al servidor; el diagnóstico da los ms por consulta |
 | Un error que solo le pasa a esa persona | Su copia del código quedó atrás — `git pull` |

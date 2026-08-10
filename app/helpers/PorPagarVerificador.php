@@ -32,16 +32,10 @@ class PorPagarVerificador
                 'respaldada' => (int) ($resumen['respaldada'] ?? 0),
                 'con_diferencia' => (int) ($resumen['con_diferencia'] ?? 0),
                 'sin_respaldo' => (int) ($resumen['sin_respaldo'] ?? 0),
-                'archivos_movidos' => 0,
-                'archivos_revisar' => 0,
-                'archivos_errores' => 0,
             ];
         }
 
         $lineas = $modelo->getLineas($listadoId);
-        $idsAntes = method_exists($modelo, 'getFacturaIdsVinculadas')
-            ? $modelo->getFacturaIdsVinculadas($listadoId)
-            : [];
 
         // El universo de candidatas es la semana del listado (si tiene):
         // la verificación no es contra el acumulado de todo el sistema
@@ -153,19 +147,48 @@ class PorPagarVerificador
             $stats[$estado]++;
         }
 
-        $stats['archivos_movidos'] = 0;
-        $stats['archivos_revisar'] = 0;
-        $stats['archivos_errores'] = 0;
-
+        // Verificar no mueve archivos. La ubicación en el disco solo cambia
+        // por orden explícita de la persona (Correo → Ordenar el archivo).
         if ($semanaId > 0 && method_exists($modelo, 'asignarRespaldadasASemana')) {
             $modelo->asignarRespaldadasASemana($listadoId, $semanaId);
         }
-        if (method_exists($modelo, 'getFacturaIdsVinculadas')) {
-            $idsDespues = $modelo->getFacturaIdsVinculadas($listadoId);
-            self::organizarArchivos(array_values(array_unique(array_merge($idsAntes, $idsDespues))), $stats);
-        }
 
         return $stats;
+    }
+
+    /**
+     * Re-verifica los listados abiertos a los que todavía les falta respaldo.
+     *
+     * Para cuando entran facturas sin semana asignada —las que llegan por
+     * Correo— y por tanto no hay una semana concreta que revisar: cualquier
+     * listado abierto puede haberse completado con ellas.
+     *
+     * Solo mira los que de verdad pueden cambiar: el modelo devuelve en una
+     * consulta los listados abiertos con líneas sin respaldo, los más
+     * recientes. Los que ya están completos —la mayoría— ni se tocan.
+     * Devuelve cuántas líneas pasaron a tener respaldo.
+     *
+     * El límite es bajo a propósito. Verificar un listado compara cada una de
+     * sus líneas contra cada factura candidata: medido sobre datos reales,
+     * un listado de 568 líneas son 2.4 millones de comparaciones. Las
+     * facturas que llegan hoy pertenecen al pago en curso, no a uno de hace
+     * semanas que quedó a medias, así que ampliar el alcance costaría mucho
+     * para no encontrar nada.
+     */
+    public static function verificarAbiertos($modelo, $limite = 3)
+    {
+        $resueltas = 0;
+        try {
+            foreach ($modelo->idsAbiertosConFaltantes($limite) as $id) {
+                $antes = (int) ($modelo->resumenPorEstado($id)['sin_respaldo'] ?? 0);
+                self::verificarListado($id, $modelo);
+                $despues = (int) ($modelo->resumenPorEstado($id)['sin_respaldo'] ?? 0);
+                $resueltas += max(0, $antes - $despues);
+            }
+        } catch (Throwable $e) {
+            // Best effort: el siguiente lote o el botón manual la repiten.
+        }
+        return $resueltas;
     }
 
     /**
@@ -193,23 +216,4 @@ class PorPagarVerificador
         }
     }
 
-    /** Mueve de inmediato los pares afectados; la tarea programada reintenta cualquier pendiente. */
-    private static function organizarArchivos(array $facturaIds, array &$stats)
-    {
-        if (!$facturaIds) {
-            return;
-        }
-        try {
-            require_once __DIR__ . '/OrganizadorDocumentos.php';
-            if (DocumentoArchivo::raizConfigurada() === '') {
-                return;
-            }
-            $resultado = (new OrganizadorDocumentos())->organizarIds($facturaIds);
-            $stats['archivos_movidos'] = (int) ($resultado['movidos'] ?? 0);
-            $stats['archivos_revisar'] = (int) ($resultado['revisar'] ?? 0);
-            $stats['archivos_errores'] = (int) ($resultado['errores'] ?? 0);
-        } catch (Throwable $e) {
-            $stats['archivos_errores']++;
-        }
-    }
 }

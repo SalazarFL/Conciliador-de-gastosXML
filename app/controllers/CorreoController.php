@@ -13,6 +13,7 @@ require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 require_once __DIR__ . '/../helpers/DocumentoArchivo.php';
 require_once __DIR__ . '/../helpers/RutaDocumento.php';
 require_once __DIR__ . '/../helpers/XmlDocumentImporter.php';
+require_once __DIR__ . '/../helpers/OrganizadorDocumentos.php';
 
 class CorreoController extends Controller
 {
@@ -1211,7 +1212,11 @@ class CorreoController extends Controller
                     $resumen['estado'] = 'omitido';
                     $resumen['detalle'] = 'Sin XML/PDF adjuntos.';
                 } else {
-                    $captura = $this->procesarMensaje($mensaje, $bandeja, $facturas, (int) $lote['cuenta_id'], ['FE', 'NC'], (string) $lote['sociedad_cedula']);
+                    $captura = $this->procesarMensaje(
+                        $mensaje, $bandeja, $facturas, (int) $lote['cuenta_id'],
+                        ['FE', 'NC'], (string) $lote['sociedad_cedula'],
+                        (int) $lote['sociedad_id'], [], 'descargas'
+                    );
                     $resumen['duplicados'] += (int) ($captura['ya_existentes'] ?? 0);
 
                     foreach (($captura['errores'] ?? []) as $error) {
@@ -1271,9 +1276,19 @@ class CorreoController extends Controller
         }
         if ($fetcherCompartido === null) { $fetcher->cerrar(); }
         if ($notasNuevas > 0) { $this->revalidarNotasGeneral((int) $lote['sociedad_id']); }
+
+        // Cruzar contra los pagos semanales cuesta millones de comparaciones
+        // de texto, así que se hace UNA vez —al terminar el lote— y no en
+        // cada tanda. Una vez completado, las llamadas siguientes salen antes
+        // de llegar aquí, así que no se repite.
+        $loteFinal = $lotes->get($loteId);
+        if (($loteFinal['estado'] ?? '') === 'completado') {
+            $this->revalidarPorPagarGeneral();
+        }
+
         return [
             'ok' => true,
-            'lote' => $lotes->get($loteId),
+            'lote' => $loteFinal,
             'procesados_ahora' => $procesadosAhora,
             'incidencias' => $lotes->incidencias($loteId, 20),
             'message' => '',
@@ -1327,6 +1342,28 @@ class CorreoController extends Controller
         try {
             require_once __DIR__ . '/../helpers/NotasCreditoVerificador.php';
             NotasCreditoVerificador::verificarTodosSociedad($sociedadId, $this->loadModel('NotaCredito'));
+        } catch (Throwable $e) {
+        }
+    }
+
+    /**
+     * Cruza contra los pagos semanales las facturas que acaban de entrar.
+     *
+     * Existía la mitad de notas de crédito y faltaba esta. Sin ella, importar
+     * desde Correo dejaba las líneas del listado "sin respaldo" aunque su XML
+     * ya estuviera en la base: el emparejamiento solo corría al entrar a Por
+     * Pagar y darle a "Verificar de nuevo", y quien importaba no tenía forma
+     * de saber que hacía falta.
+     *
+     * No se acota a una semana porque las facturas que llegan por correo no
+     * traen ninguna asignada; cualquier listado abierto puede completarse con
+     * ellas. Nunca lanza: la importación ya terminó bien y esto es un extra.
+     */
+    private function revalidarPorPagarGeneral()
+    {
+        try {
+            require_once __DIR__ . '/../helpers/PorPagarVerificador.php';
+            PorPagarVerificador::verificarAbiertos($this->loadModel('PorPagar'));
         } catch (Throwable $e) {
         }
     }
@@ -1651,7 +1688,27 @@ class CorreoController extends Controller
      * la factura esté aceptada; si Hacienda la rechazó, la factura queda
      * en la bandeja como 'rechazada' y no se puede importar.
      */
-    private function procesarMensaje(array $mensaje, $bandejaModel, $facturaModel, $cuentaId = 0, array $tiposPermitidos = ['FE'], $cedulaForzada = '')
+    /** Punto compartido con el worker: captura, pero nunca importa. */
+    public function capturarMensajeParaRevision(array $mensaje, $cuentaId,
+                                                 array $sociedadesPermitidas = [])
+    {
+        return $this->procesarMensaje(
+            $mensaje,
+            $this->loadModel('CorreoBandeja'),
+            $this->loadModel('Factura'),
+            (int) $cuentaId,
+            ['FE'],
+            '',
+            0,
+            $sociedadesPermitidas,
+            'automatica'
+        );
+    }
+
+    private function procesarMensaje(array $mensaje, $bandejaModel, $facturaModel,
+                                     $cuentaId = 0, array $tiposPermitidos = ['FE'],
+                                     $cedulaForzada = '', $sociedadIdForzada = 0,
+                                     array $sociedadesPermitidas = [], $origen = 'manual')
     {
         $resultado = [
             'nuevas' => 0,
@@ -1670,11 +1727,29 @@ class CorreoController extends Controller
         // Cédula de la sociedad activa (se elige en Inicio): toda factura
         // debe venir a nombre de esa cédula como receptor
         $cedulaEmpresa = preg_replace('/\D+/', '', (string) $cedulaForzada);
-        if ($cedulaEmpresa === '') {
+        $sociedadIdDestino = max(0, (int) $sociedadIdForzada);
+        $sociedadesPorCedula = [];
+        foreach ($sociedadesPermitidas as $sociedad) {
+            $cedula = preg_replace('/\D+/', '', (string) ($sociedad['cedula'] ?? ''));
+            $id = (int) ($sociedad['id'] ?? 0);
+            if ($cedula !== '' && $id > 0) {
+                $sociedadesPorCedula[$cedula] = $id;
+                if ($sociedadIdDestino <= 0) {
+                    $sociedadIdDestino = $id;
+                }
+            }
+        }
+
+        if (!$sociedadesPorCedula && ($cedulaEmpresa === '' || $sociedadIdDestino <= 0)) {
             try {
                 $activa = $this->loadModel('Sociedad')->getActiva();
                 if ($activa) {
-                    $cedulaEmpresa = preg_replace('/\D+/', '', (string) $activa['cedula']);
+                    if ($cedulaEmpresa === '') {
+                        $cedulaEmpresa = preg_replace('/\D+/', '', (string) $activa['cedula']);
+                    }
+                    if ($sociedadIdDestino <= 0) {
+                        $sociedadIdDestino = (int) $activa['id'];
+                    }
                 }
             } catch (Throwable $e) {
                 // Sin sociedades registradas no se verifica cédula
@@ -1845,8 +1920,17 @@ class CorreoController extends Controller
             // empresa configurada. Sin cédula configurada o sin receptor
             // legible en el XML no se bloquea.
             $esOtraCedula = false;
-            if (!$esRechazada && $cedulaEmpresa !== '') {
-                $receptor = preg_replace('/\D+/', '', (string) $factura['receptor_id']);
+            $receptor = preg_replace('/\D+/', '', (string) $factura['receptor_id']);
+            $sociedadFacturaId = $sociedadIdDestino;
+            if ($sociedadesPorCedula) {
+                if ($receptor !== '' && isset($sociedadesPorCedula[$receptor])) {
+                    $sociedadFacturaId = (int) $sociedadesPorCedula[$receptor];
+                } elseif (!$esRechazada && $receptor !== '') {
+                    // Se conserva bajo la primera sociedad asociada para que
+                    // el documento bloqueado sea visible y revisable.
+                    $esOtraCedula = true;
+                }
+            } elseif (!$esRechazada && $cedulaEmpresa !== '') {
                 $esOtraCedula = $receptor !== '' && $receptor !== $cedulaEmpresa;
             }
 
@@ -1898,6 +1982,7 @@ class CorreoController extends Controller
 
             $datosFila = [
                 'cuenta_id' => (int) $cuentaId,
+                'sociedad_id' => $sociedadFacturaId > 0 ? $sociedadFacturaId : null,
                 'uid_correo' => $mensaje['clave'],
                 'remitente' => $mensaje['remitente'],
                 'asunto' => $mensaje['asunto'],
@@ -1911,6 +1996,8 @@ class CorreoController extends Controller
                 'total' => $factura['total'],
                 'hash_xml' => $factura['hash_xml'] !== '' ? $factura['hash_xml'] : null,
                 'estado' => $estado,
+                'origen' => in_array($origen, ['manual', 'automatica', 'descargas'], true)
+                    ? $origen : 'manual',
             ];
 
             if ($filaPrevia) {
@@ -1931,7 +2018,11 @@ class CorreoController extends Controller
             } else {
                 $filaId = (int) $bandejaModel->crear($datosFila);
             }
-            $resultado['filas'][] = ['id' => $filaId, 'estado' => $estado, 'tipo_doc' => $factura['tipo_doc']];
+            $resultado['filas'][] = [
+                'id' => $filaId, 'estado' => $estado,
+                'tipo_doc' => $factura['tipo_doc'],
+                'sociedad_id' => $sociedadFacturaId,
+            ];
 
             if ($estado === 'rechazada') {
                 $resultado['rechazadas']++;
@@ -2006,8 +2097,8 @@ class CorreoController extends Controller
                 if (!is_dir($carpeta) && !@mkdir($carpeta, 0777, true) && !is_dir($carpeta)) {
                     $this->json(['ok' => false, 'message' => 'No se pudo crear la carpeta "' . $carpeta . '". Verifica la ruta.'], 422);
                 }
-                if (!is_writable($carpeta)) {
-                    $this->json(['ok' => false, 'message' => 'La carpeta "' . $carpeta . '" existe pero no se puede escribir en ella.'], 422);
+                if (!RutaDocumento::permiteEscritura($carpeta)) {
+                    $this->json(['ok' => false, 'message' => 'La carpeta "' . $carpeta . '" existe, pero no dejó guardar un archivo de prueba. Si es de SharePoint, pide permiso de edición sobre la biblioteca.'], 422);
                 }
             }
 
@@ -2019,6 +2110,85 @@ class CorreoController extends Controller
             $this->json(['ok' => true, 'config' => $this->configLocal()]);
         } catch (Throwable $e) {
             $this->json(['ok' => false, 'message' => 'No se pudo guardar la configuración: ' . $e->getMessage()], 500);
+        }
+    }
+
+    // ── Ordenar el archivo local (únicamente por orden explícita) ──
+
+    /**
+     * Ordena los documentos ya archivados, moviéndolos a la carpeta que les
+     * toca por fecha, tipo y estado (POST, JSON).
+     *
+     * Por qué es una orden y no algo automático: los XML y PDF viven en una
+     * carpeta de SharePoint que la gente también abre en el Explorador. Que la
+     * aplicación moviera archivos por su cuenta —al importar del correo o al
+     * verificar un listado— hacía que carpetas ordenadas a mano se
+     * reacomodaran solas, sin que nadie lo hubiera pedido. Ahora nada se mueve
+     * salvo que alguien lo pida desde aquí; la tarea programada se limita a
+     * seguir los archivos que se movieron a mano, sin tocarlos.
+     *
+     * alcance=todo    → los documentos registrados (lo procesado del correo).
+     * alcance=semana  → solo las facturas de una semana, a su carpeta de pago.
+     *
+     * previsualizar() responde exactamente lo mismo pero sin mover nada, para
+     * que se pueda ver la lista antes de confirmar.
+     */
+    public function organizar()
+    {
+        $this->organizarCorrer(false);
+    }
+
+    public function organizarPrevisualizar()
+    {
+        $this->organizarCorrer(true);
+    }
+
+    private function organizarCorrer($dryRun)
+    {
+        if (!$this->isPost()) {
+            $this->json(['ok' => false, 'message' => 'Metodo no permitido.'], 405);
+        }
+        if (DocumentoArchivo::raizConfigurada() === '') {
+            $this->json(['ok' => false, 'message' => 'Configura primero la carpeta raíz de XML y PDF.'], 422);
+        }
+
+        $alcance  = (string) $this->post('alcance', 'todo');
+        $semanaId = (int) $this->post('semana_id', 0);
+
+        try {
+            $organizador = new OrganizadorDocumentos();
+
+            if ($alcance === 'semana') {
+                if ($semanaId <= 0) {
+                    $this->json(['ok' => false, 'message' => 'Elige la semana que quieres ordenar.'], 422);
+                }
+                $ids = $this->loadModel('Factura')->getIdsPorSemana($semanaId);
+                if (!$ids) {
+                    $this->json(['ok' => false, 'message' => 'Esa semana todavía no tiene facturas asignadas.'], 422);
+                }
+                $resumen = $organizador->organizarIds($ids, (bool) $dryRun);
+            } else {
+                // incluirNoRegistrados = false: la orden alcanza lo que la
+                // aplicación importó, nunca archivos ajenos que alguien haya
+                // dejado dentro de la carpeta por su cuenta.
+                $resumen = $organizador->ejecutar((bool) $dryRun, false);
+            }
+
+            if (!empty($resumen['omitido_por_bloqueo'])) {
+                $this->json([
+                    'ok' => false,
+                    'message' => 'Hay otra ordenación en curso en esta computadora. Espera a que termine.',
+                ], 409);
+            }
+
+            $this->json([
+                'ok'      => true,
+                'dry_run' => (bool) $dryRun,
+                'alcance' => $alcance === 'semana' ? 'semana' : 'todo',
+                'resumen' => $resumen,
+            ]);
+        } catch (Throwable $e) {
+            $this->json(['ok' => false, 'message' => 'No se pudo ordenar: ' . $e->getMessage()], 500);
         }
     }
 
@@ -2036,12 +2206,28 @@ class CorreoController extends Controller
         }
 
         $cfg = $this->configLocal()['auto_sync'] ?? [];
+        $cola = null;
+        $revisionPendiente = null;
+        try {
+            require_once __DIR__ . '/../models/CorreoCapturaAutomatica.php';
+            $cola = (new CorreoCapturaAutomatica())->resumen();
+            $conteoBandeja = $this->loadModel('CorreoBandeja')->contarPorEstado();
+            $revisionPendiente = (int) ($conteoBandeja['pendiente'] ?? 0);
+        } catch (Throwable $e) {
+            // La configuración de la tarea se puede consultar aun durante
+            // una instalación que todavía no aplicó la migración de cola.
+        }
 
         $this->json([
             'ok'              => true,
             'soportado'       => DIRECTORY_SEPARATOR === '\\' && function_exists('exec'),
             'activo'          => !empty($cfg['activo']),
-            'intervalo_min'   => max(1, (int) ($cfg['intervalo_min'] ?? 10)),
+            'intervalo_min'   => max(1, min(1440, (int) ($cfg['intervalo_min'] ?? 10))),
+            'capturar_nuevos' => !empty($cfg['capturar_nuevos']),
+            'max_correos_corrida' => max(1, min(200, (int) ($cfg['max_correos_corrida'] ?? 20))),
+            'max_intentos'    => max(1, min(10, (int) ($cfg['max_intentos'] ?? 3))),
+            'cola_captura'    => $cola,
+            'revision_pendiente' => $revisionPendiente,
             'tarea_instalada' => $this->tareaSyncInstalada(),
             'ultima'          => $this->leerEstadoSync(),
         ]);
@@ -2066,6 +2252,29 @@ class CorreoController extends Controller
         }
 
         $intervalo = max(1, min(1440, (int) $this->post('intervalo_min', 10)));
+        $capturarNuevos = in_array(
+            strtolower(trim((string) $this->post('capturar_nuevos', '0'))),
+            ['1', 'true', 'on', 'si', 'sí'],
+            true
+        );
+        $maxCorreos = max(1, min(200, (int) $this->post('max_correos_corrida', 20)));
+        $maxIntentos = max(1, min(10, (int) $this->post('max_intentos', 3)));
+
+        if ($capturarNuevos) {
+            $raiz = DocumentoArchivo::raizConfigurada();
+            if ($raiz === '' || !is_dir($raiz)) {
+                $this->json([
+                    'ok' => false,
+                    'message' => 'Configura primero una carpeta compartida válida para guardar la Bandeja.',
+                ], 422);
+            }
+            if (!RutaDocumento::permiteEscritura($raiz)) {
+                $this->json([
+                    'ok' => false,
+                    'message' => 'La carpeta compartida no permite escritura; la captura automática no podría guardar la Bandeja.',
+                ], 422);
+            }
+        }
 
         $php = $this->rutaPhpCli();
         if ($php === null) {
@@ -2081,7 +2290,7 @@ class CorreoController extends Controller
         // hueco entre corridas (el lock de archivo impide solaparse). Con un
         // rezago grande de adjuntos/CC, un tope corto deja el índice
         // trabajando una fracción del tiempo y la cola nunca termina.
-        $topeSegundos = max(60, min(3600, $intervalo * 60 - 60));
+        $topeSegundos = max(30, min(3600, $intervalo * 60 - 10));
 
         // Lanzador .vbs: ejecuta php OCULTO (sin ventana de consola cada N min)
         try {
@@ -2101,19 +2310,35 @@ class CorreoController extends Controller
         }
 
         $configActual = $this->configLocal();
-        $configActual['auto_sync'] = [
-            'activo'        => true,
-            'intervalo_min' => $intervalo,
-            'php'           => $php,
-            'actualizado'   => date('Y-m-d H:i:s'),
-        ];
+        $autoAnterior = is_array($configActual['auto_sync'] ?? null)
+            ? $configActual['auto_sync'] : [];
+        $capturaActivadaEn = (string) ($autoAnterior['captura_activada_en'] ?? '');
+        if ($capturarNuevos && empty($autoAnterior['capturar_nuevos'])) {
+            // Este corte evita que la primera indexación automática meta
+            // todo el archivo histórico en revisión.
+            $capturaActivadaEn = date('Y-m-d H:i:s');
+        }
+        $configActual['auto_sync'] = array_merge($autoAnterior, [
+            'activo'               => true,
+            'intervalo_min'        => $intervalo,
+            'capturar_nuevos'      => $capturarNuevos,
+            'max_correos_corrida'  => $maxCorreos,
+            'max_intentos'         => $maxIntentos,
+            'captura_activada_en'  => $capturaActivadaEn,
+            'php'                  => $php,
+            'actualizado'          => date('Y-m-d H:i:s'),
+        ]);
         $this->guardarConfigLocal($configActual);
 
         $this->json([
             'ok'            => true,
             'intervalo_min' => $intervalo,
+            'capturar_nuevos' => $capturarNuevos,
             'php'           => $php,
-            'message'       => 'Actualización automática activada: el índice se refrescará cada ' . $intervalo . ' min en segundo plano.',
+            'message'       => 'Automatización activada cada ' . $intervalo . ' min. '
+                . ($capturarNuevos
+                    ? 'Los correos nuevos quedarán en la Bandeja hasta que una persona los importe.'
+                    : 'Solo se actualizará el índice.'),
         ]);
     }
 
@@ -2275,6 +2500,8 @@ POWERSHELL;
                 'usuario' => trim((string) $this->post('usuario', '')),
                 'password' => (string) $this->post('password', ''),
                 'carpeta' => trim((string) $this->post('carpeta', 'INBOX')),
+                'indice_retencion_dias' => max(0, min(3650,
+                    (int) $this->post('indice_retencion_dias', 1825))),
             ];
 
             if ($datos['nombre'] === '' || $datos['host'] === '' || $datos['usuario'] === '') {
@@ -2526,7 +2753,7 @@ POWERSHELL;
             'ruta' => $ruta,
             'es_raiz' => false,
             'padre' => $this->rutaPadre($ruta),
-            'escribible' => is_writable($ruta),
+            'escribible' => RutaDocumento::permiteEscritura($ruta),
             'carpetas' => $carpetas,
         ];
     }

@@ -24,7 +24,15 @@ class FacturaImporterSemanaFalsa
     public function begin() { return true; }
     public function commit() { $this->commits++; return true; }
     public function rollback() { $this->rollbacks++; return true; }
-    public function getParaOrganizarArchivos(array $ids = []) { return []; }
+
+    // Si alguien vuelve a enchufar el organizador en la importación, este
+    // contador deja de ser cero y la prueba lo delata.
+    public $consultasOrganizador = 0;
+    public function getParaOrganizarArchivos(array $ids = [])
+    {
+        $this->consultasOrganizador++;
+        return [];
+    }
 }
 
 class ProveedorImporterSemanaFalso
@@ -102,14 +110,18 @@ try {
     assertImporterSemana($otra->semanaAsignada === 12, 'mueve la factura a la semana seleccionada');
     assertImporterSemana(($resultadoOtra['semana_anterior'] ?? 0) === 11, 'informa la semana anterior para revalidarla');
     assertImporterSemana($otra->commits === 1 && $otra->rollbacks === 0, 'confirma el cambio de semana en transacción');
-    echo "OK: XmlDocumentImporter valida duplicados por semana\n";
+
+    // Importar NO reacomoda el árbol. Mover lo ya archivado es una orden
+    // explícita de la persona; que ocurriera sola hacía que una carpeta
+    // ordenada a mano se reacomodara sin que nadie lo pidiera.
+    assertImporterSemana(is_file($xmlRuta) && is_file($pdfRuta),
+        'importar deja el par donde estaba: no lo mueve');
+    assertImporterSemana($misma->consultasOrganizador === 0 && $otra->consultasOrganizador === 0,
+        'importar ni siquiera consulta al organizador');
+
+    echo "OK: XmlDocumentImporter valida duplicados por semana y no mueve archivos\n";
 } finally {
     foreach ([$xmlRuta, $pdfRuta] as $ruta) {
         if (is_file($ruta)) { unlink($ruta); }
     }
-    $raizLock = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, (string) realpath($dir));
-    if (DIRECTORY_SEPARATOR === '\\') $raizLock = strtolower($raizLock);
-    $lock = dirname(__DIR__) . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'locks'
-        . DIRECTORY_SEPARATOR . 'organizador_documentos_' . substr(sha1($raizLock), 0, 16) . '.lock';
-    if (is_file($lock)) unlink($lock);
 }

@@ -113,6 +113,39 @@ foreach (['2026/07/a.xml', '2026\\07\\a.xml', 'a.xml'] as $rel) {
     verificaRuta(!RutaDocumento::esAbsoluta($rel), "se reconoce como ruta relativa: {$rel}");
 }
 
+// ── ¿Se puede escribir en la carpeta? ─────────────────────────────────
+// La carpeta que OneDrive sincroniza desde SharePoint viene marcada de solo
+// lectura, y con esa marca is_writable() contesta false aunque los permisos sí
+// alcancen. Como esa era la única comprobación al configurar, la carpeta
+// compartida —justo la que hay que elegir— se rechazaba siempre.
+$carpetaTmp = sys_get_temp_dir() . $S . 'xmlconcilia_esc_' . uniqid();
+mkdir($carpetaTmp);
+
+verificaRuta(RutaDocumento::permiteEscritura($carpetaTmp) === true,
+    'una carpeta normal se reconoce como escribible');
+
+if (DIRECTORY_SEPARATOR === '\\' && function_exists('exec')) {
+    exec('attrib +R ' . escapeshellarg($carpetaTmp));
+    clearstatcache(true, $carpetaTmp);
+    verificaRuta(is_writable($carpetaTmp) === false,
+        'is_writable() rechaza una carpeta marcada de solo lectura (el fallo que se corrige)');
+    verificaRuta(RutaDocumento::permiteEscritura($carpetaTmp) === true,
+        'la carpeta de SharePoint, marcada de solo lectura, sí se acepta: escribir en ella funciona');
+    exec('attrib -R ' . escapeshellarg($carpetaTmp));
+    clearstatcache(true, $carpetaTmp);
+}
+
+verificaRuta(count(array_diff((array) scandir($carpetaTmp), ['.', '..'])) === 0,
+    'la prueba de escritura no deja archivos tirados en la carpeta del usuario');
+rmdir($carpetaTmp);
+
+verificaRuta(RutaDocumento::permiteEscritura($carpetaTmp) === false,
+    'una carpeta que no existe no se da por escribible');
+verificaRuta(RutaDocumento::permiteEscritura('') === false,
+    'una ruta vacía no se da por escribible');
+verificaRuta(RutaDocumento::permiteEscritura(__FILE__) === false,
+    'un archivo no es una carpeta donde guardar documentos');
+
 RutaDocumento::olvidarRaiz();
 
 if ($fallos > 0) {

@@ -41,6 +41,9 @@ $xmlRuta = tempnam(sys_get_temp_dir(), 'correo_re_xml_');
 $pdfRuta = tempnam(sys_get_temp_dir(), 'correo_re_pdf_');
 $xmlAnterior = tempnam(sys_get_temp_dir(), 'correo_old_xml_');
 $pdfAnterior = tempnam(sys_get_temp_dir(), 'correo_old_pdf_');
+$raizTrabajo = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'xmlconcilia_reproceso_' . uniqid();
+mkdir($raizTrabajo, 0777, true);
+RutaDocumento::fijarRaiz($raizTrabajo);
 $xml = '<?xml version="1.0" encoding="UTF-8"?>'
     . '<FacturaElectronica xmlns="https://cdn.comprobanteselectronicos.go.cr/xml-schemas/v4.4/facturaElectronica">'
     . '<Clave>' . $clave . '</Clave>'
@@ -84,12 +87,19 @@ try {
         new stdClass(),
         1,
         ['FE'],
-        '3101639680'
+        '',
+        0,
+        [['id' => 42, 'cedula' => '3101639680']],
+        'automatica'
     );
 
     assertCorreoReproceso($bandeja->creadas === 0, 'reutiliza la fila del mismo correo y XML');
     assertCorreoReproceso(($bandeja->revivida['id'] ?? 0) === 77, 'reactiva la fila importada');
     assertCorreoReproceso(($bandeja->revivida['estado'] ?? '') === 'pendiente', 'la deja lista para importar otra vez');
+    assertCorreoReproceso(($bandeja->revivida['origen'] ?? '') === 'automatica',
+        'identifica que la fila fue capturada por el worker');
+    assertCorreoReproceso((int) ($bandeja->revivida['sociedad_id'] ?? 0) === 42,
+        'asigna la sociedad según la cédula receptora del XML');
     assertCorreoReproceso(is_file($bandeja->revivida['archivo_xml'] ?? ''), 'conserva el nuevo XML');
     assertCorreoReproceso(is_file($bandeja->revivida['archivo_pdf'] ?? ''), 'conserva el nuevo PDF');
     assertCorreoReproceso(!is_file($xmlAnterior) && !is_file($pdfAnterior), 'limpia los temporales anteriores');
@@ -102,4 +112,15 @@ try {
             unlink($ruta);
         }
     }
+    foreach (['BANDEJA/xml', 'BANDEJA/pdf', 'BANDEJA/sin-identificar', 'BANDEJA', ''] as $sub) {
+        $dir = $raizTrabajo . DIRECTORY_SEPARATOR . RutaDocumento::TRABAJO;
+        if ($sub !== '') {
+            $dir .= DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $sub);
+        }
+        if (is_dir($dir)) {
+            @rmdir($dir);
+        }
+    }
+    @rmdir($raizTrabajo);
+    RutaDocumento::olvidarRaiz();
 }

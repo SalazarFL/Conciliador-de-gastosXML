@@ -434,13 +434,21 @@ class Factura extends Model
                            SELECT 1 FROM notas_credito_lineas nl
                            WHERE nl.factura_xml_id = f.id AND nl.estado = 'coincide'
                        ) THEN 1 ELSE 0 END AS coincide_registro,
+                       -- Un vínculo hecho a mano vale lo mismo que uno
+                       -- automático. Antes se excluía de la carpeta de pago
+                       -- el que tuviera diferencia de monto y fuera manual, y
+                       -- el efecto era el contrario del buscado: una factura
+                       -- ya entregada SALÍA de la carpeta en cuanto alguien la
+                       -- emparejaba a mano, sin que nada lo avisara. Quien
+                       -- vincula a mano está afirmando que ese respaldo es el
+                       -- correcto; la diferencia de monto ya se ve marcada en
+                       -- el listado, que es donde hay que resolverla.
                        CASE WHEN EXISTS (
                            SELECT 1
                            FROM porpagar_facturas psp
                             JOIN porpagar_listados lsp ON lsp.id = psp.listado_id
                             WHERE psp.factura_xml_id = f.id
-                              AND (psp.estado = 'respaldada'
-                                   OR (psp.estado = 'con_diferencia' AND psp.match_manual = 0))
+                              AND psp.estado IN ('respaldada', 'con_diferencia')
                               AND lsp.semana_id = f.semana_id
                         ) THEN 1 ELSE 0 END AS pago_semanal
                 FROM {$this->table} f
@@ -449,6 +457,23 @@ class Factura extends Model
                 {$where}
                 ORDER BY f.id ASC";
         return $this->fetchAll($sql, $params) ?: [];
+    }
+
+    /**
+     * IDs de las facturas asignadas a una semana. Lo usa la orden de ordenar
+     * el pago semanal, que solo debe alcanzar esas facturas y ninguna otra.
+     */
+    public function getIdsPorSemana($semanaId)
+    {
+        $semanaId = (int) $semanaId;
+        if ($semanaId <= 0) {
+            return [];
+        }
+        $filas = $this->fetchAll(
+            "SELECT id FROM {$this->table} WHERE semana_id = ? ORDER BY id ASC",
+            [$semanaId]
+        );
+        return array_map('intval', array_column($filas ?: [], 'id'));
     }
 
     public function actualizarUbicacionArchivos($id, $rutaXml, $rutaPdf)

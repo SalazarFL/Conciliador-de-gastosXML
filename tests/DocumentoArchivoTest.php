@@ -47,8 +47,16 @@ try {
     assertArchivo(strpos($primero['ruta_xml'], '2026' . DIRECTORY_SEPARATOR . '07 JULIO' . DIRECTORY_SEPARATOR . 'Facturas') !== false, 'estructura año/mes/tipo');
     assertArchivo($repetido['xml_creado'] === false && $repetido['ruta_xml'] === $primero['ruta_xml'], 'reutiliza el mismo hash');
     assertArchivo(strpos($colision['archivo_xml'], '_DUP_') !== false, 'no sobrescribe una colisión');
-    assertArchivo(strpos($primero['ruta_xml'], DIRECTORY_SEPARATOR . 'EN SISTEMA' . DIRECTORY_SEPARATOR) !== false, 'el par completo queda en EN SISTEMA');
-    assertArchivo(strpos($incompleto['ruta_xml'], DIRECTORY_SEPARATOR . 'REVISAR' . DIRECTORY_SEPARATOR) !== false, 'un XML sin PDF queda en REVISAR');
+    // La carpeta sale de la fecha de emisión y el tipo, y de nada más: debajo
+    // del mes está el tipo y ahí termina el árbol. Antes había además una
+    // subcarpeta por estado, y era la causa de que los archivos tuvieran que
+    // reacomodarse cada vez que la factura avanzaba.
+    assertArchivo(basename(dirname($primero['ruta_xml'])) === 'Facturas'
+        && basename(dirname(dirname($primero['ruta_xml']))) === '07 JULIO',
+        'la carpeta es año/mes/tipo, sin subcarpeta de estado debajo');
+    assertArchivo(basename(dirname($incompleto['ruta_xml'])) === 'Notas de crédito'
+        && basename(dirname(dirname($incompleto['ruta_xml']))) === '07 JULIO',
+        'un documento incompleto no se aparta: va con su tipo, al mismo nivel');
     assertArchivo($incompleto['ruta_pdf'] === null, 'no inventa un PDF para un documento incompleto');
     assertArchivo(hash_file('sha256', $primero['ruta_xml']) === hash_file('sha256', $xml1), 'valida SHA-256');
     echo "OK: DocumentoArchivo\n";

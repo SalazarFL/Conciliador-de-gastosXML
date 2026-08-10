@@ -11,6 +11,17 @@
 
 ## Tablas Principales
 
+### Cola de captura automática de correo
+
+`correo_capturas_auto` conserva una fila por cuenta, UIDVALIDITY y UID. Sus
+estados separan los mensajes pendientes, en proceso, capturados, sin documentos
+y con error; `intentos` y `reintentar_en` permiten reintentos sin duplicar.
+
+Una fila `capturado` solo indica que sus comprobantes llegaron a
+`correo_bandeja` con `origen = 'automatica'`. No crea una importación, no marca
+`correo_procesados` y no archiva documentos: la importación sigue requiriendo
+confirmación manual en la Bandeja.
+
 ### 1. `proveedores`
 **Propósito:** Catálogo normalizado de proveedores/emisores de facturas.
 
@@ -91,7 +102,7 @@
 - `moneda` - Código ISO 4217 (ej: MXN, USD)
 - `archivo_xml` / `archivo_pdf` - Nombre del archivo (sin la ruta)
 - `ruta_xml` / `ruta_pdf` - Dónde está el documento, **relativo a la carpeta
-  compartida** de cada computadora (ej. `2026/07 JULIO/Facturas/EN SISTEMA/FE_….xml`).
+  compartida** de cada computadora (ej. `2026/07 JULIO/Facturas/FE_….xml`).
   La base nunca guarda el documento en sí, solo dónde encontrarlo; ver
   `app/helpers/RutaDocumento.php`.
 - `hash_xml` - SHA-256 del contenido (opcional, para detectar duplicados)

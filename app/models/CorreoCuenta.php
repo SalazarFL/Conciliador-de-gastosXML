@@ -25,7 +25,7 @@ class CorreoCuenta extends Model
 
     public function __construct()
     {
-        $this->ensureTable();
+        Esquema::unaVez(static::class, function () { $this->ensureTable(); });
     }
 
     /**
@@ -54,22 +54,26 @@ class CorreoCuenta extends Model
         if ($sociedadId <= 0) {
             return true;
         }
-        return (bool) $this->fetchColumn(
-            "SELECT 1 FROM correo_cuenta_sociedades WHERE cuenta_id = ? AND sociedad_id = ? LIMIT 1",
-            [(int) $cuentaId, $sociedadId]
-        );
+        // Se pregunta una vez por buzón listado. Resolverlo contra la lista
+        // completa —que ya está recordada— convierte esas once consultas en
+        // una: la respuesta a "¿a qué sociedades sirve este buzón?" no cambia
+        // a mitad de una carga de página.
+        return in_array($sociedadId, $this->sociedadesDe($cuentaId), true);
     }
 
     /** Sociedades a las que sirve un buzón (para el ⚙). */
     public function sociedadesDe($cuentaId)
     {
-        return array_map('intval', array_column(
-            $this->fetchAll(
-                'SELECT sociedad_id FROM correo_cuenta_sociedades WHERE cuenta_id = ? ORDER BY sociedad_id',
-                [(int) $cuentaId]
-            ) ?: [],
-            'sociedad_id'
-        ));
+        $cuentaId = (int) $cuentaId;
+        return $this->recordado('sociedades|' . $cuentaId, function () use ($cuentaId) {
+            return array_map('intval', array_column(
+                $this->fetchAll(
+                    'SELECT sociedad_id FROM correo_cuenta_sociedades WHERE cuenta_id = ? ORDER BY sociedad_id',
+                    [$cuentaId]
+                ) ?: [],
+                'sociedad_id'
+            ));
+        });
     }
 
     /** Reemplaza por completo las sociedades de un buzón. */
@@ -99,10 +103,22 @@ class CorreoCuenta extends Model
                 `password` TEXT NOT NULL,
                 `carpeta` VARCHAR(100) NOT NULL DEFAULT 'INBOX',
                 `dias_atras` INT UNSIGNED NOT NULL DEFAULT 0,
+                `indice_retencion_dias` INT UNSIGNED NOT NULL DEFAULT 1825,
                 `solo_no_leidos` TINYINT(1) NOT NULL DEFAULT 0,
                 `creado_en` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (`id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+            $tieneRetencion = (int) $this->fetchColumn(
+                "SELECT COUNT(*) FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?
+                   AND COLUMN_NAME = 'indice_retencion_dias'",
+                [$this->table]
+            ) > 0;
+            if (!$tieneRetencion) {
+                $this->execute("ALTER TABLE {$this->table}
+                                ADD COLUMN indice_retencion_dias
+                                INT UNSIGNED NOT NULL DEFAULT 1825 AFTER dias_atras");
+            }
         } catch (Throwable $e) {
         }
     }
@@ -125,8 +141,10 @@ class CorreoCuenta extends Model
 
     public function crear(array $datos)
     {
-        $sql = "INSERT INTO {$this->table} (nombre, host, puerto, usuario, password, carpeta, dias_atras, solo_no_leidos)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+        $sql = "INSERT INTO {$this->table}
+                (nombre, host, puerto, usuario, password, carpeta, dias_atras,
+                 indice_retencion_dias, solo_no_leidos)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
         $id = (int) $this->insert($sql, [
             (string) $datos['nombre'],
             (string) $datos['host'],
@@ -135,6 +153,7 @@ class CorreoCuenta extends Model
             base64_encode((string) $datos['password']),
             trim((string) ($datos['carpeta'] ?? '')) !== '' ? (string) $datos['carpeta'] : 'INBOX',
             max(0, (int) ($datos['dias_atras'] ?? 0)),
+            max(0, min(3650, (int) ($datos['indice_retencion_dias'] ?? 1825))),
             !empty($datos['solo_no_leidos']) ? 1 : 0,
         ]);
 
@@ -165,7 +184,8 @@ class CorreoCuenta extends Model
             : $actual['password'];
 
         $sql = "UPDATE {$this->table}
-                SET nombre = ?, host = ?, puerto = ?, usuario = ?, password = ?, carpeta = ?
+                SET nombre = ?, host = ?, puerto = ?, usuario = ?, password = ?, carpeta = ?,
+                    indice_retencion_dias = ?
                 WHERE id = ?";
         return $this->execute($sql, [
             (string) $datos['nombre'],
@@ -174,6 +194,7 @@ class CorreoCuenta extends Model
             (string) $datos['usuario'],
             $password,
             trim((string) ($datos['carpeta'] ?? '')) !== '' ? (string) $datos['carpeta'] : 'INBOX',
+            max(0, min(3650, (int) ($datos['indice_retencion_dias'] ?? $actual['indice_retencion_dias'] ?? 1825))),
             (int) $id,
         ]);
     }
@@ -201,6 +222,7 @@ class CorreoCuenta extends Model
             'password' => (string) base64_decode((string) $cuenta['password'], true),
             'carpeta' => (string) $cuenta['carpeta'],
             'dias_atras' => (int) $cuenta['dias_atras'],
+            'indice_retencion_dias' => (int) ($cuenta['indice_retencion_dias'] ?? 1825),
             'solo_no_leidos' => (bool) $cuenta['solo_no_leidos'],
         ];
     }
@@ -233,6 +255,7 @@ class CorreoCuenta extends Model
             'password' => (string) $config['password'],
             'carpeta' => (string) ($config['carpeta'] ?? 'INBOX'),
             'dias_atras' => (int) ($config['dias_atras'] ?? 0),
+            'indice_retencion_dias' => (int) ($config['indice_retencion_dias'] ?? 1825),
             'solo_no_leidos' => !empty($config['solo_no_leidos']),
         ]);
 

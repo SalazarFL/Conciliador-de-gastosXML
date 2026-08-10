@@ -2,18 +2,21 @@
 /**
  * Archivo durable de comprobantes fuera de la base de datos.
  *
- * Estructura: RAIZ/AAAA/MM MES/Facturas|Notas de crédito/ESTADO/ARCHIVO.ext
+ * Estructura: RAIZ/AAAA/MM MES/Facturas|Notas de crédito/ARCHIVO.ext
  * Los archivos se copian primero como .partial, se valida SHA-256 y solo
  * entonces se renombran. Nunca sobrescribe un contenido diferente.
+ *
+ * La carpeta depende solo de la fecha de emisión y del tipo de documento:
+ * dos datos que no cambian nunca. Antes había además una subcarpeta por
+ * estado (EN SISTEMA, REVISAR, …) y era la causa de que los archivos tuvieran
+ * que reacomodarse cada vez que una factura avanzaba. El estado se consulta en
+ * la aplicación, que es donde está al día.
  */
 require_once __DIR__ . '/NumeroFactura.php';
+require_once __DIR__ . '/RutaDocumento.php';
 
 class DocumentoArchivo
 {
-    public const ESTADO_PENDIENTE = 'PENDIENTES DE PROCESAR';
-    public const ESTADO_SISTEMA = 'EN SISTEMA';
-    public const ESTADO_DIFERENCIA = 'CON DIFERENCIA';
-    public const ESTADO_REVISAR = 'REVISAR';
     public const CARPETA_PAGOS = 'PAGOS SEMANALES';
 
     /** Tope del nombre del proveedor dentro del archivo: FE_<proveedor>_ddmmyy_00000000. */
@@ -46,7 +49,7 @@ class DocumentoArchivo
 
         $this->raiz = rtrim($raiz, '/\\');
         $this->asegurarDirectorio($this->raiz);
-        if (!is_writable($this->raiz)) {
+        if (!RutaDocumento::permiteEscritura($this->raiz)) {
             throw new RuntimeException('La carpeta raíz no permite escritura: ' . $this->raiz);
         }
     }
@@ -76,8 +79,7 @@ class DocumentoArchivo
         $pdfDisponible = is_string($pdfOrigen) && $pdfOrigen !== '' && is_file($pdfOrigen);
         $carpeta = $this->carpetaDocumento(
             (string) ($documento['fecha_emision'] ?? ''),
-            (string) ($documento['tipo_documento'] ?? 'FE'),
-            $pdfDisponible ? self::ESTADO_SISTEMA : self::ESTADO_REVISAR
+            (string) ($documento['tipo_documento'] ?? 'FE')
         );
         $this->asegurarDirectorio($carpeta);
 
@@ -120,8 +122,7 @@ class DocumentoArchivo
         } else {
             $carpeta = $this->carpetaDocumento(
                 (string) ($registro['fecha_emision'] ?? ''),
-                (string) ($registro['tipo_documento'] ?? 'FE'),
-                self::ESTADO_REVISAR
+                (string) ($registro['tipo_documento'] ?? 'FE')
             );
             $base = self::nombreBase($registro, (string) ($registro['proveedor_nombre'] ?? 'PROVEEDOR'));
         }
@@ -166,7 +167,8 @@ class DocumentoArchivo
         return $tipo . '_' . self::tokenProveedor($proveedor) . '_' . $fecha . '_' . $numero;
     }
 
-    public function carpetaDocumento($fecha, $tipo, $estado = self::ESTADO_SISTEMA)
+    /** AAAA/MM MES/Facturas|Notas de crédito — solo fecha de emisión y tipo. */
+    public function carpetaDocumento($fecha, $tipo)
     {
         $ts = strtotime($fecha);
         if ($ts === false) {
@@ -176,16 +178,9 @@ class DocumentoArchivo
         $tipo = strtoupper(trim($tipo));
         $grupo = $tipo === 'NC' ? 'Notas de crédito' : ($tipo === 'ND' ? 'Notas de débito' : 'Facturas');
 
-        $estados = [self::ESTADO_PENDIENTE, self::ESTADO_SISTEMA, self::ESTADO_DIFERENCIA, self::ESTADO_REVISAR];
-        $estado = strtoupper(trim((string) $estado));
-        if (!in_array($estado, $estados, true)) {
-            $estado = self::ESTADO_REVISAR;
-        }
-
         return $this->raiz . DIRECTORY_SEPARATOR . date('Y', $ts)
             . DIRECTORY_SEPARATOR . date('m', $ts) . ' ' . self::MESES[$mes]
-            . DIRECTORY_SEPARATOR . $grupo
-            . DIRECTORY_SEPARATOR . $estado;
+            . DIRECTORY_SEPARATOR . $grupo;
     }
 
     /** Carpeta elegida para reunir los pares XML/PDF de un pago semanal. */

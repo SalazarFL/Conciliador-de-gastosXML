@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS `correo_bandeja` (
     `fecha_emision` DATE NULL DEFAULT NULL,
     `total` DECIMAL(15,2) NULL DEFAULT NULL,
     `hash_xml` CHAR(64) NULL DEFAULT NULL COMMENT 'sha256 del XML, para marcar "ya en el sistema"',
-    `estado` ENUM('pendiente','importada','descartada','ya_existe','rechazada') NOT NULL DEFAULT 'pendiente',
+    `estado` ENUM('pendiente','importada','descartada','ya_existe','rechazada','otra_cedula') NOT NULL DEFAULT 'pendiente',
+    `origen` ENUM('manual','automatica','descargas') NOT NULL DEFAULT 'manual',
     `importacion_id` INT UNSIGNED NULL DEFAULT NULL COMMENT 'Importación con la que se procesó',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`),
@@ -39,7 +40,7 @@ CREATE TABLE IF NOT EXISTS `correo_indice` (
     `clave` VARCHAR(64) NOT NULL,
     `remitente` VARCHAR(255) NULL DEFAULT NULL,
     `cc` VARCHAR(1024) NULL DEFAULT NULL,
-    `reply_to` VARCHAR(1024) NULL DEFAULT NULL,
+    `reply_to` VARCHAR(255) NULL DEFAULT NULL,
     `consecutivo` VARCHAR(20) NULL DEFAULT NULL,
     `numero_corto` VARCHAR(10) NULL DEFAULT NULL,
     `asunto` VARCHAR(255) NULL DEFAULT NULL,
@@ -47,7 +48,6 @@ CREATE TABLE IF NOT EXISTS `correo_indice` (
     `timestamp` INT UNSIGNED NOT NULL DEFAULT 0,
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_carpeta_uid` (`carpeta`(180), `uidvalidity`, `uid`),
-    KEY `idx_timestamp` (`timestamp`),
     KEY `idx_consecutivo` (`consecutivo`),
     KEY `idx_numero_corto` (`numero_corto`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS `correo_carpetas` (
     `uidvalidity` BIGINT UNSIGNED NOT NULL DEFAULT 0,
     `ultimo_uid` INT UNSIGNED NOT NULL DEFAULT 0,
     `mensajes` INT UNSIGNED NOT NULL DEFAULT 0,
+    `mensajes_omitidos` INT UNSIGNED NOT NULL DEFAULT 0,
+    `retencion_dias` INT UNSIGNED NOT NULL DEFAULT 0,
     `ultima_sync` DATETIME NULL DEFAULT NULL,
     PRIMARY KEY (`carpeta`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

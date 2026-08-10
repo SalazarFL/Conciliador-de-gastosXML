@@ -341,7 +341,7 @@ class MailFetcher
                     ? mb_substr($this->decodificarTexto((string) $ov->cc), 0, 1000, 'UTF-8')
                     : null,
                 'reply_to'  => isset($ov->reply_to)
-                    ? mb_substr($this->decodificarTexto((string) $ov->reply_to), 0, 1000, 'UTF-8')
+                    ? mb_substr($this->decodificarTexto((string) $ov->reply_to), 0, 255, 'UTF-8')
                     : null,
                 'fecha'     => $ts > 0 ? date('Y-m-d H:i:s', $ts) : null,
                 'timestamp' => $ts,
@@ -414,7 +414,7 @@ class MailFetcher
         $replyTo = $this->decodificarTexto((string) ($encabezados->reply_toaddress ?? ''));
         return [
             'cc' => mb_substr($cc, 0, 1000, 'UTF-8'),
-            'reply_to' => mb_substr($replyTo, 0, 1000, 'UTF-8'),
+            'reply_to' => mb_substr($replyTo, 0, 255, 'UTF-8'),
         ];
     }
 
@@ -598,7 +598,7 @@ class MailFetcher
                             ? mb_substr($this->decodificarTexto((string) $ov->cc), 0, 1000, 'UTF-8')
                             : '',
                         'reply_to'       => isset($ov->reply_to)
-                            ? mb_substr($this->decodificarTexto((string) $ov->reply_to), 0, 1000, 'UTF-8')
+                            ? mb_substr($this->decodificarTexto((string) $ov->reply_to), 0, 255, 'UTF-8')
                             : '',
                         'fecha'          => $ts > 0 ? date('Y-m-d H:i:s', $ts) : null,
                         'timestamp'      => $ts,

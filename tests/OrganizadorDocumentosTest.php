@@ -91,23 +91,44 @@ $modelo = new FacturaOrganizadorFalsa([
 
 try {
     $resumen = (new OrganizadorDocumentos($root, $modelo))->ejecutar(false, true);
-    assertOrganizador(strpos($modelo->filas[1]['ruta_xml'], DIRECTORY_SEPARATOR . 'EN SISTEMA' . DIRECTORY_SEPARATOR) !== false, 'mueve el par registrado a EN SISTEMA');
+
+    // La carpeta la deciden la fecha de emisión y el tipo, y nada más. El
+    // estado de la factura ya no parte el árbol: por eso las cuatro primeras
+    // —completa, incompleta, con diferencia y sin match— terminan repartidas
+    // solo entre Facturas y Notas de crédito del mes que les toca.
+    $julioFacturas = $root . DIRECTORY_SEPARATOR . '2026' . DIRECTORY_SEPARATOR . '07 JULIO'
+        . DIRECTORY_SEPARATOR . 'Facturas';
+    $julioNotas = $root . DIRECTORY_SEPARATOR . '2026' . DIRECTORY_SEPARATOR . '07 JULIO'
+        . DIRECTORY_SEPARATOR . 'Notas de crédito';
+
+    assertOrganizador(dirname($modelo->filas[1]['ruta_xml']) === $julioFacturas,
+        'la factura completa va a la carpeta del mes por tipo');
     assertOrganizador(is_file($modelo->filas[1]['ruta_xml']) && is_file($modelo->filas[1]['ruta_pdf']), 'conserva juntos XML y PDF registrados');
-    assertOrganizador(strpos($modelo->filas[2]['ruta_xml'], DIRECTORY_SEPARATOR . 'REVISAR' . DIRECTORY_SEPARATOR) !== false, 'manda la NC sin PDF a REVISAR');
+    assertOrganizador(dirname($modelo->filas[2]['ruta_xml']) === $julioNotas,
+        'la NC sin PDF va con las notas de crédito, no a una carpeta de estado');
     assertOrganizador($modelo->filas[2]['ruta_pdf'] === '', 'la NC incompleta sigue sin PDF asociado');
-    assertOrganizador(strpos($modelo->filas[3]['ruta_xml'], DIRECTORY_SEPARATOR . 'CON DIFERENCIA' . DIRECTORY_SEPARATOR) !== false, 'mueve el par con diferencia');
-    assertOrganizador(strpos($modelo->filas[4]['ruta_xml'], DIRECTORY_SEPARATOR . 'PENDIENTES DE PROCESAR' . DIRECTORY_SEPARATOR) !== false, 'un documento completo sin match queda pendiente');
+    assertOrganizador(dirname($modelo->filas[3]['ruta_xml']) === $julioFacturas,
+        'el par con diferencia no se aparta: la diferencia se ve en la aplicación');
+    assertOrganizador(dirname($modelo->filas[4]['ruta_xml']) === $julioFacturas,
+        'un documento completo sin match tampoco se aparta');
+    assertOrganizador(dirname($modelo->filas[1]['ruta_xml']) === dirname($modelo->filas[3]['ruta_xml']),
+        'facturas del mismo mes y tipo comparten carpeta, sea cual sea su estado');
+    assertOrganizador(($resumen['por_fecha'] ?? 0) > 0, 'contabiliza los movimientos por fecha y tipo');
+
     $carpetaSemanal = $root . DIRECTORY_SEPARATOR . 'PAGOS SEMANALES' . DIRECTORY_SEPARATOR . 'Pago semana 31';
     assertOrganizador(dirname($modelo->filas[5]['ruta_xml']) === $carpetaSemanal, 'el monto diferente no saca el XML de la carpeta semanal');
     assertOrganizador(dirname($modelo->filas[5]['ruta_pdf']) === $carpetaSemanal, 'el monto diferente no saca el PDF de la carpeta semanal');
     assertOrganizador(basename($modelo->filas[5]['ruta_xml']) === 'FE_PROVEEDOR_200726_00000167.xml', 'el XML semanal conserva tipo, proveedor y fecha con ocho dígitos');
     assertOrganizador(basename($modelo->filas[5]['ruta_pdf']) === 'FE_PROVEEDOR_200726_00000167.pdf', 'el PDF semanal conserva tipo, proveedor y fecha con ocho dígitos');
     assertOrganizador(($resumen['pago_semanal'] ?? 0) === 1, 'contabiliza el par enviado al pago semanal');
-    assertOrganizador(strpos($modelo->filas[6]['ruta_xml'], DIRECTORY_SEPARATOR . 'REVISAR' . DIRECTORY_SEPARATOR) !== false, 'un match semanal sin PDF permanece en REVISAR');
+    // Un par incompleto sí sale de la carpeta semanal: ahí solo van los pares
+    // completos, porque esa carpeta existe para entregarlos.
+    assertOrganizador(dirname($modelo->filas[6]['ruta_xml']) === $julioFacturas,
+        'un match semanal sin PDF no entra a la carpeta de pago');
     assertOrganizador(DocumentoArchivo::normalizarCarpetaPago('../Semana: 31') === 'Semana 31', 'limpia recorridos y caracteres inválidos del nombre de carpeta');
     assertOrganizador(is_file(dirname($modelo->filas[1]['ruta_xml']) . DIRECTORY_SEPARATOR . basename($modelo->filas[1]['ruta_pdf'])), 'el par comparte carpeta');
-    assertOrganizador(count(glob($root . DIRECTORY_SEPARATOR . '2026' . DIRECTORY_SEPARATOR . '07 JULIO' . DIRECTORY_SEPARATOR . 'Facturas' . DIRECTORY_SEPARATOR . 'PENDIENTES DE PROCESAR' . DIRECTORY_SEPARATOR . 'FE_PENDIENTE.*')) === 2, 'el par externo queda pendiente de procesar');
-    assertOrganizador(is_file($root . DIRECTORY_SEPARATOR . '2026' . DIRECTORY_SEPARATOR . '07 JULIO' . DIRECTORY_SEPARATOR . 'Notas de crédito' . DIRECTORY_SEPARATOR . 'REVISAR' . DIRECTORY_SEPARATOR . 'NC_EXTERNA_SIN_PDF.xml'), 'la NC externa sin PDF queda en REVISAR');
+    assertOrganizador(count(glob($julioFacturas . DIRECTORY_SEPARATOR . 'FE_PENDIENTE.*')) === 2, 'el par externo se archiva por su fecha');
+    assertOrganizador(is_file($julioNotas . DIRECTORY_SEPARATOR . 'NC_EXTERNA_SIN_PDF.xml'), 'la NC externa sin PDF se archiva con las notas de crédito');
     assertOrganizador(count(glob($root . DIRECTORY_SEPARATOR . '2026' . DIRECTORY_SEPARATOR . '07 JULIO' . DIRECTORY_SEPARATOR . 'IGNORADOS' . DIRECTORY_SEPARATOR . 'MENSAJE HACIENDA SOLO' . DIRECTORY_SEPARATOR . '*.xml')) === 1, 'separa el MensajeHacienda aislado');
     assertOrganizador(($resumen['errores'] ?? 1) === 0, 'termina sin errores');
 
@@ -166,6 +187,19 @@ try {
     assertOrganizador($modelo->filas[7]['ruta_pdf'] === $pdfSeparado, 'recupera por el índice un PDF histórico sin hash en BD');
     assertOrganizador(is_file($pdfSeparado), 'conserva el nombre independiente elegido para el PDF');
     assertOrganizador(($pdfHistorico['rutas_actualizadas'] ?? 0) === 1, 'actualiza la ruta del PDF histórico');
+
+    // Previsualizar: dice exactamente qué haría, sin tocar un solo archivo.
+    // Es lo que hace que la orden sea segura de dar — se ve antes de confirmar.
+    $xmlAntesPrevia = $modelo->filas[7]['ruta_xml'];
+    $pdfAntesPrevia = $modelo->filas[7]['ruta_pdf'];
+    $previa = $organizador->organizarIds([7], true);
+    assertOrganizador(($previa['dry_run'] ?? false) === true, 'la previsualización se identifica como tal');
+    assertOrganizador(($previa['movimientos_planificados'] ?? 0) > 0, 'la previsualización anuncia el movimiento pendiente');
+    assertOrganizador(($previa['movidos'] ?? -1) === 0, 'la previsualización no mueve nada');
+    assertOrganizador(is_file($xmlAntesPrevia) && is_file($pdfAntesPrevia),
+        'tras previsualizar, el par sigue exactamente donde estaba');
+    assertOrganizador($modelo->filas[7]['ruta_xml'] === $xmlAntesPrevia,
+        'la previsualización tampoco toca la base de datos');
 
     $modelo->filas[8] = [
         'id'=>8, 'tipo_documento'=>'FE', 'fecha_emision'=>'2026-07-20',

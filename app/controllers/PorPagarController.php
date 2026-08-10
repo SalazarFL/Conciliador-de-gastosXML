@@ -300,14 +300,8 @@ class PorPagarController extends Controller
                 $statsSinCambios = $this->ejecutarMatching($listadoId, $modelo);
                 // Modo añadir: el archivo no trae nada nuevo.
                 $mensajeSinCambios = $omitidas > 0
-                    ? "Sin líneas nuevas: las {$omitidas} facturas ya estaban en \"{$nombre}\". La carpeta semanal quedó actualizada."
+                    ? "Sin líneas nuevas: las {$omitidas} facturas ya estaban en \"{$nombre}\"."
                     : 'No se pudo leer ninguna línea del listado. Verifica las columnas Fecha, Numero, Proveedor y Total.';
-                if (!empty($statsSinCambios['archivos_movidos'])) {
-                    $mensajeSinCambios .= " {$statsSinCambios['archivos_movidos']} pares XML/PDF fueron movidos.";
-                }
-                if (!empty($statsSinCambios['archivos_errores'])) {
-                    $mensajeSinCambios .= ' Algunos archivos quedan pendientes para el reintento automático.';
-                }
                 $this->redirectWithMessage(
                     $this->url('/por-pagar?listado_id=' . $listadoId . '&semana_id=' . (int) $semanaId),
                     $mensajeSinCambios,
@@ -324,15 +318,6 @@ class PorPagarController extends Controller
                 . ($omitidas > 0 ? " ({$omitidas} ya estaban, omitidas)" : '')
                 . ($fallidos > 0 ? " ({$fallidos} filas descartadas)" : '')
                 . " — {$stats['respaldada']} respaldadas, {$stats['con_diferencia']} con diferencia, {$stats['sin_respaldo']} sin respaldo.";
-            if (!empty($stats['archivos_movidos'])) {
-                $msg .= " {$stats['archivos_movidos']} pares XML/PDF movidos a su carpeta correspondiente.";
-            }
-            if (!empty($stats['archivos_revisar'])) {
-                $msg .= " {$stats['archivos_revisar']} documentos incompletos permanecen en REVISAR.";
-            }
-            if (!empty($stats['archivos_errores'])) {
-                $msg .= " Algunos archivos no pudieron moverse ahora; la tarea automática volverá a intentarlo.";
-            }
 
             // Volver al contexto de la semana del listado recién subido
             $this->redirectWithMessage(

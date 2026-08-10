@@ -9,8 +9,8 @@
  * el documento solo se abre en la computadora que lo importó. Guardando la
  * ruta relativa a la raíz, la misma fila sirve para todos:
  *
- *   en la base   2026/07 JULIO/Facturas/EN SISTEMA/FE_PROVEEDOR_010726_00000123.xml
- *   en el disco  <raíz de esa máquina>\2026\07 JULIO\...\FE_...xml
+ *   en la base   2026/07 JULIO/Facturas/FE_PROVEEDOR_010726_00000123.xml
+ *   en el disco  <raíz de esa máquina>\2026\07 JULIO\Facturas\FE_...xml
  *
  * Las dos conversiones son idempotentes y toleran la forma contraria: pedir
  * absoluta() sobre algo ya absoluto lo devuelve igual, y relativa() sobre algo
@@ -130,6 +130,31 @@ class RutaDocumento
             throw new RuntimeException('No se pudo crear la carpeta de trabajo: ' . $ruta);
         }
         return $ruta;
+    }
+
+    /**
+     * ¿De verdad se puede escribir en esta carpeta?
+     *
+     * No se usa is_writable(): en Windows contesta false para las carpetas que
+     * OneDrive sincroniza desde SharePoint. Vienen con el atributo de solo
+     * lectura —que en una carpeta no significa "no se puede escribir", sino
+     * que Windows la trata distinto— y encima son puntos de reanálisis, así
+     * que la comprobación de PHP falla aunque los permisos sí alcancen. La
+     * única respuesta fiable es intentar escribir un archivo y borrarlo.
+     */
+    public static function permiteEscritura($ruta)
+    {
+        $ruta = trim((string) $ruta);
+        if ($ruta === '' || !is_dir($ruta)) {
+            return false;
+        }
+        $prueba = rtrim($ruta, '\\/') . DIRECTORY_SEPARATOR
+            . '.xmlconcilia_prueba_' . getmypid() . '_' . uniqid();
+        if (@file_put_contents($prueba, 'ok') === false) {
+            return false;
+        }
+        @unlink($prueba);
+        return true;
     }
 
     /** ¿La ruta apunta adentro de la carpeta compartida? */

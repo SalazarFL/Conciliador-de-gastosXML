@@ -74,9 +74,28 @@ class CorreoSync
             $fetcher->conectar();
         }
 
-        $stats = ['carpetas' => 0, 'nuevos' => 0, 'reindexadas' => 0, 'restantes' => 0, 'completado' => true];
+        $stats = [
+            'carpetas' => 0, 'nuevos' => 0, 'reindexadas' => 0,
+            'podados' => 0, 'capturas_detectadas' => 0,
+            'restantes' => 0, 'completado' => true,
+        ];
 
         try {
+            // El índice es una caché buscable, no el archivo documental. Una
+            // retención finita evita que crezca para siempre; timestamp=0 se
+            // conserva porque no hay una fecha fiable con la cual podarlo.
+            $retencionDias = max(0, (int) ($config['indice_retencion_dias'] ?? 0));
+            $capturaAutomatica = !empty($config['captura_automatica']);
+            $capturaActivadaEn = trim((string) ($config['captura_activada_en'] ?? ''));
+            $corteRetencion = $retencionDias > 0
+                ? (int) strtotime('-' . $retencionDias . ' days', strtotime(date('Y-m-d 00:00:00')))
+                : 0;
+            if ($corteRetencion > 0) {
+                // Una tanda pequeña mantiene el costo predecible. El CLI de
+                // mantenimiento recorre todas las tandas al cambiar la política.
+                $stats['podados'] = $indice->podarAntesDe($corteRetencion, 1000);
+            }
+
             $carpetas = $fetcher->carpetasABuscar();
             $estados = $indice->getCarpetas();
 
@@ -110,8 +129,15 @@ class CorreoSync
 
                 $nombre = $fetcher->nombreLegibleCarpeta($carpeta);
                 $ultimoUid = $registro ? (int) $registro['ultimo_uid'] : 0;
+                $omitidosRetencion = $registro ? (int) ($registro['mensajes_omitidos'] ?? 0) : 0;
 
-                $resync = !$registro || (int) $registro['uidvalidity'] !== $estado['uidvalidity'];
+                $uidvalidityCambio = $registro
+                    && (int) $registro['uidvalidity'] !== $estado['uidvalidity'];
+                $resync = !$registro
+                    || $uidvalidityCambio
+                    // Al ampliar la retención (incluso a 0), una reconstrucción
+                    // recupera del servidor los encabezados antes omitidos.
+                    || (int) ($registro['retencion_dias'] ?? 0) !== $retencionDias;
 
                 if ($resync) {
                     // Carpeta nueva o renumerada por el servidor: completa
@@ -121,6 +147,19 @@ class CorreoSync
                     if ($estado['mensajes'] > 0 && empty($filas)) {
                         throw new RuntimeException("IMAP no devolvió encabezados para reconstruir {$nombre}.");
                     }
+                    // Una cuenta nueva o un UIDVALIDITY regenerado trae una
+                    // fotografía completa. Solo se encolan mensajes fechados
+                    // desde la activación, nunca todo el archivo histórico.
+                    if ($capturaAutomatica && (!$registro || $uidvalidityCambio)) {
+                        $stats['capturas_detectadas'] += self::registrarCapturas(
+                            (int) ($config['cuenta_id'] ?? 0),
+                            $carpeta,
+                            (int) $estado['uidvalidity'],
+                            $filas,
+                            $capturaActivadaEn
+                        );
+                    }
+                    [$filas, $omitidosRetencion] = self::aplicarRetencion($filas, $corteRetencion);
                     $stats['nuevos'] += $indice->reemplazarCarpeta(
                         $carpeta,
                         $nombre,
@@ -135,17 +174,33 @@ class CorreoSync
                     $filas = array_values(array_filter($filas, function ($f) use ($ultimoUid) {
                         return $f['uid'] > $ultimoUid;
                     }));
+                    // Esta rama representa exactamente UIDs que el servidor
+                    // acaba de agregar; se encolan aunque su cabecera Date sea
+                    // antigua o incorrecta.
+                    if ($capturaAutomatica && $filas) {
+                        $stats['capturas_detectadas'] += self::registrarCapturas(
+                            (int) ($config['cuenta_id'] ?? 0),
+                            $carpeta,
+                            (int) $estado['uidvalidity'],
+                            $filas
+                        );
+                    }
+                    [$filas, $omitidosNuevos] = self::aplicarRetencion($filas, $corteRetencion);
+                    $omitidosRetencion += $omitidosNuevos;
                     $stats['nuevos'] += $indice->insertarLote($carpeta, $nombre, $estado['uidvalidity'], $filas);
                 }
 
-                // Movidos/eliminados: si el conteo no cuadra, reindexar
-                if (!$resync && $indice->contarCarpeta($carpeta) !== $estado['mensajes']) {
+                // Movidos/eliminados: el total local incluye tanto las filas
+                // conservadas como las omitidas deliberadamente por retención.
+                if (!$resync
+                    && $indice->contarCarpeta($carpeta) + $omitidosRetencion !== $estado['mensajes']) {
                     $filas = $estado['mensajes'] > 0
                         ? $fetcher->overviewCarpeta($carpeta, '1:*')
                         : [];
                     if ($estado['mensajes'] > 0 && empty($filas)) {
                         throw new RuntimeException("IMAP no devolvió encabezados para reconstruir {$nombre}.");
                     }
+                    [$filas, $omitidosRetencion] = self::aplicarRetencion($filas, $corteRetencion);
                     $indice->reemplazarCarpeta(
                         $carpeta,
                         $nombre,
@@ -155,7 +210,14 @@ class CorreoSync
                     $stats['reindexadas']++;
                 }
 
-                $indice->guardarEstadoCarpeta($carpeta, $estado['uidvalidity'], max(0, $estado['uidnext'] - 1), $estado['mensajes']);
+                $indice->guardarEstadoCarpeta(
+                    $carpeta,
+                    $estado['uidvalidity'],
+                    max(0, $estado['uidnext'] - 1),
+                    $estado['mensajes'],
+                    $omitidosRetencion,
+                    $retencionDias
+                );
             }
 
             // ── Fase 2: nombres de adjuntos y destinatarios CC/Reply-To ──
@@ -216,5 +278,42 @@ class CorreoSync
         $stats['segundos'] = round(microtime(true) - $inicio, 1);
 
         return $stats;
+    }
+
+    /** Separa encabezados que quedan en el índice de los vencidos. */
+    private static function aplicarRetencion(array $filas, $timestampMinimo)
+    {
+        $timestampMinimo = (int) $timestampMinimo;
+        if ($timestampMinimo <= 0) {
+            return [array_values($filas), 0];
+        }
+
+        $conservar = [];
+        $omitidos = 0;
+        foreach ($filas as $fila) {
+            $timestamp = (int) ($fila['timestamp'] ?? 0);
+            if ($timestamp > 0 && $timestamp < $timestampMinimo) {
+                $omitidos++;
+            } else {
+                $conservar[] = $fila;
+            }
+        }
+        return [$conservar, $omitidos];
+    }
+
+    private static function registrarCapturas($cuentaId, $carpeta, $uidvalidity,
+                                               array $filas, $desde = '')
+    {
+        if (!$filas || (int) $cuentaId <= 0) {
+            return 0;
+        }
+        require_once __DIR__ . '/../models/CorreoCapturaAutomatica.php';
+        return (new CorreoCapturaAutomatica())->registrarNuevos(
+            (int) $cuentaId,
+            (string) $carpeta,
+            (int) $uidvalidity,
+            $filas,
+            (string) $desde
+        );
     }
 }

@@ -1,6 +1,6 @@
 <?php
 /**
- * Sincronización automática del índice de correo — se ejecuta SIN el módulo
+ * Sincronización y captura automática de correo — se ejecuta SIN el módulo
  * abierto, disparada por la Tarea Programada de Windows "XMLConcilia_SyncCorreo"
  * (se activa/desactiva desde el ⚙ del módulo Correo).
  *
@@ -30,10 +30,15 @@ date_default_timezone_set('America/Mexico_City');
 
 $ROOT = dirname(__DIR__);
 require_once $ROOT . '/app/core/Model.php';
+require_once $ROOT . '/app/core/Controller.php';
 require_once $ROOT . '/app/helpers/MailFetcher.php';
 require_once $ROOT . '/app/helpers/CorreoSync.php';
+require_once $ROOT . '/app/helpers/XmlParser.php';
 require_once $ROOT . '/app/models/CorreoCuenta.php';
 require_once $ROOT . '/app/models/CorreoIndice.php';
+require_once $ROOT . '/app/models/CorreoCapturaAutomatica.php';
+require_once $ROOT . '/app/models/Sociedad.php';
+require_once $ROOT . '/app/controllers/CorreoController.php';
 require_once $ROOT . '/app/helpers/OrganizadorDocumentos.php';
 
 $topeSegundos = isset($argv[1]) ? max(30, min(3600, (int) $argv[1])) : 240; // 4 min por defecto
@@ -45,6 +50,22 @@ $rutaEstado = $dirCorreo . DIRECTORY_SEPARATOR . 'sync_estado.json';
 $rutaLog    = $dirCorreo . DIRECTORY_SEPARATOR . 'sync_auto.log';
 
 $inicioCorrida = microtime(true);
+
+$configLocal = [];
+$rutaConfigLocal = MailFetcher::storagePath() . DIRECTORY_SEPARATOR . 'config.json';
+if (is_file($rutaConfigLocal)) {
+    $leida = json_decode((string) file_get_contents($rutaConfigLocal), true);
+    $configLocal = is_array($leida) ? $leida : [];
+}
+$autoCfg = is_array($configLocal['auto_sync'] ?? null) ? $configLocal['auto_sync'] : [];
+$capturaActiva = !empty($autoCfg['activo']) && !empty($autoCfg['capturar_nuevos']);
+$capturaMax = max(1, min(200, (int) ($autoCfg['max_correos_corrida'] ?? 20)));
+$capturaIntentos = max(1, min(10, (int) ($autoCfg['max_intentos'] ?? 3)));
+$capturaActivadaEn = trim((string) ($autoCfg['captura_activada_en'] ?? ''));
+$capturaCorrida = [
+    'activa' => $capturaActiva, 'detectados' => 0, 'procesados' => 0,
+    'documentos' => 0, 'sin_documentos' => 0, 'errores' => 0,
+];
 
 // Lock: si otra corrida sigue viva, esta se retira en silencio
 $fpLock = @fopen($rutaLock, 'c');
@@ -91,6 +112,9 @@ try {
             continue;
         }
 
+        $cfg['captura_automatica'] = $capturaActiva;
+        $cfg['captura_activada_en'] = $capturaActivadaEn;
+
         $cola[(int) $c['id']] = [
             'config' => $cfg,
             'indice' => (new CorreoIndice())->setCuenta((int) $c['id']),
@@ -101,6 +125,8 @@ try {
                 'id' => (int) $c['id'], 'nombre' => (string) $c['nombre'],
                 'nuevos' => 0, 'adjuntos' => 0, 'adjuntos_pendientes' => null,
                 'cc' => 0, 'cc_pendientes' => null,
+                'capturas_detectadas' => 0, 'capturas_procesadas' => 0,
+                'documentos_revision' => 0, 'capturas_error' => 0,
                 'completado' => false, 'error' => null,
             ],
         ];
@@ -128,6 +154,8 @@ try {
                 $acc['stats']['adjuntos_pendientes'] = $stats['adjuntos_pendientes'] ?? $acc['stats']['adjuntos_pendientes'];
                 $acc['stats']['cc'] += (int) ($stats['cc'] ?? 0);
                 $acc['stats']['cc_pendientes'] = $stats['cc_pendientes'] ?? $acc['stats']['cc_pendientes'];
+                $acc['stats']['capturas_detectadas'] += (int) ($stats['capturas_detectadas'] ?? 0);
+                $capturaCorrida['detectados'] += (int) ($stats['capturas_detectadas'] ?? 0);
                 $acc['stats']['completado'] = (bool) ($stats['completado'] ?? true);
 
                 if ($acc['stats']['completado']) {
@@ -158,6 +186,189 @@ try {
     registrar($rutaLog, 'ERROR GLOBAL: ' . $e->getMessage());
 }
 
+// Captura: consume solamente la cola de UIDs nuevos que dejó CorreoSync y
+// lleva sus comprobantes a correo_bandeja. Deliberadamente no marca el correo
+// como importado/procesado ni llama a importar(): esa decisión sigue siendo
+// manual desde la Bandeja.
+$resumenCapturas = [
+    'pendiente' => 0, 'procesando' => 0, 'capturado' => 0,
+    'sin_documentos' => 0, 'error' => 0, 'documentos' => 0,
+];
+if ($capturaActiva && isset($cuentasModel, $cuentas)
+    && (microtime(true) - $inicioCorrida) < $topeSegundos) {
+    try {
+        if (DocumentoArchivo::raizConfigurada() === '') {
+            throw new RuntimeException(
+                'La captura automática necesita la carpeta compartida de documentos configurada.'
+            );
+        }
+
+        $capturas = new CorreoCapturaAutomatica();
+        $correoController = new CorreoController();
+        $sociedadesPorId = [];
+        foreach ((new Sociedad())->getAll() as $sociedad) {
+            $sociedadesPorId[(int) $sociedad['id']] = $sociedad;
+        }
+
+        // Tandas cortas en round-robin: una cuenta con mucho tráfico no
+        // monopoliza toda la corrida ni retrasa a los demás buzones.
+        $cuentasCaptura = array_values($cuentas);
+        $huboTrabajo = true;
+        while ($huboTrabajo
+            && $capturaCorrida['procesados'] < $capturaMax
+            && (microtime(true) - $inicioCorrida) < $topeSegundos) {
+            $huboTrabajo = false;
+
+            foreach ($cuentasCaptura as $cuenta) {
+                if ($capturaCorrida['procesados'] >= $capturaMax
+                    || (microtime(true) - $inicioCorrida) >= $topeSegundos) {
+                    break;
+                }
+
+                $cuentaId = (int) ($cuenta['id'] ?? 0);
+                $cfg = $cuentasModel->configPara($cuentaId);
+                if ($cuentaId <= 0 || $cfg === null || !MailFetcher::configurado($cfg)) {
+                    continue;
+                }
+
+                $capturas->resolverSinDocumentos($cuentaId);
+                $limite = min(5, $capturaMax - $capturaCorrida['procesados']);
+                $pendientes = $capturas->tomarPendientes(
+                    $cuentaId,
+                    $limite,
+                    $capturaIntentos
+                );
+                if (!$pendientes) {
+                    continue;
+                }
+                $huboTrabajo = true;
+
+                $sociedadesCuenta = [];
+                foreach ($cuentasModel->sociedadesDe($cuentaId) as $sociedadId) {
+                    if (isset($sociedadesPorId[$sociedadId])) {
+                        $sociedadesCuenta[] = $sociedadesPorId[$sociedadId];
+                    }
+                }
+
+                $fetcher = new MailFetcher($cfg);
+                try {
+                    $fetcher->conectar();
+                    foreach ($pendientes as $pendiente) {
+                        $mensaje = null;
+                        try {
+                            $mensaje = $fetcher->extraerMensaje(
+                                (int) $pendiente['uid'],
+                                (string) $pendiente['carpeta']
+                            );
+
+                            if (empty($mensaje['xmls']) && empty($mensaje['pdfs'])) {
+                                $capturas->finalizar(
+                                    (int) $pendiente['id'],
+                                    'sin_documentos',
+                                    'El correo no contiene XML ni PDF.'
+                                );
+                                $capturaCorrida['sin_documentos']++;
+                                $capturaCorrida['procesados']++;
+                                continue;
+                            }
+
+                            $resultado = $correoController->capturarMensajeParaRevision(
+                                $mensaje,
+                                $cuentaId,
+                                $sociedadesCuenta
+                            );
+                            $documentos = count($resultado['filas'] ?? []);
+                            $detalle = implode(' | ', array_slice($resultado['errores'] ?? [], 0, 8));
+                            if ($documentos > 0) {
+                                $capturas->finalizar(
+                                    (int) $pendiente['id'],
+                                    'capturado',
+                                    $detalle !== '' ? $detalle : 'Disponible en la Bandeja para revisión manual.',
+                                    $documentos
+                                );
+                                $capturaCorrida['documentos'] += $documentos;
+                                if (isset($resumenCuentas[$cuentaId])) {
+                                    $resumenCuentas[$cuentaId]['documentos_revision'] += $documentos;
+                                }
+                            } else {
+                                $capturas->finalizar(
+                                    (int) $pendiente['id'],
+                                    'sin_documentos',
+                                    $detalle !== '' ? $detalle : 'No se encontró un comprobante XML importable.'
+                                );
+                                $capturaCorrida['sin_documentos']++;
+                            }
+                            $capturaCorrida['procesados']++;
+                            if (isset($resumenCuentas[$cuentaId])) {
+                                $resumenCuentas[$cuentaId]['capturas_procesadas']++;
+                            }
+                        } catch (Throwable $e) {
+                            // Un fallo antes de que procesarMensaje mueva los
+                            // adjuntos no debe dejar temporales abandonados.
+                            if (is_array($mensaje)) {
+                                foreach (array_merge($mensaje['xmls'] ?? [], $mensaje['pdfs'] ?? []) as $adjunto) {
+                                    $ruta = (string) ($adjunto['ruta'] ?? '');
+                                    if ($ruta !== '' && is_file($ruta)) {
+                                        @unlink($ruta);
+                                    }
+                                }
+                            }
+                            $capturas->finalizar(
+                                (int) $pendiente['id'],
+                                'error',
+                                $e->getMessage()
+                            );
+                            $capturaCorrida['errores']++;
+                            $capturaCorrida['procesados']++;
+                            if (isset($resumenCuentas[$cuentaId])) {
+                                $resumenCuentas[$cuentaId]['capturas_error']++;
+                            }
+                            registrar(
+                                $rutaLog,
+                                'Captura cuenta "' . (string) ($cuenta['nombre'] ?? $cuentaId)
+                                . '", UID ' . (int) $pendiente['uid'] . ': ERROR ' . $e->getMessage()
+                            );
+                        }
+                    }
+                } catch (Throwable $e) {
+                    // Si ni siquiera fue posible conectar, devolver cada fila
+                    // tomada al ciclo de reintentos persistente.
+                    foreach ($pendientes as $pendiente) {
+                        $actual = $capturas->get((int) $pendiente['id']);
+                        if ($actual && ($actual['estado'] ?? '') === 'procesando') {
+                            $capturas->finalizar((int) $pendiente['id'], 'error', $e->getMessage());
+                            $capturaCorrida['errores']++;
+                            $capturaCorrida['procesados']++;
+                            if (isset($resumenCuentas[$cuentaId])) {
+                                $resumenCuentas[$cuentaId]['capturas_error']++;
+                            }
+                        }
+                    }
+                    registrar(
+                        $rutaLog,
+                        'Captura cuenta "' . (string) ($cuenta['nombre'] ?? $cuentaId)
+                        . '": ERROR ' . $e->getMessage()
+                    );
+                } finally {
+                    $fetcher->cerrar();
+                }
+            }
+        }
+
+        $resumenCapturas = $capturas->resumen();
+    } catch (Throwable $e) {
+        $capturaCorrida['errores']++;
+        registrar($rutaLog, 'Captura automática: ERROR ' . $e->getMessage());
+    }
+} else {
+    try {
+        $resumenCapturas = (new CorreoCapturaAutomatica())->resumen();
+    } catch (Throwable $e) {
+        // La sincronización del índice sigue siendo válida aunque la tabla
+        // de captura aún no exista o el usuario la haya desactivado.
+    }
+}
+
 // La misma tarea programada reconcilia rutas movidas o renombradas. Este modo
 // nunca reorganiza archivos: respeta la ubicación elegida manualmente y solo
 // actualiza la referencia persistida. Un error no invalida el correo.
@@ -186,11 +397,12 @@ $duracion = round(microtime(true) - $inicioCorrida, 1);
 // Registro resumido por cuenta
 foreach ($resumenCuentas as $r) {
     registrar($rutaLog, sprintf(
-        'Cuenta "%s": +%d encabezados, +%d adjuntos, +%d CC/Reply-To, pendientes=%s, %s%s',
+        'Cuenta "%s": +%d encabezados, +%d adjuntos, +%d CC/Reply-To, +%d a revisión, pendientes=%s, %s%s',
         $r['nombre'],
         (int) $r['nuevos'],
         (int) $r['adjuntos'],
         (int) $r['cc'],
+        (int) ($r['documentos_revision'] ?? 0),
         ($r['adjuntos_pendientes'] === null || $r['cc_pendientes'] === null)
             ? '?'
             : (string) ((int) $r['adjuntos_pendientes'] + (int) $r['cc_pendientes']),
@@ -208,6 +420,10 @@ $estado = [
     'tope_seg'         => $topeSegundos,
     'error'            => $errorGlobal,
     'cuentas'          => array_values($resumenCuentas),
+    'captura'          => [
+        'corrida' => $capturaCorrida,
+        'cola' => $resumenCapturas,
+    ],
     'pendientes_total' => array_sum(array_map(function ($r) {
         return max(0, (int) $r['adjuntos_pendientes']) + max(0, (int) $r['cc_pendientes']);
     }, $resumenCuentas)),

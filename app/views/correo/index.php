@@ -298,7 +298,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             <?php if (empty($bandeja)): ?>
             <div class="correo-vacio-panel">
                 <i class="fas fa-inbox"></i>
-                Procesa correos para llenar la bandeja
+                Procesa correos o activa la captura automática para llenar la bandeja
             </div>
             <?php else: ?>
                 <?php foreach ($bandeja as $fila): ?>
@@ -313,6 +313,9 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                         </div>
                     </div>
                     <span class="bandeja-total"><?= number_format((float) ($fila['total'] ?? 0), 2) ?></span>
+                    <?php if (($fila['origen'] ?? 'manual') === 'automatica'): ?>
+                    <i class="fas fa-robot" style="color:#7c3aed;" title="Capturada automáticamente; pendiente de revisión manual"></i>
+                    <?php endif; ?>
                     <i class="fas fa-file-pdf"
                        style="color:<?= !empty($fila['archivo_pdf']) ? '#16a34a' : '#cbd5e1' ?>;"
                        title="<?= !empty($fila['archivo_pdf']) ? htmlspecialchars(basename($fila['archivo_pdf'])) : 'Sin PDF' ?>"></i>
@@ -514,33 +517,73 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
         <div style="font-size:11px;color:var(--text-muted);margin:6px 0 14px;">
             Dentro de esta raíz se crea <code>AAAA/MM MES/Facturas</code> o
-            <code>AAAA/MM MES/Notas de crédito</code>. El nombre se mantiene como
-            <code>FE_PROVEEDOR_120726_00004354</code> o <code>NC_...</code>.
+            <code>AAAA/MM MES/Notas de crédito</code>, según la fecha de emisión.
+            El nombre se mantiene como <code>FE_PROVEEDOR_120726_00004354</code> o <code>NC_...</code>.
         </div>
 
-        <!-- ── Actualización automática del índice (Tarea Programada de Windows) ── -->
+        <!-- ── Ordenar el archivo: solo ocurre cuando la persona lo pide ── -->
         <label style="display:block;font-size:12px;font-weight:700;color:var(--navy);margin-bottom:4px;">
-            <i class="fas fa-rotate" style="margin-right:4px;color:var(--gold);"></i>Actualizar el índice automáticamente
+            <i class="fas fa-folder-tree" style="margin-right:4px;color:var(--gold);"></i>Ordenar el archivo
+        </label>
+        <div style="font-size:12px;background:#f3f7fb;border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:10px 12px;">
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                <select id="org-alcance" class="form-control" style="font-size:12px;padding:3px 6px;width:auto;flex:1;min-width:170px;">
+                    <option value="todo">Todo lo procesado del correo</option>
+                    <option value="semana"<?= $semanas ? '' : ' disabled' ?>>Solo una semana de pago</option>
+                </select>
+                <select id="org-semana" class="form-control" style="display:none;font-size:12px;padding:3px 6px;width:auto;min-width:130px;">
+                    <?php foreach ($semanas as $sem): ?>
+                    <option value="<?= (int) $sem['id'] ?>"<?= (int) ($semanaActiva ?? 0) === (int) $sem['id'] ? ' selected' : '' ?>><?= htmlspecialchars($sem['nombre']) ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <button type="button" class="btn btn-outline btn-sm" id="org-previsualizar" style="white-space:nowrap;">
+                    <i class="fas fa-eye"></i> Ver qué haría
+                </button>
+                <button type="button" class="btn btn-primary btn-sm" id="org-ejecutar" disabled style="white-space:nowrap;">
+                    <i class="fas fa-play"></i> Ordenar
+                </button>
+            </div>
+            <div id="org-resultado" style="display:none;font-size:11.5px;margin-top:8px;border-radius:6px;padding:6px 10px;"></div>
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin:4px 0 14px;">
+            <strong>Ningún archivo se mueve solo.</strong> Ni al importar del correo ni al verificar un listado.
+            Solo se mueven aquí, y después de ver qué haría.
+        </div>
+
+        <!-- ── Automatización de correo (Tarea Programada de Windows) ── -->
+        <label style="display:block;font-size:12px;font-weight:700;color:var(--navy);margin-bottom:4px;">
+            <i class="fas fa-rotate" style="margin-right:4px;color:var(--gold);"></i>Automatización de correo
         </label>
         <div id="auto-box" style="font-size:12px;background:#f3f7fb;border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:10px 12px;">
             <div id="auto-estado" style="color:var(--text-muted);">Consultando…</div>
             <div id="auto-controles" style="display:none;margin-top:8px;align-items:center;gap:8px;flex-wrap:wrap;">
                 <label style="font-size:11.5px;color:var(--navy);font-weight:600;">Cada
-                    <select id="auto-intervalo" class="form-control" style="display:inline-block;width:auto;font-size:12px;padding:2px 6px;margin:0 4px;">
-                        <option value="5">5 min</option>
-                        <option value="10" selected>10 min</option>
-                        <option value="15">15 min</option>
-                        <option value="30">30 min</option>
-                        <option value="60">1 hora</option>
-                    </select>
+                    <input id="auto-intervalo" type="number" min="1" max="1440" value="10"
+                           class="form-control" style="display:inline-block;width:66px;font-size:12px;padding:2px 6px;margin:0 4px;">
+                    min
+                </label>
+                <label style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--navy);font-weight:600;cursor:pointer;">
+                    <input id="auto-capturar" type="checkbox"> Capturar correos nuevos
+                </label>
+                <label style="font-size:11.5px;color:var(--navy);font-weight:600;">Máximo por corrida
+                    <input id="auto-max-correos" type="number" min="1" max="200" value="20"
+                           class="form-control" style="display:inline-block;width:60px;font-size:12px;padding:2px 6px;margin-left:4px;">
+                </label>
+                <label style="font-size:11.5px;color:var(--navy);font-weight:600;">Intentos
+                    <input id="auto-max-intentos" type="number" min="1" max="10" value="3"
+                           class="form-control" style="display:inline-block;width:52px;font-size:12px;padding:2px 6px;margin-left:4px;">
                 </label>
                 <button type="button" class="btn btn-primary btn-sm" id="auto-activar"><i class="fas fa-play"></i> Activar</button>
                 <button type="button" class="btn btn-outline btn-sm" id="auto-desactivar" style="display:none;color:#b91c1c;border-color:#fed7d7;"><i class="fas fa-stop"></i> Desactivar</button>
             </div>
+            <div style="font-size:10.5px;color:var(--text-muted);margin-top:7px;line-height:1.35;">
+                La captura descarga comprobantes nuevos a la <strong>Bandeja de revisión</strong>.
+                No los importa ni los guarda en carpetas finales: una persona debe seleccionarlos y confirmar la importación.
+            </div>
             <div id="auto-msg" style="display:none;font-size:11.5px;margin-top:8px;border-radius:6px;padding:6px 10px;"></div>
         </div>
         <div style="font-size:11px;color:var(--text-muted);margin:4px 0 14px;">
-            Mantiene el índice al día en segundo plano <strong>aunque cierres esta página</strong>. Requiere que el equipo y XAMPP (MySQL) estén encendidos.
+            Trabaja en segundo plano <strong>aunque cierres esta página</strong>. Requiere que el equipo y XAMPP (MySQL) estén encendidos.
         </div>
 
         <label style="display:block;font-size:12px;font-weight:700;color:var(--navy);margin-bottom:4px;">
@@ -607,6 +650,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                         data-puerto="<?= (int) $c['puerto'] ?>"
                         data-usuario="<?= htmlspecialchars($c['usuario']) ?>"
                         data-carpeta="<?= htmlspecialchars($c['carpeta']) ?>"
+                        data-indice-retencion-dias="<?= (int) ($c['indice_retencion_dias'] ?? 1825) ?>"
                         data-sociedades="<?= htmlspecialchars(implode(',', $c['sociedades'] ?? [])) ?>">
                     <i class="fas fa-pen"></i>
                 </button>
@@ -649,6 +693,14 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                 <div>
                     <label style="font-size:10.5px;font-weight:700;color:var(--navy);">Carpeta inicial</label>
                     <input type="text" id="cta-carpeta" class="form-control" style="font-size:12px;" value="INBOX">
+                </div>
+                <div>
+                    <label style="font-size:10.5px;font-weight:700;color:var(--navy);">Retención del índice (días)</label>
+                    <input type="number" id="cta-indice-retencion" class="form-control"
+                           style="font-size:12px;" min="0" max="3650" value="1825">
+                    <div style="font-size:10px;color:var(--text-muted);margin-top:2px;">
+                        1825 = 5 años. 0 conserva todos los encabezados. No borra correos ni documentos.
+                    </div>
                 </div>
                 <div style="grid-column:1 / -1;">
                     <label style="font-size:10.5px;font-weight:700;color:var(--navy);">Sociedades que usan este buzón</label>
@@ -1842,10 +1894,110 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         cfgMsg.style.color = esError ? '#b91c1c' : '#166534';
     }
 
+    // ── Ordenar el archivo: nunca automático, siempre a pedido ──
+    // El botón «Ordenar» nace deshabilitado y solo lo habilita una
+    // previsualización, que no toca ningún archivo. Cambiar el alcance lo
+    // vuelve a deshabilitar: nunca se confirma algo que no se acaba de ver.
+    var orgAlcance = document.getElementById('org-alcance');
+    var orgSemana  = document.getElementById('org-semana');
+    var orgPrev    = document.getElementById('org-previsualizar');
+    var orgEjec    = document.getElementById('org-ejecutar');
+    var orgRes     = document.getElementById('org-resultado');
+
+    function orgMostrar(texto, tono) {
+        if (!orgRes) return;
+        var colores = {
+            ok:     ['#f0fdf4', '#86efac', '#166534'],
+            aviso:  ['#fffbeb', '#fde68a', '#b45309'],
+            error:  ['#fff5f5', '#fed7d7', '#b91c1c']
+        }[tono] || ['#f8fafc', '#e2e8f0', '#475569'];
+        orgRes.textContent = texto;
+        orgRes.style.display = 'block';
+        orgRes.style.background = colores[0];
+        orgRes.style.border = '1px solid ' + colores[1];
+        orgRes.style.color = colores[2];
+    }
+
+    function orgDatos() {
+        var datos = { alcance: orgAlcance.value };
+        if (orgAlcance.value === 'semana') datos.semana_id = orgSemana.value || 0;
+        return datos;
+    }
+
+    function orgDesarmar() {
+        if (orgEjec) orgEjec.disabled = true;
+        if (orgRes) orgRes.style.display = 'none';
+    }
+
+    // Un solo total esconde lo que importa: un documento puede entrar a la
+    // carpeta de pago o SALIR de ella hacia la de su mes, y ambas cosas
+    // cuentan como "movido". Decir solo "74 movidos" cuando 73 entraron y 1
+    // salió parece una pérdida silenciosa de un par.
+    function orgDesglose(s) {
+        var partes = [];
+        if (s.pago_semanal) { partes.push(s.pago_semanal + ' a la carpeta de pago'); }
+        if (s.por_fecha) { partes.push(s.por_fecha + ' a su carpeta del mes'); }
+        return partes.join(' y ');
+    }
+
+    if (orgAlcance && orgPrev && orgEjec) {
+        orgAlcance.addEventListener('change', function () {
+            orgSemana.style.display = orgAlcance.value === 'semana' ? '' : 'none';
+            orgDesarmar();
+        });
+        orgSemana.addEventListener('change', orgDesarmar);
+
+        orgPrev.addEventListener('click', function () {
+            orgPrev.disabled = true;
+            orgDesarmar();
+            orgMostrar('Revisando…', 'neutro');
+            postJson(BASE + '/correo/organizar/previsualizar', orgDatos())
+                .then(function (r) {
+                    var s = r.resumen || {};
+                    var n = s.movimientos_planificados || 0;
+                    orgPrev.disabled = false;
+                    if (n === 0) {
+                        orgMostrar('Todo está ya en su carpeta: no hay nada que mover.', 'ok');
+                        return;
+                    }
+                    orgEjec.disabled = false;
+                    var detallePrev = orgDesglose(s);
+                    orgMostrar(n + (n === 1 ? ' documento se movería' : ' documentos se moverían')
+                        + (detallePrev ? ': ' + detallePrev : ' a su carpeta')
+                        + '. Pulsa «Ordenar» para confirmarlo.', 'aviso');
+                })
+                .catch(function (err) {
+                    orgPrev.disabled = false;
+                    orgMostrar(err.message, 'error');
+                });
+        });
+
+        orgEjec.addEventListener('click', function () {
+            orgEjec.disabled = true;
+            orgPrev.disabled = true;
+            orgMostrar('Moviendo…', 'neutro');
+            postJson(BASE + '/correo/organizar', orgDatos())
+                .then(function (r) {
+                    var s = r.resumen || {};
+                    var movidos = s.movidos || 0;
+                    var errores = s.errores || 0;
+                    orgPrev.disabled = false;
+                    var detalle = orgDesglose(s);
+                    orgMostrar('Listo: ' + (detalle || (movidos + (movidos === 1 ? ' documento movido' : ' documentos movidos')))
+                        + (errores ? ', ' + errores + ' con error.' : '.'), errores ? 'aviso' : 'ok');
+                })
+                .catch(function (err) {
+                    orgPrev.disabled = false;
+                    orgMostrar(err.message, 'error');
+                });
+        });
+    }
+
     window.abrirConfigCorreo = function () {
         if (!modalCfg) return;
         cfgMsg.style.display = 'none';
         modalCfg.style.display = 'flex';
+        orgDesarmar();
         cfgCarpeta.focus();
         autoRefrescar();
     };
@@ -1875,10 +2027,13 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         });
     }
 
-    // ── Actualización automática del índice (Tarea Programada de Windows) ──
+    // ── Automatización de correo (Tarea Programada de Windows) ──
     var autoEstado     = document.getElementById('auto-estado');
     var autoControles  = document.getElementById('auto-controles');
     var autoIntervalo  = document.getElementById('auto-intervalo');
+    var autoCapturar   = document.getElementById('auto-capturar');
+    var autoMaxCorreos = document.getElementById('auto-max-correos');
+    var autoMaxIntentos = document.getElementById('auto-max-intentos');
     var autoActivar    = document.getElementById('auto-activar');
     var autoDesactivar = document.getElementById('auto-desactivar');
     var autoMsg        = document.getElementById('auto-msg');
@@ -1900,6 +2055,11 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         } else if (u.todo_al_dia) {
             extra = ' — índice al día';
         }
+        if (u.captura && u.captura.corrida) {
+            var c = u.captura.corrida;
+            extra += ' — captura: ' + Number(c.documentos || 0).toLocaleString('es-CR')
+                + ' documento(s) nuevo(s), ' + Number(c.errores || 0).toLocaleString('es-CR') + ' error(es)';
+        }
         return 'Última corrida automática: ' + u.ultima_corrida + extra + '.';
     }
 
@@ -1913,6 +2073,9 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
         autoControles.style.display = 'flex';
         if (info.intervalo_min) autoIntervalo.value = String(info.intervalo_min);
+        autoCapturar.checked = !!info.capturar_nuevos;
+        if (info.max_correos_corrida) autoMaxCorreos.value = String(info.max_correos_corrida);
+        if (info.max_intentos) autoMaxIntentos.value = String(info.max_intentos);
 
         var activo = info.activo && info.tarea_instalada;
         autoActivar.innerHTML = activo
@@ -1922,7 +2085,10 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
         var linea;
         if (activo) {
-            linea = '<strong style="color:#166534;">Activa</strong> — el índice se actualiza solo cada ' + info.intervalo_min + ' min.';
+            linea = '<strong style="color:#166534;">Activa</strong> — cada ' + info.intervalo_min + ' min; '
+                + (info.capturar_nuevos
+                    ? 'los correos nuevos pasan a revisión manual.'
+                    : 'solo se actualiza el índice.');
         } else if (info.activo && !info.tarea_instalada) {
             linea = '<span style="color:#b45309;">Configurada, pero la tarea de Windows no aparece. Pulsa «Activar» para recrearla.</span>';
         } else {
@@ -1930,9 +2096,18 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         }
 
         var ultima = autoFmtUltima(info.ultima);
+        var cola = '';
+        if (info.cola_captura) {
+            var q = info.cola_captura;
+            cola = '<div style="margin-top:4px;color:var(--text-muted);font-size:11px;">'
+                + 'Cola: ' + Number(q.pendiente || 0).toLocaleString('es-CR') + ' pendiente(s), '
+                + Number(q.procesando || 0).toLocaleString('es-CR') + ' en proceso, '
+                + Number(q.error || 0).toLocaleString('es-CR') + ' con error. '
+                + 'Bandeja por revisar: ' + Number(info.revision_pendiente || 0).toLocaleString('es-CR') + '.</div>';
+        }
         autoEstado.innerHTML = linea + (ultima
             ? '<div style="margin-top:4px;color:var(--text-muted);font-size:11px;">' + ultima + '</div>'
-            : '');
+            : '') + cola;
     }
 
     function autoRefrescar() {
@@ -1948,7 +2123,12 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         autoActivar.addEventListener('click', function () {
             autoActivar.disabled = true;
             autoMostrarMsg('Registrando la tarea de Windows…', false);
-            postJson(BASE + '/correo/auto/activar', { intervalo_min: autoIntervalo.value })
+            postJson(BASE + '/correo/auto/activar', {
+                intervalo_min: autoIntervalo.value,
+                capturar_nuevos: autoCapturar.checked ? 1 : 0,
+                max_correos_corrida: autoMaxCorreos.value,
+                max_intentos: autoMaxIntentos.value
+            })
                 .then(function (r) {
                     autoMostrarMsg(r.message || 'Activada.', false);
                     autoRefrescar();
@@ -1991,6 +2171,8 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         document.getElementById('cta-puerto').value = datos.puerto || 993;
         document.getElementById('cta-usuario').value = datos.usuario || '';
         document.getElementById('cta-carpeta').value = datos.carpeta || 'INBOX';
+        document.getElementById('cta-indice-retencion').value =
+            datos.indiceRetencionDias || datos.indice_retencion_dias || 1825;
         var pass = document.getElementById('cta-password');
         pass.value = '';
         pass.placeholder = datos.id ? '(dejar vacío para no cambiarla)' : '';
@@ -2021,6 +2203,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             usuario: document.getElementById('cta-usuario').value.trim(),
             password: document.getElementById('cta-password').value,
             carpeta: document.getElementById('cta-carpeta').value.trim(),
+            indice_retencion_dias: document.getElementById('cta-indice-retencion').value,
             sociedades: sociedades.join(',')
         };
     }

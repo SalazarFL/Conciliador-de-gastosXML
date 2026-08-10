@@ -1,7 +1,6 @@
 <?php
 require_once __DIR__ . '/XmlParser.php';
 require_once __DIR__ . '/DocumentoArchivo.php';
-require_once __DIR__ . '/OrganizadorDocumentos.php';
 require_once __DIR__ . '/../models/Factura.php';
 require_once __DIR__ . '/../models/FacturaXmlDetalle.php';
 require_once __DIR__ . '/../models/Proveedor.php';
@@ -110,7 +109,9 @@ class XmlDocumentImporter
             throw $e;
         }
 
-        $this->organizarDocumento((int) $id);
+        // Aquí NO se reorganiza el árbol: el documento se queda donde lo dejó
+        // DocumentoArchivo al archivarlo. Mover lo ya archivado es una orden
+        // explícita de la persona (Correo → Ordenar el archivo).
         if ($tipo === 'NC') {
             $this->extraerDetalle((int) $id, (string) $archivado['ruta_xml']);
         }
@@ -175,7 +176,6 @@ class XmlDocumentImporter
             throw $e;
         }
 
-        $this->organizarDocumento((int) $existente['id']);
         if ($tipo === 'NC') {
             $ruta = (string) ($cambios['ruta_xml'] ?? ($existente['ruta_xml'] ?? ''));
             $this->extraerDetalle((int) $existente['id'], $ruta);
@@ -212,12 +212,4 @@ class XmlDocumentImporter
         }
     }
 
-    private function organizarDocumento($id)
-    {
-        try {
-            (new OrganizadorDocumentos($this->archivo->raiz(), $this->facturas))->organizarIds([(int) $id]);
-        } catch (Throwable $e) {
-            // Best effort: la tarea programada vuelve a ordenar el árbol.
-        }
-    }
 }

@@ -59,6 +59,8 @@ $router->post('/correo/carpetas', 'CorreoController@carpetas');
 $router->post('/correo/carpetas-buzon', 'CorreoController@carpetasBuzon');
 $router->post('/correo/selector/abrir', 'CorreoController@selectorAbrir');
 $router->post('/correo/selector/estado', 'CorreoController@selectorEstado');
+$router->post('/correo/organizar', 'CorreoController@organizar');
+$router->post('/correo/organizar/previsualizar', 'CorreoController@organizarPrevisualizar');
 $router->post('/correo/auto/estado', 'CorreoController@autoSyncEstado');
 $router->post('/correo/auto/activar', 'CorreoController@autoSyncActivar');
 $router->post('/correo/auto/desactivar', 'CorreoController@autoSyncDesactivar');

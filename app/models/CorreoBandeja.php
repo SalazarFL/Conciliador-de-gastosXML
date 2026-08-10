@@ -22,17 +22,19 @@ class CorreoBandeja extends Model
 
     public function __construct()
     {
-        $this->ensureTable();
+        Esquema::unaVez(static::class, function () { $this->ensureTable(); });
     }
 
     public function crear($data)
     {
         $sql = "INSERT INTO {$this->table}
                 (cuenta_id, sociedad_id, uid_correo, remitente, asunto, fecha_correo, archivo_xml, archivo_pdf,
-                 numero_corto, tipo_doc, proveedor, fecha_emision, total, hash_xml, estado)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                 numero_corto, tipo_doc, proveedor, fecha_emision, total, hash_xml, estado, origen)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
         $sociedadId = !empty($data['sociedad_id']) ? (int) $data['sociedad_id'] : $this->sociedadId();
+        $origen = in_array(($data['origen'] ?? 'manual'), ['manual', 'automatica', 'descargas'], true)
+            ? (string) ($data['origen'] ?? 'manual') : 'manual';
 
         return $this->insert($sql, [
             (int) ($data['cuenta_id'] ?? 0),
@@ -50,6 +52,7 @@ class CorreoBandeja extends Model
             isset($data['total']) ? (float) $data['total'] : null,
             $data['hash_xml'] ?? null,
             (string) ($data['estado'] ?? 'pendiente'),
+            $origen,
         ]);
     }
 
@@ -137,15 +140,18 @@ class CorreoBandeja extends Model
      */
     public function revivir($id, $data)
     {
+        $origen = in_array(($data['origen'] ?? 'manual'), ['manual', 'automatica', 'descargas'], true)
+            ? (string) ($data['origen'] ?? 'manual') : 'manual';
         $sql = "UPDATE {$this->table} SET
-                    cuenta_id = ?, remitente = ?, asunto = ?, fecha_correo = ?,
+                    cuenta_id = ?, sociedad_id = ?, remitente = ?, asunto = ?, fecha_correo = ?,
                     archivo_xml = ?, archivo_pdf = ?, numero_corto = ?, tipo_doc = ?,
-                    proveedor = ?, fecha_emision = ?, total = ?, estado = ?,
+                    proveedor = ?, fecha_emision = ?, total = ?, estado = ?, origen = ?,
                     importacion_id = NULL
                 WHERE id = ?";
 
         return $this->execute($sql, [
             (int) ($data['cuenta_id'] ?? 0),
+            !empty($data['sociedad_id']) ? (int) $data['sociedad_id'] : null,
             $data['remitente'] ?? null,
             $data['asunto'] ?? null,
             $data['fecha_correo'] ?? null,
@@ -157,6 +163,7 @@ class CorreoBandeja extends Model
             $data['fecha_emision'] ?? null,
             isset($data['total']) ? (float) $data['total'] : null,
             (string) ($data['estado'] ?? 'pendiente'),
+            $origen,
             (int) $id,
         ]);
     }
@@ -228,6 +235,7 @@ class CorreoBandeja extends Model
         $sql = "CREATE TABLE IF NOT EXISTS {$this->table} (
                     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
                     cuenta_id INT UNSIGNED NOT NULL DEFAULT 0,
+                    sociedad_id INT UNSIGNED NULL DEFAULT NULL,
                     uid_correo VARCHAR(64) NOT NULL COMMENT 'uidvalidity:uid del mensaje IMAP (dedup)',
                     remitente VARCHAR(255) NULL DEFAULT NULL,
                     asunto VARCHAR(255) NULL DEFAULT NULL,
@@ -241,6 +249,7 @@ class CorreoBandeja extends Model
                     total DECIMAL(15,2) NULL DEFAULT NULL,
                     hash_xml CHAR(64) NULL DEFAULT NULL,
                     estado ENUM('pendiente','importada','descartada','ya_existe','rechazada','otra_cedula') NOT NULL DEFAULT 'pendiente',
+                    origen ENUM('manual','automatica','descargas') NOT NULL DEFAULT 'manual',
                     importacion_id INT UNSIGNED NULL DEFAULT NULL,
                     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (id),
@@ -249,5 +258,15 @@ class CorreoBandeja extends Model
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci";
 
         $this->query($sql);
+        $tieneOrigen = (int) $this->fetchColumn(
+            "SELECT COUNT(*) FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = 'origen'",
+            [$this->table]
+        ) > 0;
+        if (!$tieneOrigen) {
+            $this->query("ALTER TABLE {$this->table}
+                          ADD COLUMN origen ENUM('manual','automatica','descargas')
+                          NOT NULL DEFAULT 'manual' AFTER estado");
+        }
     }
 }

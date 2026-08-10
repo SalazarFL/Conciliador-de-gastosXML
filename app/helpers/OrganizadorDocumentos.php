@@ -6,7 +6,12 @@ require_once __DIR__ . '/../models/Semana.php';
 
 /**
  * Ordena el archivo local sin perder la relación XML/PDF ni romper las rutas
- * persistidas. Los comprobantes incompletos siempre terminan en REVISAR.
+ * persistidas.
+ *
+ * La carpeta de un documento sale de su fecha de emisión y su tipo —dos datos
+ * que no cambian nunca—, así que ordenar es idempotente: correrlo dos veces no
+ * mueve nada la segunda. La única excepción es PAGOS SEMANALES, donde se
+ * reúnen los pares completos de una semana para poder entregarlos.
  */
 class OrganizadorDocumentos
 {
@@ -645,37 +650,26 @@ class OrganizadorDocumentos
                     continue;
                 }
 
-                $completo = $xml !== '' && $pdf !== '';
-                if (!$completo) {
-                    $estado = DocumentoArchivo::ESTADO_REVISAR;
-                    $destinoDir = null;
-                } elseif (!empty($fila['pago_semanal']) && !empty($fila['carpeta_pago'])) {
-                    $estado = DocumentoArchivo::CARPETA_PAGOS;
-                    $destinoDir = $this->archivo->carpetaPagoSemanal((string) $fila['carpeta_pago']);
-                } elseif (!empty($fila['con_diferencia'])) {
-                    $estado = DocumentoArchivo::ESTADO_DIFERENCIA;
-                    $destinoDir = null;
-                } elseif (!empty($fila['coincide_registro'])) {
-                    $estado = DocumentoArchivo::ESTADO_SISTEMA;
-                    $destinoDir = null;
-                } else {
-                    // El par está completo, pero aún no hizo match correcto.
-                    // REVISAR se reserva exclusivamente para pares incompletos.
-                    $estado = DocumentoArchivo::ESTADO_PENDIENTE;
-                    $destinoDir = null;
-                }
+                // La carpeta depende solo de la fecha de emisión y del tipo,
+                // que no cambian nunca. La única excepción es el pago semanal:
+                // ahí los pares se reúnen aparte para poder entregarlos.
+                // Solo los pares completos entran a la carpeta de pago: esa
+                // carpeta existe para entregar los respaldos, y un documento
+                // al que le falta el PDF no se puede entregar.
+                $enPagoSemanal = $xml !== '' && $pdf !== ''
+                    && !empty($fila['pago_semanal']) && !empty($fila['carpeta_pago']);
                 $fecha = $this->fechaValida((string) ($fila['fecha_emision'] ?? ''), $xml !== '' ? $xml : $pdf);
                 $tipo = $this->tipoValido((string) ($fila['tipo_documento'] ?? 'FE'));
-                if ($destinoDir === null) {
-                    $destinoDir = $this->archivo->carpetaDocumento($fecha, $tipo, $estado);
-                }
-                if (!$dryRun && $estado !== DocumentoArchivo::CARPETA_PAGOS) {
-                    $this->crearEstadosDelTipo($fecha, $tipo);
-                }
 
-                $base = $estado === DocumentoArchivo::CARPETA_PAGOS
-                    ? DocumentoArchivo::nombreBase($fila, (string) ($fila['proveedor_nombre'] ?? 'PROVEEDOR'))
-                    : pathinfo($xml !== '' ? $xml : $pdf, PATHINFO_FILENAME);
+                if ($enPagoSemanal) {
+                    $estado = DocumentoArchivo::CARPETA_PAGOS;
+                    $destinoDir = $this->archivo->carpetaPagoSemanal((string) $fila['carpeta_pago']);
+                    $base = DocumentoArchivo::nombreBase($fila, (string) ($fila['proveedor_nombre'] ?? 'PROVEEDOR'));
+                } else {
+                    $estado = $tipo;
+                    $destinoDir = $this->archivo->carpetaDocumento($fecha, $tipo);
+                    $base = pathinfo($xml !== '' ? $xml : $pdf, PATHINFO_FILENAME);
+                }
                 $movimiento = $this->moverConjunto(['xml' => $xml, 'pdf' => $pdf], $destinoDir, $base, $dryRun);
                 if (!$movimiento['cambio']) {
                     $resumen['ya_ordenados']++;
@@ -770,12 +764,8 @@ class OrganizadorDocumentos
                     $destinoDir = $this->carpetaIgnorados($info['fecha'], 'XML INVALIDO');
                     $estado = 'XML INVALIDO';
                 } else {
-                    $completo = $xml !== '' && $pdf !== '';
-                    $estado = $completo ? DocumentoArchivo::ESTADO_PENDIENTE : DocumentoArchivo::ESTADO_REVISAR;
-                    $destinoDir = $this->archivo->carpetaDocumento($info['fecha'], $info['tipo'], $estado);
-                    if (!$dryRun) {
-                        $this->crearEstadosDelTipo($info['fecha'], $info['tipo']);
-                    }
+                    $estado = $info['tipo'];
+                    $destinoDir = $this->archivo->carpetaDocumento($info['fecha'], $info['tipo']);
                 }
 
                 $base = pathinfo($xml !== '' ? $xml : $pdf, PATHINFO_FILENAME);
@@ -979,18 +969,6 @@ class OrganizadorDocumentos
             . DIRECTORY_SEPARATOR . 'IGNORADOS' . DIRECTORY_SEPARATOR . $motivo;
     }
 
-    private function crearEstadosDelTipo($fecha, $tipo)
-    {
-        foreach ([DocumentoArchivo::ESTADO_PENDIENTE, DocumentoArchivo::ESTADO_SISTEMA,
-                     DocumentoArchivo::ESTADO_DIFERENCIA, DocumentoArchivo::ESTADO_REVISAR] as $estado) {
-            $dir = $this->archivo->carpetaDocumento($fecha, $tipo, $estado);
-            $this->asegurarDestinoDentroRaiz($dir);
-            if (!is_dir($dir)) {
-                @mkdir($dir, 0777, true);
-            }
-        }
-    }
-
     private function asegurarDentroRaiz($ruta)
     {
         $real = realpath($ruta);
@@ -1064,10 +1042,7 @@ class OrganizadorDocumentos
             'ya_ordenados' => 0,
             'faltantes_en_disco' => 0,
             'fuera_de_raiz' => 0,
-            'en_sistema' => 0,
-            'con_diferencia' => 0,
-            'pendientes_procesar' => 0,
-            'revisar' => 0,
+            'por_fecha' => 0,
             'pago_semanal' => 0,
             'ignorados' => 0,
             'errores' => 0,
@@ -1076,13 +1051,11 @@ class OrganizadorDocumentos
         ];
     }
 
+    /** Reparte el movimiento en el contador que le toca según a dónde fue. */
     private function contarEstado(array &$resumen, $estado)
     {
         if ($estado === DocumentoArchivo::CARPETA_PAGOS) $resumen['pago_semanal']++;
-        elseif ($estado === DocumentoArchivo::ESTADO_SISTEMA) $resumen['en_sistema']++;
-        elseif ($estado === DocumentoArchivo::ESTADO_DIFERENCIA) $resumen['con_diferencia']++;
-        elseif ($estado === DocumentoArchivo::ESTADO_PENDIENTE) $resumen['pendientes_procesar']++;
-        elseif ($estado === DocumentoArchivo::ESTADO_REVISAR) $resumen['revisar']++;
+        elseif (in_array($estado, ['FE', 'NC', 'ND'], true)) $resumen['por_fecha']++;
         else $resumen['ignorados']++;
     }
 

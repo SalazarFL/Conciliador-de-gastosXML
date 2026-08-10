@@ -115,6 +115,40 @@ class PorPagar extends Model
      * Listados guardados. Filtro por semana: null = todos · 0 = sin semana ·
      * >0 = los de esa semana.
      */
+    /**
+     * Listados abiertos a los que todavía les falta respaldo, del más nuevo
+     * al más viejo.
+     *
+     * Sirve para decidir qué vale la pena volver a verificar después de
+     * importar facturas. Va en una sola consulta a propósito: preguntando
+     * listado por listado eran tantos viajes al servidor como listados, y eso
+     * se paga en cada tanda de un lote de correo.
+     *
+     * El límite deja fuera los listados antiguos. Un pago de hace meses con
+     * líneas sin respaldo ya no las va a completar con una factura que llega
+     * hoy, y revisarlo en cada importación es trabajo que nunca rinde.
+     */
+    public function idsAbiertosConFaltantes($limite = 10)
+    {
+        $where = ["l.estado <> 'cerrado'"];
+        $params = [];
+        $this->filtrarPorSociedad($where, $params, 'l.');
+
+        $filas = $this->fetchAll(
+            "SELECT l.id
+               FROM porpagar_listados l
+               JOIN porpagar_facturas pf
+                 ON pf.listado_id = l.id AND pf.estado = 'sin_respaldo'
+              WHERE " . implode(' AND ', $where) . "
+              GROUP BY l.id
+              ORDER BY l.id DESC
+              LIMIT " . max(1, (int) $limite),
+            $params
+        ) ?: [];
+
+        return array_values(array_map('intval', array_column($filas, 'id')));
+    }
+
     public function getListados($limite = 30, $semanaId = null)
     {
         $where = ['1=1'];
