@@ -34,6 +34,10 @@ storage/locks/
 # PDFs de devoluciones archivados por la app (runtime)
 storage/devoluciones/
 
+# Configuración de esta computadora: contraseña de la base y rutas propias.
+# El repositorio es público; la plantilla versionada es local.ejemplo.php.
+app/config/local.php
+
 # Correo IMAP: credenciales reales y archivos capturados del buzón
 app/config/correo.php
 storage/correo/

@@ -42,7 +42,8 @@ class Diagnostico
     public function ejecutar()
     {
         $revisiones = array_merge(
-            [$this->php(), $this->extensiones(), $this->baseDeDatos()],
+            [$this->php(), $this->extensiones(), $this->configuracionDeEstaMaquina(),
+             $this->baseDeDatos()],
             $this->esquema(),
             [$this->carpetaCompartida(), $this->escrituraEnCarpeta(), $this->rutasAbsolutas(),
              $this->documentosDentroDelProyecto(), $this->archivosFaltantes()]
@@ -99,16 +100,81 @@ class Diagnostico
         );
     }
 
+    /**
+     * ¿Esta computadora sabe a qué base conectarse, y es la compartida?
+     *
+     * Va antes que la conexión porque los dos fallos se ven igual desde la
+     * pantalla y el remedio no tiene nada que ver: falta un archivo de
+     * configuración, o el servidor no contesta.
+     */
+    private function configuracionDeEstaMaquina()
+    {
+        $nombre = 'Configuración de esta computadora';
+        if (!is_file(dirname(__DIR__) . '/config/local.php')) {
+            return $this->resultado($nombre, 'error',
+                'Falta app/config/local.php',
+                "Copia la plantilla y escribe los datos del servidor de base de datos:\n"
+                . '  copy app\\config\\local.ejemplo.php app\\config\\local.php');
+        }
+
+        try {
+            $c = require dirname(__DIR__) . '/config/database.php';
+        } catch (Throwable $e) {
+            return $this->resultado($nombre, 'error', $e->getMessage(),
+                'Compara app/config/local.php con app/config/local.ejemplo.php.');
+        }
+
+        // Apuntar al MySQL de la propia máquina no da ningún error visible: la
+        // aplicación abre, se ve normal y el trabajo se guarda en una base que
+        // nadie más lee. Por eso se avisa aquí y no cuando ya es tarde.
+        $propia = in_array(strtolower((string) $c['host']), ['localhost', '127.0.0.1', '::1'], true);
+        return $this->resultado(
+            $nombre,
+            $propia ? 'aviso' : 'ok',
+            "Base {$c['database']} en {$c['host']}:{$c['port']}",
+            $propia
+                ? 'La base está en esta misma computadora, no en el servidor. Si ya existe '
+                  . 'la base compartida, corrige "host" en app/config/local.php: lo que '
+                  . 'trabajes aquí no lo va a ver nadie más.'
+                : ''
+        );
+    }
+
     private function baseDeDatos()
     {
+        // Sin configuración no hay nada que probar, y la revisión de arriba ya
+        // dijo qué hacer. Insistir aquí solo agrega un consejo equivocado
+        // —revisar la red— sobre un problema que no es de red.
+        if (!is_file(dirname(__DIR__) . '/config/local.php')) {
+            return $this->resultado('Base de datos', 'aviso',
+                'No se pudo probar: falta la configuración de esta computadora', '');
+        }
+
         try {
-            $servidor = $this->pdo()->query('SELECT VERSION()')->fetchColumn();
+            $pdo = $this->pdo();
             $config = require dirname(__DIR__) . '/config/database.php';
+            $servidor = $pdo->query('SELECT VERSION()')->fetchColumn();
+
+            // Diez viajes de ida y vuelta. Con la base en el servidor, esta
+            // latencia se paga en CADA consulta, y una pantalla hace cientos:
+            // es lo que decide si la aplicación se siente ágil o pesada.
+            $inicio = microtime(true);
+            for ($i = 0; $i < 10; $i++) {
+                $pdo->query('SELECT 1')->fetchColumn();
+            }
+            $ms = (microtime(true) - $inicio) * 100;
+
+            $lenta = $ms >= 40;
             return $this->resultado(
                 'Base de datos',
-                'ok',
-                "Conectada a {$config['database']} en {$config['host']} ({$servidor})",
-                ''
+                $lenta ? 'aviso' : 'ok',
+                "Conectada a {$config['database']} en {$config['host']} ({$servidor}), "
+                . number_format($ms, 1) . ' ms por consulta',
+                $lenta
+                    ? 'Cada consulta tarda más de 40 ms y las pantallas hacen muchas. Revisa '
+                      . 'que el servidor esté en un centro de datos cercano y que la conexión '
+                      . 'no esté saturada.'
+                    : ''
             );
         } catch (Throwable $e) {
             return $this->resultado(
@@ -116,7 +182,7 @@ class Diagnostico
                 'error',
                 'No se pudo conectar: ' . $e->getMessage(),
                 'Revisa que el servidor de base de datos esté encendido y que esta computadora '
-                . 'llegue a él (VPN encendida, si aplica).'
+                . 'llegue a él (VPN o Tailscale encendidos, si aplica).'
             );
         }
     }
@@ -187,9 +253,7 @@ class Diagnostico
             return $this->resultado('Permisos de escritura', 'aviso',
                 'No se pudo probar (la carpeta compartida no está disponible)', '');
         }
-        $prueba = $raiz . DIRECTORY_SEPARATOR . '.xmlconcilia_prueba_' . getmypid();
-        $ok = @file_put_contents($prueba, 'ok') !== false;
-        @unlink($prueba);
+        $ok = RutaDocumento::permiteEscritura($raiz);
         return $this->resultado(
             'Permisos de escritura',
             $ok ? 'ok' : 'error',
@@ -292,8 +356,9 @@ class Diagnostico
             $faltan === 0 ? '' : ($faltan === $revisados
                 ? 'No se encontró NINGUNO: casi seguro la carpeta compartida apunta al lugar '
                   . 'equivocado o SharePoint no ha terminado de bajar los archivos.'
-                : "Probablemente se movieron a mano. Vuelve a ubicarlos con:\n"
-                  . '  php cli/organizar_documentos.php --reconciliar')
+                : "Probablemente se movieron a mano. Si siguen dentro de la carpeta "
+                  . "compartida, esto vuelve a ubicarlos sin moverlos:\n"
+                  . '  php cli/organizar_documentos.php')
         );
     }
 
@@ -304,10 +369,14 @@ class Diagnostico
         if ($this->pdo === null) {
             $c = require dirname(__DIR__) . '/config/database.php';
             $this->pdo = new PDO(
-                "mysql:host={$c['host']};dbname={$c['database']};charset={$c['charset']}",
+                $c['dsn'],
                 $c['username'],
                 $c['password'],
-                [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]
+                [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                 PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                 // El diagnóstico se corre justamente cuando algo no responde:
+                 // tiene que contestar, no quedarse esperando al servidor.
+                 PDO::ATTR_TIMEOUT => 10]
             );
         }
         return $this->pdo;

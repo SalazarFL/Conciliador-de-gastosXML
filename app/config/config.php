@@ -1,18 +1,23 @@
 <?php
 /**
- * Configuración general de la aplicación
- * Detecta automáticamente si corre en localhost (XAMPP) o producción (InfinityFree)
+ * Configuración general de la aplicación: lo que es igual en todas las
+ * computadoras. Lo que cambia de una a otra vive en local.php, que no se
+ * versiona (ver local.ejemplo.php).
+ *
+ * Este archivo detectaba antes si corría en localhost o en un hosting. Ya no
+ * hay hosting: la aplicación se instala en la máquina de cada persona y lo
+ * único remoto es la base de datos, así que la rama de producción nunca se
+ * ejecutaba y solo confundía.
  */
 
-$host    = strtolower((string) ($_SERVER['HTTP_HOST'] ?? 'localhost'));
-$isLocal = ($host === 'localhost' || $host === '127.0.0.1' || $host === '::1'
-         || strpos($host, 'localhost:') === 0);
+$local = is_file(__DIR__ . DIRECTORY_SEPARATOR . 'local.php')
+    ? require __DIR__ . DIRECTORY_SEPARATOR . 'local.php'
+    : [];
+$local = is_array($local) ? $local : [];
 
-// En local: app/ está fuera de public/ → uploads en public/uploads/
-// En server: app/ está dentro de htdocs/ → uploads en htdocs/uploads/
-$uploadsPath = $isLocal
-    ? dirname(__DIR__, 2) . '/public/uploads'
-    : dirname(__DIR__, 2) . '/uploads';
+// Errores en pantalla por defecto: es una herramienta interna y quien la usa
+// necesita poder mandar la captura del error a quien la mantiene.
+$ambiente = ($local['environment'] ?? '') === 'production' ? 'production' : 'development';
 
 return [
     // Información de la aplicación
@@ -25,7 +30,7 @@ return [
     'base_uri'  => '',
 
     // Ambiente
-    'environment' => $isLocal ? 'development' : 'production',
+    'environment' => $ambiente,
 
     // Configuración regional
     'timezone' => 'America/Mexico_City',
@@ -33,7 +38,9 @@ return [
     'charset'  => 'UTF-8',
 
     // Configuración de archivos
-    'uploads_path'       => $uploadsPath,
+    // Zona de paso para lo que sube la gente antes de archivarse; los
+    // documentos definitivos nunca viven aquí, sino en la carpeta compartida.
+    'uploads_path'       => dirname(__DIR__, 2) . '/public/uploads',
     'max_upload_size'    => 10485760, // 10 MB
     'allowed_extensions' => [
         'xml'    => ['xml'],
@@ -45,16 +52,16 @@ return [
     'session_name'     => 'XMLCONCILIA_SESSION',
 
     // Configuración de seguridad
-    'encryption_key'  => 'change-this-to-random-string-in-production',
     'csrf_protection' => true,
 
     // Configuración de logs
     'log_path'  => dirname(__DIR__, 2) . '/storage/logs',
-    'log_level' => $isLocal ? 'debug' : 'error',
+    'log_level' => $ambiente === 'production' ? 'error' : 'debug',
 
-    // Extracción de texto de reportes PDF del ERP (Poppler).
+    // Extracción de texto de reportes PDF del ERP (Poppler). Cada máquina lo
+    // tiene instalado donde le tocó, así que sale de local.php.
     // Vacío = buscar 'pdftotext' en el PATH del sistema.
-    'pdftotext_path' => $isLocal ? 'C:\\tools\\poppler-25.12.0\\Library\\bin\\pdftotext.exe' : '',
+    'pdftotext_path' => (string) ($local['pdftotext_path'] ?? ''),
 
     // Configuración de conciliación
     'conciliacion' => [

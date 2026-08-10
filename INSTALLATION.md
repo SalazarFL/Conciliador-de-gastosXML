@@ -50,17 +50,26 @@ Ejecutar los siguientes archivos SQL en phpMyAdmin en **este orden exacto**:
 
 ### 3. Verificar Configuración de PHP
 
-Editar `app/config/database.php` si es necesario:
+Copiar `app/config/local.ejemplo.php` como `app/config/local.php` y llenarlo
+con los datos del servidor de base de datos:
 
 ```php
 return [
-    'host' => 'localhost',
-    'database' => 'bd_xmlconcilia',
-    'username' => 'root',
-    'password' => '',  // Cambiar si tienes contraseña MySQL
-    // ...
+    'database' => [
+        'host'     => 'servidor',   // NO 'localhost': la base es una sola y compartida
+        'port'     => '3306',
+        'database' => 'bd_xmlconcilia',
+        'username' => 'xmlconcilia',
+        'password' => '',
+    ],
+    'pdftotext_path' => '',
 ];
 ```
+
+`local.php` no se versiona (contiene la contraseña y el repositorio es
+público). `app/config/database.php` solo lee ese archivo; no lo edites.
+
+Ver [docs/INSTALACION.md](docs/INSTALACION.md) para la instalación completa.
 
 Editar `app/config/config.php` para ajustar URLs:
 
@@ -129,7 +138,8 @@ Si aparecen los números, la conexión a BD está funcionando correctamente.
 **Solución:**
 1. Verificar que MySQL esté corriendo en XAMPP
 2. Verificar que la base de datos `bd_xmlconcilia` existe en phpMyAdmin
-3. Revisar credenciales en `app/config/database.php`
+3. Revisar credenciales en `app/config/local.php`
+4. O mejor: `php cli/diagnostico.php`, que lo dice directamente
 
 ### Error: "Cannot modify header information"
 

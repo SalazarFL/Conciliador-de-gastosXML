@@ -30,7 +30,7 @@ function verificaAlias($condicion, $mensaje)
 $config = require __DIR__ . '/../app/config/database.php';
 try {
     $pdo = new PDO(
-        "mysql:host={$config['host']};dbname={$config['database']};charset={$config['charset']}",
+        $config['dsn'],
         $config['username'],
         $config['password'],
         [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]

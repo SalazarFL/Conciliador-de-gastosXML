@@ -114,14 +114,22 @@ PDO::ATTR_EMULATE_PREPARES => false
 ```
 
 ### database.php
+No contiene credenciales: lee `app/config/local.php` (no versionado, uno por
+computadora), valida lo obligatorio y arma el DSN una sola vez para toda la
+aplicación. Si falta esa configuración lanza una excepción en vez de caer a
+`localhost`, porque conectarse por error a la base de la propia máquina no
+produce ningún síntoma visible.
+
 ```php
 'driver' => 'mysql'
-'host' => 'localhost'
+'host' => …          // del servidor, no de esta computadora
+'port' => '3306'
 'database' => 'bd_xmlconcilia'
-'username' => 'root'
-'password' => ''
+'username' => …
+'password' => …
 'charset' => 'utf8mb4'
 'collation' => 'utf8mb4_unicode_ci'
+'dsn' => 'mysql:host=…;port=…;dbname=…;charset=utf8mb4'
 ```
 
 ## 🎨 Modelos Implementados
