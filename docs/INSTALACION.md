@@ -40,19 +40,62 @@ extension=mbstring
 
 Reiniciar Apache.
 
-### 2. El proyecto
+### 2. Git
 
+XAMPP no lo trae. Instalarlo desde <https://git-scm.com/download/win> con las
+opciones por defecto.
+
+**Después hay que cerrar y volver a abrir PowerShell.** El PATH se lee al
+arrancar la ventana, así que en la que ya estaba abierta `git` va a seguir sin
+reconocerse aunque la instalación haya ido bien. Comprobar con:
+
+```powershell
+git --version
 ```
-git clone <repositorio> C:\xampp\htdocs\xmlconcilia
+
+### 3. El proyecto
+
+```powershell
+cd C:\xampp\htdocs
+git clone -b trabajo-multisociedad-y-rutas-compartidas https://github.com/SalazarFL/Conciliador-de-gastosXML.git xmlconcilia
 ```
+
+No hay que crear `xmlconcilia` antes: `git clone` la crea. Lo que sí debe
+existir es `C:\xampp\htdocs`, que viene con XAMPP. El nombre al final del
+comando no es opcional —sin él la carpeta se llamaría como el repositorio y
+las rutas de la aplicación no coincidirían.
+
+> **El `-b <rama>` no es opcional.** Sin él, `git clone` descarga la rama por
+> defecto del repositorio (`main`), que va meses atrás de donde está el
+> trabajo real. La instalación arranca, pero le faltan comandos enteros de
+> `cli/` —entre ellos `diagnostico.php`— sin ningún aviso de que pasó.
+> Confirmá con quien te pasó esta guía cuál es la rama vigente: puede haber
+> cambiado desde que esto se escribió.
+>
+> Si ya clonaste sin `-b` y notás que faltan archivos, no hace falta volver a
+> clonar — alcanza con cambiar de rama en el lugar:
+>
+> ```powershell
+> git fetch origin
+> git checkout trabajo-multisociedad-y-rutas-compartidas
+> ```
 
 > **Antes de clonar, comprobá que lo que hay en GitHub es lo que estás usando.**
-> En la computadora que ya funciona: `git status` (sin cambios pendientes) y
-> `git log origin/<rama>..HEAD` (vacío). Si falta subir algo, la máquina nueva
-> va a instalar una versión distinta y los errores que aparezcan solo le van a
-> pasar a ella.
+> En la computadora que ya funciona:
+>
+> ```
+> git status -sb
+> ```
+>
+> La primera línea no debe decir `ahead` ni deben quedar archivos listados. Si
+> falta subir algo, la máquina nueva va a instalar una versión distinta, y los
+> errores que aparezcan solo le van a pasar a ella.
+>
+> Para ver qué falta subir: `git log '@{u}..HEAD' --oneline` (vacío = todo
+> subido). **Las comillas son obligatorias en PowerShell**, que interpreta
+> `@{...}` como una tabla hash y da un error de sintaxis sin ellas.
 
-### 3. La red privada
+### 4. La red privada
 
 La base de datos **no está publicada en internet**: escucha únicamente dentro
 de una red privada de Tailscale. Sin este paso, la computadora no llega al
@@ -66,7 +109,7 @@ servidor y nada más funciona.
 Esa es también la razón de que no haga falta VPN de oficina ni IP fija: la
 computadora entra a la red privada desde donde sea.
 
-### 4. La configuración de esta computadora
+### 5. La configuración de esta computadora
 
 Copiar la plantilla y llenarla:
 
@@ -92,7 +135,7 @@ sistema; no está escrita en ningún archivo del repositorio.
 La base **ya existe y tiene los datos**: no hay que crear nada ni correr
 `schema.sql`. Eso es solo para levantar un servidor desde cero.
 
-### 5. La carpeta compartida
+### 6. La carpeta compartida
 
 Abrir la biblioteca de SharePoint en el navegador y usar **Sincronizar**. Eso
 crea una carpeta local, algo como:
@@ -108,7 +151,7 @@ documentos*. Es lo único que cambia de una computadora a otra.
 > arranca a media sincronización, va a reportar documentos que no encuentra —
 > no están perdidos, todavía no han bajado.
 
-### 6. Comprobar
+### 7. Comprobar
 
 ```
 php cli/diagnostico.php
@@ -163,7 +206,7 @@ modelo, en orden de frecuencia:
 | "No abre *este* documento" | Alguien lo movió fuera de la carpeta compartida — devolvelo adentro y corré `php cli/organizar_documentos.php` |
 | "Me da error al guardar" | Falta una migración en la base, o permiso de solo lectura en SharePoint |
 | "No conecta" | Tailscale apagado en esa computadora, o el servidor caído. `tailscale status` lo dice en un segundo |
-| "Falta app/config/local.php" | Instalación a medias: hacer el paso 4 |
+| "Falta app/config/local.php" | Instalación a medias: hacer el paso 5 |
 | "No veo lo que capturó mi compañero" | Su `local.php` apunta a `localhost` en vez del servidor |
 | Todo va lento en una sola computadora | Su conexión al servidor; el diagnóstico da los ms por consulta |
 | Un error que solo le pasa a esa persona | Su copia del código quedó atrás — `git pull` |
