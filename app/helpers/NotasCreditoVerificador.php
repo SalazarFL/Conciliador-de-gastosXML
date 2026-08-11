@@ -21,6 +21,7 @@ class NotasCreditoVerificador
         $indice = self::indexarFacturas($facturas);
         $usadas = [];
         $pendientes = [];
+        $historial = [];
         $manualesNoExactas = [];
         $stats = ['coincide' => 0, 'con_diferencia' => 0, 'sin_respaldo' => 0];
         $verificacionId = null;
@@ -73,7 +74,7 @@ class NotasCreditoVerificador
                     ];
                     $pendientes[] = self::filaMatch((int) $linea['id'], null, $nuevo['estado'], null,
                         'ninguno', null, false, $nuevo['motivo_match'], true);
-                    $cantidadCambios += self::registrarCambio($modelo, $verificacionId, $linea, $nuevo);
+                    $cantidadCambios += self::registrarCambio($modelo, $verificacionId, $linea, $nuevo, $historial);
                     $stats['sin_respaldo']++;
                     continue;
                 }
@@ -88,7 +89,7 @@ class NotasCreditoVerificador
                     ];
                     $pendientes[] = self::filaMatch((int) $linea['id'], null, $nuevo['estado'], null,
                         'ninguno', $match['score'], false, $nuevo['motivo_match'], false);
-                    $cantidadCambios += self::registrarCambio($modelo, $verificacionId, $linea, $nuevo);
+                    $cantidadCambios += self::registrarCambio($modelo, $verificacionId, $linea, $nuevo, $historial);
                     $stats['sin_respaldo']++;
                     continue;
                 }
@@ -108,13 +109,14 @@ class NotasCreditoVerificador
                 ];
                 $pendientes[] = self::filaMatch((int) $linea['id'], $nuevo['factura_xml_id'], $estado,
                     $diferencia, $match['metodo'], $match['score'], false, $match['motivo'], false);
-                $cantidadCambios += self::registrarCambio($modelo, $verificacionId, $linea, $nuevo);
+                $cantidadCambios += self::registrarCambio($modelo, $verificacionId, $linea, $nuevo, $historial);
                 $stats[$estado]++;
             }
 
             // Todas las escrituras juntas, al final: son una por línea y cada
             // una cuesta un viaje a la base.
             self::aplicarMatches($modelo, $pendientes);
+            self::guardarHistorial($modelo, $historial);
 
             if ($verificacionId !== null && method_exists($modelo, 'finalizarVerificacion')) {
                 $modelo->finalizarVerificacion($verificacionId, $stats, $cantidadCambios);
@@ -197,12 +199,39 @@ class NotasCreditoVerificador
         }
     }
 
-    private static function registrarCambio($modelo, $verificacionId, array $anterior, array $nuevo)
+    /**
+     * Acumula la fila de historial del cambio en lugar de escribirla.
+     *
+     * La primera verificación de un listado cambia TODAS sus líneas —miles—, y
+     * una consulta por línea no cabe en el tiempo de la petición. Se juntan y
+     * se guardan de una vez en guardarHistorial(). Si el modelo no sabe armar
+     * la fila (las pruebas usan dobles más simples), cae a la escritura de a
+     * una, que es lo que se hacía antes.
+     */
+    private static function registrarCambio($modelo, $verificacionId, array $anterior, array $nuevo, array &$historial)
     {
-        if ($verificacionId === null || !method_exists($modelo, 'registrarCambioVerificacion')) {
+        if ($verificacionId === null) {
+            return 0;
+        }
+        if (method_exists($modelo, 'filaHistorial')) {
+            $fila = $modelo->filaHistorial($verificacionId, $anterior, $nuevo);
+            if ($fila === null) {
+                return 0;
+            }
+            $historial[] = $fila;
+            return 1;
+        }
+        if (!method_exists($modelo, 'registrarCambioVerificacion')) {
             return 0;
         }
         return $modelo->registrarCambioVerificacion($verificacionId, $anterior, $nuevo) ? 1 : 0;
+    }
+
+    private static function guardarHistorial($modelo, array $historial)
+    {
+        if ($historial && method_exists($modelo, 'registrarHistorialLote')) {
+            $modelo->registrarHistorialLote($historial);
+        }
     }
 
     public static function clasificar($montoReporte, $totalXml, $moneda)

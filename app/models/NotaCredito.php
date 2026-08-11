@@ -529,7 +529,23 @@ class NotaCredito extends Model
         );
     }
 
-    public function registrarCambioVerificacion($verificacionId, array $anterior, array $nuevo)
+    private const COLUMNAS_HISTORIAL = [
+        'verificacion_id', 'listado_id', 'linea_id', 'fila_origen', 'documento',
+        'proveedor_nombre', 'nc_proveedor', 'moneda', 'estado_anterior', 'estado_nuevo',
+        'factura_xml_id_anterior', 'factura_xml_id_nuevo',
+        'diferencia_anterior', 'diferencia_nueva', 'motivo_anterior', 'motivo_nuevo',
+    ];
+
+    /**
+     * Los valores de la fila de historial de un cambio, o null si la línea
+     * quedó igual que estaba y no hay nada que historiar.
+     *
+     * Separado de la escritura para que quien verifica pueda juntar todas las
+     * filas y guardarlas de una vez: la primera verificación de un listado
+     * cambia TODAS sus líneas, y ahí una consulta por línea no cabe en el
+     * tiempo de la petición.
+     */
+    public function filaHistorial($verificacionId, array $anterior, array $nuevo)
     {
         $estadoAnterior = (string) ($anterior['estado'] ?? 'sin_respaldo');
         $estadoNuevo = (string) ($nuevo['estado'] ?? 'sin_respaldo');
@@ -545,16 +561,10 @@ class NotaCredito extends Model
             || self::valorDecimalHistorial($diferenciaAnterior) !== self::valorDecimalHistorial($diferenciaNueva)
             || $motivoAnterior !== $motivoNuevo;
         if (!$cambio) {
-            return false;
+            return null;
         }
 
-        $sql = "INSERT INTO notas_credito_historial
-                    (verificacion_id, listado_id, linea_id, fila_origen, documento,
-                     proveedor_nombre, nc_proveedor, moneda, estado_anterior, estado_nuevo,
-                     factura_xml_id_anterior, factura_xml_id_nuevo,
-                     diferencia_anterior, diferencia_nueva, motivo_anterior, motivo_nuevo)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-        $this->insert($sql, [
+        return [
             (int) $verificacionId,
             (int) ($anterior['listado_id'] ?? 0),
             (int) ($anterior['id'] ?? 0) ?: null,
@@ -571,8 +581,42 @@ class NotaCredito extends Model
             $diferenciaNueva,
             $motivoAnterior,
             $motivoNuevo,
-        ]);
+        ];
+    }
+
+    public function registrarCambioVerificacion($verificacionId, array $anterior, array $nuevo)
+    {
+        $valores = $this->filaHistorial($verificacionId, $anterior, $nuevo);
+        if ($valores === null) {
+            return false;
+        }
+        $this->registrarHistorialLote([$valores]);
         return true;
+    }
+
+    /** Guarda muchas filas de historial en tandas de una sola consulta. */
+    public function registrarHistorialLote(array $filas, $tam = 200)
+    {
+        $columnas = implode(', ', self::COLUMNAS_HISTORIAL);
+        $hueco = '(' . implode(', ', array_fill(0, count(self::COLUMNAS_HISTORIAL), '?')) . ')';
+
+        $guardadas = 0;
+        foreach (array_chunk(array_values($filas), max(1, (int) $tam)) as $tanda) {
+            $params = [];
+            foreach ($tanda as $valores) {
+                foreach ($valores as $valor) {
+                    $params[] = $valor;
+                }
+            }
+            $this->execute(
+                "INSERT INTO notas_credito_historial ({$columnas}) VALUES "
+                . implode(', ', array_fill(0, count($tanda), $hueco)),
+                $params
+            );
+            $guardadas += count($tanda);
+        }
+
+        return $guardadas;
     }
 
     private static function valorDecimalHistorial($value)
