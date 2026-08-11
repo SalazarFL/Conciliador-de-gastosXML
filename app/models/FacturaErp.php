@@ -413,26 +413,54 @@ class FacturaErp extends Model
         }
     }
 
+    /**
+     * Escribe los saldos que cambiaron respecto de la carga anterior.
+     *
+     * Por tandas y no de a una: la primera carga inserta todo y no pasa por
+     * aquí, pero la segunda encuentra saldos distintos en buena parte de las
+     * miles de filas del reporte, y con la base en el servidor cada UPDATE
+     * cuesta un viaje de ida y vuelta.
+     *
+     * El ELSE de cada CASE deja intacta cualquier fila fuera de la tanda.
+     */
     private function actualizarCambiadas(array $cambios, $cargaId)
     {
-        foreach ($cambios as $c) {
-            $f = $c['factura'];
+        $columnas = ['saldo', 'saldo_anterior', 'saldo_colones',
+                     'proveedor_nombre', 'sucursal', 'fecha_vence'];
+
+        foreach (array_chunk($cambios, self::LOTE_INSERT) as $tanda) {
+            $valores = [];
+            foreach ($tanda as $c) {
+                $f = $c['factura'];
+                $valores[] = [
+                    'id'               => (int) $c['id'],
+                    'saldo'            => (float) $f['saldo'],
+                    'saldo_anterior'   => $c['anterior'],
+                    'saldo_colones'    => $f['saldo_colones'],
+                    'proveedor_nombre' => (string) $f['proveedor_nombre'],
+                    'sucursal'         => (string) $f['sucursal'],
+                    'fecha_vence'      => $f['fecha_vence'],
+                ];
+            }
+
+            $sets = [];
+            $params = [];
+            foreach ($columnas as $columna) {
+                $caso = "{$columna} = CASE id";
+                foreach ($valores as $valor) {
+                    $caso .= ' WHEN ? THEN ?';
+                    $params[] = $valor['id'];
+                    $params[] = $valor[$columna];
+                }
+                $sets[] = $caso . " ELSE {$columna} END";
+            }
+
+            $ids = array_column($valores, 'id');
             $this->execute(
-                "UPDATE facturas_erp
-                    SET saldo = ?, saldo_anterior = ?, saldo_colones = ?,
-                        proveedor_nombre = ?, sucursal = ?, fecha_vence = ?,
-                        carga_cambio_id = ?, saldo_cambiado_en = NOW()
-                  WHERE id = ?",
-                [
-                    (float) $f['saldo'],
-                    $c['anterior'],
-                    $f['saldo_colones'],
-                    (string) $f['proveedor_nombre'],
-                    (string) $f['sucursal'],
-                    $f['fecha_vence'],
-                    $cargaId,
-                    $c['id'],
-                ]
+                'UPDATE facturas_erp SET ' . implode(', ', $sets)
+                . ', carga_cambio_id = ?, saldo_cambiado_en = NOW()'
+                . ' WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')',
+                array_merge($params, [$cargaId], $ids)
             );
         }
     }
@@ -603,17 +631,35 @@ class FacturaErp extends Model
                 throw new Exception('No se puede cerrar: ' . implode('; ', $partes) . '.');
             }
 
-            foreach ($asignaciones as $asignacion) {
+            // Por tandas y no de a una: un listado de 568 líneas eran 1,136
+            // consultas, y con la base en el servidor eso son 100 segundos —
+            // más de lo que dura la petición.
+            foreach (array_chunk($asignaciones, self::LOTE_INSERT) as $tanda) {
+                $caso = 'factura_erp_id = CASE id';
+                $params = [];
+                $ids = [];
+                $erpIds = [];
+                foreach ($tanda as $asignacion) {
+                    $caso .= ' WHEN ? THEN ?';
+                    $params[] = (int) $asignacion['linea_id'];
+                    $params[] = (int) $asignacion['erp_id'];
+                    $ids[] = (int) $asignacion['linea_id'];
+                    $erpIds[] = (int) $asignacion['erp_id'];
+                }
                 $this->execute(
-                    "UPDATE porpagar_facturas SET factura_erp_id = ? WHERE id = ? AND listado_id = ?",
-                    [$asignacion['erp_id'], $asignacion['linea_id'], $listadoId]
+                    "UPDATE porpagar_facturas SET {$caso} ELSE factura_erp_id END
+                      WHERE listado_id = ?
+                        AND id IN (" . implode(',', array_fill(0, count($ids), '?')) . ')',
+                    array_merge($params, [$listadoId], $ids)
                 );
+
+                // Aquí todas las filas reciben lo mismo, así que basta el IN.
                 $this->execute(
                     "UPDATE facturas_erp
                         SET estado = 'asignada_semana', semana_id = ?, porpagar_listado_id = ?,
                             asignada_semana_en = NOW()
-                      WHERE id = ?",
-                    [$semanaId, $listadoId, $asignacion['erp_id']]
+                      WHERE id IN (" . implode(',', array_fill(0, count($erpIds), '?')) . ')',
+                    array_merge([$semanaId, $listadoId], $erpIds)
                 );
             }
 

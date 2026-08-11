@@ -44,6 +44,7 @@ class PorPagarVerificador
 
         $stats = ['respaldada' => 0, 'con_diferencia' => 0, 'sin_respaldo' => 0];
         $usadas = [];
+        $pendientes = [];
 
         // Los vínculos manuales (botón "Sin coincidencia") se respetan: la
         // línea conserva su factura y esa factura no queda disponible para
@@ -126,7 +127,7 @@ class PorPagarVerificador
             }
 
             if ($mejor === null) {
-                $modelo->actualizarMatch((int) $linea['id'], null, 'sin_respaldo', null, null, null);
+                $pendientes[] = self::filaMatch((int) $linea['id'], null, 'sin_respaldo', null, null, null);
                 $stats['sin_respaldo']++;
                 continue;
             }
@@ -136,7 +137,7 @@ class PorPagarVerificador
             $diferencia = round((float) $linea['total'] - (float) $mejor['total'], 2);
             $estado = abs($diferencia) <= FacturaMatcher::TOLERANCIA_CRC ? 'respaldada' : 'con_diferencia';
 
-            $modelo->actualizarMatch(
+            $pendientes[] = self::filaMatch(
                 (int) $linea['id'],
                 (int) $mejor['id'],
                 $estado,
@@ -147,6 +148,10 @@ class PorPagarVerificador
             $stats[$estado]++;
         }
 
+        // Todas las escrituras juntas: son una por línea y cada una cuesta un
+        // viaje a la base. Un listado de 568 líneas se llevaba 50 segundos.
+        self::aplicarMatches($modelo, $pendientes);
+
         // Verificar no mueve archivos. La ubicación en el disco solo cambia
         // por orden explícita de la persona (Correo → Ordenar el archivo).
         if ($semanaId > 0 && method_exists($modelo, 'asignarRespaldadasASemana')) {
@@ -155,6 +160,41 @@ class PorPagarVerificador
 
         self::anotarAliasUsados();
         return $stats;
+    }
+
+    /** Un cambio de emparejamiento, con las columnas que espera el modelo. */
+    private static function filaMatch($id, $facturaId, $estado, $diferencia, $scoreNumero, $scoreProveedor)
+    {
+        return [
+            'id'              => (int) $id,
+            'factura_xml_id'  => $facturaId ?: null,
+            'estado'          => (string) $estado,
+            'diferencia'      => $diferencia,
+            'score_numero'    => $scoreNumero,
+            'score_proveedor' => $scoreProveedor,
+        ];
+    }
+
+    /**
+     * Escribe los cambios acumulados. Prefiere la versión por tandas; si el
+     * modelo no la trae —las pruebas usan dobles más simples— cae a una
+     * consulta por línea, que es lo que se hacía antes.
+     */
+    private static function aplicarMatches($modelo, array $filas)
+    {
+        if (!$filas) {
+            return;
+        }
+        if (method_exists($modelo, 'actualizarMatchLote')) {
+            $modelo->actualizarMatchLote($filas);
+            return;
+        }
+        foreach ($filas as $fila) {
+            $modelo->actualizarMatch(
+                $fila['id'], $fila['factura_xml_id'], $fila['estado'], $fila['diferencia'],
+                $fila['score_numero'], $fila['score_proveedor']
+            );
+        }
     }
 
     /**

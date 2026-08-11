@@ -342,6 +342,45 @@ class PorPagar extends Model
         ]);
     }
 
+    private const COLUMNAS_MATCH = ['factura_xml_id', 'estado', 'diferencia',
+        'score_numero', 'score_proveedor'];
+
+    /**
+     * Lo mismo que actualizarMatch pero para muchas líneas de una vez.
+     *
+     * Verificar un listado toca TODAS sus líneas —cientos—, y con la base en
+     * el servidor cada UPDATE cuesta un viaje de ida y vuelta. De a una, un
+     * listado grande se llevaba la mitad del tiempo de la petición, y al
+     * vincular a mano eso se repite en cada listado abierto.
+     *
+     * El ELSE de cada CASE deja intacta cualquier fila fuera del lote.
+     */
+    public function actualizarMatchLote(array $filas, $tam = 100)
+    {
+        $afectadas = 0;
+        foreach (array_chunk(array_values($filas), max(1, (int) $tam)) as $tanda) {
+            $sets = [];
+            $params = [];
+            foreach (self::COLUMNAS_MATCH as $columna) {
+                $caso = "{$columna} = CASE id";
+                foreach ($tanda as $fila) {
+                    $caso .= ' WHEN ? THEN ?';
+                    $params[] = (int) $fila['id'];
+                    $params[] = $fila[$columna];
+                }
+                $sets[] = $caso . " ELSE {$columna} END";
+            }
+            $ids = array_map(function ($fila) { return (int) $fila['id']; }, $tanda);
+            $afectadas += (int) $this->execute(
+                'UPDATE porpagar_facturas SET ' . implode(', ', $sets) . ', match_manual = 0'
+                . ' WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')',
+                array_merge($params, $ids)
+            );
+        }
+
+        return $afectadas;
+    }
+
     /**
      * Vínculo manual (botón "Sin coincidencia"): número y proveedor no
      * coincidieron, la persona decidió el respaldo y solo cuenta el monto.
