@@ -149,14 +149,16 @@ class NotaCredito extends Model
         ]);
     }
 
-    public function crearLinea($listadoId, array $linea)
+    private const COLUMNAS_LINEA = [
+        'listado_id', 'fila_origen', 'proveedor_codigo', 'proveedor_nombre', 'sucursal',
+        'documento', 'fecha', 'nc_proveedor', 'fecha_nc_proveedor', 'entrada_asociada',
+        'moneda', 'monto', 'saldo', 'monto_conversion', 'datos_origen',
+    ];
+
+    /** Los valores de una línea, en el orden de COLUMNAS_LINEA. */
+    private function valoresLinea($listadoId, array $linea)
     {
-        $sql = "INSERT INTO notas_credito_lineas
-                    (listado_id, fila_origen, proveedor_codigo, proveedor_nombre, sucursal,
-                     documento, fecha, nc_proveedor, fecha_nc_proveedor, entrada_asociada,
-                     moneda, monto, saldo, monto_conversion, datos_origen)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-        return (int) $this->insert($sql, [
+        return [
             (int) $listadoId,
             (int) $linea['fila_origen'],
             $linea['proveedor_codigo'] ?: null,
@@ -172,7 +174,46 @@ class NotaCredito extends Model
             (float) $linea['saldo'],
             (float) $linea['monto_conversion'],
             $linea['datos_origen'] ?: null,
-        ]);
+        ];
+    }
+
+    public function crearLinea($listadoId, array $linea)
+    {
+        return (int) $this->insert(
+            'INSERT INTO notas_credito_lineas (' . implode(', ', self::COLUMNAS_LINEA) . ')'
+            . ' VALUES (' . implode(', ', array_fill(0, count(self::COLUMNAS_LINEA), '?')) . ')',
+            $this->valoresLinea($listadoId, $linea)
+        );
+    }
+
+    /**
+     * Inserta las líneas de un listado en tandas. Un CSV de notas son miles
+     * de filas, y con la base en el servidor cada INSERT cuesta un viaje de
+     * ida y vuelta: de a una, la carga se pasa del tiempo máximo de la
+     * petición antes de llegar al final.
+     */
+    public function crearLineasLote($listadoId, array $lineas, $tam = 200)
+    {
+        $columnas = implode(', ', self::COLUMNAS_LINEA);
+        $hueco = '(' . implode(', ', array_fill(0, count(self::COLUMNAS_LINEA), '?')) . ')';
+
+        $insertadas = 0;
+        foreach (array_chunk(array_values($lineas), max(1, (int) $tam)) as $tanda) {
+            $params = [];
+            foreach ($tanda as $linea) {
+                foreach ($this->valoresLinea($listadoId, $linea) as $valor) {
+                    $params[] = $valor;
+                }
+            }
+            $this->execute(
+                "INSERT INTO notas_credito_lineas ({$columnas}) VALUES "
+                . implode(', ', array_fill(0, count($tanda), $hueco)),
+                $params
+            );
+            $insertadas += count($tanda);
+        }
+
+        return $insertadas;
     }
 
     public function buscarPorHash($hash)

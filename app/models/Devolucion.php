@@ -59,18 +59,51 @@ class Devolucion extends Model
         );
     }
 
+    /** Los valores de una línea, en el orden en que van al INSERT. */
+    private function valoresLinea($devolucionId, array $l)
+    {
+        return [
+            (int) $devolucionId, $l['seccion'], $l['codigo'], $l['nombre'],
+            $l['cantidad'], $l['costo'], $l['impuesto'], $l['total'],
+            $l['dif_costo'],
+        ];
+    }
+
     public function crearLinea($devolucionId, array $l)
     {
         return $this->insert(
             'INSERT INTO devolucion_lineas
                 (devolucion_id, seccion, codigo, nombre, cantidad, costo, impuesto, total, dif_costo)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [
-                (int) $devolucionId, $l['seccion'], $l['codigo'], $l['nombre'],
-                $l['cantidad'], $l['costo'], $l['impuesto'], $l['total'],
-                $l['dif_costo'],
-            ]
+            $this->valoresLinea($devolucionId, $l)
         );
+    }
+
+    /**
+     * Inserta las líneas de una devolución en tandas: con la base en el
+     * servidor, cada INSERT cuesta un viaje de ida y vuelta, y una devolución
+     * larga se lleva la petición entera de a una.
+     */
+    public function crearLineasLote($devolucionId, array $lineas, $tam = 200)
+    {
+        $insertadas = 0;
+        foreach (array_chunk(array_values($lineas), max(1, (int) $tam)) as $tanda) {
+            $params = [];
+            foreach ($tanda as $linea) {
+                foreach ($this->valoresLinea($devolucionId, $linea) as $valor) {
+                    $params[] = $valor;
+                }
+            }
+            $this->execute(
+                'INSERT INTO devolucion_lineas
+                    (devolucion_id, seccion, codigo, nombre, cantidad, costo, impuesto, total, dif_costo)
+                 VALUES ' . implode(', ', array_fill(0, count($tanda), '(?, ?, ?, ?, ?, ?, ?, ?, ?)')),
+                $params
+            );
+            $insertadas += count($tanda);
+        }
+
+        return $insertadas;
     }
 
     public function getDevolucion($id)

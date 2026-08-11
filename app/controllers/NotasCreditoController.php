@@ -192,9 +192,7 @@ class NotasCreditoController extends Controller
                 'archivo_hash' => $hash,
                 'total_lineas' => count($parsed['lineas']),
             ]);
-            foreach ($parsed['lineas'] as $linea) {
-                $modelo->crearLinea($listadoId, $linea);
-            }
+            $modelo->crearLineasLote($listadoId, $parsed['lineas']);
             $modelo->commit();
 
             $stats = NotasCreditoVerificador::verificarListado($listadoId, $modelo, 'carga_inicial');

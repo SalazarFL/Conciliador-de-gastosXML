@@ -54,9 +54,7 @@ class DevolucionImporter
         try {
             $this->modelo->begin();
             $id = (int) $this->modelo->crear($datos);
-            foreach ($this->mapearLineas($parsed) as $linea) {
-                $this->modelo->crearLinea($id, $linea);
-            }
+            $this->modelo->crearLineasLote($id, $this->mapearLineas($parsed));
             $this->modelo->commit();
         } catch (Throwable $e) {
             $this->modelo->rollback();

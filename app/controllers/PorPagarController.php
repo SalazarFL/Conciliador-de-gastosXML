@@ -266,6 +266,7 @@ class PorPagarController extends Controller
             $fallidos = 0;
             $omitidas = 0;
 
+            $nuevas = [];
             foreach ($analisis['lineas'] as $lineaArchivo) {
                 if ($lineaArchivo['estado'] === 'error') {
                     $fallidos++;
@@ -276,14 +277,14 @@ class PorPagarController extends Controller
                     continue;
                 }
 
-                $modelo->crearLinea($listadoId, [
+                $nuevas[] = [
                     'fecha' => $lineaArchivo['fecha'] ?: null,   // informativa
                     'numero' => $lineaArchivo['numero'],
                     'proveedor' => $lineaArchivo['proveedor'],
                     'total' => $lineaArchivo['total'],
-                ]);
-                $exitosos++;
+                ];
             }
+            $exitosos = $modelo->crearLineasLote($listadoId, $nuevas);
 
             if (is_file($file['path'])) {
                 @unlink($file['path']);

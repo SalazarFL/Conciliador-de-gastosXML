@@ -207,17 +207,50 @@ class PorPagar extends Model
 
     // ── Líneas del listado ─────────────────────────────────────────
 
-    public function crearLinea($listadoId, array $linea)
+    /** Los valores de una línea, en el orden en que van al INSERT. */
+    private function valoresLinea($listadoId, array $linea)
     {
-        $sql = "INSERT INTO porpagar_facturas (listado_id, fecha, numero, proveedor_texto, total)
-                VALUES (?, ?, ?, ?, ?)";
-        return $this->insert($sql, [
+        return [
             (int) $listadoId,
             $linea['fecha'] ?: null,
             (string) $linea['numero'],
             (string) $linea['proveedor'],
             (float) $linea['total'],
-        ]);
+        ];
+    }
+
+    public function crearLinea($listadoId, array $linea)
+    {
+        $sql = "INSERT INTO porpagar_facturas (listado_id, fecha, numero, proveedor_texto, total)
+                VALUES (?, ?, ?, ?, ?)";
+        return $this->insert($sql, $this->valoresLinea($listadoId, $linea));
+    }
+
+    /**
+     * Inserta las líneas de un listado en tandas. Un listado semanal son
+     * cientos de filas, y con la base en el servidor cada INSERT cuesta un
+     * viaje de ida y vuelta: de a una, la carga se acerca peligrosamente al
+     * tiempo máximo de la petición.
+     */
+    public function crearLineasLote($listadoId, array $lineas, $tam = 200)
+    {
+        $insertadas = 0;
+        foreach (array_chunk(array_values($lineas), max(1, (int) $tam)) as $tanda) {
+            $params = [];
+            foreach ($tanda as $linea) {
+                foreach ($this->valoresLinea($listadoId, $linea) as $valor) {
+                    $params[] = $valor;
+                }
+            }
+            $this->execute(
+                'INSERT INTO porpagar_facturas (listado_id, fecha, numero, proveedor_texto, total)'
+                . ' VALUES ' . implode(', ', array_fill(0, count($tanda), '(?, ?, ?, ?, ?)')),
+                $params
+            );
+            $insertadas += count($tanda);
+        }
+
+        return $insertadas;
     }
 
     /**
