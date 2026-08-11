@@ -587,6 +587,53 @@ class NotaCredito extends Model
         ]);
     }
 
+    /** Columnas que escribe el emparejamiento, en el orden del UPDATE por tandas. */
+    private const COLUMNAS_MATCH = [
+        'factura_xml_id', 'estado', 'diferencia', 'metodo_match',
+        'score_proveedor', 'match_manual', 'bloqueo_automatico', 'motivo_match',
+    ];
+
+    /**
+     * Aplica muchos emparejamientos en pocas consultas.
+     *
+     * Verificar un listado hacía un UPDATE por línea. Con la base en la misma
+     * máquina eran décimas de segundo y nadie lo notó nunca; con la base en el
+     * servidor cada uno cuesta la latencia de la red, y un listado de 2 100
+     * líneas tardaba casi seis minutos: la pantalla moría en el límite de
+     * ejecución de PHP sin decir por qué.
+     *
+     * Cada tanda resuelve hasta $tam líneas con un solo UPDATE, usando CASE
+     * sobre el id. El `ELSE columna` deja intacta cualquier fila que entre por
+     * el WHERE sin estar en la tanda: no puede borrar nada por accidente.
+     *
+     * @param array $filas Cada una con 'id' y las columnas de COLUMNAS_MATCH.
+     */
+    public function actualizarMatchLote(array $filas, $tam = 100)
+    {
+        $afectadas = 0;
+        foreach (array_chunk(array_values($filas), max(1, (int) $tam)) as $tanda) {
+            $sets = [];
+            $params = [];
+            foreach (self::COLUMNAS_MATCH as $columna) {
+                $caso = "{$columna} = CASE id";
+                foreach ($tanda as $fila) {
+                    $caso .= ' WHEN ? THEN ?';
+                    $params[] = (int) $fila['id'];
+                    $params[] = $fila[$columna];
+                }
+                $sets[] = $caso . " ELSE {$columna} END";
+            }
+
+            $ids = array_map(function ($fila) { return (int) $fila['id']; }, $tanda);
+            $afectadas += (int) $this->execute(
+                'UPDATE notas_credito_lineas SET ' . implode(', ', $sets)
+                . ' WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')',
+                array_merge($params, $ids)
+            );
+        }
+        return $afectadas;
+    }
+
     /**
      * Prepara una revalidación completa sin tocar vínculos manuales ni el
      * bloqueo solicitado por el usuario. Evita que un vínculo automático

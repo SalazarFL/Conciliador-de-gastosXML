@@ -18,7 +18,9 @@ class NotasCreditoVerificador
 
         $lineas = $modelo->getLineasParaMatching((int) $listadoId);
         $facturas = $modelo->getFacturasNcSociedad((string) $listado['sociedad_cedula']);
+        $indice = self::indexarFacturas($facturas);
         $usadas = [];
+        $pendientes = [];
         $manualesNoExactas = [];
         $stats = ['coincide' => 0, 'con_diferencia' => 0, 'sin_respaldo' => 0];
         $verificacionId = null;
@@ -69,14 +71,14 @@ class NotasCreditoVerificador
                         'diferencia' => null,
                         'motivo_match' => 'Desvinculada manualmente.',
                     ];
-                    $modelo->actualizarMatch((int) $linea['id'], null, $nuevo['estado'], null, 'ninguno',
-                        null, false, $nuevo['motivo_match'], true);
+                    $pendientes[] = self::filaMatch((int) $linea['id'], null, $nuevo['estado'], null,
+                        'ninguno', null, false, $nuevo['motivo_match'], true);
                     $cantidadCambios += self::registrarCambio($modelo, $verificacionId, $linea, $nuevo);
                     $stats['sin_respaldo']++;
                     continue;
                 }
 
-                $match = self::buscarMatch($linea, $facturas, $usadas);
+                $match = self::buscarMatch($linea, $facturas, $usadas, $indice);
                 if ($match['factura'] === null) {
                     $nuevo = [
                         'factura_xml_id' => null,
@@ -84,8 +86,8 @@ class NotasCreditoVerificador
                         'diferencia' => null,
                         'motivo_match' => $match['motivo'],
                     ];
-                    $modelo->actualizarMatch((int) $linea['id'], null, $nuevo['estado'], null, 'ninguno',
-                        $match['score'], false, $nuevo['motivo_match']);
+                    $pendientes[] = self::filaMatch((int) $linea['id'], null, $nuevo['estado'], null,
+                        'ninguno', $match['score'], false, $nuevo['motivo_match'], false);
                     $cantidadCambios += self::registrarCambio($modelo, $verificacionId, $linea, $nuevo);
                     $stats['sin_respaldo']++;
                     continue;
@@ -104,11 +106,15 @@ class NotasCreditoVerificador
                     'diferencia' => $diferencia,
                     'motivo_match' => $match['motivo'],
                 ];
-                $modelo->actualizarMatch((int) $linea['id'], $nuevo['factura_xml_id'], $estado,
-                    $diferencia, $match['metodo'], $match['score'], false, $match['motivo']);
+                $pendientes[] = self::filaMatch((int) $linea['id'], $nuevo['factura_xml_id'], $estado,
+                    $diferencia, $match['metodo'], $match['score'], false, $match['motivo'], false);
                 $cantidadCambios += self::registrarCambio($modelo, $verificacionId, $linea, $nuevo);
                 $stats[$estado]++;
             }
+
+            // Todas las escrituras juntas, al final: son una por línea y cada
+            // una cuesta un viaje a la base.
+            self::aplicarMatches($modelo, $pendientes);
 
             if ($verificacionId !== null && method_exists($modelo, 'finalizarVerificacion')) {
                 $modelo->finalizarVerificacion($verificacionId, $stats, $cantidadCambios);
@@ -130,6 +136,45 @@ class NotasCreditoVerificador
     {
         foreach ($modelo->getListadosPorSociedad((int) $sociedadId) as $listado) {
             self::verificarListado((int) $listado['id'], $modelo, (string) $origen);
+        }
+    }
+
+    /** Un cambio de emparejamiento, con las columnas que espera el modelo. */
+    private static function filaMatch($id, $facturaId, $estado, $diferencia, $metodo, $score, $manual, $motivo, $bloqueo)
+    {
+        return [
+            'id'                 => (int) $id,
+            'factura_xml_id'     => $facturaId ?: null,
+            'estado'             => (string) $estado,
+            'diferencia'         => $diferencia,
+            'metodo_match'       => (string) $metodo,
+            'score_proveedor'    => $score,
+            'match_manual'       => $manual ? 1 : 0,
+            'bloqueo_automatico' => $bloqueo ? 1 : 0,
+            'motivo_match'       => $motivo ?: null,
+        ];
+    }
+
+    /**
+     * Escribe los cambios acumulados. Prefiere la versión por tandas; si el
+     * modelo no la trae —las pruebas usan dobles más simples— cae a una
+     * consulta por línea, que es lo que se hacía antes.
+     */
+    private static function aplicarMatches($modelo, array $filas)
+    {
+        if (!$filas) {
+            return;
+        }
+        if (method_exists($modelo, 'actualizarMatchLote')) {
+            $modelo->actualizarMatchLote($filas);
+            return;
+        }
+        foreach ($filas as $fila) {
+            $modelo->actualizarMatch(
+                $fila['id'], $fila['factura_xml_id'], $fila['estado'], $fila['diferencia'],
+                $fila['metodo_match'], $fila['score_proveedor'], (bool) $fila['match_manual'],
+                $fila['motivo_match'], $fila['bloqueo_automatico']
+            );
         }
     }
 
@@ -162,15 +207,85 @@ class NotasCreditoVerificador
         return in_array($value, ['USD', 'US$', '$'], true) ? 'USD' : 'CRC';
     }
 
-    private static function buscarMatch(array $linea, array $facturas, array $usadas)
+    /** Respuestas ya calculadas de "¿son el mismo proveedor?", por par de nombres. */
+    private static $memoProveedor = [];
+
+    /**
+     * Compara proveedores recordando lo ya comparado.
+     *
+     * La comparación es difusa —normaliza, quita sufijos societarios y mide
+     * parecido—, así que cuesta. Y se repite muchísimo: medido sobre un
+     * listado real, 2.7 millones de llamadas para solo 43 560 pares distintos,
+     * porque los mismos 242 nombres de línea se comparan una y otra vez contra
+     * los mismos 180 de las facturas.
+     *
+     * La memoria vive lo que dure la petición. Un alias nuevo aprendido a
+     * mitad de una verificación no se reflejaría, pero los alias se aprenden
+     * al vincular a mano, nunca durante una verificación.
+     */
+    private static function mismoProveedorMemo($nombreLinea, $nombreFactura)
     {
-        $disponibles = array_values(array_filter($facturas, function ($factura) use ($usadas, $linea) {
+        $clave = $nombreLinea . "\x00" . $nombreFactura;
+        if (!array_key_exists($clave, self::$memoProveedor)) {
+            self::$memoProveedor[$clave] = FacturaMatcher::mismoProveedor($nombreLinea, $nombreFactura);
+        }
+        return self::$memoProveedor[$clave];
+    }
+
+    /**
+     * Índice de las facturas por los dos valores con los que mismoNumeroNc()
+     * compara, que son igualdades exactas.
+     *
+     * Sin él, cada línea recorría las 1 636 candidatas para descartarlas una a
+     * una: con 2 103 líneas eran 3.4 millones de comparaciones y casi un
+     * minuto de CPU. Guarda posiciones, no copias, para no duplicar en memoria
+     * todas las facturas.
+     */
+    private static function indexarFacturas(array $facturas)
+    {
+        $indice = ['consecutivo' => [], 'ocho' => []];
+        foreach ($facturas as $posicion => $factura) {
+            $consecutivo = self::digits((string) ($factura['consecutivo_completo'] ?? ''));
+            if ($consecutivo !== '') {
+                $indice['consecutivo'][$consecutivo][] = $posicion;
+            }
+            $ocho = NumeroFactura::xmlOchoDigitos($factura['numero_factura_asistente'] ?? '');
+            if ((string) $ocho !== '') {
+                $indice['ocho'][(string) $ocho][] = $posicion;
+            }
+        }
+        return $indice;
+    }
+
+    private static function buscarMatch(array $linea, array $facturas, array $usadas, ?array $indice = null)
+    {
+        $numeroProveedor = self::digits((string) ($linea['nc_proveedor'] ?? ''));
+
+        // Con número de NC del proveedor el universo se reduce a las que
+        // comparten ese consecutivo: se buscan en el índice en vez de recorrer
+        // todas. Se conservan las posiciones ordenadas para que el orden de
+        // las candidatas sea el mismo de siempre.
+        $base = $facturas;
+        if ($numeroProveedor !== '' && $indice !== null) {
+            $posiciones = array_unique(array_merge(
+                $indice['consecutivo'][$numeroProveedor] ?? [],
+                $indice['ocho'][(string) NumeroFactura::xmlOchoDigitos($numeroProveedor)] ?? []
+            ));
+            sort($posiciones);
+            $base = [];
+            foreach ($posiciones as $posicion) {
+                $base[] = $facturas[$posicion];
+            }
+        }
+
+        $disponibles = array_values(array_filter($base, function ($factura) use ($usadas, $linea) {
             return !isset($usadas[(int) $factura['id']])
                 && self::normalizeCurrency($factura['moneda']) === self::normalizeCurrency($linea['moneda']);
         }));
 
-        $numeroProveedor = self::digits((string) ($linea['nc_proveedor'] ?? ''));
         if ($numeroProveedor !== '') {
+            // Se vuelve a comprobar sobre el conjunto ya reducido: el índice
+            // acelera, pero quien decide sigue siendo la misma función.
             $disponibles = array_values(array_filter($disponibles, function ($factura) use ($numeroProveedor) {
                 return self::mismoNumeroNc($numeroProveedor, $factura);
             }));
@@ -187,12 +302,12 @@ class NotasCreditoVerificador
 
         $candidatas = [];
         foreach ($disponibles as $factura) {
-            $mismoProveedor = FacturaMatcher::mismoProveedor(
+            $mismoProveedor = self::mismoProveedorMemo(
                 (string) $linea['proveedor_nombre'],
                 (string) $factura['proveedor_nombre']
             );
             if (!$mismoProveedor && !empty($factura['proveedor_alias'])) {
-                $mismoProveedor = FacturaMatcher::mismoProveedor(
+                $mismoProveedor = self::mismoProveedorMemo(
                     (string) $linea['proveedor_nombre'],
                     (string) $factura['proveedor_alias']
                 );
