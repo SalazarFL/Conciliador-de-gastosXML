@@ -116,6 +116,25 @@ try {
                                    WHERE alias_norm = '{$CORTO}'")->fetchColumn();
     verificaAlias($cuantos === 1, 'corregir no duplica la fila, la reescribe');
 
+    // ── El contador de uso ────────────────────────────────────────────
+    // Sin esto la pantalla de alias decía 0 aunque el alias estuviera
+    // resolviendo emparejamientos, y parecía que no servía para nada.
+    FacturaMatcher::olvidarAliasAplicados();
+    verificaAlias(FacturaMatcher::aliasAplicados() === [],
+        'sin comparaciones, no hay ningún alias que anotar');
+
+    FacturaMatcher::mismoProveedor($CORTO, $OTRO_NOMBRE);
+    verificaAlias(in_array(ProveedorAlias::normalizar($CORTO), FacturaMatcher::aliasAplicados(), true),
+        'el alias que resolvió la comparación queda anotado para contarlo después');
+
+    $antesUso = (int) $pdo->query("SELECT veces_aplicado FROM proveedor_alias
+                                    WHERE alias_norm = '{$CORTO}'")->fetchColumn();
+    $modelo->registrarUsos(FacturaMatcher::aliasAplicados());
+    $despuesUso = (int) $pdo->query("SELECT veces_aplicado FROM proveedor_alias
+                                      WHERE alias_norm = '{$CORTO}'")->fetchColumn();
+    verificaAlias($despuesUso === $antesUso + 1, 'anotar el uso incrementa el contador');
+    verificaAlias($modelo->registrarUsos([]) === 0, 'sin alias usados no se escribe nada');
+
     // ── Nada que aprender cuando los nombres ya se parecían ───────────
     verificaAlias($modelo->aprender($provId, $NOMBRE_LARGO) === false,
         'no se guarda un alias igual al nombre real');

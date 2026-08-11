@@ -844,7 +844,8 @@ class PorPagarController extends Controller
             // Si los nombres no se parecían, esta vinculación acaba de
             // enseñar una equivalencia que nadie podía deducir. Se guarda para
             // que valga en todas las demás facturas del mismo proveedor.
-            $aprendido = $this->aprenderAliasProveedor($linea, $factura);
+            $aliasTexto = $this->aprenderAliasProveedor($linea, $factura);
+            $aprendido = $aliasTexto !== '';
 
             // Asigna la semana y mueve el par XML/PDF si el vínculo manual
             // quedó respaldado correctamente.
@@ -856,12 +857,18 @@ class PorPagarController extends Controller
                 ? $this->reprocesarListadosAbiertos($modelo, (int) $linea['listado_id'])
                 : 0;
 
+            // El alias vale igual para las notas de crédito, que se comparan
+            // con el mismo emparejador. Antes había que entrar a ese módulo y
+            // pedir «Verificar de nuevo» para que se enterara.
+            $ncResueltas = $aprendido ? $this->reprocesarNotasCredito($aliasTexto) : 0;
+
             $this->json([
                 'ok' => true,
                 'estado' => $estado,
                 'diferencia' => $diferencia,
                 'alias_aprendido' => $aprendido,
                 'lineas_resueltas' => $reprocesadas,
+                'notas_resueltas' => $ncResueltas,
             ]);
         } catch (Throwable $e) {
             $this->json(['ok' => false, 'message' => 'No se pudo vincular: ' . $e->getMessage()], 500);
@@ -958,7 +965,7 @@ class PorPagarController extends Controller
         $textoErp = trim((string) ($linea['proveedor_texto'] ?? ''));
         $proveedorId = (int) ($factura['proveedor_id'] ?? 0);
         if ($textoErp === '' || $proveedorId <= 0) {
-            return false;
+            return '';
         }
 
         $score = FacturaMatcher::similaridadTexto(
@@ -966,20 +973,65 @@ class PorPagarController extends Controller
             (string) ($factura['proveedor_nombre'] ?? '')
         );
         if ($score >= FacturaMatcher::UMBRAL_PROVEEDOR) {
-            return false; // se parecían; no hay nada que enseñar
+            return ''; // se parecían; no hay nada que enseñar
         }
 
         try {
-            return (bool) $this->loadModel('ProveedorAlias')->aprender(
+            $aprendido = $this->loadModel('ProveedorAlias')->aprender(
                 $proveedorId,
                 $textoErp,
                 (int) ($_SESSION['user_id'] ?? 0)
             );
+            return $aprendido ? $textoErp : '';
         } catch (Throwable $e) {
             // Que no se pueda aprender no debe tumbar el vínculo manual, que
             // es lo que la persona pidió.
-            return false;
+            return '';
         }
+    }
+
+    /**
+     * Vuelve a verificar los listados de notas de crédito donde el alias
+     * recién aprendido puede rescatar algo.
+     *
+     * Solo entran los listados que tienen líneas sin respaldo de ese mismo
+     * proveedor: repasarlos todos costaría segundos por listado sin ninguna
+     * posibilidad de cambiar nada. El límite acota el peor caso, porque esto
+     * cuelga del clic de un vínculo manual y la persona está esperando.
+     */
+    private function reprocesarNotasCredito($aliasTexto, $limite = 3)
+    {
+        $resueltas = 0;
+        try {
+            require_once __DIR__ . '/../models/ProveedorAlias.php';
+            $buscado = ProveedorAlias::normalizar($aliasTexto);
+            if ($buscado === '') {
+                return 0;
+            }
+
+            $notas = $this->loadModel('NotaCredito');
+            $listados = [];
+            foreach ($notas->proveedoresSinRespaldo() as $fila) {
+                if (ProveedorAlias::normalizar((string) $fila['proveedor_nombre']) === $buscado) {
+                    $listados[(int) $fila['listado_id']] = true;
+                }
+            }
+            if (!$listados) {
+                return 0;
+            }
+
+            require_once __DIR__ . '/../helpers/NotasCreditoVerificador.php';
+            $ids = array_slice(array_keys($listados), 0, max(1, (int) $limite));
+            foreach ($ids as $id) {
+                $antes = (int) ($notas->resumen($id)['sin_respaldo'] ?? 0);
+                $stats = NotasCreditoVerificador::verificarListado($id, $notas, 'alias_nuevo');
+                $resueltas += max(0, $antes - (int) ($stats['sin_respaldo'] ?? $antes));
+            }
+        } catch (Throwable $e) {
+            // El vínculo manual ya quedó guardado; esto es un extra.
+        }
+
+        return $resueltas;
     }
 
     /**

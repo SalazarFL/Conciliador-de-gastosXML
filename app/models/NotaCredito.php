@@ -484,6 +484,21 @@ class NotaCredito extends Model
         ];
     }
 
+    /**
+     * Pares (listado, proveedor) que siguen sin respaldo.
+     *
+     * Con esto, un alias recién aprendido solo hace revisar los listados
+     * donde ese proveedor tiene algo pendiente, en vez de repasarlos todos.
+     */
+    public function proveedoresSinRespaldo()
+    {
+        return $this->fetchAll(
+            "SELECT DISTINCT listado_id, proveedor_nombre
+               FROM notas_credito_lineas
+              WHERE estado = 'sin_respaldo' AND proveedor_nombre <> ''"
+        ) ?: [];
+    }
+
     public function resumen($listadoId)
     {
         $rows = $this->fetchAll(

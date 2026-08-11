@@ -153,7 +153,26 @@ class PorPagarVerificador
             $modelo->asignarRespaldadasASemana($listadoId, $semanaId);
         }
 
+        self::anotarAliasUsados();
         return $stats;
+    }
+
+    /**
+     * Vuelca de una sola vez qué alias de proveedor decidieron algún
+     * emparejamiento en esta corrida, para que la pantalla de alias muestre
+     * cuáles siguen sirviendo. Un contador nunca debe tumbar la verificación.
+     */
+    private static function anotarAliasUsados()
+    {
+        try {
+            $usados = FacturaMatcher::aliasAplicados();
+            FacturaMatcher::olvidarAliasAplicados();
+            if ($usados && class_exists('ProveedorAlias')) {
+                (new ProveedorAlias())->registrarUsos($usados);
+            }
+        } catch (Throwable $e) {
+            // Sin tabla de alias, o sin capa de modelos (pruebas): da igual.
+        }
     }
 
     /**

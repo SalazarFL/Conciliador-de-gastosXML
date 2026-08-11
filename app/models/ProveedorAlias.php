@@ -145,9 +145,35 @@ class ProveedorAlias extends Model
     /** Cuenta cuántas veces sirvió, para saber si vale la pena conservarlo. */
     public function registrarUso($aliasNorm)
     {
-        return $this->execute(
-            'UPDATE proveedor_alias SET veces_aplicado = veces_aplicado + 1 WHERE alias_norm = ?',
-            [(string) $aliasNorm]
-        );
+        return $this->registrarUsos([(string) $aliasNorm]);
+    }
+
+    /**
+     * Suma un uso a cada alias de la lista, en una sola consulta.
+     *
+     * Cuenta **corridas de verificación**, no líneas: lo que hace falta saber
+     * es si el alias sigue sirviendo para algo. Contar línea por línea
+     * significaría escribir dentro del bucle de comparaciones —cientos de
+     * miles— y volvería a inflarse cada vez que se reverifica el listado.
+     */
+    public function registrarUsos(array $aliasNorms)
+    {
+        $norms = array_values(array_unique(array_filter(array_map(
+            function ($n) { return trim((string) $n); },
+            $aliasNorms
+        ), 'strlen')));
+        if (!$norms) {
+            return 0;
+        }
+
+        try {
+            return (int) $this->execute(
+                'UPDATE proveedor_alias SET veces_aplicado = veces_aplicado + 1
+                  WHERE alias_norm IN (' . implode(',', array_fill(0, count($norms), '?')) . ')',
+                $norms
+            );
+        } catch (Throwable $e) {
+            return 0; // un contador no puede tumbar una verificación
+        }
     }
 }

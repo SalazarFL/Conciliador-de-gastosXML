@@ -344,7 +344,33 @@ class FacturaMatcher
 
         $canonA = $mapa[$normA] ?? $normA;
         $canonB = $mapa[$normB] ?? $normB;
-        return $canonA === $canonB;
+        if ($canonA !== $canonB) {
+            return false;
+        }
+
+        // Se anota en memoria cuál alias resolvió la comparación; quien corre
+        // la verificación lo vuelca a la base de una sola vez al terminar.
+        // Contar aquí sería una escritura dentro del bucle de comparaciones.
+        foreach ([$normA, $normB] as $norm) {
+            if (isset($mapa[$norm])) {
+                self::$aliasAplicados[$norm] = true;
+            }
+        }
+
+        return true;
+    }
+
+    /** Alias que decidieron alguna comparación desde el último volcado. */
+    private static $aliasAplicados = [];
+
+    public static function aliasAplicados()
+    {
+        return array_keys(self::$aliasAplicados);
+    }
+
+    public static function olvidarAliasAplicados()
+    {
+        self::$aliasAplicados = [];
     }
 
     public static function tokenizarProveedor($value)
