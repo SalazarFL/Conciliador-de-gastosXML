@@ -120,6 +120,18 @@ class FacturaMatcher
             return $dist === 1 ? 50 : 0;
         }
 
+        // similar_text() es O(n·m) y el emparejador la llamaría millones de
+        // veces. Su resultado no puede superar 2·min/(la+lb)·100, porque no
+        // puede haber más caracteres en común que los del texto más corto.
+        // Cuando ese techo ya queda por debajo del umbral, devolverlo ahorra
+        // el cálculo sin cambiar ningún veredicto: todos los que llaman a esto
+        // lo comparan contra un umbral, y un no-match sigue siendo no-match.
+        $minLen = min(strlen($a), strlen($b));
+        $techo = 2 * $minLen * 100 / ($minLen + $maxLen);
+        if ($techo < self::UMBRAL_NUMERO) {
+            return $techo;
+        }
+
         similar_text($a, $b, $pct);
         return $pct;
     }
@@ -131,7 +143,11 @@ class FacturaMatcher
      */
     public static function secuenciasNumericas($value)
     {
-        preg_match_all('/\d+/', (string) $value, $m);
+        $clave = (string) $value;
+        if (isset(self::$memoSecuencias[$clave])) {
+            return self::$memoSecuencias[$clave];
+        }
+        preg_match_all('/\d+/', $clave, $m);
         $runs = [];
         foreach ($m[0] as $run) {
             $run = ltrim($run, '0');
@@ -139,19 +155,23 @@ class FacturaMatcher
                 $runs[] = $run;
             }
         }
-        return $runs;
+        return self::$memoSecuencias[$clave] = $runs;
     }
 
     /** La secuencia numérica más larga: el "número real" de la factura. */
     public static function nucleoNumerico($value)
     {
+        $clave = (string) $value;
+        if (isset(self::$memoNucleo[$clave])) {
+            return self::$memoNucleo[$clave];
+        }
         $best = '';
-        foreach (self::secuenciasNumericas($value) as $run) {
+        foreach (self::secuenciasNumericas($clave) as $run) {
             if (strlen($run) > strlen($best)) {
                 $best = $run;
             }
         }
-        return $best;
+        return self::$memoNucleo[$clave] = $best;
     }
 
     /**
@@ -403,7 +423,31 @@ class FacturaMatcher
 
     public static function normalizarNumero($value)
     {
-        $text = preg_replace('/[^A-Za-z0-9]/', '', strtoupper(trim((string) $value)));
-        return preg_replace('/^0+/', '', $text);
+        $clave = (string) $value;
+        if (isset(self::$memoNumero[$clave])) {
+            return self::$memoNumero[$clave];
+        }
+        $text = preg_replace('/[^A-Za-z0-9]/', '', strtoupper(trim($clave)));
+        return self::$memoNumero[$clave] = preg_replace('/^0+/', '', $text);
+    }
+
+    /**
+     * Recuerda lo ya calculado sobre cada número.
+     *
+     * Estas tres funciones son puras y las llama el emparejador millones de
+     * veces sobre los MISMOS textos: verificar un listado de 568 líneas contra
+     * 3,726 candidatas normalizaba el consecutivo de cada candidata 568 veces.
+     * Los textos distintos son unos miles; las llamadas, millones.
+     */
+    private static $memoNumero = [];
+    private static $memoSecuencias = [];
+    private static $memoNucleo = [];
+
+    /** La llaman las pruebas entre casos; en producción no hace falta. */
+    public static function olvidarMemoriaNumeros()
+    {
+        self::$memoNumero = [];
+        self::$memoSecuencias = [];
+        self::$memoNucleo = [];
     }
 }
