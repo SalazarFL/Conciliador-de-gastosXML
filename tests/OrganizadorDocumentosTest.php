@@ -23,6 +23,7 @@ function borrarOrganizador($dir)
 class FacturaOrganizadorFalsa
 {
     public $filas;
+    public $lotes = [];
     public function __construct(array $filas) { $this->filas = $filas; }
     public function getParaOrganizarArchivos(array $ids = [])
     {
@@ -38,6 +39,18 @@ class FacturaOrganizadorFalsa
         $this->filas[$id]['archivo_xml'] = $xml !== '' ? basename($xml) : null;
         $this->filas[$id]['archivo_pdf'] = $pdf !== '' ? basename($pdf) : null;
         return 1;
+    }
+    public function actualizarUbicacionArchivosLote(array $filas)
+    {
+        $this->lotes[] = count($filas);
+        foreach ($filas as $fila) {
+            $this->actualizarUbicacionArchivos(
+                (int) $fila['id'],
+                (string) $fila['ruta_xml'],
+                (string) $fila['ruta_pdf']
+            );
+        }
+        return count($filas);
     }
     public function begin() { return true; }
     public function commit() { return true; }
@@ -131,6 +144,10 @@ try {
     assertOrganizador(is_file($julioNotas . DIRECTORY_SEPARATOR . 'NC_EXTERNA_SIN_PDF.xml'), 'la NC externa sin PDF se archiva con las notas de crédito');
     assertOrganizador(count(glob($root . DIRECTORY_SEPARATOR . '2026' . DIRECTORY_SEPARATOR . '07 JULIO' . DIRECTORY_SEPARATOR . 'IGNORADOS' . DIRECTORY_SEPARATOR . 'MENSAJE HACIENDA SOLO' . DIRECTORY_SEPARATOR . '*.xml')) === 1, 'separa el MensajeHacienda aislado');
     assertOrganizador(($resumen['errores'] ?? 1) === 0, 'termina sin errores');
+    // Con la base en el servidor, una consulta por documento agotaba el tiempo
+    // de la petición al ordenar una semana entera (cientos de documentos).
+    assertOrganizador(count($modelo->lotes) === 1 && array_sum($modelo->lotes) === ($resumen['movidos'] ?? 0),
+        'anota las ubicaciones de una sola vez, no con una consulta por documento');
 
     // La reconciliación acepta un movimiento/renombre manual, actualiza la
     // referencia por hash y no devuelve el par a la estructura automática.

@@ -500,6 +500,57 @@ class Factura extends Model
         );
     }
 
+    /**
+     * Lo mismo que actualizarUbicacionArchivos pero para muchos documentos de
+     * una sola vez. Ordenar una semana son cientos de documentos, y con la
+     * base en el servidor cada consulta cuesta un viaje de ida y vuelta: de a
+     * uno, la petición se pasa del tiempo máximo antes de terminar.
+     *
+     * El ELSE de cada CASE deja intacta cualquier fila que no venga en el
+     * lote, así que la consulta no puede tocar lo que no le corresponde.
+     */
+    public function actualizarUbicacionArchivosLote(array $filas)
+    {
+        if (!$filas) {
+            return 0;
+        }
+
+        $columnas = ['ruta_xml', 'archivo_xml', 'ruta_pdf', 'archivo_pdf', 'estado_pdf'];
+        $valores = [];
+        foreach ($filas as $fila) {
+            $rutaXml = trim((string) ($fila['ruta_xml'] ?? ''));
+            $rutaPdf = trim((string) ($fila['ruta_pdf'] ?? ''));
+            $valores[] = [
+                'id'          => (int) $fila['id'],
+                'ruta_xml'    => RutaDocumento::relativa($rutaXml) ?: null,
+                'archivo_xml' => $rutaXml !== '' ? basename($rutaXml) : null,
+                'ruta_pdf'    => RutaDocumento::relativa($rutaPdf) ?: null,
+                'archivo_pdf' => $rutaPdf !== '' ? basename($rutaPdf) : null,
+                'estado_pdf'  => $rutaPdf !== '' && RutaDocumento::existe($rutaPdf)
+                    ? 'disponible' : 'pendiente',
+            ];
+        }
+
+        $sets = [];
+        $params = [];
+        foreach ($columnas as $columna) {
+            $caso = "{$columna} = CASE id";
+            foreach ($valores as $valor) {
+                $caso .= ' WHEN ? THEN ?';
+                $params[] = $valor['id'];
+                $params[] = $valor[$columna];
+            }
+            $sets[] = $caso . " ELSE {$columna} END";
+        }
+
+        $ids = array_column($valores, 'id');
+        return (int) $this->execute(
+            "UPDATE {$this->table} SET " . implode(', ', $sets)
+            . ' WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')',
+            array_merge($params, $ids)
+        );
+    }
+
     public function begin() { return self::getDB()->beginTransaction(); }
     public function commit() { return self::getDB()->commit(); }
     public function rollback()

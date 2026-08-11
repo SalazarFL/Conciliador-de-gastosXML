@@ -15,6 +15,14 @@ require_once __DIR__ . '/../models/Semana.php';
  */
 class OrganizadorDocumentos
 {
+    /**
+     * Cuántos documentos movidos se anotan en la base de una sola vez. Acota
+     * el daño si la escritura falla —solo ese grupo se devuelve a su sitio— y
+     * a la vez evita la consulta por documento, que contra un servidor remoto
+     * agotaba el tiempo de la petición al ordenar una semana entera.
+     */
+    private const LOTE_UBICACION = 100;
+
     private $archivo;
     private $facturas;
     private $raiz;
@@ -636,6 +644,7 @@ class OrganizadorDocumentos
     private function organizarRegistrados(array &$resumen, $dryRun, array $ids = [])
     {
         $filas = $this->facturas->getParaOrganizarArchivos($ids);
+        $pendientes = [];
         foreach ($filas as $fila) {
             $resumen['registrados_revisados']++;
             try {
@@ -688,22 +697,19 @@ class OrganizadorDocumentos
                     continue;
                 }
 
-                try {
-                    $this->facturas->begin();
-                    $this->facturas->actualizarUbicacionArchivos(
-                        (int) $fila['id'],
-                        $movimiento['rutas']['xml'],
-                        $movimiento['rutas']['pdf']
-                    );
-                    $this->facturas->commit();
-                } catch (Throwable $e) {
-                    $this->facturas->rollback();
-                    $this->revertirMovimientos($movimiento['movidos']);
-                    throw $e;
+                // El archivo ya está en su sitio; la base se pone al día por
+                // grupos para no gastar un viaje al servidor por documento.
+                $pendientes[] = [
+                    'id'       => (int) $fila['id'],
+                    'ruta_xml' => $movimiento['rutas']['xml'],
+                    'ruta_pdf' => $movimiento['rutas']['pdf'],
+                    'estado'   => $estado,
+                    'movidos'  => $movimiento['movidos'],
+                ];
+                if (count($pendientes) >= self::LOTE_UBICACION) {
+                    $this->guardarUbicaciones($pendientes, $resumen);
+                    $pendientes = [];
                 }
-
-                $resumen['movidos']++;
-                $this->contarEstado($resumen, $estado);
             } catch (Throwable $e) {
                 $resumen['errores']++;
                 $this->agregarOperacion($resumen, [
@@ -711,6 +717,43 @@ class OrganizadorDocumentos
                     'error' => $e->getMessage(),
                 ]);
             }
+        }
+
+        $this->guardarUbicaciones($pendientes, $resumen);
+    }
+
+    /**
+     * Anota en la base dónde quedaron los documentos de un grupo ya movido, en
+     * una sola consulta. Si esa escritura falla, los archivos del grupo
+     * vuelven a donde estaban: el disco y la base nunca quedan contando
+     * historias distintas.
+     */
+    private function guardarUbicaciones(array $pendientes, array &$resumen)
+    {
+        if (!$pendientes) {
+            return;
+        }
+
+        try {
+            $this->facturas->begin();
+            $this->facturas->actualizarUbicacionArchivosLote($pendientes);
+            $this->facturas->commit();
+        } catch (Throwable $e) {
+            $this->facturas->rollback();
+            foreach ($pendientes as $pendiente) {
+                $this->revertirMovimientos($pendiente['movidos']);
+                $resumen['errores']++;
+                $this->agregarOperacion($resumen, [
+                    'documento_id' => $pendiente['id'],
+                    'error' => $e->getMessage(),
+                ]);
+            }
+            return;
+        }
+
+        foreach ($pendientes as $pendiente) {
+            $resumen['movidos']++;
+            $this->contarEstado($resumen, $pendiente['estado']);
         }
     }
 
