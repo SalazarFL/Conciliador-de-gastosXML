@@ -78,6 +78,14 @@ $router->post('/correo/general/pausar', 'CorreoController@generalPausar');
 $router->post('/correo/general/reanudar', 'CorreoController@generalReanudar');
 $router->post('/correo/general/cancelar', 'CorreoController@generalCancelar');
 
+// --- RUTAS DE SEGUIMIENTO (la cola única de trabajo) ---
+// Junta notas de crédito y pago semanal: lo que no tiene XML, lo que no tiene
+// PDF y lo que no cuadra, con la gestión de cada renglón.
+$router->get('/seguimiento', 'SeguimientoController@index');
+$router->post('/seguimiento/actualizar', 'SeguimientoController@actualizar');
+$router->get('/seguimiento/detalle', 'SeguimientoController@detalle');
+$router->get('/seguimiento/exportar', 'SeguimientoController@exportar');
+
 // --- RUTAS DE FACTURAS POR PAGAR (listado del pago semanal) ---
 $router->get('/por-pagar', 'PorPagarController@index');
 $router->post('/por-pagar/subir', 'PorPagarController@subir');

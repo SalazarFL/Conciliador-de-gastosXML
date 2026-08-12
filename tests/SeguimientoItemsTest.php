@@ -1,0 +1,90 @@
+<?php
+/**
+ * Lo que llega de la tabla al servidor cuando alguien selecciona renglones.
+ *
+ * Se prueba sin base: Seguimiento::normalizarItems() es lógica pura, y es la
+ * puerta por la que entra una selección que puede venir manipulada.
+ */
+
+// El modelo extiende Model, que abre conexión al instanciarse. Aquí solo se
+// usa un método estático, así que basta con que la clase padre exista.
+require_once __DIR__ . '/../app/core/Model.php';
+require_once __DIR__ . '/../app/models/Seguimiento.php';
+
+function assertSameSeg($expected, $actual, $message)
+{
+    if ($expected !== $actual) {
+        fwrite(STDERR, "FAIL: {$message}\nEsperado: " . var_export($expected, true)
+            . "\nActual: " . var_export($actual, true) . "\n");
+        exit(1);
+    }
+}
+
+// Las casillas de la tabla mandan "origen|id".
+assertSameSeg(
+    [['origen' => 'nota_credito', 'referencia_id' => 12]],
+    Seguimiento::normalizarItems(['nota_credito|12']),
+    'acepta la forma "origen|id" de las casillas'
+);
+
+// El panel de detalle manda el arreglo.
+assertSameSeg(
+    [['origen' => 'pago_semanal', 'referencia_id' => 7]],
+    Seguimiento::normalizarItems([['origen' => 'pago_semanal', 'referencia_id' => 7]]),
+    'acepta la forma de arreglo'
+);
+
+// Un renglón repetido escribiría dos anotaciones idénticas en la bitácora.
+assertSameSeg(
+    [['origen' => 'nota_credito', 'referencia_id' => 5]],
+    Seguimiento::normalizarItems(['nota_credito|5', 'nota_credito|5', ['origen' => 'nota_credito', 'referencia_id' => '5']]),
+    'quita los repetidos aunque vengan en formatos distintos'
+);
+
+// Un origen inventado no debe llegar nunca a la consulta.
+assertSameSeg(
+    [],
+    Seguimiento::normalizarItems(['facturas_erp|9', 'otra_cosa|1', ['origen' => 'usuarios', 'referencia_id' => 1]]),
+    'descarta orígenes que no existen'
+);
+
+// "12abc" convertido con (int) tocaría el renglón 12, que nadie eligió.
+assertSameSeg(
+    [],
+    Seguimiento::normalizarItems(['nota_credito|12abc', ['origen' => 'nota_credito', 'referencia_id' => '3 OR 1=1']]),
+    'descarta ids que no son números en vez de recortarlos'
+);
+
+assertSameSeg(
+    [],
+    Seguimiento::normalizarItems(['nota_credito|0', 'nota_credito|-4', 'nota_credito', '', 'sin_barra']),
+    'descarta ids no positivos y cadenas sin la forma esperada'
+);
+
+// Una casilla rara no debe tumbar la tanda entera: se descarta y sigue.
+assertSameSeg(
+    [
+        ['origen' => 'nota_credito', 'referencia_id' => 1],
+        ['origen' => 'pago_semanal', 'referencia_id' => 2],
+    ],
+    Seguimiento::normalizarItems(['nota_credito|1', 'basura', null, 42, 'pago_semanal|2']),
+    'lo inválido se descarta sin arrastrar lo válido'
+);
+
+// Los estados que la pantalla ofrece tienen que existir en la columna ENUM.
+foreach (array_keys(Seguimiento::ESTADOS) as $estado) {
+    assertSameSeg(
+        true,
+        preg_match('/^[a-z_]+$/', $estado) === 1,
+        "el estado '{$estado}' tiene una clave usable en SQL"
+    );
+}
+foreach (Seguimiento::ESTADOS_CERRADOS as $estado) {
+    assertSameSeg(
+        true,
+        isset(Seguimiento::ESTADOS[$estado]),
+        "el estado cerrado '{$estado}' está declarado en ESTADOS"
+    );
+}
+
+echo "OK: SeguimientoItems\n";

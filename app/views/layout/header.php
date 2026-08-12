@@ -45,6 +45,7 @@ function navActive(string $segment, string $uri): string {
 
 // Título de la página actual para el topbar (sin descripción: solo el nombre)
 $pageLabels = [
+    'seguimiento'  => 'Seguimiento de documentos',
     'facturas'     => 'Facturas ERP · Carga XML',
     'facturas-erp' => 'Facturas ERP',
     'correo'       => 'Correo',
@@ -111,7 +112,15 @@ if (!isset($sociedadActiva)) {
 
         <!-- Navegación -->
         <nav class="sidebar-nav">
-            <div class="sidebar-section-label">Módulos</div>
+            <div class="sidebar-section-label">Trabajo del día</div>
+
+            <a href="<?= $baseUrl ?>/seguimiento" class="<?= navActive('seguimiento', $uriClean) ?>"
+               title="Todo lo que le falta respaldo o no cuadra, en una sola lista">
+                <span class="nav-icon"><i class="fas fa-list-check"></i></span>
+                <span class="nav-label">Seguimiento</span>
+            </a>
+
+            <div class="sidebar-section-label" style="margin-top:16px;">Módulos</div>
 
             <a href="<?= $baseUrl ?>/por-pagar" class="<?= navActive('por-pagar', $uriClean) ?>" title="Pagos semanales">
                 <span class="nav-icon"><i class="fas fa-file-invoice-dollar"></i></span>
