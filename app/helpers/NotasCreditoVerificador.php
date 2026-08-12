@@ -4,6 +4,7 @@
  */
 require_once __DIR__ . '/FacturaMatcher.php';
 require_once __DIR__ . '/NumeroFactura.php';
+require_once __DIR__ . '/ClaseNotaCredito.php';
 
 class NotasCreditoVerificador
 {
@@ -74,6 +75,31 @@ class NotasCreditoVerificador
                     ];
                     $pendientes[] = self::filaMatch((int) $linea['id'], null, $nuevo['estado'], null,
                         'ninguno', null, false, $nuevo['motivo_match'], true);
+                    $cantidadCambios += self::registrarCambio($modelo, $verificacionId, $linea, $nuevo, $historial);
+                    $stats['sin_respaldo']++;
+                    continue;
+                }
+
+                // Una nota de ajuste interno casi nunca tiene documento
+                // electrónico: de las 478 que traen número de NC del proveedor,
+                // solo 7 existen como XML (1.5%), contra 85% de las directas y
+                // 92% de las de cambio. Emparejarlas por proveedor y monto
+                // producía 217 vínculos falsos que además dejaban sin respaldo
+                // a la línea dueña de ese XML.
+                //
+                // Se salta solo cuando NO hay consecutivo que comprobar. Con
+                // consecutivo se deja pasar: buscarMatch() exige entonces
+                // coincidencia exacta de consecutivo, proveedor y monto, y con
+                // esas tres no queda margen para un falso positivo.
+                if (self::esAjuste($linea) && self::digits($linea['nc_proveedor'] ?? '') === '') {
+                    $nuevo = [
+                        'factura_xml_id' => null,
+                        'estado' => 'sin_respaldo',
+                        'diferencia' => null,
+                        'motivo_match' => 'Nota de ajuste interno: no lleva documento electrónico.',
+                    ];
+                    $pendientes[] = self::filaMatch((int) $linea['id'], null, $nuevo['estado'], null,
+                        'ninguno', null, false, $nuevo['motivo_match'], false);
                     $cantidadCambios += self::registrarCambio($modelo, $verificacionId, $linea, $nuevo, $historial);
                     $stats['sin_respaldo']++;
                     continue;
@@ -158,6 +184,25 @@ class NotasCreditoVerificador
         foreach ($modelo->getListadosPorSociedad((int) $sociedadId) as $listado) {
             self::verificarListado((int) $listado['id'], $modelo, (string) $origen);
         }
+    }
+
+    /**
+     * ¿Es una nota de ajuste interno, de las que nunca llevan XML?
+     *
+     * Se prefiere la clase ya guardada en la línea; si no viene —listados
+     * cargados antes de existir la columna, o dobles de prueba— se deduce del
+     * número, que es de donde salió en primer lugar.
+     */
+    private static function esAjuste(array $linea)
+    {
+        if (!class_exists('ClaseNotaCredito')) {
+            return false;
+        }
+        $clase = (string) ($linea['clase'] ?? '');
+        if ($clase === '') {
+            $clase = ClaseNotaCredito::clasificar($linea['documento'] ?? '');
+        }
+        return $clase === ClaseNotaCredito::AJUSTE;
     }
 
     /** Un cambio de emparejamiento, con las columnas que espera el modelo. */

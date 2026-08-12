@@ -2,6 +2,8 @@
 /**
  * Persistencia del módulo "Notas de crédito".
  */
+require_once __DIR__ . '/../helpers/ClaseNotaCredito.php';
+
 class NotaCredito extends Model
 {
     protected $table = 'notas_credito_listados';
@@ -39,6 +41,7 @@ class NotaCredito extends Model
                 proveedor_nombre VARCHAR(255) NOT NULL,
                 sucursal VARCHAR(150) NULL,
                 documento VARCHAR(255) NOT NULL,
+                clase ENUM('directa','costo','cambio','ajuste','revisar') NOT NULL DEFAULT 'revisar',
                 fecha DATE NOT NULL,
                 nc_proveedor VARCHAR(100) NULL,
                 fecha_nc_proveedor DATE NULL,
@@ -60,6 +63,7 @@ class NotaCredito extends Model
                 PRIMARY KEY (id),
                 UNIQUE KEY uk_nc_xml_por_listado (listado_id, factura_xml_id),
                 KEY idx_nc_linea_listado_estado (listado_id, estado),
+                KEY idx_nc_lineas_clase (listado_id, clase, estado),
                 KEY idx_nc_linea_documento (documento),
                 KEY idx_nc_linea_nc_proveedor (nc_proveedor),
                 KEY idx_nc_linea_factura_xml (factura_xml_id)
@@ -151,7 +155,7 @@ class NotaCredito extends Model
 
     private const COLUMNAS_LINEA = [
         'listado_id', 'fila_origen', 'proveedor_codigo', 'proveedor_nombre', 'sucursal',
-        'documento', 'fecha', 'nc_proveedor', 'fecha_nc_proveedor', 'entrada_asociada',
+        'documento', 'clase', 'fecha', 'nc_proveedor', 'fecha_nc_proveedor', 'entrada_asociada',
         'moneda', 'monto', 'saldo', 'monto_conversion', 'datos_origen',
     ];
 
@@ -165,6 +169,7 @@ class NotaCredito extends Model
             (string) $linea['proveedor_nombre'],
             $linea['sucursal'] ?: null,
             (string) $linea['documento'],
+            ClaseNotaCredito::clasificar($linea['documento']),
             (string) $linea['fecha'],
             $linea['nc_proveedor'] ?: null,
             $linea['fecha_nc_proveedor'] ?: null,

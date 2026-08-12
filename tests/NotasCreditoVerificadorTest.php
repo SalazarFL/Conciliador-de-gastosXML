@@ -222,4 +222,61 @@ NotasCreditoVerificador::verificarListado(1, $modelo);
 assertSameNcv(111, $modelo->resultados[11]['facturaId'], 'reemplaza un vínculo manual antiguo cuyo monto no era exacto');
 assertSameNcv(false, $modelo->resultados[11]['manual'], 'el reemplazo válido vuelve a ser automático');
 
+// Una nota de ajuste interno no tiene documento electrónico. Aunque haya un
+// XML del mismo proveedor con el monto clavado, no se le debe enganchar: ese
+// XML es de otra nota y engancharlo la deja a ella sin respaldo.
+$linea = lineaNcv(12, 'BIMBO DE COSTA RICA S.A.', 5000.00);
+$linea['documento'] = 'NC- 4945';
+$modelo = new NotaCreditoModeloFalso(
+    [$linea],
+    [facturaNcv(120, 'Bimbo de Costa Rica, S.A.', 5000.00, '2026-01-01')]
+);
+NotasCreditoVerificador::verificarListado(1, $modelo);
+assertSameNcv(null, $modelo->resultados[12]['facturaId'], 'una nota de ajuste no se empareja aunque el monto calce');
+assertSameNcv('sin_respaldo', $modelo->resultados[12]['estado'], 'la nota de ajuste queda sin respaldo');
+
+// Con consecutivo de NC del proveedor sí se empareja, aunque sea de ajuste:
+// exigir consecutivo, proveedor y monto exactos no deja margen a un falso.
+$linea = lineaNcv(15, 'BIMBO DE COSTA RICA S.A.', 5000.00);
+$linea['documento'] = 'NC- 5031';
+$linea['nc_proveedor'] = '00100002030000034572';
+$modelo = new NotaCreditoModeloFalso(
+    [$linea],
+    [facturaNcv(150, 'Bimbo de Costa Rica, S.A.', 5000.00, '2026-01-01', 'CRC', '00100002030000034572')]
+);
+NotasCreditoVerificador::verificarListado(1, $modelo);
+assertSameNcv(150, $modelo->resultados[15]['facturaId'], 'una nota de ajuste con consecutivo exacto sí se empareja');
+
+// Pero si el consecutivo no aparece, no cae de vuelta a proveedor y monto.
+$linea = lineaNcv(16, 'BIMBO DE COSTA RICA S.A.', 5000.00);
+$linea['documento'] = 'NC- 5032';
+$linea['nc_proveedor'] = '00100002030000099999';
+$modelo = new NotaCreditoModeloFalso(
+    [$linea],
+    [facturaNcv(160, 'Bimbo de Costa Rica, S.A.', 5000.00, '2026-01-01', 'CRC', '00100002030000034572')]
+);
+NotasCreditoVerificador::verificarListado(1, $modelo);
+assertSameNcv(null, $modelo->resultados[16]['facturaId'], 'sin el consecutivo exacto la nota de ajuste no engancha por monto');
+
+// La clase ya guardada manda sobre lo que diga el número.
+$linea = lineaNcv(13, 'BIMBO DE COSTA RICA S.A.', 5000.00);
+$linea['documento'] = 'NC- 4946';
+$linea['clase'] = ClaseNotaCredito::CAMBIO;
+$modelo = new NotaCreditoModeloFalso(
+    [$linea],
+    [facturaNcv(130, 'Bimbo de Costa Rica, S.A.', 5000.00, '2026-01-01')]
+);
+NotasCreditoVerificador::verificarListado(1, $modelo);
+assertSameNcv(130, $modelo->resultados[13]['facturaId'], 'si la clase guardada dice que sí lleva respaldo, se empareja');
+
+// Las demás clases siguen emparejando igual que antes.
+$linea = lineaNcv(14, 'BIMBO DE COSTA RICA S.A.', 5000.00);
+$linea['documento'] = 'NC- 1-1-D-99900001010000670607-189';
+$modelo = new NotaCreditoModeloFalso(
+    [$linea],
+    [facturaNcv(140, 'Bimbo de Costa Rica, S.A.', 5000.00, '2026-01-01')]
+);
+NotasCreditoVerificador::verificarListado(1, $modelo);
+assertSameNcv(140, $modelo->resultados[14]['facturaId'], 'una nota de costo sí se empareja');
+
 echo "OK: NotasCreditoVerificador\n";

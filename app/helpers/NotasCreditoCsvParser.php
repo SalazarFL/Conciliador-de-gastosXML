@@ -79,7 +79,11 @@ class NotasCreditoCsvParser
                 // El número interno puede venir partido en la siguiente línea.
                 if ($pendiente !== null && count($nonEmpty) === 1) {
                     $continuation = trim((string) reset($nonEmpty));
-                    if ($continuation !== '' && preg_match('/[A-Z0-9]/i', $continuation)) {
+                    // Solo se pega si parece la cola de un número. Antes bastaba
+                    // con que tuviera una letra o un dígito, y así el nombre del
+                    // proveedor terminaba dentro del documento
+                    // ("1-2-68-0GrupoBMSPS.A"), que ya nunca emparejaba.
+                    if ($continuation !== '' && preg_match('/^[0-9][0-9-]*$/', $continuation)) {
                         $lineas[$pendiente]['documento'] .= $continuation;
                         $origen = json_decode($lineas[$pendiente]['datos_origen'], true) ?: [];
                         $origen['continuacion'][] = [
