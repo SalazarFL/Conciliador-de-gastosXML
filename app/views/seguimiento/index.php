@@ -564,6 +564,16 @@ $moneda = function ($valor, $mon = 'CRC') {
 .seg-acciones-cuenta strong { font-size: 16px; }
 .seg-acciones-btns { display: flex; gap: 6px; flex-wrap: wrap; }
 
+/**
+ * El atributo hidden se apoya en la regla [hidden]{display:none} que trae el
+ * navegador, y esa regla pierde contra cualquier selector de clase. Sin esta
+ * línea, el display:flex de .seg-panel y .seg-acciones gana: los paneles nacen
+ * abiertos encima de la tabla y el botón de cerrar no hace nada, porque poner
+ * el atributo desde JavaScript no cambia lo que se ve.
+ * La comprueba tests/VistaOcultosTest.php.
+ */
+.seg-panel[hidden], .seg-acciones[hidden] { display: none !important; }
+
 /* Panel lateral y diálogo comparten el fondo oscurecido */
 .seg-panel { position: fixed; inset: 0; z-index: 1200; display: flex; }
 .seg-panel-fondo { position: absolute; inset: 0; background: rgba(8,24,71,.45); }
