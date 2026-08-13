@@ -21,6 +21,12 @@ $router->get('/home', 'HomeController@index');
 // La aplicación corre en la computadora de cada persona: esta página dice qué
 // le falta a ESTA instalación, para no depender de acceso remoto.
 $router->get('/diagnostico', 'DiagnosticoController@index');
+// Respaldo de la base a la carpeta compartida: lo genera la computadora que
+// alcanza el servidor y las demás lo levantan de SharePoint. Solo admin.
+$router->post('/diagnostico/respaldo/estado', 'DiagnosticoController@respaldoEstado');
+$router->post('/diagnostico/respaldo/iniciar', 'DiagnosticoController@respaldoIniciar');
+$router->post('/diagnostico/respaldo/auto/activar', 'DiagnosticoController@respaldoAutoActivar');
+$router->post('/diagnostico/respaldo/auto/desactivar', 'DiagnosticoController@respaldoAutoDesactivar');
 
 // --- RUTAS DE SOCIEDADES (se administran desde Inicio) ---
 $router->post('/sociedades/crear', 'SociedadesController@crear');

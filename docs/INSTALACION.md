@@ -168,6 +168,182 @@ consulta se siente ágil; muy por encima, el diagnóstico lo marca como aviso.
 
 ---
 
+## Una copia local de la base
+
+La base compartida vive en una sola computadora. Cuando esa máquina está
+apagada, o Tailscale no llega hasta ella, **nadie puede trabajar**: la
+aplicación abre y muere con `SQLSTATE[HY000] [2002]`.
+
+Contra eso, una máquina puede tener además una **copia** de la base en su
+propio MySQL, y cambiar de una a otra con un comando.
+
+```
+   base compartida  ──── copiar-base.ps1 ────>  copia en esta máquina
+   (auxiliar-06c)          una sola dirección        (127.0.0.1)
+```
+
+> **La copia no es un segundo servidor.** No hay vuelta: lo que se escriba
+> sobre la copia no sube a la oficina y se pierde entero la próxima vez que se
+> refresque. Sirve para tres cosas —seguir consultando cuando el servidor no
+> responde, probar una migración sin arriesgar los datos de todos, y tener un
+> respaldo fuera del servidor— y para ninguna más. Capturar correo o cerrar un
+> pago semanal se hace **siempre** contra la base de la oficina.
+
+### Preparar la copia (una vez)
+
+1. **XAMPP con MySQL corriendo** en esta máquina. Ya viene instalado.
+
+2. **Crear el usuario `xmlconcilia` en el MySQL local**, con la misma
+   contraseña que en el servidor. Así lo único que cambia entre una base y la
+   otra es el host, y un respaldo se puede restaurar en cualquiera de las dos
+   máquinas sin tocar nada:
+
+   ```powershell
+   C:\xampp\mysql\bin\mysql.exe -u root -e "CREATE USER IF NOT EXISTS 'xmlconcilia'@'localhost' IDENTIFIED BY 'LA_CONTRASEÑA'; CREATE USER IF NOT EXISTS 'xmlconcilia'@'127.0.0.1' IDENTIFIED BY 'LA_CONTRASEÑA'; GRANT ALL PRIVILEGES ON bd_xmlconcilia.* TO 'xmlconcilia'@'localhost'; GRANT ALL PRIVILEGES ON bd_xmlconcilia.* TO 'xmlconcilia'@'127.0.0.1'; FLUSH PRIVILEGES;"
+   ```
+
+   El `GRANT ALL` sobre `bd_xmlconcilia.*` incluye poder borrarla y volver a
+   crearla, que es lo que hace la restauración. No hace falta dar permisos
+   sobre nada más.
+
+3. **Los dos perfiles de conexión**, en `app/config/`:
+
+   | Archivo | `host` | Qué es |
+   |---|---|---|
+   | `local.oficina.php` | `auxiliar-06c` | La base compartida, la de verdad |
+   | `local.propia.php` | `127.0.0.1` | La copia de esta máquina |
+
+   Se hacen copiando `local.ejemplo.php` y cambiando el `host`. Ninguno de los
+   dos se versiona.
+
+   La aplicación **no lee estos archivos**: sigue leyendo `local.php`. Los
+   perfiles solo son las dos versiones de ese archivo, guardadas para poder ir
+   y venir sin volver a escribir la contraseña.
+
+### Cambiar de base
+
+```powershell
+.\scripts\cambiar-base.ps1              # dice cuál está activa
+.\scripts\cambiar-base.ps1 oficina      # la compartida
+.\scripts\cambiar-base.ps1 propia       # la copia local
+```
+
+Copia el perfil encima de `local.php` y corre el diagnóstico. Si `local.php`
+estaba editado a mano, primero lo guarda aparte.
+
+> **Saber sobre cuál base estás es el punto entero de este comando.** Trabajar
+> sin darse cuenta sobre la copia se ve exactamente igual que trabajar bien,
+> hasta que alguien pregunta por qué no aparece lo que capturaste. El
+> diagnóstico marca con AVISO cuando el host es local, y `cambiar-base.ps1`
+> sin argumentos lo dice en un segundo.
+
+### Refrescar la copia — con el servidor a la vista
+
+```powershell
+.\scripts\copiar-base.ps1                 # respalda el servidor y restaura aquí
+.\scripts\copiar-base.ps1 -SoloRespaldo   # solo genera el .sql, no toca la copia
+```
+
+Necesita que el servidor esté alcanzable, así que hay que correrlo **antes** de
+quedarse sin conexión, no después. Lo que hace:
+
+1. Lista las tablas del servidor y cuenta sus filas.
+2. Exporta con `mysqldump` a `storage/backups/bd_xmlconcilia_<fecha>.sql`.
+3. Borra la base local, la vuelve a crear y carga el respaldo.
+4. Recrea las vistas y `sp_marcar_revisado` desde
+   `database/vistas_y_procedimientos.sql`.
+5. Vuelve a contar y compara tabla por tabla contra el servidor.
+
+Tres decisiones del script que parecen caprichos y no lo son:
+
+- **Sin `--routines`.** El usuario `xmlconcilia` del servidor no puede hacer
+  `SHOW CREATE PROCEDURE` y `mysqldump` aborta entero. Por eso el respaldo trae
+  solo tablas, y las vistas y el procedimiento se recrean aparte en el paso 4.
+  Un respaldo hecho a mano tiene el mismo agujero: acordate del paso 4.
+- **Con `--result-file=` y no con `>`.** La redirección de PowerShell escribe
+  UTF-16 con BOM y `mysql` no puede leer ese archivo de vuelta.
+- **La base local se borra entera**, no se sobrescribe tabla por tabla: si en
+  el servidor se borró una tabla, sobrescribir la dejaría aquí para siempre.
+
+`storage/backups/` no se versiona y los archivos pesan ~150 MB cada uno. El
+script dice cuánto ocupa la carpeta; borrar los viejos es a mano y a
+conciencia.
+
+> **Antes de aplicar cualquier migración de esquema, sacá un respaldo.** Es lo
+> único que separa un error de un desastre.
+
+### Refrescar la copia — sin acceso al servidor
+
+El camino de arriba tiene un problema de fondo: **no sirve justo cuando hace
+falta**. Si Tailscale no llega a la máquina del servidor, tampoco llega
+`mysqldump`, y la copia se queda congelada precisamente el día que es lo único
+que hay.
+
+La salida es invertir quién empieza. En vez de que esta computadora vaya a
+buscar la copia, **la computadora que tiene la base la deja escrita en la
+carpeta compartida**, y SharePoint hace el resto:
+
+```
+  máquina con la base                                      esta máquina
+  ───────────────────                                      ────────────
+  Administración → Diagnóstico                             copiar-base.ps1
+  → Generar respaldo ahora        _TRABAJO/RESPALDOS/         -Desde ultimo
+         │                          *.sql.gz                       │
+         └───── mysqldump ──────>  (OneDrive) ──────────────>  restaura aquí
+```
+
+Ninguno de los dos extremos toca la red del otro. Funciona con Tailscale caído,
+con la VPN caída y con el servidor apagado, siempre que el respaldo se haya
+generado antes.
+
+**En la computadora que tiene la base** (Administración → Diagnóstico, solo
+admin):
+
+- **Generar respaldo ahora** — vuelca la base y deja un `.sql.gz` en
+  `_TRABAJO/RESPALDOS`. Corre en segundo plano: se puede cerrar la página, el
+  proceso sigue y al volver se ve cómo terminó.
+- **Todas las noches a las HH:MM** — registra una tarea programada de Windows
+  que hace lo mismo sin que nadie se acuerde. Corre en la sesión del usuario
+  conectado, sin contraseña ni permisos de administrador de Windows, y si la
+  máquina estaba apagada a esa hora corre al encenderla.
+
+Lo mismo desde la consola: `php cli/respaldar_base.php`.
+
+**En esta computadora**, cuando el archivo ya sincronizó:
+
+```powershell
+.\scripts\copiar-base.ps1 -Desde ultimo                    # el más nuevo de la carpeta
+.\scripts\copiar-base.ps1 -Desde C:\ruta\archivo.sql.gz    # uno concreto
+```
+
+Dos cosas que el script vigila, porque las dos se ven igual que un respaldo
+bueno hasta que ya es tarde:
+
+- **Un `.gz` a medio sincronizar.** OneDrive muestra el archivo antes de
+  terminar de bajarlo; si se restaura, la base local ya se borró cuando falla
+  la descompresión. El script se planta si el archivo es sospechosamente chico.
+- **Un respaldo generado por esta misma máquina.** El nombre lleva el equipo
+  (`bd_xmlconcilia_AUXILIAR-06C_20260813_2200.sql.gz`). Si el más nuevo lo hizo
+  esta computadora, es la copia de la copia y avisa: restaurarlo sería reciclar
+  datos viejos creyendo que te pusiste al día.
+
+El archivo va comprimido a propósito: la carpeta la sincroniza **todo el
+mundo**, así que 150 MB por respaldo se los baja cada persona. Comprimido son
+unos 12 MB. Se conservan los últimos 5 y los viejos se borran solos.
+
+### Lo que la copia no trae
+
+Los **documentos** (XML y PDF) no están en la base: viven en la carpeta de
+SharePoint sincronizada, y esa se sincroniza sola. La copia de la base y la
+carpeta compartida son dos cosas independientes; sobre la copia local los
+documentos se abren igual, porque las rutas se guardan relativas.
+
+Tampoco trae la configuración de la máquina —carpeta de documentos, cuentas de
+correo, tarea programada—, que vive en `storage/correo/` y es de cada
+computadora.
+
+---
+
 ## Actualizar a una versión nueva
 
 En cada computadora:
@@ -205,7 +381,7 @@ modelo, en orden de frecuencia:
 | "No abre ningún documento" | La carpeta compartida apunta al lugar equivocado, o SharePoint aún no termina de bajar los archivos |
 | "No abre *este* documento" | Alguien lo movió fuera de la carpeta compartida — devolvelo adentro y corré `php cli/organizar_documentos.php` |
 | "Me da error al guardar" | Falta una migración en la base, o permiso de solo lectura en SharePoint |
-| "No conecta" | Tailscale apagado en esa computadora, o el servidor caído. `tailscale status` lo dice en un segundo |
+| "No conecta" | Tailscale apagado en esa computadora, o el servidor caído. `tailscale status` lo dice en un segundo. Si va para largo, se puede seguir trabajando sobre la copia local — ver "Refrescar la copia — sin acceso al servidor" |
 | "Falta app/config/local.php" | Instalación a medias: hacer el paso 5 |
 | "No veo lo que capturó mi compañero" | Su `local.php` apunta a `localhost` en vez del servidor |
 | Todo va lento en una sola computadora | Su conexión al servidor; el diagnóstico da los ms por consulta |
@@ -218,6 +394,12 @@ modelo, en orden de frecuencia:
 | Comando | Para qué |
 |---|---|
 | `php cli/diagnostico.php` | Revisar la instalación de esta computadora |
+| `.\scripts\cambiar-base.ps1` | Decir a qué base apunta esta computadora |
+| `.\scripts\cambiar-base.ps1 oficina\|propia` | Cambiar entre la base compartida y la copia local |
+| `.\scripts\copiar-base.ps1` | **Borra la copia local**: la respalda del servidor y la vuelve a bajar |
+| `.\scripts\copiar-base.ps1 -SoloRespaldo` | Respaldar el servidor a `storage/backups` sin tocar nada más |
+| `.\scripts\copiar-base.ps1 -Desde ultimo` | **Borra la copia local**: la rehace con el respaldo que dejó la otra máquina en SharePoint |
+| `php cli/respaldar_base.php` | Dejar un respaldo en la carpeta compartida (lo mismo que el botón de Diagnóstico) |
 | `php cli/migrar_rutas_relativas.php` | Ver qué rutas siguen siendo absolutas (no cambia nada) |
 | `php cli/migrar_rutas_relativas.php --aplicar` | Convertirlas y sacar del proyecto los documentos que queden adentro |
 | `php cli/organizar_documentos.php` | Volver a ubicar documentos movidos a mano (no mueve nada) |
