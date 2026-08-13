@@ -1097,14 +1097,109 @@ class CorreoController extends Controller
             }
             $result = $this->loadModel('CorreoLote')->historialIncidencias(
                 (int) $config['cuenta_id'],
-                [
-                    'q' => trim((string) $this->post('q', '')),
-                    'tipo' => trim((string) $this->post('tipo', '')),
-                ],
+                $this->filtrosIncidencia(),
                 max(1, (int) $this->post('pagina', 1)),
                 50
             );
             $this->json(['ok' => true] + $result);
+        } catch (Throwable $e) {
+            $this->json(['ok' => false, 'message' => $e->getMessage()], 422);
+        }
+    }
+
+    /**
+     * Los ids marcados. La pantalla los manda como JSON en un solo campo:
+     * con 'ids[]' repetido, una selección de varios cientos choca contra
+     * max_input_vars de PHP y llegan truncados sin ningún error.
+     */
+    private function idsRecibidos()
+    {
+        $crudo = $this->post('ids', []);
+        if (is_string($crudo)) {
+            $decodificado = json_decode($crudo, true);
+            $crudo = is_array($decodificado) ? $decodificado : [];
+        }
+        return array_values(array_filter(array_map('intval', (array) $crudo)));
+    }
+
+    /** El filtro que manda la pantalla, leído en un solo lugar. */
+    private function filtrosIncidencia()
+    {
+        $ver = strtolower(trim((string) $this->post('ver', 'pendientes')));
+        return [
+            'q' => trim((string) $this->post('q', '')),
+            'tipo' => trim((string) $this->post('tipo', '')),
+            'ver' => in_array($ver, ['pendientes', 'descartadas', 'todas'], true) ? $ver : 'pendientes',
+        ];
+    }
+
+    /**
+     * Descarta incidencias revisadas (POST, JSON).
+     *
+     * Dos modos: por lista de ids, o `todas=1` para alcanzar todo lo que
+     * cumple el filtro de la pantalla. El segundo es el que importa: 194
+     * cédulas ajenas no se descartan marcándolas de a cincuenta.
+     *
+     * No borra nada: la incidencia queda marcada y se puede restaurar. La
+     * marca vive por firma, así que reprocesar el correo no la resucita.
+     */
+    public function incidenciasDescartar()
+    {
+        if (!$this->isPost()) {
+            $this->json(['ok' => false, 'message' => 'Metodo no permitido.'], 405);
+        }
+        try {
+            $config = $this->configCuenta((int) $this->post('cuenta_id', 0));
+            if (!$config) {
+                throw new RuntimeException('La cuenta seleccionada no está configurada.');
+            }
+            $modelo = $this->loadModel('CorreoLote');
+
+            $todas = in_array(strtolower(trim((string) $this->post('todas', '0'))), ['1', 'true', 'on', 'si', 'sí'], true);
+            if ($todas) {
+                $ids = $modelo->idsIncidencias((int) $config['cuenta_id'], $this->filtrosIncidencia());
+            } else {
+                $ids = $this->idsRecibidos();
+            }
+            if (!$ids) {
+                $this->json(['ok' => false, 'message' => 'No hay incidencias que descartar con ese filtro.'], 422);
+            }
+
+            $r = $modelo->descartarIncidencias(
+                $ids,
+                (string) $this->post('motivo', ''),
+                $_SESSION['user_id'] ?? null
+            );
+            $this->json([
+                'ok' => true,
+                'descartadas' => (int) $r['descartadas'],
+                'message' => sprintf(
+                    '%d incidencia(s) descartada(s). No van a volver aunque el correo se reprocese.',
+                    (int) $r['descartadas']
+                ),
+            ]);
+        } catch (Throwable $e) {
+            $this->json(['ok' => false, 'message' => $e->getMessage()], 422);
+        }
+    }
+
+    /** Devuelve a la lista incidencias descartadas (POST, JSON). */
+    public function incidenciasRestaurar()
+    {
+        if (!$this->isPost()) {
+            $this->json(['ok' => false, 'message' => 'Metodo no permitido.'], 405);
+        }
+        try {
+            $ids = $this->idsRecibidos();
+            if (!$ids) {
+                $this->json(['ok' => false, 'message' => 'No se indicó ninguna incidencia.'], 422);
+            }
+            $r = $this->loadModel('CorreoLote')->restaurarIncidencias($ids);
+            $this->json([
+                'ok' => true,
+                'restauradas' => (int) $r['restauradas'],
+                'message' => (int) $r['restauradas'] . ' incidencia(s) de vuelta en la lista.',
+            ]);
         } catch (Throwable $e) {
             $this->json(['ok' => false, 'message' => $e->getMessage()], 422);
         }
@@ -1220,8 +1315,7 @@ class CorreoController extends Controller
                     $resumen['duplicados'] += (int) ($captura['ya_existentes'] ?? 0);
 
                     foreach (($captura['errores'] ?? []) as $error) {
-                        $tipoIncidencia = stripos($error, 'otra cédula') !== false ? 'receptor'
-                            : (stripos($error, 'rechaz') !== false ? 'rechazado' : 'adjunto');
+                        $tipoIncidencia = $this->tipoIncidencia($error);
                         $lotes->incidencia($loteId, (int) $item['id'], $tipoIncidencia, $error, ['uid' => (int) $item['uid']]);
                     }
                     foreach (($captura['archivos_huerfanos'] ?? []) as $huerfano) {
@@ -1258,7 +1352,7 @@ class CorreoController extends Controller
                             $bandeja->marcarImportadasGeneral([(int) $fila['id']]);
                             $this->limpiarArchivosBandeja($fila);
                         } catch (Throwable $e) {
-                            $lotes->incidencia($loteId, (int) $item['id'], 'xml_invalido', $e->getMessage(), ['archivo' => basename((string) $fila['archivo_xml'])]);
+                            $lotes->incidencia($loteId, (int) $item['id'], $this->tipoIncidencia($e->getMessage(), 'xml_invalido'), $e->getMessage(), ['archivo' => basename((string) $fila['archivo_xml'])]);
                             $this->limpiarArchivosBandeja($fila);
                             $bandeja->marcarDescartadas([(int) $fila['id']]);
                         }
@@ -3293,6 +3387,32 @@ POWERSHELL;
      * de la factura. El mensaje tiene raíz MensajeHacienda (o MensajeReceptor)
      * con Clave, Mensaje (1 aceptado, 2 parcial, 3 rechazado) y DetalleMensaje.
      */
+    /**
+     * De qué es esta incidencia, leído del texto del error.
+     *
+     * Existe para que la pantalla pueda ofrecer "descartar todas las de este
+     * tipo": mientras los mensajes de Hacienda y las cédulas ajenas cayeran
+     * todos en 'adjunto' o 'xml_invalido', había que descartarlos de a uno
+     * leyendo cada renglón.
+     */
+    private function tipoIncidencia($texto, $porOmision = 'adjunto')
+    {
+        $texto = (string) $texto;
+        if (stripos($texto, 'mensaje de Hacienda') !== false) {
+            return 'mensaje_hacienda';
+        }
+        if (stripos($texto, 'nota de débito') !== false || stripos($texto, 'nota de debito') !== false) {
+            return 'nota_debito';
+        }
+        if (stripos($texto, 'otra cédula') !== false || stripos($texto, 'otra cedula') !== false) {
+            return 'receptor';
+        }
+        if (stripos($texto, 'rechaz') !== false) {
+            return 'rechazado';
+        }
+        return $porOmision;
+    }
+
     private function clasificarXml($ruta)
     {
         libxml_use_internal_errors(true);

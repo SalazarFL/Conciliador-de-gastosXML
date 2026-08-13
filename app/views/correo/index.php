@@ -449,17 +449,46 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         <div style="display:flex;gap:8px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);flex-wrap:wrap;">
             <input type="text" id="incidencias-q" class="form-control" style="min-width:260px;flex:1;font-size:12px;"
                    placeholder="Buscar por asunto, motivo, remitente o carpeta">
-            <select id="incidencias-tipo" class="form-control" style="width:auto;min-width:170px;font-size:12px;">
+            <select id="incidencias-tipo" class="form-control" style="width:auto;min-width:210px;font-size:12px;">
                 <option value="">Todos los tipos</option>
             </select>
+            <select id="incidencias-ver" class="form-control" style="width:auto;min-width:150px;font-size:12px;"
+                    title="Descartar sirve para dejar de ver lo ya revisado">
+                <option value="pendientes">Pendientes</option>
+                <option value="descartadas">Descartadas</option>
+                <option value="todas">Todas</option>
+            </select>
             <button type="button" id="incidencias-buscar" class="btn btn-primary btn-sm"><i class="fas fa-search"></i> Buscar</button>
+        </div>
+
+        <!-- Acciones en lote. Descartar no borra: marca lo revisado para que
+             deje de contar, y la marca sobrevive a reprocesar el correo. -->
+        <div style="display:flex;gap:8px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--border);
+                    flex-wrap:wrap;background:#fffdf7;">
+            <label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--navy);font-weight:700;">
+                <input type="checkbox" id="incidencias-todos"> Seleccionar la página
+            </label>
+            <span id="incidencias-marcadas" style="font-size:11.5px;color:var(--text-muted);">0 marcadas</span>
+            <input type="text" id="incidencias-motivo" class="form-control" maxlength="255"
+                   style="width:auto;min-width:220px;flex:1;font-size:12px;"
+                   placeholder="Motivo (opcional): por qué ya no hay que revisarlas">
+            <button type="button" id="incidencias-descartar" class="btn btn-outline btn-sm" disabled>
+                <i class="fas fa-eye-slash"></i> Descartar marcadas
+            </button>
+            <button type="button" id="incidencias-descartar-todas" class="btn btn-outline btn-sm">
+                <i class="fas fa-filter-circle-xmark"></i> Descartar todas las del filtro
+            </button>
+            <button type="button" id="incidencias-restaurar" class="btn btn-outline btn-sm" disabled
+                    style="display:none;">
+                <i class="fas fa-rotate-left"></i> Restaurar marcadas
+            </button>
         </div>
         <div style="flex:1;min-height:0;overflow:auto;">
             <table class="data-table" style="min-width:1050px;">
                 <thead style="position:sticky;top:0;z-index:2;background:#f3f7fb;">
-                    <tr><th>Fecha</th><th>Lote</th><th>Tipo</th><th>Asunto del correo</th><th>Motivo</th><th>Carpeta</th><th></th></tr>
+                    <tr><th style="width:34px;"></th><th>Fecha</th><th>Lote</th><th>Tipo</th><th>Asunto del correo</th><th>Motivo</th><th>Carpeta</th><th></th></tr>
                 </thead>
-                <tbody id="incidencias-body"><tr><td colspan="7" style="padding:30px;text-align:center;color:var(--text-muted);">Cargando…</td></tr></tbody>
+                <tbody id="incidencias-body"><tr><td colspan="8" style="padding:30px;text-align:center;color:var(--text-muted);">Cargando…</td></tr></tbody>
             </table>
         </div>
         <div style="display:flex;justify-content:center;align-items:center;gap:8px;padding:9px 14px;border-top:1px solid var(--border);background:#f8fafc;">
@@ -2820,6 +2849,13 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     var historialPrev = document.getElementById('incidencias-prev');
     var historialNext = document.getElementById('incidencias-next');
     var historialPaginaEl = document.getElementById('incidencias-pagina');
+    var historialVer = document.getElementById('incidencias-ver');
+    var historialTodos = document.getElementById('incidencias-todos');
+    var historialMarcadas = document.getElementById('incidencias-marcadas');
+    var historialMotivo = document.getElementById('incidencias-motivo');
+    var historialDescartar = document.getElementById('incidencias-descartar');
+    var historialDescartarTodas = document.getElementById('incidencias-descartar-todas');
+    var historialRestaurar = document.getElementById('incidencias-restaurar');
     var historialPagina = 1;
     var historialPaginas = 1;
 
@@ -2849,33 +2885,42 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
     function cargarHistorial(pagina) {
         historialPagina = Math.max(1, Number(pagina || 1));
-        historialBody.innerHTML = '<tr><td colspan="7" style="padding:30px;text-align:center;color:#64748b;"><i class="fas fa-spinner fa-spin"></i> Cargando incidencias…</td></tr>';
+        historialBody.innerHTML = '<tr><td colspan="8" style="padding:30px;text-align:center;color:#64748b;"><i class="fas fa-spinner fa-spin"></i> Cargando incidencias…</td></tr>';
         post('/correo/general/incidencias', {
             pagina: historialPagina,
             q: historialQ.value || '',
-            tipo: historialTipo.value || ''
+            tipo: historialTipo.value || '',
+            ver: historialVer.value || 'pendientes'
         }).then(function (r) {
             historialPagina = Number(r.page || 1);
             historialPaginas = Number(r.pages || 1);
-            historialResumen.textContent = Number(r.total || 0) + ' incidencias guardadas para esta cuenta';
+            historialResumen.textContent = Number(r.pendientes || 0) + ' pendientes · '
+                + Number(r.descartadas || 0) + ' descartadas · '
+                + Number(r.total || 0) + ' con el filtro actual';
+
+            var viendoDescartadas = (historialVer.value === 'descartadas');
+            historialRestaurar.style.display = viendoDescartadas ? '' : 'none';
+            historialDescartar.style.display = viendoDescartadas ? 'none' : '';
+            historialDescartarTodas.style.display = viendoDescartadas ? 'none' : '';
             historialPaginaEl.textContent = 'Página ' + historialPagina + ' de ' + historialPaginas;
             historialPrev.disabled = historialPagina <= 1;
             historialNext.disabled = historialPagina >= historialPaginas;
 
+            // El selector se rehace en cada carga porque lleva el conteo de
+            // pendientes de cada tipo, y ese número cambia al descartar.
             var tipoActual = historialTipo.value;
-            var tiposExistentes = {};
-            Array.prototype.forEach.call(historialTipo.options, function (option) { tiposExistentes[option.value] = true; });
-            (r.tipos || []).forEach(function (tipo) {
-                if (tiposExistentes[tipo]) return;
+            historialTipo.innerHTML = '<option value="">Todos los tipos</option>';
+            (r.tipos || []).forEach(function (t) {
                 var option = document.createElement('option');
-                option.value = tipo;
-                option.textContent = tipo;
+                option.value = t.tipo;
+                option.textContent = t.tipo + ' (' + t.pendientes + ' pendiente' + (t.pendientes !== 1 ? 's' : '') + ')';
                 historialTipo.appendChild(option);
             });
             historialTipo.value = tipoActual;
 
             if (!(r.rows || []).length) {
-                historialBody.innerHTML = '<tr><td colspan="7" style="padding:30px;text-align:center;color:#64748b;">No hay incidencias con estos filtros.</td></tr>';
+                historialBody.innerHTML = '<tr><td colspan="8" style="padding:30px;text-align:center;color:#64748b;">No hay incidencias con estos filtros.</td></tr>';
+                actualizarMarcadas();
                 return;
             }
             historialBody.innerHTML = (r.rows || []).map(function (row) {
@@ -2888,8 +2933,13 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                 var accion = puedeAbrir
                     ? '<a class="btn btn-outline btn-sm" href="'+escapeHtml(url)+'" title="Buscar y abrir el correo original"><i class="fas fa-envelope-open-text"></i> Ver correo</a>'
                     : '<span style="font-size:10.5px;color:#94a3b8;">Sin referencia</span>';
-                return '<tr>'+
-                    '<td style="white-space:nowrap;font-size:11px;">'+escapeHtml(fechaHistorial(row.creado_en))+'</td>'+
+                var descartada = Number(row.descartada || 0) === 1;
+                return '<tr'+(descartada ? ' style="opacity:.55;"' : '')+'>'+
+                    '<td style="text-align:center;"><input type="checkbox" class="inc-check" value="'+Number(row.id||0)+'"></td>'+
+                    '<td style="white-space:nowrap;font-size:11px;">'+escapeHtml(fechaHistorial(row.creado_en))+
+                        (descartada ? '<div style="font-size:10px;color:#16a34a;font-weight:700;">descartada</div>' : '')+
+                        (descartada && row.motivo ? '<div style="font-size:10px;color:#64748b;">'+escapeHtml(row.motivo)+'</div>' : '')+
+                    '</td>'+
                     '<td style="font-weight:700;color:var(--navy);">#'+Number(row.lote_id || 0)+'</td>'+
                     '<td><span class="badge" style="background:#fff7ed;color:#9a3412;">'+escapeHtml(row.tipo || 'incidencia')+'</span></td>'+
                     '<td style="max-width:260px;"><div style="font-weight:700;color:var(--navy);white-space:normal;">'+escapeHtml(asunto || '(Sin asunto)')+'</div>'+
@@ -2898,6 +2948,8 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                     '<td style="max-width:190px;overflow-wrap:anywhere;font-size:10.5px;color:#64748b;">'+escapeHtml(row.carpeta || '—')+'</td>'+
                     '<td style="white-space:nowrap;">'+accion+'</td></tr>';
             }).join('');
+            historialTodos.checked = false;
+            actualizarMarcadas();
         }).catch(function (e) {
             historialBody.innerHTML = '<tr><td colspan="7" style="padding:30px;text-align:center;color:#b91c1c;">'+escapeHtml(e.message)+'</td></tr>';
         });
@@ -2916,6 +2968,92 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         if (event.key === 'Enter') { event.preventDefault(); cargarHistorial(1); }
     });
     historialTipo.addEventListener('change', function () { cargarHistorial(1); });
+    historialVer.addEventListener('change', function () { cargarHistorial(1); });
+    historialTipo.addEventListener('change', function () { cargarHistorial(1); });
+
+    // ── Descarte de incidencias revisadas ──────────────────────
+    function marcadas() {
+        return Array.prototype.slice.call(historialBody.querySelectorAll('.inc-check:checked'))
+            .map(function (c) { return Number(c.value); })
+            .filter(function (n) { return n > 0; });
+    }
+
+    // El resultado se dice donde estaba el contador: cargarHistorial lo
+    // sobrescribe en cuanto termina de refrescar, que es lo que se quiere.
+    function avisarIncidencias(texto) {
+        historialMarcadas.textContent = texto;
+        historialMarcadas.style.color = 'var(--ok)';
+        setTimeout(function () { historialMarcadas.style.color = ''; }, 4000);
+    }
+
+    function actualizarMarcadas() {
+        var n = marcadas().length;
+        historialMarcadas.textContent = n + ' marcada' + (n !== 1 ? 's' : '');
+        historialDescartar.disabled = n === 0;
+        historialRestaurar.disabled = n === 0;
+        var total = historialBody.querySelectorAll('.inc-check').length;
+        historialTodos.checked = total > 0 && n === total;
+    }
+
+    historialBody.addEventListener('change', function (e) {
+        if (e.target && e.target.classList.contains('inc-check')) actualizarMarcadas();
+    });
+
+    historialTodos.addEventListener('change', function () {
+        Array.prototype.forEach.call(historialBody.querySelectorAll('.inc-check'), function (c) {
+            c.checked = historialTodos.checked;
+        });
+        actualizarMarcadas();
+    });
+
+    function descartar(datos, textoBoton, boton) {
+        var original = boton.innerHTML;
+        boton.disabled = true;
+        boton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> ' + textoBoton;
+        datos.motivo = historialMotivo.value || '';
+        post('/correo/incidencias/descartar', datos)
+            .then(function (r) {
+                historialMotivo.value = '';
+                historialTodos.checked = false;
+                cargarHistorial(1);
+                avisarIncidencias(r.message);
+            })
+            .catch(function (err) { alert(err.message); })
+            .then(function () { boton.disabled = false; boton.innerHTML = original; });
+    }
+
+    historialDescartar.addEventListener('click', function () {
+        var ids = marcadas();
+        if (!ids.length) return;
+        descartar({ ids: JSON.stringify(ids) }, 'Descartando…', historialDescartar);
+    });
+
+    // "Todas las del filtro" alcanza lo que NO está en pantalla: el caso real
+    // son 194 cédulas ajenas repartidas en cuatro páginas.
+    historialDescartarTodas.addEventListener('click', function () {
+        var tipo = historialTipo.value ? ('de tipo "' + historialTipo.value + '" ') : '';
+        if (!confirm('Se van a descartar TODAS las incidencias ' + tipo + 'que cumplen el filtro actual, ' +
+                     'estén o no en esta página.
+
+No se borra nada: se pueden restaurar.')) return;
+        descartar({
+            todas: 1,
+            q: historialQ.value || '',
+            tipo: historialTipo.value || '',
+            ver: historialVer.value || 'pendientes'
+        }, 'Descartando…', historialDescartarTodas);
+    });
+
+    historialRestaurar.addEventListener('click', function () {
+        var ids = marcadas();
+        if (!ids.length) return;
+        historialRestaurar.disabled = true;
+        post('/correo/incidencias/restaurar', { ids: JSON.stringify(ids) })
+            .then(function (r) { historialTodos.checked = false; cargarHistorial(1); avisarIncidencias(r.message); })
+            .catch(function (err) { alert(err.message); })
+            .then(function () { historialRestaurar.disabled = false; });
+    });
+
     historialPrev.addEventListener('click', function () { if (historialPagina > 1) cargarHistorial(historialPagina - 1); });
     historialNext.addEventListener('click', function () { if (historialPagina < historialPaginas) cargarHistorial(historialPagina + 1); });
 

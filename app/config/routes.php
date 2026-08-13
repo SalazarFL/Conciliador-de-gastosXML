@@ -91,6 +91,10 @@ $router->post('/correo/general/estimar', 'CorreoController@generalEstimar');
 $router->post('/correo/general/crear', 'CorreoController@generalCrear');
 $router->post('/correo/general/estado', 'CorreoController@generalEstado');
 $router->post('/correo/general/incidencias', 'CorreoController@generalIncidencias');
+// Descarte de incidencias revisadas, igual que en Facturas ERP: la marca vive
+// por firma, así que reprocesar el correo no las resucita.
+$router->post('/correo/incidencias/descartar', 'CorreoController@incidenciasDescartar');
+$router->post('/correo/incidencias/restaurar', 'CorreoController@incidenciasRestaurar');
 $router->post('/correo/general/procesar', 'CorreoController@generalProcesar');
 $router->post('/correo/general/pausar', 'CorreoController@generalPausar');
 $router->post('/correo/general/reanudar', 'CorreoController@generalReanudar');

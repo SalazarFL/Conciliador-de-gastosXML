@@ -29,6 +29,8 @@ class Diagnostico
         ['facturas_erp', 'sociedad_id', 'database/migration_facturas_erp.sql'],
         ['correo_cuenta_sociedades', null, 'database/migration_sociedades_alcance.sql'],
         ['proveedor_alias', null, 'database/migration_proveedor_alias.sql'],
+        ['correo_incidencias', 'descartada', 'database/migration_correo_incidencias_descarte.sql'],
+        ['correo_incidencias_descartes', null, 'database/migration_correo_incidencias_descarte.sql'],
     ];
 
     private $pdo;

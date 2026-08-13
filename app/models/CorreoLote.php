@@ -51,17 +51,55 @@ class CorreoLote extends Model
                  WHERE TABLE_SCHEMA = DATABASE()
                    AND TABLE_NAME = 'correo_incidencias' AND COLUMN_NAME = 'asunto'"
             );
-            if ($existe > 0) {
-                self::$schemaIncidenciasLista = true;
-                return;
+            if ($existe === 0) {
+                $this->execute("ALTER TABLE correo_incidencias
+                                ADD COLUMN IF NOT EXISTS asunto VARCHAR(255) NULL AFTER mensaje");
             }
+
+            // Descarte de incidencias, igual que en Facturas ERP.
             $this->execute("ALTER TABLE correo_incidencias
-                            ADD COLUMN IF NOT EXISTS asunto VARCHAR(255) NULL AFTER mensaje");
+                ADD COLUMN IF NOT EXISTS firma VARCHAR(64) NOT NULL DEFAULT '' AFTER metadata,
+                ADD COLUMN IF NOT EXISTS descartada TINYINT(1) NOT NULL DEFAULT 0 AFTER firma,
+                ADD COLUMN IF NOT EXISTS descartada_en DATETIME NULL AFTER descartada,
+                ADD COLUMN IF NOT EXISTS descartada_por INT(10) UNSIGNED NULL AFTER descartada_en,
+                ADD COLUMN IF NOT EXISTS motivo VARCHAR(255) NULL AFTER descartada_por");
+            $this->execute("CREATE TABLE IF NOT EXISTS correo_incidencias_descartes (
+                firma      VARCHAR(64) NOT NULL,
+                tipo       VARCHAR(40) NOT NULL DEFAULT '',
+                asunto     VARCHAR(255) NULL,
+                motivo     VARCHAR(255) NULL,
+                usuario_id INT(10) UNSIGNED NULL,
+                creado_en  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (firma),
+                KEY idx_tipo (tipo)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
             self::$schemaIncidenciasLista = true;
         } catch (Throwable $e) {
-            // database/migration_correo_historial_incidencias.sql cubre
+            // database/migration_correo_historial_incidencias.sql y
+            // database/migration_correo_incidencias_descarte.sql cubren
             // servidores donde el usuario web no tiene permisos de DDL.
         }
+    }
+
+    /**
+     * Identifica LA MISMA incidencia entre corridas.
+     *
+     * El lote y el item cambian al reprocesar; lo que no cambia es el mensaje
+     * del buzón (carpeta + uidvalidity + uid). Se le suma el texto porque un
+     * mismo correo trae varias facturas y produce una incidencia por cada una:
+     * sin eso, descartar "la factura 2312 vino sin PDF" descartaría también
+     * las otras cinco del mismo correo.
+     */
+    public static function firmaIncidencia($tipo, $carpeta, $uidvalidity, $uid, $mensaje)
+    {
+        return sha1(implode('|', [
+            (string) $tipo,
+            (string) $carpeta,
+            (int) $uidvalidity,
+            (int) $uid,
+            (string) $mensaje,
+        ]));
     }
 
     public function crear(array $data)
@@ -306,15 +344,44 @@ class CorreoLote extends Model
             );
         }
 
+        $tipo = mb_substr((string) $tipo, 0, 40, 'UTF-8');
+        $mensaje = mb_substr((string) $mensaje, 0, 1000, 'UTF-8');
+
+        // Firma del correo al que pertenece, para que el descarte sobreviva a
+        // reprocesar: el lote y el item serán otros, el mensaje del buzón no.
+        $correo = ['carpeta' => '', 'uidvalidity' => 0, 'uid' => 0];
+        if ($itemId > 0) {
+            $fila = $this->fetchOne(
+                'SELECT carpeta, uidvalidity, uid FROM correo_lote_items WHERE id = ? LIMIT 1',
+                [(int) $itemId]
+            );
+            if ($fila) {
+                $correo = $fila;
+            }
+        }
+        $firma = self::firmaIncidencia(
+            $tipo, $correo['carpeta'] ?? '', $correo['uidvalidity'] ?? 0, $correo['uid'] ?? 0, $mensaje
+        );
+
+        // Si esta misma incidencia ya se descartó antes, nace descartada. Sin
+        // esto, reprocesar un rango devuelve a la lista todo lo que alguien ya
+        // revisó y la lista no baja nunca.
+        $descarte = $this->descarteDe($firma);
+
         $this->insert("INSERT INTO correo_incidencias
-                          (lote_id, lote_item_id, tipo, mensaje, asunto, metadata)
-                       VALUES (?, ?, ?, ?, ?, ?)", [
+                          (lote_id, lote_item_id, tipo, mensaje, asunto, metadata,
+                           firma, descartada, descartada_en, motivo)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
             (int) $loteId,
             $itemId > 0 ? (int) $itemId : null,
-            mb_substr((string) $tipo, 0, 40, 'UTF-8'),
-            mb_substr((string) $mensaje, 0, 1000, 'UTF-8'),
+            $tipo,
+            $mensaje,
             $asunto !== '' ? mb_substr($asunto, 0, 255, 'UTF-8') : null,
             $metadata ? json_encode($metadata, JSON_UNESCAPED_UNICODE) : null,
+            $firma,
+            $descarte !== null ? 1 : 0,
+            $descarte !== null ? date('Y-m-d H:i:s') : null,
+            $descarte !== null ? ($descarte['motivo'] ?? null) : null,
         ]);
         $this->recalcular((int) $loteId);
     }
@@ -336,7 +403,12 @@ class CorreoLote extends Model
         ) ?: [];
     }
 
-    public function historialIncidencias($cuentaId, array $filters = [], $page = 1, $perPage = 50)
+    /**
+     * El WHERE del historial, compartido con el descarte masivo: si el filtro
+     * de la pantalla y el de "descartar todas" no fueran literalmente el mismo
+     * código, "todas" acabaría alcanzando filas que el usuario no vio.
+     */
+    private function condicionesIncidencia($cuentaId, array $filters = [])
     {
         $where = ['l.cuenta_id = ?'];
         $params = [(int) $cuentaId];
@@ -355,7 +427,21 @@ class CorreoLote extends Model
             $params[] = $tipo;
         }
 
-        $whereSql = implode(' AND ', $where);
+        // Por omisión solo lo pendiente: descartar sirve justamente para no
+        // volver a verlo. 'descartadas' lo invierte y 'todas' no filtra.
+        $ver = (string) ($filters['ver'] ?? 'pendientes');
+        if ($ver === 'descartadas') {
+            $where[] = 'x.descartada = 1';
+        } elseif ($ver !== 'todas') {
+            $where[] = 'x.descartada = 0';
+        }
+
+        return [implode(' AND ', $where), $params];
+    }
+
+    public function historialIncidencias($cuentaId, array $filters = [], $page = 1, $perPage = 50)
+    {
+        [$whereSql, $params] = $this->condicionesIncidencia((int) $cuentaId, $filters);
         $total = (int) $this->fetchColumn(
             "SELECT COUNT(*)
              FROM correo_incidencias x
@@ -374,6 +460,7 @@ class CorreoLote extends Model
             "SELECT x.id, x.lote_id, x.tipo, x.mensaje,
                     COALESCE(NULLIF(x.asunto, ''), i.asunto, li.asunto, '') AS asunto,
                     x.metadata, x.creado_en, li.carpeta, li.uid, li.uidvalidity,
+                    x.descartada, x.descartada_en, x.motivo,
                     COALESCE(i.remitente, li.remitente) AS remitente,
                     COALESCE(i.fecha, li.fecha_correo) AS fecha_correo
              FROM correo_incidencias x
@@ -384,11 +471,26 @@ class CorreoLote extends Model
              ORDER BY x.id DESC LIMIT {$perPage} OFFSET {$offset}",
             $params
         ) ?: [];
+        // El selector de tipo lleva el conteo de lo PENDIENTE de cada uno: es
+        // lo que responde "¿qué me queda por revisar?" antes de abrir nada, y
+        // lo que hace obvio que 194 cédulas equivocadas se descartan de una.
         $tipos = $this->fetchAll(
-            "SELECT DISTINCT x.tipo
+            "SELECT x.tipo,
+                    SUM(CASE WHEN x.descartada = 0 THEN 1 ELSE 0 END) AS pendientes,
+                    COUNT(*) AS total
              FROM correo_incidencias x
              JOIN correo_lotes l ON l.id = x.lote_id
-             WHERE l.cuenta_id = ? ORDER BY x.tipo",
+             WHERE l.cuenta_id = ?
+             GROUP BY x.tipo ORDER BY x.tipo",
+            [(int) $cuentaId]
+        ) ?: [];
+
+        $conteo = $this->fetchOne(
+            "SELECT SUM(CASE WHEN x.descartada = 0 THEN 1 ELSE 0 END) AS pendientes,
+                    SUM(CASE WHEN x.descartada = 1 THEN 1 ELSE 0 END) AS descartadas
+             FROM correo_incidencias x
+             JOIN correo_lotes l ON l.id = x.lote_id
+             WHERE l.cuenta_id = ?",
             [(int) $cuentaId]
         ) ?: [];
 
@@ -398,13 +500,165 @@ class CorreoLote extends Model
             'page' => $page,
             'pages' => $pages,
             'per_page' => $perPage,
-            'tipos' => array_values(array_filter(array_map(function ($row) {
-                return (string) ($row['tipo'] ?? '');
-            }, $tipos))),
+            'ver' => (string) ($filters['ver'] ?? 'pendientes'),
+            'pendientes' => (int) ($conteo['pendientes'] ?? 0),
+            'descartadas' => (int) ($conteo['descartadas'] ?? 0),
+            'tipos' => array_map(function ($row) {
+                return [
+                    'tipo' => (string) ($row['tipo'] ?? ''),
+                    'pendientes' => (int) ($row['pendientes'] ?? 0),
+                    'total' => (int) ($row['total'] ?? 0),
+                ];
+            }, $tipos),
         ];
     }
 
+    // ── Descarte de incidencias ────────────────────────────────────
+    //
+    // Mismo mecanismo que Facturas ERP. Una incidencia revisada que no da más
+    // trabajo se marca descartada y deja de contar; la marca vive por firma,
+    // así que sobrevive a que el correo se vuelva a procesar. No borra nada:
+    // se puede restaurar.
+
+    /** El descarte permanente de esa firma, o null. */
+    private function descarteDe($firma)
+    {
+        try {
+            $fila = $this->fetchOne(
+                'SELECT motivo FROM correo_incidencias_descartes WHERE firma = ? LIMIT 1',
+                [(string) $firma]
+            );
+            return $fila ?: null;
+        } catch (Throwable $e) {
+            // Instalación sin la migración aplicada: nada está descartado.
+            return null;
+        }
+    }
+
+    /**
+     * Descarta por id. `$permanente` guarda además la firma, para que la
+     * incidencia no vuelva a aparecer si el correo se reprocesa.
+     */
+    public function descartarIncidencias(array $ids, $motivo = '', $usuarioId = null, $permanente = true)
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+        if (!$ids) {
+            return ['descartadas' => 0, 'firmas' => 0];
+        }
+        $motivo = mb_substr(trim((string) $motivo), 0, 255, 'UTF-8');
+        $marcas = implode(',', array_fill(0, count($ids), '?'));
+        $usuario = $usuarioId !== null ? (int) $usuarioId : null;
+
+        $this->begin();
+        try {
+            $filas = $this->fetchAll(
+                "SELECT DISTINCT firma, tipo, asunto FROM correo_incidencias
+                  WHERE id IN ({$marcas}) AND firma <> ''",
+                $ids
+            );
+
+            $this->execute(
+                "UPDATE correo_incidencias
+                    SET descartada = 1, descartada_en = NOW(), descartada_por = ?, motivo = ?
+                  WHERE id IN ({$marcas})",
+                array_merge([$usuario, $motivo !== '' ? $motivo : null], $ids)
+            );
+
+            $firmas = 0;
+            if ($permanente) {
+                foreach ($filas as $f) {
+                    // Alcanza también a las apariciones de otros lotes: si algo
+                    // ya no interesa, no interesa en ninguna corrida.
+                    $this->execute(
+                        "UPDATE correo_incidencias
+                            SET descartada = 1, descartada_en = NOW(), descartada_por = ?, motivo = ?
+                          WHERE firma = ? AND descartada = 0",
+                        [$usuario, $motivo !== '' ? $motivo : null, $f['firma']]
+                    );
+                    $this->execute(
+                        "INSERT INTO correo_incidencias_descartes (firma, tipo, asunto, motivo, usuario_id)
+                         VALUES (?, ?, ?, ?, ?)
+                         ON DUPLICATE KEY UPDATE motivo = VALUES(motivo), usuario_id = VALUES(usuario_id)",
+                        [$f['firma'], (string) $f['tipo'], $f['asunto'], $motivo !== '' ? $motivo : null, $usuario]
+                    );
+                    $firmas++;
+                }
+            }
+            $this->commit();
+        } catch (Throwable $e) {
+            $this->rollback();
+            throw $e;
+        }
+
+        return ['descartadas' => count($ids), 'firmas' => $firmas];
+    }
+
+    public function restaurarIncidencias(array $ids)
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+        if (!$ids) {
+            return ['restauradas' => 0];
+        }
+        $marcas = implode(',', array_fill(0, count($ids), '?'));
+
+        $this->begin();
+        try {
+            $firmas = array_column($this->fetchAll(
+                "SELECT DISTINCT firma FROM correo_incidencias
+                  WHERE id IN ({$marcas}) AND firma <> ''",
+                $ids
+            ), 'firma');
+
+            foreach ($firmas as $firma) {
+                $this->execute('DELETE FROM correo_incidencias_descartes WHERE firma = ?', [$firma]);
+                $this->execute(
+                    "UPDATE correo_incidencias
+                        SET descartada = 0, descartada_en = NULL, descartada_por = NULL, motivo = NULL
+                      WHERE firma = ?",
+                    [$firma]
+                );
+            }
+            $this->execute(
+                "UPDATE correo_incidencias
+                    SET descartada = 0, descartada_en = NULL, descartada_por = NULL, motivo = NULL
+                  WHERE id IN ({$marcas})",
+                $ids
+            );
+            $this->commit();
+        } catch (Throwable $e) {
+            $this->rollback();
+            throw $e;
+        }
+
+        return ['restauradas' => count($ids)];
+    }
+
+    /**
+     * Los ids de TODO lo que cumple el filtro actual, para "descartar todas
+     * las de este tipo" sin ir marcando página por página. Es el caso de uso
+     * real: 194 cédulas equivocadas no se descartan de a cincuenta.
+     */
+    public function idsIncidencias($cuentaId, array $filtros = [], $tope = 5000)
+    {
+        [$where, $params] = $this->condicionesIncidencia((int) $cuentaId, $filtros);
+        $tope = max(1, min(20000, (int) $tope));
+        return array_map('intval', array_column($this->fetchAll(
+            "SELECT x.id
+             FROM correo_incidencias x
+             JOIN correo_lotes l ON l.id = x.lote_id
+             LEFT JOIN correo_lote_items li ON li.id = x.lote_item_id
+             LEFT JOIN correo_indice i ON i.id = li.correo_indice_id
+             WHERE {$where} LIMIT {$tope}",
+            $params
+        ), 'id'));
+    }
+
     public function begin() { return self::getDB()->beginTransaction(); }
+    public function commit()
+    {
+        if (self::getDB()->inTransaction()) { return self::getDB()->commit(); }
+        return true;
+    }
     public function rollback()
     {
         if (self::getDB()->inTransaction()) { return self::getDB()->rollBack(); }
