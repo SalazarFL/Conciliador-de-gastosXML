@@ -67,13 +67,13 @@ function ncQuery(array $changes = []) {
             Sociedad: <strong style="color:var(--navy);"><?= htmlspecialchars($sociedadActiva['nombre']) ?></strong>.
             Se acepta el reporte CSV “Notas de Crédito por Proveedor”.
         </div>
-        <form id="nc-upload-form" action="<?= $baseUrl ?>/notas-credito/previsualizar" method="POST" enctype="multipart/form-data"
-              style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-            <input type="file" name="listado_file" id="nc-file" accept=".csv" required style="display:none;">
-            <label class="upload-file-btn" for="nc-file"><i class="fas fa-folder-open"></i> Seleccionar CSV</label>
-            <span id="nc-file-name" style="font-size:12px;color:var(--text-muted);font-style:italic;">Ningún archivo seleccionado</span>
-            <button type="submit" class="btn btn-primary btn-sm" id="nc-preview-btn"><i class="fas fa-eye"></i> Vista previa</button>
-        </form>
+        <a href="<?= $baseUrl ?>/carga" class="btn btn-primary btn-sm">
+            <i class="fas fa-inbox" style="margin-right:4px;"></i>Cargar listado
+        </a>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:8px;">
+            El CSV se carga desde <a href="<?= $baseUrl ?>/carga">Carga de documentos</a>,
+            con vista previa antes de importar.
+        </div>
     <?php endif; ?>
 </div>
 
@@ -293,35 +293,6 @@ function ncQuery(array $changes = []) {
 </div>
 <?php endif; ?>
 
-<!-- Vista previa -->
-<div class="nc-modal" id="nc-preview-modal">
-    <div class="nc-modal-panel">
-        <div class="nc-modal-head">
-            <i class="fas fa-eye" style="color:var(--gold);"></i>
-            <div><strong>Vista previa del listado</strong><div id="nc-preview-meta" class="nc-period"></div></div>
-            <button class="nc-close" type="button" data-close="nc-preview-modal">&times;</button>
-        </div>
-        <div class="nc-modal-body">
-            <div id="nc-preview-stats" class="nc-summary"></div>
-            <div id="nc-preview-alert"></div>
-            <div class="nc-table-wrap" style="max-height:45vh;">
-                <table class="data-table" style="min-width:900px;">
-                    <thead><tr><th>Fila</th><th>Documento</th><th>Proveedor</th><th>Fecha</th><th class="right">Monto</th><th class="right">Saldo</th></tr></thead>
-                    <tbody id="nc-preview-body"></tbody>
-                </table>
-            </div>
-        </div>
-        <div style="padding:12px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px;">
-            <button type="button" class="btn btn-outline btn-sm" data-close="nc-preview-modal">Cancelar</button>
-            <form method="POST" action="<?= $baseUrl ?>/notas-credito/subir" id="nc-confirm-form">
-                <input type="hidden" name="archivo_token" id="nc-token">
-                <input type="hidden" name="archivo_nombre" id="nc-original">
-                <button class="btn btn-primary btn-sm" id="nc-confirm-btn"><i class="fas fa-database"></i> Importar listado</button>
-            </form>
-        </div>
-    </div>
-</div>
-
 <!-- Vinculación manual -->
 <div class="nc-modal" id="nc-link-modal">
     <div class="nc-modal-panel">
@@ -377,9 +348,6 @@ function ncQuery(array $changes = []) {
 <script>
 (function () {
     var BASE = <?= json_encode($baseUrl) ?>;
-    var file = document.getElementById('nc-file');
-    var uploadForm = document.getElementById('nc-upload-form');
-    var previewModal = document.getElementById('nc-preview-modal');
     var linkModal = document.getElementById('nc-link-modal');
     var historyModal = document.getElementById('nc-history-modal');
     var linesBody = document.getElementById('nc-lines-body');
@@ -467,7 +435,7 @@ function ncQuery(array $changes = []) {
     document.querySelectorAll('[data-close]').forEach(function (button) {
         button.addEventListener('click', function () { closeModal(document.getElementById(button.dataset.close)); });
     });
-    [previewModal, linkModal, historyModal].forEach(function (modal) {
+    [linkModal, historyModal].forEach(function (modal) {
         if (modal) modal.addEventListener('click', function (event) { if (event.target === modal) closeModal(modal); });
     });
 
@@ -597,54 +565,6 @@ function ncQuery(array $changes = []) {
             });
         });
     }
-
-    if (file) file.addEventListener('change', function () {
-        document.getElementById('nc-file-name').textContent = file.files.length ? file.files[0].name : 'Ningún archivo seleccionado';
-    });
-
-    if (uploadForm) uploadForm.addEventListener('submit', function (event) {
-        event.preventDefault();
-        if (!file.files.length) return;
-        var button = document.getElementById('nc-preview-btn');
-        button.disabled = true;
-        button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Analizando…';
-        fetch(uploadForm.action, {method:'POST', body:new FormData(uploadForm)})
-            .then(function (response) { return response.json(); })
-            .then(function (data) {
-                if (!data.ok) throw new Error(data.message || 'No fue posible analizar el archivo.');
-                document.getElementById('nc-token').value = data.token;
-                document.getElementById('nc-original').value = data.archivo;
-                document.getElementById('nc-preview-meta').textContent =
-                    data.archivo + ' · ' + (data.empresa || 'Empresa no detectada') + ' · ' +
-                    dateEs(data.periodo_desde) + ' al ' + dateEs(data.periodo_hasta);
-                var s = data.estadisticas;
-                document.getElementById('nc-preview-stats').innerHTML =
-                    '<div class="nc-stat"><strong>'+s.total+'</strong><span>Notas</span></div>' +
-                    '<div class="nc-stat"><strong>'+s.proveedores+'</strong><span>Proveedores</span></div>' +
-                    '<div class="nc-stat"><strong>'+s.sucursales+'</strong><span>Sucursales</span></div>' +
-                    '<div class="nc-stat"><strong>'+s.crc+' / '+s.usd+'</strong><span>CRC / USD</span></div>';
-                var alert = document.getElementById('nc-preview-alert');
-                var confirm = document.getElementById('nc-confirm-btn');
-                if (data.duplicado) {
-                    alert.innerHTML = '<div class="alert alert-warning">Este archivo ya fue cargado como <strong>'+esc(data.duplicado.nombre)+'</strong>.</div>';
-                    confirm.disabled = true;
-                } else if (data.errores.length) {
-                    alert.innerHTML = '<div class="alert alert-warning">'+data.errores.length+' filas inválidas se omitirán al importar.</div>';
-                    confirm.disabled = false;
-                } else {
-                    alert.innerHTML = '<div class="alert alert-success">Todas las filas fueron interpretadas correctamente.</div>';
-                    confirm.disabled = false;
-                }
-                document.getElementById('nc-preview-body').innerHTML = data.lineas.map(function (row) {
-                    return '<tr><td>'+row.fila_origen+'</td><td class="nc-doc">'+esc(row.documento)+'</td>' +
-                        '<td>'+esc(row.proveedor_nombre)+'</td><td>'+dateEs(row.fecha)+'</td>' +
-                        '<td class="right">'+money(row.monto,row.moneda)+'</td><td class="right">'+money(row.saldo,row.moneda)+'</td></tr>';
-                }).join('');
-                openModal(previewModal);
-            })
-            .catch(function (error) { alert(error.message); })
-            .finally(function () { button.disabled=false; button.innerHTML='<i class="fas fa-eye"></i> Vista previa'; });
-    });
 
     function loadCandidates() {
         var q = document.getElementById('nc-candidate-q').value || '';

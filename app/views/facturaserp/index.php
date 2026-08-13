@@ -63,26 +63,18 @@ function feMonto($v)
         <?php endif; ?>
     </div>
 
-    <form method="POST" action="<?= $baseUrl ?>/facturas-erp/subir" enctype="multipart/form-data"
-          style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
-        <input type="file" name="listado_file" id="fe-file" accept=".csv" style="display:none;"
-               onchange="feMostrarArchivo(this)">
-        <label for="fe-file" class="upload-file-btn" style="padding:8px 16px;font-size:12.5px;">
-            <i class="fas fa-folder-open"></i> Seleccionar CSV
-        </label>
-        <span id="fe-file-name" style="font-size:11.5px;color:var(--text-muted);font-style:italic;">
-            Ningún archivo seleccionado
-        </span>
-        <button type="submit" class="btn btn-primary btn-sm">
-            <i class="fas fa-upload" style="margin-right:4px;"></i>Cargar
-        </button>
-        <span style="font-size:11px;color:var(--text-muted);margin-left:auto;max-width:520px;">
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+        <a href="<?= $baseUrl ?>/carga" class="btn btn-primary btn-sm">
+            <i class="fas fa-inbox" style="margin-right:4px;"></i>Cargar listado
+        </a>
+        <span style="font-size:11px;color:var(--text-muted);max-width:560px;">
             <i class="fas fa-circle-info" style="margin-right:3px;color:var(--navy-light);"></i>
-            Reporte <strong>Facturas por Proveedor</strong> exportado a CSV. Se puede volver a subir
-            cuantas veces haga falta: las facturas nuevas se agregan, las que cambiaron de saldo se
-            actualizan y las que siguen igual no se tocan.
+            El reporte <strong>Facturas por Proveedor</strong> se carga desde
+            <a href="<?= $baseUrl ?>/carga">Carga de documentos</a>, junto con el resto de los
+            archivos. Se puede volver a subir cuantas veces haga falta: las facturas nuevas se
+            agregan, las que cambiaron de saldo se actualizan y las que siguen igual no se tocan.
         </span>
-    </form>
+    </div>
 </div>
 
 <!-- ── Resumen ── -->

@@ -177,6 +177,10 @@ function ppUpdateFileDisplay(input) {
             <button type="button" id="ppv-cerrar" style="background:none;border:none;font-size:20px;color:#94a3b8;cursor:pointer;line-height:1;">&times;</button>
         </div>
         <div id="ppv-resumen" style="padding:10px 18px;display:flex;gap:16px;flex-wrap:wrap;font-size:13px;border-bottom:1px solid var(--border);flex-shrink:0;"></div>
+        <!-- Facturas que no están en ningún listado del ERP: bloquean la carga. -->
+        <div id="ppv-sin-erp" style="display:none;margin:10px 18px 0;padding:10px 12px;background:#fef2f2;
+             border:1px solid #fecaca;border-radius:7px;color:#991b1b;font-size:12.5px;line-height:1.6;
+             flex-shrink:0;"></div>
         <div style="overflow:auto;flex:1;">
             <table class="data-table" style="font-size:12.5px;">
                 <thead>
@@ -588,10 +592,30 @@ document.addEventListener('keydown', function (e) {
                 + '</tr>';
         }).join('');
 
-        btnImportar.disabled = r.nuevas === 0;
-        btnImportar.innerHTML = r.nuevas === 0
-            ? 'Nada nuevo que importar'
-            : '<i class="fas fa-check-double"></i> Importar ' + r.nuevas + ' nueva' + (r.nuevas !== 1 ? 's' : '');
+        // Facturas que no están en ningún listado del ERP: la importación las
+        // rechaza entera, así que se dice acá y se apaga el botón. Enterarse
+        // al confirmar obligaba a repetir todo el camino.
+        var avisoErp = document.getElementById('ppv-sin-erp');
+        if (r.sin_erp > 0) {
+            avisoErp.style.display = 'block';
+            avisoErp.innerHTML = '<strong>' + r.sin_erp + ' factura' + (r.sin_erp !== 1 ? 's' : '') +
+                ' no está' + (r.sin_erp !== 1 ? 'n' : '') + ' en ningún listado de facturas del ERP:</strong> ' +
+                (r.sin_erp_muestra || []).map(esc).join(', ') +
+                (r.sin_erp > (r.sin_erp_muestra || []).length ? ', …' : '') +
+                '<br>El pago semanal no se puede cargar hasta que el reporte “Facturas por Proveedor” que las incluya esté cargado en ' +
+                '<a href="<?= $baseUrl ?>/carga">Carga de documentos</a>.';
+        } else {
+            avisoErp.style.display = 'none';
+            avisoErp.innerHTML = '';
+        }
+
+        var bloqueado = r.nuevas === 0 || r.sin_erp > 0;
+        btnImportar.disabled = bloqueado;
+        btnImportar.innerHTML = r.sin_erp > 0
+            ? 'Faltan facturas en el ERP'
+            : (r.nuevas === 0
+                ? 'Nada nuevo que importar'
+                : '<i class="fas fa-check-double"></i> Importar ' + r.nuevas + ' nueva' + (r.nuevas !== 1 ? 's' : ''));
     }
 
     btnImportar.addEventListener('click', function () {

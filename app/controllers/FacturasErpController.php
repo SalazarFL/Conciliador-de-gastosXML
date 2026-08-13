@@ -167,7 +167,7 @@ class FacturasErpController extends Controller
     public function subir()
     {
         if (!$this->isPost()) {
-            $this->redirect($this->url('/facturas-erp'));
+            $this->redirect($this->url('/carga'));
         }
 
         require_once __DIR__ . '/../helpers/FileUploader.php';
@@ -191,7 +191,7 @@ class FacturasErpController extends Controller
             if (!$resultado['ok']) {
                 $detalle = array_merge($resultado['errores'], array_slice($resultado['no_reconocidas'], 0, 5));
                 $this->redirectWithMessage(
-                    $this->url('/facturas-erp'),
+                    $this->url('/carga'),
                     'No se pudo leer el listado: ' . implode(' ', $resultado['errores']),
                     'error',
                     ['failed_files' => $detalle]
@@ -205,7 +205,7 @@ class FacturasErpController extends Controller
             $sociedad = $this->loadModel('Sociedad')->getActiva();
             if (!$sociedad) {
                 $this->redirectWithMessage(
-                    $this->url('/facturas-erp'),
+                    $this->url('/carga'),
                     'Selecciona una sociedad antes de cargar el listado del ERP: el reporte no indica a qué empresa pertenece.',
                     'error'
                 );
@@ -259,7 +259,7 @@ class FacturasErpController extends Controller
             $this->redirectWithMessage($this->url('/facturas-erp'), $mensaje, $tipo, $detalles);
         } catch (Throwable $e) {
             $this->redirectWithMessage(
-                $this->url('/facturas-erp'),
+                $this->url('/carga'),
                 'Error al procesar el listado: ' . $e->getMessage(),
                 'error'
             );

@@ -418,7 +418,7 @@ class FacturasController extends Controller
 				]
 			);
 		} catch (Throwable $e) {
-			$this->redirectWithMessage($this->url('/facturas'), 'Error de importación XML: ' . $e->getMessage(), 'error');
+			$this->redirectWithMessage($this->url('/carga'), 'Error de importación XML: ' . $e->getMessage(), 'error');
 		}
 	}
 

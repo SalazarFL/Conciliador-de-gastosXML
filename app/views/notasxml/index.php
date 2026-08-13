@@ -14,11 +14,14 @@ foreach ([$desde ?? '', $hasta ?? '', $buscar ?? ''] as $valorFiltro) {
             <i class="fas fa-arrow-left" style="margin-right:4px;"></i>Volver a Notas de crédito
         </a>
     </div>
-    <form method="post" action="<?= $baseUrl ?>/notas-xml/subir" enctype="multipart/form-data" style="padding:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-        <input type="file" name="xml_files[]" accept=".xml" multiple required class="form-control" style="max-width:520px;">
-        <button class="btn btn-primary" type="submit"><i class="fas fa-upload"></i> Importar NC XML</button>
-        <span style="font-size:12px;color:var(--text-muted);">Los archivos quedan en el árbol local; la base conserva datos, hashes y rutas.</span>
-    </form>
+    <div style="padding:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <a href="<?= $baseUrl ?>/carga" class="btn btn-primary btn-sm">
+            <i class="fas fa-inbox" style="margin-right:5px;"></i>Ir a Carga de documentos
+        </a>
+        <span style="font-size:12px;color:var(--text-muted);">
+            Los archivos se cargan desde un solo lugar: listados del ERP y comprobantes XML.
+        </span>
+    </div>
     <?php if (empty($carpetaRaiz)): ?><div style="margin:0 14px 14px;padding:9px 12px;background:#fff7ed;border:1px solid #fdba74;border-radius:7px;color:#9a3412;font-size:12px;">Configura primero la carpeta raíz desde el engranaje de Correo.</div><?php endif; ?>
 </div>
 

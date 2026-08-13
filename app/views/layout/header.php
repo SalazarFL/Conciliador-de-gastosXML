@@ -57,6 +57,7 @@ $pageLabels = [
     'conciliacion' => 'Conciliación',
     'reportes'     => 'Reportes y Exportación',
     'usuarios'     => 'Gestión de Usuarios',
+    'carga'        => 'Carga de documentos',
     'diagnostico'  => 'Diagnóstico de la instalación',
 ];
 
@@ -121,6 +122,12 @@ if (!isset($sociedadActiva)) {
             </a>
 
             <div class="sidebar-section-label" style="margin-top:16px;">Módulos</div>
+
+            <a href="<?= $baseUrl ?>/carga" class="<?= navActive('carga', $uriClean) ?>"
+               title="Cargar listados del ERP y comprobantes XML">
+                <span class="nav-icon"><i class="fas fa-inbox"></i></span>
+                <span class="nav-label">Carga de documentos</span>
+            </a>
 
             <a href="<?= $baseUrl ?>/por-pagar" class="<?= navActive('por-pagar', $uriClean) ?>" title="Pagos semanales">
                 <span class="nav-icon"><i class="fas fa-file-invoice-dollar"></i></span>

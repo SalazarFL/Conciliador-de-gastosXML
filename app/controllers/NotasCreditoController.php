@@ -214,7 +214,7 @@ class NotasCreditoController extends Controller
                 @rename($permanentPath, $tempPath);
             }
             $this->redirectWithMessage(
-                $this->url('/notas-credito'),
+                $this->url('/carga'),
                 'No se pudo cargar el listado: ' . $e->getMessage(),
                 'error'
             );

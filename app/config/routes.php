@@ -17,6 +17,20 @@ $router->get('/logout', 'AuthController@logout');
 $router->get('/', 'HomeController@index');
 $router->get('/home', 'HomeController@index');
 
+// --- CARGA DE DOCUMENTOS (única puerta de entrada de archivos) ---
+// Los cuatro formularios viven en /carga, pero cada POST lo sigue atendiendo
+// el controlador dueño del modelo que escribe: esos manejadores comparten
+// helpers con el resto de su módulo (la cola de XML, la verificación de
+// semanas, el borrado de auditoría) y traerlos aquí obligaría a duplicarlos.
+// El pago semanal y las devoluciones NO están aquí: se cargan dentro del
+// flujo de trabajo de su propio módulo.
+$router->get('/carga', 'CargaController@index');
+$router->post('/carga/listado-facturas', 'FacturasErpController@subir');
+$router->post('/carga/listado-notas/previa', 'NotasCreditoController@previsualizar');
+$router->post('/carga/listado-notas', 'NotasCreditoController@subir');
+$router->post('/carga/comprobantes-facturas', 'FacturasController@subir');
+$router->post('/carga/comprobantes-notas', 'NotasXmlController@subir');
+
 // --- DIAGNÓSTICO DE LA INSTALACIÓN ---
 // La aplicación corre en la computadora de cada persona: esta página dice qué
 // le falta a ESTA instalación, para no depender de acceso remoto.
@@ -36,7 +50,6 @@ $router->post('/sociedades/activar/{id}', 'SociedadesController@activar');
 
 // --- RUTAS DE FACTURAS XML ---
 $router->get('/facturas', 'FacturasController@index');
-$router->post('/facturas/subir', 'FacturasController@subir');
 $router->post('/facturas/cola/iniciar', 'FacturasController@colaIniciar');
 $router->post('/facturas/cola/agregar', 'FacturasController@colaAgregar');
 $router->post('/facturas/cola/procesar', 'FacturasController@colaProcesar');
@@ -46,7 +59,6 @@ $router->post('/facturas/semana', 'FacturasController@semanaAsignar');
 
 // --- RUTAS DE NOTAS DE CRÉDITO XML ---
 $router->get('/notas-xml', 'NotasXmlController@index');
-$router->post('/notas-xml/subir', 'NotasXmlController@subir');
 $router->get('/notas-xml/ver/{id}', 'NotasXmlController@ver');
 $router->get('/documentos/xml/{id}', 'DocumentosController@xml');
 $router->get('/documentos/pdf/{id}', 'DocumentosController@pdf');
@@ -107,7 +119,6 @@ $router->post('/por-pagar/forzar', 'PorPagarController@forzar');
 
 // --- RUTAS DE FACTURAS ERP (reporte "Facturas por Proveedor", saldos) ---
 $router->get('/facturas-erp', 'FacturasErpController@index');
-$router->post('/facturas-erp/subir', 'FacturasErpController@subir');
 $router->get('/facturas-erp/incidencias', 'FacturasErpController@incidencias');
 $router->post('/facturas-erp/incidencias/descartar', 'FacturasErpController@descartarIncidencias');
 $router->post('/facturas-erp/incidencias/restaurar', 'FacturasErpController@restaurarIncidencias');
@@ -116,8 +127,6 @@ $router->get('/facturas-erp/exportar', 'FacturasErpController@exportar');
 // --- RUTAS DE NOTAS DE CRÉDITO (listados por período) ---
 $router->get('/notas-credito', 'NotasCreditoController@index');
 $router->get('/notas-credito/buscar', 'NotasCreditoController@buscar');
-$router->post('/notas-credito/previsualizar', 'NotasCreditoController@previsualizar');
-$router->post('/notas-credito/subir', 'NotasCreditoController@subir');
 $router->post('/notas-credito/verificar/{id}', 'NotasCreditoController@verificar');
 $router->get('/notas-credito/historial/{id}', 'NotasCreditoController@historial');
 $router->get('/notas-credito/candidatas', 'NotasCreditoController@candidatas');

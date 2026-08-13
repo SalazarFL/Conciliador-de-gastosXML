@@ -716,6 +716,107 @@ class FacturaErp extends Model
         return preg_match('/^\d{20}$/', $valor) ? $valor : '';
     }
 
+    /**
+     * De las dos llaves que puede traer un número del pago semanal, cuál es.
+     *
+     * El listado del pago semanal escribe el documento de dos formas según de
+     * dónde lo exportaron:
+     *
+     *   FACT-00200001010000045587-1377   consecutivo electrónico + correlativo
+     *   FACT-12339                       número interno del ERP, sin consecutivo
+     *   FACT-000…0000039547              el mismo interno, rellenado con ceros
+     *
+     * La primera cruza contra `documento`; las otras dos contra `numero_corto`,
+     * que es la única columna del reporte que las conoce. Sin la segunda vía,
+     * los listados viejos —que traen casi todo en forma corta— quedarían
+     * marcados enteros como ausentes del ERP.
+     */
+    public static function llavesDeNumero($numero)
+    {
+        $llaves = ['consecutivo' => '', 'corto' => ''];
+        if (!preg_match_all('/\d+/', (string) $numero, $m)) {
+            return $llaves;
+        }
+        $trozos = $m[0];
+
+        // Un consecutivo son exactamente 20 dígitos como grupo completo. Se
+        // exige el largo del grupo, no "veinte dígitos en algún lado": el ERP
+        // rellena sus números internos con ceros hasta cincuenta cifras
+        // (…0000039547) y cualquier ventana de veinte dentro de eso parece un
+        // consecutivo válido sin serlo.
+        foreach ($trozos as $trozo) {
+            if (strlen($trozo) === 20 && ltrim($trozo, '0') !== '') {
+                $llaves['consecutivo'] = $trozo;
+                $llaves['corto'] = ltrim(substr($trozo, -10), '0');
+                return $llaves;
+            }
+        }
+
+        $masLargo = '';
+        foreach ($trozos as $trozo) {
+            if (strlen($trozo) >= strlen($masLargo)) {
+                $masLargo = $trozo;
+            }
+        }
+        $llaves['corto'] = ltrim($masLargo, '0');
+        return $llaves;
+    }
+
+    /**
+     * Cuáles de esos números NO están en ningún listado de facturas del ERP.
+     *
+     * La regla del negocio es que el pago semanal no inventa facturas: paga
+     * las que el ERP ya reportó. Se comprueba al cargar y no al cerrar —donde
+     * ya existía— porque enterarse al final significa haber emparejado una
+     * semana entera antes de descubrir que faltaba cargar el reporte.
+     *
+     * Una sola consulta y comparación en memoria: son miles de líneas contra
+     * miles de facturas y la base está a 100 ms por consulta.
+     */
+    public function faltantesEnErp(array $numeros)
+    {
+        $numeros = array_values(array_filter(array_map('strval', $numeros), function ($n) {
+            return trim($n) !== '';
+        }));
+        if (!$numeros) {
+            return [];
+        }
+
+        // El alcance por sociedad lo pone condicionSociedad, igual que en el
+        // resto de los modelos: es por usuario, no por parámetro. Filtrar
+        // además por la sociedad del listado sería redundante cuando
+        // coinciden y devolvería vacío —y por tanto "todas faltan"— cuando no.
+        $params = [];
+        $sql = 'SELECT documento, numero_corto FROM facturas_erp WHERE 1=1'
+             . $this->condicionSociedad('', $params);
+
+        $documentos = [];
+        $cortos = [];
+        foreach ($this->fetchAll($sql, $params) as $fila) {
+            $doc = trim((string) $fila['documento']);
+            if (preg_match('/^\d{20}$/', $doc)) {
+                $documentos[$doc] = true;
+            }
+            $corto = ltrim(trim((string) $fila['numero_corto']), '0');
+            if ($corto !== '') {
+                $cortos[$corto] = true;
+            }
+        }
+
+        $faltantes = [];
+        foreach ($numeros as $numero) {
+            $llaves = self::llavesDeNumero($numero);
+            if ($llaves['consecutivo'] !== '' && isset($documentos[$llaves['consecutivo']])) {
+                continue;
+            }
+            if ($llaves['corto'] !== '' && isset($cortos[$llaves['corto']])) {
+                continue;
+            }
+            $faltantes[] = $numero;
+        }
+        return array_values(array_unique($faltantes));
+    }
+
     private static function muestraNumeros(array $numeros)
     {
         $numeros = array_values(array_unique(array_filter(array_map('strval', $numeros))));

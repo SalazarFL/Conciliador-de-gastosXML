@@ -252,6 +252,12 @@ class PorPagarController extends Controller
             $analisis = $this->analizarListado($file['path'], $ext, $semanaId, $modelo);
             $listadoExistente = $analisis['listado_existente'];
 
+            // El pago semanal no inventa facturas: paga las que el ERP ya
+            // reportó. Se comprueba ACÁ y no al cerrar —donde la validación ya
+            // existía— porque enterarse al final significa haber emparejado la
+            // semana entera antes de descubrir que faltaba cargar el reporte.
+            $this->exigirRespaldoEnErp($analisis['lineas']);
+
             if ($listadoExistente !== null) {
                 if (($listadoExistente['estado'] ?? 'abierto') === 'cerrado') {
                     throw new Exception('El pago de esta semana ya está cerrado. Crea otra semana para cargar más facturas.');
@@ -390,6 +396,22 @@ class PorPagarController extends Controller
                 }
             }
 
+            // Lo mismo que va a bloquear la carga, pero dicho antes de
+            // confirmar: sin esto la vista previa sale toda en verde y el
+            // error aparece recién al apretar Importar.
+            $sinErp = [];
+            try {
+                $numeros = [];
+                foreach ($analisis['lineas'] as $l) {
+                    if (($l['estado'] ?? '') !== 'error' && trim((string) $l['numero']) !== '') {
+                        $numeros[] = (string) $l['numero'];
+                    }
+                }
+                $sinErp = $this->loadModel('FacturaErp')->faltantesEnErp($numeros);
+            } catch (Throwable $e) {
+                $sinErp = [];
+            }
+
             $this->json([
                 'ok' => true,
                 'token' => basename($file['path']),
@@ -401,6 +423,8 @@ class PorPagarController extends Controller
                 'repetidas' => $repetidas,
                 'errores' => $errores,
                 'monto_nuevas' => round($montoNuevas, 2),
+                'sin_erp' => count($sinErp),
+                'sin_erp_muestra' => array_slice($sinErp, 0, 5),
                 'lineas' => array_slice($analisis['lineas'], 0, 1000),
             ]);
         } catch (Throwable $e) {
@@ -641,6 +665,50 @@ class PorPagarController extends Controller
      * Cierra el pago y refleja sus facturas emparejadas en Facturas ERP con
      * el estado "Asignada a una semana".
      */
+    /**
+     * Corta la carga si alguna factura del pago semanal no está en ningún
+     * listado de facturas del ERP.
+     *
+     * Es todo o nada por decisión del negocio: media semana cargada obliga a
+     * llevar en la cabeza cuáles líneas entraron y cuáles no. El mensaje dice
+     * cuántas faltan y nombra las primeras, que es lo que hace falta para ir a
+     * cargar el reporte que corresponde.
+     *
+     * Las filas que el lector marcó 'error' no se cuentan: no llegaron a ser
+     * una factura y ya se reportan aparte.
+     */
+    private function exigirRespaldoEnErp(array $lineas)
+    {
+        $numeros = [];
+        foreach ($lineas as $linea) {
+            if (($linea['estado'] ?? '') === 'error') {
+                continue;
+            }
+            $numero = trim((string) ($linea['numero'] ?? ''));
+            if ($numero !== '') {
+                $numeros[] = $numero;
+            }
+        }
+        if (!$numeros) {
+            return;
+        }
+
+        $faltantes = $this->loadModel('FacturaErp')->faltantesEnErp($numeros);
+        if (!$faltantes) {
+            return;
+        }
+
+        $muestra = array_slice($faltantes, 0, 5);
+        throw new Exception(sprintf(
+            '%d de %d facturas del listado no están en ningún listado de facturas del ERP: %s%s. '
+            . 'Cargá primero el reporte "Facturas por Proveedor" que las incluya, en Carga de documentos.',
+            count($faltantes),
+            count($numeros),
+            implode(', ', $muestra),
+            count($faltantes) > count($muestra) ? ', …' : ''
+        ));
+    }
+
     public function cerrar($id)
     {
         if (!$this->isPost()) {

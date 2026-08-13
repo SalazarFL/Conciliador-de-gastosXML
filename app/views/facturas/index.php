@@ -22,12 +22,12 @@ $urlLimpiarFiltros = $baseUrl . '/facturas?' . http_build_query($parametrosLimpi
 
 <!-- CARGA DE FACTURAS XML -->
 
-<!-- Subir Facturas XML -->
+<!-- Semana de trabajo + acceso a la carga -->
 <div class="card" style="margin-bottom:14px;">
     <div class="card-header">
         <div>
             <div class="card-title">
-                <i class="fas fa-upload" style="margin-right:6px;color:var(--navy-light);"></i>Subir Facturas XML
+                <i class="fas fa-calendar-week" style="margin-right:6px;color:var(--navy-light);"></i>Semana de trabajo
             </div>
         </div>
         <a href="<?= $baseUrl ?>/facturas-erp" class="btn btn-outline btn-sm" style="margin-left:auto;">
@@ -35,70 +35,37 @@ $urlLimpiarFiltros = $baseUrl . '/facturas?' . http_build_query($parametrosLimpi
         </a>
     </div>
 
-    <form method="post" action="<?= $baseUrl ?>/facturas/subir" enctype="multipart/form-data" id="form-xml-upload">
-        <input type="file" name="xml_files[]" id="xml_files" multiple
-               accept=".xml" style="display:none;" onchange="updateFileDisplay(this)">
+    <div style="padding:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+        <!-- Este selector NO es un formulario de carga: filtra la lista de
+             abajo. Vivía dentro del formulario de subida y se fue con él, pero
+             la lista lo sigue necesitando. -->
+        <select id="semana_id" class="form-control" style="max-width:300px;font-size:13px;"
+                onchange="semanaCambio(this)">
+            <option value="" <?= $semanaFiltro === 0 ? 'selected' : '' ?>>— Sin semana —</option>
+            <?php foreach (($semanas ?? []) as $sem): ?>
+            <option value="<?= (int) $sem['id'] ?>" <?= $semanaFiltro === (int) $sem['id'] ? 'selected' : '' ?>>
+                <?= htmlspecialchars($sem['nombre']) ?>
+            </option>
+            <?php endforeach; ?>
+        </select>
 
-        <div style="margin-bottom:14px;">
-            <label for="semana_id" style="display:block;font-size:12px;font-weight:700;color:var(--navy);margin-bottom:5px;">
-                <i class="fas fa-calendar-week" style="margin-right:4px;color:var(--gold);"></i>Semana de trabajo
-            </label>
-            <select name="semana_id" id="semana_id" class="form-control" style="max-width:300px;font-size:13px;"
-                    onchange="semanaCambio(this)">
-                <option value="" <?= $semanaFiltro === 0 ? 'selected' : '' ?>>— Sin semana —</option>
-                <?php foreach (($semanas ?? []) as $sem): ?>
-                <option value="<?= (int) $sem['id'] ?>" <?= $semanaFiltro === (int) $sem['id'] ? 'selected' : '' ?>>
-                    <?= htmlspecialchars($sem['nombre']) ?>
-                </option>
-                <?php endforeach; ?>
-                <option value="nueva">➕ Nueva semana…</option>
-            </select>
-            <div id="semana-nueva-box" style="display:none;margin-top:6px;">
-                <input type="text" name="semana_nueva" id="semana_nueva" maxlength="100"
-                       placeholder="Semana <?= date('d/m/Y') ?>"
-                       class="form-control" style="max-width:300px;font-size:12.5px;">
-            </div>
+        <a href="<?= $baseUrl ?>/carga" class="btn btn-primary btn-sm">
+            <i class="fas fa-inbox" style="margin-right:4px;"></i>Cargar XML
+        </a>
 
-        </div>
+        <?php if (!empty($facturas)): ?>
+        <span class="badge badge-navy" style="font-size:12px;padding:6px 14px;">
+            <i class="fas fa-layer-group"></i>
+            <?= count($facturas) ?> factura<?= count($facturas) !== 1 ? 's' : '' ?>
+            <?php if ($importacionActiva): ?>
+            <span style="font-weight:400;opacity:.75;margin-left:4px;">— <?= htmlspecialchars($importacionActiva['archivo_origen']) ?></span>
+            <?php endif; ?>
+        </span>
+        <?php endif; ?>
 
-        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:space-between;">
-            <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;min-width:220px;">
-                <label for="xml_files" class="upload-file-btn">
-                    <i class="fas fa-folder-open"></i> Seleccionar Archivos XML
-                </label>
-                <span id="files-selected-name" style="font-size:12px;color:var(--text-muted);font-style:italic;">
-                    Ningún archivo seleccionado
-                </span>
-
-            </div>
-
-            <div style="display:flex;align-items:center;gap:12px;margin-left:auto;">
-                <?php if (!empty($facturas)): ?>
-                <span class="badge badge-navy" style="font-size:12px;padding:6px 14px;">
-                    <i class="fas fa-layer-group"></i>
-                    <?= count($facturas) ?> factura<?= count($facturas) !== 1 ? 's' : '' ?>
-                    <?php if ($importacionActiva): ?>
-                    <span style="font-weight:400;opacity:.75;margin-left:4px;">— <?= htmlspecialchars($importacionActiva['archivo_origen']) ?></span>
-                    <?php endif; ?>
-                </span>
-                <?php endif; ?>
-                <button type="submit" class="btn btn-primary btn-lg" id="btn-procesar-xml">
-                    <i class="fas fa-cogs"></i> Procesar XML
-                </button>
-            </div>
-        </div>
-    </form>
-
-    <!-- Progreso de importación por lotes -->
-    <div id="upload-progress" style="display:none;margin-top:16px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;margin-bottom:6px;flex-wrap:wrap;gap:6px;">
-            <span id="up-status" style="font-weight:700;color:var(--navy);">Preparando…</span>
-            <span id="up-counts" style="color:var(--text-muted);"></span>
-        </div>
-        <div style="background:#e2e8f0;border-radius:8px;height:14px;overflow:hidden;">
-            <div id="up-bar" style="background:linear-gradient(90deg,#0c2461,#1e3a8a);height:100%;width:0%;transition:width .3s;"></div>
-        </div>
-        <div id="up-detail" style="font-size:11px;color:var(--text-muted);margin-top:6px;"></div>
+        <span style="font-size:11.5px;color:var(--text-muted);margin-left:auto;">
+            Los XML se cargan en <a href="<?= $baseUrl ?>/carga">Carga de documentos</a>.
+        </span>
     </div>
 </div>
 
@@ -107,13 +74,6 @@ $urlLimpiarFiltros = $baseUrl . '/facturas?' . http_build_query($parametrosLimpi
 // se recarga mostrando las facturas de esa opción ("Sin semana" = las no
 // asignadas). "Nueva semana" solo abre el campo del nombre, sin recargar.
 function semanaCambio(sel) {
-    var box = document.getElementById('semana-nueva-box');
-    if (sel.value === 'nueva') {
-        box.style.display = 'block';
-        document.getElementById('semana_nueva').focus();
-        return;
-    }
-    box.style.display = 'none';
     // "Sin semana" navega con semana_id=0 explícito para que se recuerde
     // como selección (y no se confunda con una llegada sin parámetro).
     var base = '<?= $baseUrl ?>/facturas';
@@ -367,194 +327,4 @@ function semAsignar(btn, facturaId, semanaActual) {
     });
 }
 
-function updateFileDisplay(input) {
-    var label = document.getElementById('files-selected-name');
-    var count = input.files.length;
-    if (count === 0) {
-        label.textContent = 'Ningún archivo seleccionado';
-    } else if (count === 1) {
-        label.textContent = input.files[0].name;
-    } else {
-        label.textContent = count + ' archivos seleccionados';
-    }
-}
-
-// ── Importación masiva por lotes (sin límite de archivos) ──
-// Sube en chunks de CHUNK_SIZE (bajo el max_file_uploads de PHP) y procesa
-// en lotes vía la cola del servidor, con progreso en vivo.
-(function () {
-    var form = document.getElementById('form-xml-upload');
-    if (!form || !window.fetch || !window.FormData) return; // sin JS moderno: POST clásico (máx. 20)
-
-    var CHUNK_SIZE  = 10;
-    var BATCH_LIMIT = 10;
-    var BASE = '<?= $baseUrl ?>';
-
-    var input    = document.getElementById('xml_files');
-    var btn      = document.getElementById('btn-procesar-xml');
-    var panel    = document.getElementById('upload-progress');
-    var elStatus = document.getElementById('up-status');
-    var elCounts = document.getElementById('up-counts');
-    var elBar    = document.getElementById('up-bar');
-    var elDetail = document.getElementById('up-detail');
-
-    function setStatus(t) { elStatus.textContent = t; }
-    function setBar(p) { elBar.style.width = Math.max(0, Math.min(100, p)) + '%'; }
-
-    function sendForm(url, fd) {
-        return fetch(url, { method: 'POST', body: fd, credentials: 'same-origin' })
-            .then(function (res) {
-                return res.json().catch(function () { return null; }).then(function (body) {
-                    if (!res.ok || !body || body.ok === false) {
-                        throw new Error((body && body.message) || ('Error HTTP ' + res.status));
-                    }
-                    return body;
-                });
-            });
-    }
-
-    function postJson(url, data) {
-        var fd = new FormData();
-        Object.keys(data).forEach(function (k) { fd.append(k, data[k]); });
-        return sendForm(url, fd);
-    }
-
-    function pintarStats(estado) {
-        var s = (estado && estado.stats) || {};
-        elCounts.textContent =
-            'Importadas: ' + (s.importado || 0) +
-            ' · Ya en esta semana: ' + (s.duplicado || 0) +
-            ' · Errores: ' + (s.error || 0) +
-            ' · Pendientes: ' + (s.pendiente || 0);
-    }
-
-    function sleep(ms) { return new Promise(function (ok) { setTimeout(ok, ms); }); }
-
-    form.addEventListener('submit', function (e) {
-        e.preventDefault();
-
-        var files  = Array.prototype.slice.call(input.files);
-
-        if (!files.length) { alert('Selecciona al menos un archivo XML.'); return; }
-
-        btn.disabled = true;
-        panel.style.display = 'block';
-        setBar(0);
-        elDetail.textContent = '';
-
-        var importacionId = 0;
-        var semanaDestino = '';
-
-        setStatus('Creando importación…');
-        var selSemana = document.getElementById('semana_id');
-        var inpSemanaNueva = document.getElementById('semana_nueva');
-        postJson(BASE + '/facturas/cola/iniciar', {
-            total_esperado: files.length,
-            semana_id: selSemana ? selSemana.value : '',
-            semana_nueva: inpSemanaNueva ? inpSemanaNueva.value : ''
-        })
-        .then(function (inicio) {
-            importacionId = inicio.importacion_id;
-            semanaDestino = inicio.semana_id || '';
-
-            // Fase 1: subir archivos en chunks (primer 30% de la barra)
-            var cadena = Promise.resolve();
-            for (var i = 0; i < files.length; i += CHUNK_SIZE) {
-                (function (offset) {
-                    cadena = cadena.then(function () {
-                        var lote = files.slice(offset, offset + CHUNK_SIZE);
-                        var fd = new FormData();
-                        fd.append('importacion_id', importacionId);
-                        lote.forEach(function (f) { fd.append('xml_files[]', f, f.name); });
-
-                        setStatus('Subiendo archivos… (' + Math.min(offset + lote.length, files.length) + '/' + files.length + ')');
-                        return sendForm(BASE + '/facturas/cola/agregar', fd).then(function () {
-                            setBar(((offset + lote.length) / files.length) * 30);
-                        });
-                    });
-                })(i);
-            }
-            return cadena;
-        })
-        .then(function procesarLoop() {
-            setStatus('Procesando facturas…');
-            var sinAvance = 0;
-
-            function paso() {
-                return postJson(BASE + '/facturas/cola/procesar', {
-                    importacion_id: importacionId,
-                    limit: BATCH_LIMIT
-                }).then(function (r) {
-                    var estado = r.estado || {};
-                    setBar(30 + ((estado.progress_percent || 0) * 0.7));
-                    pintarStats(estado);
-
-                    if (r.completed) return estado;
-
-                    if (!r.processed_in_batch) {
-                        sinAvance++;
-                        if (sinAvance >= 5) {
-                            throw new Error('El procesamiento se detuvo sin completar. Vuelve a intentarlo.');
-                        }
-                        return sleep(2000).then(paso);
-                    }
-
-                    sinAvance = 0;
-                    return paso();
-                });
-            }
-
-            return paso();
-        })
-        .then(function (estado) {
-            setBar(100);
-            var s = (estado && estado.stats) || {};
-            var importadas = s.importado || 0;
-            var repetidas = s.duplicado || 0;
-            var erroresImportacion = s.error || 0;
-
-            // Mostrar los primeros problemas reales (archivo + motivo)
-            var issues = (estado && estado.recent_issues) || [];
-            if (issues.length) {
-                var lineas = issues.slice(0, 5).map(function (it) {
-                    var motivo = (it.error_texto || it.estado || '').toString().split(':').pop().trim();
-                    return '• ' + (it.archivo_original || '¿?') + ' → ' + (it.estado || '') + (motivo ? ' (' + motivo.substring(0, 90) + ')' : '');
-                });
-                elDetail.innerHTML = lineas.join('<br>');
-            }
-
-            if (importadas === 0) {
-                if (repetidas > 0 && erroresImportacion === 0) {
-                    setStatus('Las ' + repetidas + ' facturas ya estaban en la semana seleccionada; no se duplicaron.');
-                } else {
-                    setStatus('⚠ La importación terminó sin facturas nuevas (' + erroresImportacion + ' con error). Revisa el detalle.');
-                }
-                btn.disabled = false;
-                return;
-            }
-
-            // Volver a la vista de la semana elegida: ahí quedan las recién subidas
-            var urlDestino = BASE + '/facturas' + (semanaDestino ? '?semana_id=' + semanaDestino : '');
-
-            if (repetidas > 0 || erroresImportacion > 0) {
-                setStatus('Importación completada: ' + importadas + ' importadas, '
-                    + repetidas + ' ya estaban en esta semana y ' + erroresImportacion + ' con error.');
-                setTimeout(function () {
-                    window.location.href = urlDestino;
-                }, 3500);
-                return;
-            }
-
-            setStatus('¡Importación completada! ' + importadas + ' facturas importadas.');
-            setTimeout(function () {
-                window.location.href = urlDestino;
-            }, 800);
-        })
-        .catch(function (err) {
-            setStatus('Error: ' + err.message);
-            elDetail.textContent = 'Puedes reintentar: solo se bloquearán las facturas que ya estén en la semana seleccionada.';
-            btn.disabled = false;
-        });
-    });
-})();
 </script>

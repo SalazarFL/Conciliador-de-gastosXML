@@ -28,7 +28,7 @@ class NotasXmlController extends Controller
 
     public function subir()
     {
-        if (!$this->isPost()) { $this->redirect($this->url('/notas-xml')); }
+        if (!$this->isPost()) { $this->redirect($this->url('/carga')); }
         require_once __DIR__ . '/../helpers/FileUploader.php';
         $config = require __DIR__ . '/../config/config.php';
         $temp = rtrim($config['uploads_path'], '/\\') . DIRECTORY_SEPARATOR . 'xml';
@@ -72,7 +72,7 @@ class NotasXmlController extends Controller
                 $errores > 0 ? 'warning' : 'success',
                 ['failed_files' => array_column($detalle, 'archivo')]);
         } catch (Throwable $e) {
-            $this->redirectWithMessage($this->url('/notas-xml'), 'No se pudieron importar las notas XML: ' . $e->getMessage(), 'error');
+            $this->redirectWithMessage($this->url('/carga'), 'No se pudieron importar las notas XML: ' . $e->getMessage(), 'error');
         }
     }
 
