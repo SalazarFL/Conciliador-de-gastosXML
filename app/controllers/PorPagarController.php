@@ -520,6 +520,7 @@ class PorPagarController extends Controller
         $dataset = $ext === 'csv'
             ? $this->readCsvData($rutaArchivo)
             : XlsxReader::readFirstSheet($rutaArchivo);
+        $dataset = $this->normalizarDataset($dataset);
 
         // Dos formatos aceptados: el plano con columnas Fecha/Numero/
         // Proveedor/Total, y el reporte agrupado que exporta el sistema
@@ -1252,6 +1253,39 @@ class PorPagarController extends Controller
         }
 
         return $registros;
+    }
+
+    /**
+     * Pasa a UTF-8 lo que el ERP escribió en Windows-1252.
+     *
+     * No es cosmético. El reporte se lee con expresiones regulares que llevan
+     * el modificador /u, y ante bytes UTF-8 inválidos preg_match no devuelve
+     * "no coincide": devuelve FALSE. El encabezado de grupo "Proveedor
+     * 140000076 COMPAÑIA AMERICANA DE HELADOS S.A." dejaba de reconocerse por
+     * la Ñ, y como el nombre del proveedor solo cambia al ver un encabezado,
+     * TODAS las facturas de ese grupo quedaban a nombre del proveedor
+     * anterior. Silencioso: ni error ni fila perdida, solo mal atribuida.
+     *
+     * Se sanea aquí, en el embudo por el que pasan los dos lectores, y no
+     * dentro de cada regex: el mismo texto termina guardado como
+     * proveedor_texto y comparado contra el ERP.
+     */
+    private function normalizarDataset($dataset)
+    {
+        $dataset['header'] = array_map([$this, 'aUtf8'], (array) ($dataset['header'] ?? []));
+        foreach (($dataset['rows'] ?? []) as $i => $fila) {
+            $dataset['rows'][$i] = array_map([$this, 'aUtf8'], (array) $fila);
+        }
+        return $dataset;
+    }
+
+    /** Los valores que no son texto (números, fechas de Excel) se dejan tal cual. */
+    private function aUtf8($valor)
+    {
+        if (!is_string($valor) || $valor === '' || mb_check_encoding($valor, 'UTF-8')) {
+            return $valor;
+        }
+        return mb_convert_encoding($valor, 'UTF-8', 'Windows-1252');
     }
 
     private function readCsvData($filePath)
