@@ -37,7 +37,15 @@ $qs = function (array $cambios = []) use ($filtros) {
         'desde'       => $filtros['desde'],
         'hasta'       => $filtros['hasta'],
         'monto_min'   => $filtros['monto_min'],
+        'condicion_saldo' => $filtros['condicion_saldo'],
         'q'           => $filtros['q'],
+        'col_documento' => $filtros['col_documento'],
+        'col_proveedor' => $filtros['col_proveedor'],
+        'col_monto'     => $filtros['col_monto'],
+        'col_saldo'     => $filtros['col_saldo'],
+        'col_respaldo'  => $filtros['col_respaldo'],
+        'col_tarea'     => $filtros['col_tarea'],
+        'col_estado'    => $filtros['col_estado'],
         'orden'       => $filtros['orden'],
     ], function ($v) { return $v !== '' && $v !== null; });
     return http_build_query(array_merge($base, $cambios));
@@ -125,7 +133,7 @@ $moneda = function ($valor, $mon = 'CRC') {
     </div>
 
     <!-- ══ Filtros ══ -->
-    <form class="filter-bar" method="get" action="<?= $baseUrl ?>/seguimiento">
+    <form class="filter-bar" id="seg-filter-form" method="get" action="<?= $baseUrl ?>/seguimiento">
         <input type="hidden" name="vista" value="<?= htmlspecialchars($filtros['vista']) ?>">
 
         <div class="filter-span-2">
@@ -218,6 +226,15 @@ $moneda = function ($valor, $mon = 'CRC') {
         </div>
 
         <div>
+            <label class="filter-label" for="f-condicion-saldo">Saldo</label>
+            <select id="f-condicion-saldo" name="condicion_saldo" class="form-control">
+                <option value="">Todas</option>
+                <option value="activas" <?= $filtros['condicion_saldo'] === 'activas' ? 'selected' : '' ?>>Activas (con saldo)</option>
+                <option value="canceladas" <?= $filtros['condicion_saldo'] === 'canceladas' ? 'selected' : '' ?>>Canceladas (sin saldo)</option>
+            </select>
+        </div>
+
+        <div>
             <label class="filter-label" for="f-desde">Desde</label>
             <input type="date" id="f-desde" name="desde" class="form-control" value="<?= htmlspecialchars($filtros['desde']) ?>">
         </div>
@@ -292,23 +309,68 @@ $moneda = function ($valor, $mon = 'CRC') {
     <div class="table-wrap">
         <table class="data-table seg-tabla">
             <thead>
-                <tr>
+                <tr class="seg-head-labels">
                     <th style="width:34px;" class="center">
                         <input type="checkbox" id="chk-todos" aria-label="Seleccionar todos">
                     </th>
                     <th>Documento</th>
                     <th>Proveedor</th>
                     <th class="right">Monto</th>
+                    <th class="right">Saldo</th>
                     <th class="center">Respaldo</th>
                     <th>Qué falta</th>
                     <th>Gestión</th>
                     <th style="width:1%;"></th>
                 </tr>
+                <tr class="seg-search-row">
+                    <th class="center" title="Filtros por columna"><i class="fas fa-search"></i></th>
+                    <th><input form="seg-filter-form" name="col_documento"
+                               value="<?= htmlspecialchars($filtros['col_documento']) ?>"
+                               placeholder="Buscar" aria-label="Buscar en documento"></th>
+                    <th><input form="seg-filter-form" name="col_proveedor"
+                               value="<?= htmlspecialchars($filtros['col_proveedor']) ?>"
+                               placeholder="Buscar" aria-label="Buscar en proveedor"></th>
+                    <th><input form="seg-filter-form" name="col_monto" inputmode="decimal"
+                               value="<?= htmlspecialchars($filtros['col_monto']) ?>"
+                               placeholder="Buscar" aria-label="Buscar monto"></th>
+                    <th><input form="seg-filter-form" name="col_saldo" inputmode="decimal"
+                               value="<?= htmlspecialchars($filtros['col_saldo']) ?>"
+                               placeholder="Buscar" aria-label="Buscar saldo"></th>
+                    <th>
+                        <select form="seg-filter-form" name="col_respaldo" aria-label="Filtrar respaldo">
+                            <option value="">Todos</option>
+                            <option value="completo" <?= $filtros['col_respaldo'] === 'completo' ? 'selected' : '' ?>>Completo</option>
+                            <option value="sin_xml" <?= $filtros['col_respaldo'] === 'sin_xml' ? 'selected' : '' ?>>Sin XML</option>
+                            <option value="sin_pdf" <?= $filtros['col_respaldo'] === 'sin_pdf' ? 'selected' : '' ?>>Sin PDF</option>
+                        </select>
+                    </th>
+                    <th>
+                        <select form="seg-filter-form" name="col_tarea" aria-label="Filtrar qué falta">
+                            <option value="">Todas</option>
+                            <?php foreach ($tareas as $clave => $etiqueta): ?>
+                            <option value="<?= $clave ?>" <?= $filtros['col_tarea'] === $clave ? 'selected' : '' ?>>
+                                <?= htmlspecialchars($etiqueta) ?>
+                            </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </th>
+                    <th>
+                        <select form="seg-filter-form" name="col_estado" aria-label="Filtrar gestión">
+                            <option value="">Todas</option>
+                            <?php foreach ($estados as $clave => $etiqueta): ?>
+                            <option value="<?= $clave ?>" <?= $filtros['col_estado'] === $clave ? 'selected' : '' ?>>
+                                <?= htmlspecialchars($etiqueta) ?>
+                            </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </th>
+                    <th></th>
+                </tr>
             </thead>
             <tbody>
             <?php if (empty($filas)): ?>
                 <tr class="empty-row">
-                    <td colspan="8">
+                    <td colspan="9">
                         <div style="font-size:34px;color:var(--ok);margin-bottom:8px;">
                             <i class="fas fa-circle-check"></i>
                         </div>
@@ -366,6 +428,12 @@ $moneda = function ($valor, $mon = 'CRC') {
                             dif. <?= $moneda(abs((float) $f['diferencia']), $f['moneda']) ?>
                         </div>
                         <?php endif; ?>
+                    </td>
+
+                    <td class="right">
+                        <strong style="<?= abs((float) $f['saldo']) <= 0.005 ? 'color:var(--text-muted);' : 'color:var(--navy);' ?>">
+                            <?= $moneda($f['saldo'], $f['moneda']) ?>
+                        </strong>
                     </td>
 
                     <!-- Las dos piezas que tiene que tener todo documento -->
@@ -539,7 +607,20 @@ $moneda = function ($valor, $mon = 'CRC') {
 .seg-tabla tbody tr.seg-vencido { background: #FFF6F6; }
 .seg-tabla tbody tr.seg-vencido:hover { background: #FFEDED; }
 .seg-tabla tbody tr.seg-sel { background: #EEF4FF; }
+.seg-tabla { min-width: 1280px; }
 .seg-tabla td { vertical-align: top; }
+.seg-tabla .seg-search-row th { padding: 5px 4px; background: #F8FAFC; }
+.seg-tabla .seg-search-row input,
+.seg-tabla .seg-search-row select {
+  width: 100%; min-width: 78px; height: 28px; padding: 3px 6px;
+  border: 1px solid #CBD5E1; border-radius: 5px; background: #FFF;
+  color: var(--navy); font-size: 10.5px; outline: none;
+}
+.seg-tabla .seg-search-row input:focus,
+.seg-tabla .seg-search-row select:focus {
+  border-color: var(--gold); box-shadow: 0 0 0 2px rgba(212,160,23,.14);
+}
+.seg-tabla .seg-search-row .fa-search { color: var(--text-muted); font-size: 11px; }
 
 .seg-respaldo { display: inline-flex; gap: 4px; }
 .seg-chip {
@@ -631,7 +712,23 @@ $moneda = function ($valor, $mon = 'CRC') {
     var contador    = document.getElementById('acciones-n');
     var panel       = document.getElementById('panel');
     var dialogo     = document.getElementById('dialogo');
+    var filterForm  = document.getElementById('seg-filter-form');
     if (!tabla) { return; }
+
+    // Los filtros pequeños del encabezado pertenecen al formulario superior
+    // mediante el atributo `form`. Al escribir, se consulta de nuevo toda la
+    // cola para que el resultado y la paginación sigan diciendo la verdad.
+    if (filterForm) {
+        var columnFilters = Array.prototype.slice.call(tabla.querySelectorAll('.seg-search-row input, .seg-search-row select'));
+        var filterTimer = null;
+        columnFilters.forEach(function (control) {
+            var evento = control.tagName === 'SELECT' ? 'change' : 'input';
+            control.addEventListener(evento, function () {
+                clearTimeout(filterTimer);
+                filterTimer = setTimeout(function () { filterForm.requestSubmit(); }, evento === 'change' ? 0 : 450);
+            });
+        });
+    }
 
     function casillas() {
         return Array.prototype.slice.call(tabla.querySelectorAll('.chk-fila'));
@@ -795,6 +892,7 @@ $moneda = function ($valor, $mon = 'CRC') {
             ['Proveedor', f.proveedor],
             ['Fecha', f.fecha],
             ['Monto', (f.moneda === 'USD' ? '$' : '₡') + Number(f.monto).toLocaleString('es-CR', { minimumFractionDigits: 2 })],
+            ['Saldo', (f.moneda === 'USD' ? '$' : '₡') + Number(f.saldo).toLocaleString('es-CR', { minimumFractionDigits: 2 })],
             ['Diferencia', f.diferencia ? (f.moneda === 'USD' ? '$' : '₡') + Number(Math.abs(f.diferencia)).toLocaleString('es-CR', { minimumFractionDigits: 2 }) : '—'],
             ['Qué falta', TAREAS[f.tarea] || f.tarea],
             ['Gestión', ESTADOS[f.seguimiento_estado] || f.seguimiento_estado],

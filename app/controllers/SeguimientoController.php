@@ -53,6 +53,8 @@ class SeguimientoController extends Controller
     {
         $vistas = ['abierto', 'pospuesto', 'cerrado', 'completo', 'todo'];
         $vista = (string) $this->get('vista', 'abierto');
+        $condicionesSaldo = ['activas', 'canceladas'];
+        $condicionSaldo = (string) $this->get('condicion_saldo', '');
 
         return [
             'vista'       => in_array($vista, $vistas, true) ? $vista : 'abierto',
@@ -65,7 +67,15 @@ class SeguimientoController extends Controller
             'desde'       => $this->fecha($this->get('desde', '')),
             'hasta'       => $this->fecha($this->get('hasta', '')),
             'monto_min'   => trim((string) $this->get('monto_min', '')),
+            'condicion_saldo' => in_array($condicionSaldo, $condicionesSaldo, true) ? $condicionSaldo : '',
             'q'           => trim((string) $this->get('q', '')),
+            'col_documento' => trim((string) $this->get('col_documento', '')),
+            'col_proveedor' => trim((string) $this->get('col_proveedor', '')),
+            'col_monto'     => trim((string) $this->get('col_monto', '')),
+            'col_saldo'     => trim((string) $this->get('col_saldo', '')),
+            'col_respaldo'  => trim((string) $this->get('col_respaldo', '')),
+            'col_tarea'     => trim((string) $this->get('col_tarea', '')),
+            'col_estado'    => trim((string) $this->get('col_estado', '')),
             'orden'       => (string) $this->get('orden', 'monto'),
             'sociedad_id' => $sociedad ? (int) $sociedad['id'] : 0,
         ];
@@ -211,7 +221,7 @@ class SeguimientoController extends Controller
         fwrite($salida, "\xEF\xBB\xBF");
         fputcsv($salida, [
             'Origen', 'Documento', 'Clase', 'Proveedor', 'Fecha', 'Moneda', 'Monto',
-            'Diferencia', 'Tarea', 'XML', 'PDF', 'Estado seguimiento', 'Responsable',
+            'Saldo', 'Diferencia', 'Tarea', 'XML', 'PDF', 'Estado seguimiento', 'Responsable',
             'Vence', 'Motivo', 'Listado', 'Consecutivo XML', 'Último movimiento',
         ], ';');
 
@@ -224,6 +234,7 @@ class SeguimientoController extends Controller
                 $f['fecha'],
                 $f['moneda'],
                 number_format((float) $f['monto'], 2, '.', ''),
+                number_format((float) $f['saldo'], 2, '.', ''),
                 $f['diferencia'] !== null ? number_format((float) $f['diferencia'], 2, '.', '') : '',
                 Seguimiento::TAREAS[$f['tarea']] ?? $f['tarea'],
                 $f['xml_ok'] ? 'Sí' : 'No',

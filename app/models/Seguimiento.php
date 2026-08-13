@@ -94,6 +94,10 @@ class Seguimiento extends Model
      * `en_juego` es el dinero que hay detrás del renglón: la diferencia si la
      * hay, el monto del documento si no. Es el orden por omisión, porque una
      * diferencia de dos millones no puede quedar debajo de una de cien colones.
+     *
+     * El reporte de notas trae monto y saldo por separado. El pago semanal no
+     * trae una columna de saldo: su total es precisamente el importe pendiente
+     * incluido para pagar, por lo que se usa como saldo operativo en esta cola.
      */
     private function sqlUnion()
     {
@@ -115,6 +119,7 @@ class Seguimiento extends Model
                 l.fecha AS fecha,
                 l.moneda AS moneda,
                 l.monto AS monto,
+                l.saldo AS saldo,
                 l.diferencia AS diferencia,
                 l.motivo_match AS motivo_match,
                 l.factura_xml_id AS factura_xml_id,
@@ -142,6 +147,7 @@ class Seguimiento extends Model
                 pf.fecha AS fecha,
                 'CRC' AS moneda,
                 pf.total AS monto,
+                pf.total AS saldo,
                 pf.diferencia AS diferencia,
                 NULL AS motivo_match,
                 pf.factura_xml_id AS factura_xml_id,
@@ -249,12 +255,53 @@ class Seguimiento extends Model
             $where[] = 'c.en_juego >= ?';
             $params[] = (float) $f['monto_min'];
         }
+        if (($f['condicion_saldo'] ?? '') === 'activas') {
+            $where[] = 'ABS(c.saldo) > 0.005';
+        } elseif (($f['condicion_saldo'] ?? '') === 'canceladas') {
+            $where[] = 'ABS(c.saldo) <= 0.005';
+        }
         if (!empty($f['q'])) {
             $like = '%' . trim((string) $f['q']) . '%';
             $where[] = '(c.documento LIKE ? OR c.proveedor LIKE ? OR c.consecutivo LIKE ?)';
             $params[] = $like;
             $params[] = $like;
             $params[] = $like;
+        }
+
+        if (!empty($f['col_documento'])) {
+            $like = '%' . trim((string) $f['col_documento']) . '%';
+            $where[] = '(c.documento LIKE ? OR c.contexto LIKE ? OR CAST(c.fecha AS CHAR) LIKE ? OR c.clase LIKE ?)';
+            array_push($params, $like, $like, $like, $like);
+        }
+        if (!empty($f['col_proveedor'])) {
+            $like = '%' . trim((string) $f['col_proveedor']) . '%';
+            $where[] = '(c.proveedor LIKE ? OR c.sucursal LIKE ?)';
+            array_push($params, $like, $like);
+        }
+        foreach (['col_monto' => 'c.monto', 'col_saldo' => 'c.saldo'] as $clave => $columna) {
+            $valor = preg_replace('/[₡$,\s]/u', '', (string) ($f[$clave] ?? ''));
+            if ($valor !== '') {
+                $where[] = "CAST({$columna} AS CHAR) LIKE ?";
+                $params[] = '%' . $valor . '%';
+            }
+        }
+
+        $respaldo = (string) ($f['col_respaldo'] ?? '');
+        if ($respaldo === 'completo') {
+            $where[] = "c.factura_xml_id IS NOT NULL AND c.ruta_xml IS NOT NULL AND c.ruta_xml <> ''";
+            $where[] = "((c.ruta_pdf IS NOT NULL AND c.ruta_pdf <> '') OR c.estado_pdf = 'no_disponible_historico')";
+        } elseif ($respaldo === 'sin_xml') {
+            $where[] = "(c.factura_xml_id IS NULL OR c.ruta_xml IS NULL OR c.ruta_xml = '')";
+        } elseif ($respaldo === 'sin_pdf') {
+            $where[] = "(c.ruta_pdf IS NULL OR c.ruta_pdf = '') AND COALESCE(c.estado_pdf, '') <> 'no_disponible_historico'";
+        }
+        if (!empty($f['col_tarea']) && isset(self::TAREAS[$f['col_tarea']])) {
+            $where[] = 'c.tarea = ?';
+            $params[] = $f['col_tarea'];
+        }
+        if (!empty($f['col_estado']) && isset(self::ESTADOS[$f['col_estado']])) {
+            $where[] = "COALESCE(s.estado, 'pendiente') = ?";
+            $params[] = $f['col_estado'];
         }
 
         return [$where ? 'WHERE ' . implode(' AND ', $where) : '', $params];
@@ -312,7 +359,7 @@ class Seguimiento extends Model
     public function resumen(array $filtros)
     {
         $f = $filtros;
-        unset($f['tarea']);
+        unset($f['tarea'], $f['col_tarea']);
         [$where, $params] = $this->condiciones($f);
 
         $fila = $this->fetchOne(
