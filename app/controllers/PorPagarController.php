@@ -1200,9 +1200,9 @@ class PorPagarController extends Controller
             }
 
             // Encabezado de grupo: "Proveedor 140000014 AGENCIAS JOP S.A."
-            // (el código y el nombre pueden venir en celdas separadas)
-            if (preg_match('/^Proveedor\s+\d{4,}\s*(.*)$/iu', implode(' ', $celdas), $m)) {
-                $proveedor = trim($m[1]);
+            $nombre = $this->nombreDeGrupo($celdas);
+            if ($nombre !== null) {
+                $proveedor = $nombre;
                 continue;
             }
 
@@ -1253,6 +1253,57 @@ class PorPagarController extends Controller
         }
 
         return $registros;
+    }
+
+    /**
+     * Nombre del proveedor si estas celdas abren un grupo, o null si no.
+     *
+     * Se busca el rótulo ENTRE las celdas en vez de exigir que la fila
+     * empiece con él, y el nombre se toma de su celda en vez de recortarlo
+     * de la fila pegada. La razón es que quien prepara el pago escribe sobre
+     * el reporte: marca proveedores con una "x" en la primera columna y deja
+     * recordatorios al final ("CAMBIAR TXT"). Con la fila pegada, esa "x"
+     * hacía que el encabezado no se reconociera, y como el proveedor solo
+     * cambia al ver uno, TODAS las facturas del grupo quedaban a nombre del
+     * proveedor anterior —sin error y sin fila perdida, solo mal atribuidas—.
+     * En el archivo de la semana 130826 le pasó a dos grupos de 140.
+     *
+     * El código y el nombre pueden venir juntos o en celdas separadas, según
+     * de dónde se exportó.
+     */
+    private function nombreDeGrupo(array $celdas)
+    {
+        foreach ($celdas as $i => $celda) {
+            // El rótulo, con el código y el nombre opcionalmente pegados.
+            if (!preg_match('/^Proveedor\s*:?(?:\s+(\d{4,})(?:\s+(.*))?)?$/iu', $celda, $m)) {
+                continue;
+            }
+
+            $resto = array_values(array_slice($celdas, $i + 1));
+            if (isset($m[2]) && trim($m[2]) !== '') {
+                return trim($m[2]);
+            }
+
+            // El código no venía con el rótulo: tiene que estar en la celda
+            // siguiente. Si no lo está, esto era un rótulo de columna suelto
+            // ("Proveedor" sobre una tabla) y no abre ningún grupo.
+            if (!isset($m[1]) || $m[1] === '') {
+                if (empty($resto)) {
+                    return null;
+                }
+                if (preg_match('/^\d{4,}\s+(.+)$/u', $resto[0], $c)) {
+                    return trim($c[1]);
+                }
+                if (!preg_match('/^\d{4,}$/', $resto[0])) {
+                    return null;
+                }
+                array_shift($resto);
+            }
+
+            return !empty($resto) && trim($resto[0]) !== '' ? trim($resto[0]) : null;
+        }
+
+        return null;
     }
 
     /**
