@@ -37,6 +37,11 @@ storage/devoluciones/
 # Configuración de esta computadora: contraseña de la base y rutas propias.
 # El repositorio es público; la plantilla versionada es local.ejemplo.php.
 app/config/local.php
+# Perfiles de conexión (local.oficina.php, local.propia.php) y las copias que
+# cambiar-base.ps1 guarda antes de pisar un local.php editado a mano.
+app/config/local.*.php
+app/config/local.php.antes-*
+!app/config/local.ejemplo.php
 
 # Correo IMAP: credenciales reales y archivos capturados del buzón
 app/config/correo.php
