@@ -17,6 +17,8 @@
  * proveedor con distinta fecha de emisión.
  */
 
+require_once __DIR__ . '/../helpers/NumeroFactura.php';
+
 class FacturaErp extends Model
 {
     // El reporte del ERP no dice a qué empresa pertenece, así que la sociedad
@@ -747,18 +749,27 @@ class FacturaErp extends Model
         foreach ($trozos as $trozo) {
             if (strlen($trozo) === 20 && ltrim($trozo, '0') !== '') {
                 $llaves['consecutivo'] = $trozo;
-                $llaves['corto'] = ltrim(substr($trozo, -10), '0');
+                $llaves['corto'] = NumeroFactura::xmlOchoDigitos($trozo);
                 return $llaves;
             }
         }
 
+        // Sin grupo de veinte: se toma el más largo y se reduce a la misma
+        // llave de ocho dígitos. El recorte por la DERECHA es lo que salva los
+        // casos torcidos —el ERP imprime consecutivos a los que les falta un
+        // cero (0010000401000090388, diecinueve dígitos) y otros con relleno
+        // hasta cincuenta cifras—: la cola es el número que el proveedor
+        // realmente usó, la cabeza es formato. Recortar por la izquierda con
+        // ltrim solo funciona cuando lo que sobra son ceros.
         $masLargo = '';
         foreach ($trozos as $trozo) {
             if (strlen($trozo) >= strlen($masLargo)) {
                 $masLargo = $trozo;
             }
         }
-        $llaves['corto'] = ltrim($masLargo, '0');
+        if ($masLargo !== '') {
+            $llaves['corto'] = NumeroFactura::xmlOchoDigitos($masLargo);
+        }
         return $llaves;
     }
 
@@ -797,9 +808,18 @@ class FacturaErp extends Model
             if (preg_match('/^\d{20}$/', $doc)) {
                 $documentos[$doc] = true;
             }
-            $corto = ltrim(trim((string) $fila['numero_corto']), '0');
-            if ($corto !== '') {
-                $cortos[$corto] = true;
+            // La llave corta se calcula desde el documento y no se lee de
+            // numero_corto: el parser deja esa columna en NULL cuando el
+            // documento no mide veinte dígitos, y así son uno de cada cuatro
+            // renglones del ERP (números cortos de proveedor: 1002, 7606,
+            // 0000666409). Leyéndola quedaban fuera del índice y el pago
+            // semanal los denunciaba como ausentes estando cargados.
+            $corto = trim((string) $fila['numero_corto']);
+            if ($corto === '') {
+                $corto = $doc;
+            }
+            if ($corto !== '' && ltrim($corto, '0') !== '') {
+                $cortos[NumeroFactura::xmlOchoDigitos($corto)] = true;
             }
         }
 

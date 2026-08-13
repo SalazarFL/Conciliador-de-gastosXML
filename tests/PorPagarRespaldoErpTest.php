@@ -43,14 +43,22 @@ class FacturaErpFalsa extends FacturaErp
     }
 }
 
-// ── 1. Las tres formas del número ──────────────────────────────
+// ── 1. Las formas del número ───────────────────────────────────
+// La llave corta son los ocho últimos dígitos significativos, el mismo
+// NumeroFactura::xmlOchoDigitos con que el parser llena facturas_erp.
+// Tienen que salir idénticas de ambos lados o la comparación no cruza.
 $casos = [
     // consecutivo electrónico + correlativo del ERP
-    'FACT-00200001010000045587-1377' => ['00200001010000045587', '45587'],
+    'FACT-00200001010000045587-1377' => ['00200001010000045587', '00045587'],
     // número interno del ERP, corto
-    'FACT-12339'                     => ['', '12339'],
+    'FACT-12339'                     => ['', '00012339'],
     // el mismo interno, rellenado con ceros hasta parecer un consecutivo
-    'FACT-00000000000000000000000000000000000000000000039547' => ['', '39547'],
+    'FACT-00000000000000000000000000000000000000000000039547' => ['', '00039547'],
+    // Consecutivo al que el ERP le comió un cero: diecinueve dígitos en vez de
+    // veinte. Caso real (DISAL, semana 130826) que bloqueó un listado entero
+    // de 551 líneas estando la factura cargada. Recortar por la izquierda
+    // daba «10000401000090388» y no cruzaba con nada.
+    'FACT-0010000401000090388'       => ['', '00090388'],
 ];
 foreach ($casos as $numero => $esperado) {
     $llaves = FacturaErp::llavesDeNumero($numero);
@@ -68,20 +76,29 @@ assertRespaldoErp($ceros['consecutivo'] === '', 'veinte ceros no son un consecut
 // ── 2. Qué falta y qué no ──────────────────────────────────────
 $modelo = new FacturaErpFalsa();
 $modelo->filas = [
-    ['documento' => '00200001010000045587', 'numero_corto' => '0000045587'],
+    ['documento' => '00200001010000045587', 'numero_corto' => '00045587'],
     ['documento' => '00100001010000322839', 'numero_corto' => '0000322839'],
     ['documento' => '',                     'numero_corto' => '0000012339'],
+    // Uno de cada cuatro renglones del ERP viene así: número corto del
+    // proveedor, sin consecutivo. El parser deja numero_corto en NULL porque
+    // el documento no mide veinte dígitos, y si el índice se armara leyendo
+    // esa columna estas facturas serían invisibles y el pago semanal las
+    // denunciaría como ausentes estando cargadas.
+    ['documento' => '0000666409',           'numero_corto' => null],
+    ['documento' => '00100004010000090388', 'numero_corto' => '00090388'],
 ];
 
 $faltantes = $modelo->faltantesEnErp([
     'FACT-00200001010000045587-1377',                             // por consecutivo
     'FACT-12339',                                                 // por número corto
     'FACT-00000000000000000000000000000000000000000000012339',    // corto con relleno
+    'FACT-0000666409',                                            // ERP sin numero_corto
+    'FACT-0010000401000090388',                                   // al que le falta un cero
     'FACT-00300001010000034399-220',                              // no está
     'FACT-99999',                                                 // no está
 ]);
 
-assertRespaldoErp(count($faltantes) === 2, 'encuentra exactamente las dos que no están (salieron ' . count($faltantes) . ')');
+assertRespaldoErp(count($faltantes) === 2, 'encuentra exactamente las dos que no están (salieron ' . count($faltantes) . ': ' . implode(', ', $faltantes) . ')');
 assertRespaldoErp(in_array('FACT-00300001010000034399-220', $faltantes, true), 'reporta la que no está por consecutivo');
 assertRespaldoErp(in_array('FACT-99999', $faltantes, true), 'reporta la que no está por número corto');
 assertRespaldoErp($modelo->consultas === 1,
