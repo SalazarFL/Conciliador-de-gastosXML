@@ -1776,6 +1776,14 @@ class CorreoController extends Controller
                 $docData = XmlInvoiceParser::parseCfdiFromFile($adjunto['ruta']);
 
                 $tipoDetectado = strtoupper((string) ($docData['tipo_documento'] ?? 'FE'));
+                // Las notas de débito no se guardan nunca, no es cosa del modo:
+                // se dice distinto para que quien lea el resultado no se ponga a
+                // buscar qué modo habría que cambiar.
+                if (in_array($tipoDetectado, XmlDocumentImporter::NUNCA_SE_GUARDAN, true)) {
+                    $resultado['errores'][] = 'Nota de débito descartada (no se guardan): ' . $adjunto['nombre'];
+                    @unlink($adjunto['ruta']);
+                    continue;
+                }
                 if (!in_array($tipoDetectado, $tiposPermitidos, true)) {
                     $resultado['errores'][] = 'Documento ' . $tipoDetectado . ' omitido en este modo: ' . $adjunto['nombre'];
                     @unlink($adjunto['ruta']);

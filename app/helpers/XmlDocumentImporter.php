@@ -9,6 +9,15 @@ require_once __DIR__ . '/../models/Sociedad.php';
 /** Importa un FE/NC, archiva sus archivos y guarda solo metadatos en BD. */
 class XmlDocumentImporter
 {
+    /**
+     * Tipos que nunca se guardan, decida lo que decida quien llame. Hoy solo
+     * la nota de débito. Los mensajes de Hacienda no están en esta lista
+     * porque ni siquiera llegan hasta aquí: XmlInvoiceParser los rechaza, que
+     * es donde corresponde —no son un tipo de comprobante, no son un
+     * comprobante—.
+     */
+    public const NUNCA_SE_GUARDAN = ['ND'];
+
     private $facturas;
     private $proveedores;
     private $archivo;
@@ -24,7 +33,22 @@ class XmlDocumentImporter
     {
         $doc = XmlInvoiceParser::parseCfdiFromFile($xmlPath);
         $tipo = strtoupper(trim((string) ($doc['tipo_documento'] ?? 'FE')));
-        $permitidos = array_map('strtoupper', $contexto['tipos_permitidos'] ?? ['FE', 'NC']);
+
+        // Los únicos documentos que se guardan son factura y nota de crédito.
+        // Las notas de débito se descartan siempre, y esto va por encima de
+        // 'tipos_permitidos' a propósito: es una regla del negocio, no una
+        // opción de cada módulo, y un módulo nuevo que pasara la lista
+        // equivocada las volvería a meter sin que nadie lo note.
+        if (in_array($tipo, self::NUNCA_SE_GUARDAN, true)) {
+            throw new RuntimeException(
+                'Las notas de débito no se guardan en el sistema (' . $tipo . ').'
+            );
+        }
+
+        $permitidos = array_diff(
+            array_map('strtoupper', $contexto['tipos_permitidos'] ?? ['FE', 'NC']),
+            self::NUNCA_SE_GUARDAN
+        );
         if (!in_array($tipo, $permitidos, true)) {
             throw new RuntimeException('Tipo de documento no permitido en este módulo: ' . $tipo . '.');
         }

@@ -20,12 +20,26 @@ class XmlInvoiceParser
 			throw new Exception('No fue posible parsear el XML.');
 		}
 
-		// Algunos proveedores (p. ej. vía EDICOM/BusinessMail) envían por correo
-		// solo el MensajeHacienda de aceptación + el PDF, sin la FacturaElectronica.
-		// Se toma el mensaje como fuente: trae emisor, receptor y total, y de la
-		// Clave se derivan consecutivo, fecha y tipo de documento.
+		// Un MensajeHacienda (o MensajeReceptor) NO es un comprobante: es el
+		// acuse con que Hacienda acepta o rechaza uno. Trae Clave, emisor,
+		// receptor y total, así que se puede reconstruir una factura creíble a
+		// partir de él —y durante un tiempo se hizo, cuando un proveedor
+		// mandaba solo el acuse y el PDF—. Fue un error: lo que quedaba
+		// archivado como "el XML de la factura" no era la factura, no tenía
+		// líneas de detalle, y nada en la base permitía distinguirlo después.
+		//
+		// Se rechaza aquí, en el único punto por el que pasan todos los
+		// caminos de importación (correo, carga manual, cola, devoluciones),
+		// para que no dependa de que cada uno se acuerde de filtrarlo.
+		// Quien clasifica antes de llamar —CorreoController::procesarMensaje,
+		// OrganizadorDocumentos::clasificarXml— sigue usando el acuse para lo
+		// único que sirve: saber si el comprobante fue aceptado, y apartarlo.
 		if (stripos($xml->getName(), 'mensaje') !== false) {
-			return self::parseMensajeHacienda($xml, $filePath);
+			throw new Exception(
+				'El XML es un mensaje de Hacienda (' . $xml->getName() . '), no un comprobante '
+				. 'electrónico. Solo se guardan facturas y notas de crédito; pídele al proveedor '
+				. 'el XML del comprobante.'
+			);
 		}
 
 		$uuid = self::firstAttrByLocalName($xml, 'TimbreFiscalDigital', 'UUID');
@@ -465,57 +479,5 @@ class XmlInvoiceParser
 		return NumeroFactura::xmlOchoDigitos($value);
 	}
 
-	/**
-	 * Factura reconstruida a partir del MensajeHacienda de aceptación (cuando
-	 * el correo no trae la FacturaElectronica). El mensaje trae Clave, emisor,
-	 * receptor y totales; el consecutivo, la fecha y el tipo de documento se
-	 * derivan de la Clave (50 díg.: 506 + ddmmaa + cédula(12) + consecutivo(20)
-	 * + situación(1) + código(8); el consecutivo = sucursal(3)+terminal(5)+
-	 * tipo(2)+número(10), tipo 01=FE, 02=ND, 03=NC, 04=tiquete).
-	 */
-	private static function parseMensajeHacienda(SimpleXMLElement $xml, $filePath)
-	{
-		$clave             = self::firstNodeText($xml, 'Clave');
-		$razonSocialEmisor = self::firstNodeText($xml, 'NombreEmisor');
-		$rfcEmisor         = self::firstNodeText($xml, 'NumeroCedulaEmisor');
-		$receptorId        = self::firstNodeText($xml, 'NumeroCedulaReceptor');
-		$total             = (float) self::firstNodeText($xml, 'TotalFactura');
-		$iva               = (float) self::firstNodeText($xml, 'MontoTotalImpuesto');
-
-		$claveDigits = preg_replace('/\D+/', '', $clave);
-
-		$consecutivo   = $claveDigits;
-		$fecha         = '';
-		$tipoDocumento = 'FE';
-
-		if (strlen($claveDigits) >= 50) {
-			$consecutivo = substr($claveDigits, 21, 20);
-			$fecha = '20' . substr($claveDigits, 7, 2) . '-' . substr($claveDigits, 5, 2) . '-' . substr($claveDigits, 3, 2);
-
-			$mapaTipo = ['01' => 'FE', '02' => 'ND', '03' => 'NC', '04' => 'FE'];
-			$tipoDocumento = $mapaTipo[substr($consecutivo, 8, 2)] ?? 'FE';
-		}
-
-		if ($consecutivo === '') {
-			$consecutivo = sha1_file($filePath);
-		}
-
-		return [
-			'consecutivo_completo'     => $consecutivo,
-			'clave'                    => $clave,
-			'numero_factura_asistente' => self::buildNumeroAsistente($consecutivo),
-			'rfc_emisor'               => $rfcEmisor,
-			'razon_social_emisor'      => $razonSocialEmisor !== '' ? $razonSocialEmisor : 'SIN NOMBRE',
-			'receptor_id'              => $receptorId,
-			'tipo_documento'           => $tipoDocumento,
-			'fecha_emision'            => self::normalizeDate($fecha),
-			'subtotal'                 => $total > 0 ? max(0.0, $total - $iva) : 0.0,
-			'iva'                      => $iva,
-			'total'                    => $total,
-			'moneda'                   => 'CRC',
-			'tipo_comprobante'         => null,
-			'hash_xml'                 => hash_file('sha256', $filePath),
-		];
-	}
 }
 }
