@@ -157,7 +157,8 @@ class PorPagarComparador
             $numeroExacto = self::texto($nueva['numero']) === self::texto($actual['numero']);
             $proveedorExacto = self::texto($nueva['proveedor']) === self::texto($actual['proveedor']);
             $proveedorEstricto = FacturaMatcher::mismoProveedor($nueva['proveedor'], $actual['proveedor']);
-            $proveedorRelacionado = $proveedorExacto || $proveedorEstricto;
+            $proveedorRelacionado = $proveedorExacto || $proveedorEstricto
+                || self::unoEmpiezaIgualQueElOtro($nueva['proveedor'], $actual['proveedor']);
             $mismoTotal = abs($nueva['total'] - $actual['total']) < 0.005;
             $mismaFecha = $nueva['fecha'] !== null && $nueva['fecha'] === $actual['fecha'];
 
@@ -185,6 +186,38 @@ class PorPagarComparador
         // Evita asociar al azar si dos proveedores tienen el mismo numero
         // y ninguna otra caracteristica permite distinguirlos.
         return $empates === 1 ? $mejorIndice : null;
+    }
+
+    /**
+     * ¿Un nombre es el otro con algo pegado al final?
+     *
+     * No es laxitud gratuita: son dos cosas que pasan de verdad en estos
+     * listados. Una, el reporte se anota a mano y durante meses esas notas
+     * entraron pegadas al nombre ("MARJAVA SUPERMERCADOS S.A YA DESCARGADO Y
+     * REVISADO" quedó así en 82 renglones de la semana 130826). Dos, el ERP
+     * corta el nombre a lo ancho de la columna, así que el mismo proveedor
+     * aparece entero en un archivo y truncado en otro.
+     *
+     * Sin esto, limpiar la lectura vuelve "nuevas" a las facturas que ya
+     * estaban, que es peor que el problema que se quería resolver.
+     *
+     * Se exigen al menos dos palabras en común para que no baste con que dos
+     * proveedores compartan la primera. El número ya tuvo que parecerse antes
+     * de llegar aquí, así que esto no empareja nada por sí solo.
+     */
+    private static function unoEmpiezaIgualQueElOtro($a, $b)
+    {
+        $tokensA = FacturaMatcher::tokenizarProveedor($a);
+        $tokensB = FacturaMatcher::tokenizarProveedor($b);
+
+        $corto = count($tokensA) <= count($tokensB) ? $tokensA : $tokensB;
+        $largo = $corto === $tokensA ? $tokensB : $tokensA;
+
+        if (count($corto) < 2 || count($corto) === count($largo)) {
+            return false;
+        }
+
+        return array_slice($largo, 0, count($corto)) === $corto;
     }
 
     private static function indexarActuales(array $actuales)

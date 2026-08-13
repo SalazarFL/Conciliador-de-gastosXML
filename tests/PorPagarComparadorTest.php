@@ -85,6 +85,51 @@ assertComparador(
     'mantiene el matching cuando el numero corto aparece como secuencia del formato largo'
 );
 
+// ── El nombre guardado con basura pegada ───────────────────────
+// Durante meses las anotaciones a mano del reporte entraron pegadas al
+// nombre del proveedor. Al limpiar la lectura, esas facturas dejaron de
+// reconocerse y 82 renglones ya cargados de la semana 130826 salieron como
+// "nuevas": peor que el problema original, porque invita a duplicarlos.
+$anotado = PorPagarComparador::comparar(
+    [['fecha' => '2026-06-08', 'numero' => 'FACT-00100001010000062756-55',
+      'proveedor_texto' => 'MARJAVA SUPERMERCADOS S.A YA DESCARGADO Y REVISADO', 'total' => 149328.68]],
+    [['estado' => 'nueva', 'fecha' => '2026-06-08', 'numero' => 'FACT-00100001010000062756-55',
+      'proveedor' => 'MARJAVA SUPERMERCADOS S.A', 'total' => 149328.68]]
+);
+assertComparador(
+    $anotado['resumen']['nueva'] === 0,
+    'una factura ya cargada no vuelve a ser nueva porque le limpiaron el nombre al proveedor'
+);
+
+// El ERP corta el nombre al ancho de la columna: el mismo proveedor viene
+// entero en un archivo y truncado en otro.
+$truncado = PorPagarComparador::comparar(
+    [['fecha' => '2026-07-13', 'numero' => 'FACT-00100001010000081822-1159',
+      'proveedor_texto' => 'COMERCIO E INDUSTRIA GIMA SOCIEDAD', 'total' => 520866.72]],
+    [['estado' => 'nueva', 'fecha' => '2026-07-13', 'numero' => 'FACT-00100001010000081822-1159',
+      'proveedor' => 'COMERCIO E INDUSTRIA GIMA SOCIEDAD ANONIMA', 'total' => 520866.72]]
+);
+assertComparador($truncado['resumen']['nueva'] === 0, 'el nombre truncado por el ERP sigue siendo el mismo proveedor');
+
+// Pero la tolerancia no puede tragarse un proveedor distinto: eso es lo que
+// pasó cuando una factura heredó el nombre del grupo anterior, y tiene que
+// salir a la vista, no taparse.
+$distinto = PorPagarComparador::comparar(
+    [['fecha' => '2026-08-06', 'numero' => 'FACT-00100001010000000552',
+      'proveedor_texto' => 'RIVERA CHAVARRIA CARLOS ALBERT', 'total' => 48025.00]],
+    [['estado' => 'nueva', 'fecha' => '2026-08-06', 'numero' => 'FACT-00100001010000000552',
+      'proveedor' => 'ROBLES CARMONA RONALDO', 'total' => 48025.00]]
+);
+assertComparador($distinto['resumen']['nueva'] === 1, 'dos proveedores distintos siguen siendo distintos');
+
+// Compartir la primera palabra no alcanza.
+$primera = PorPagarComparador::comparar(
+    [['fecha' => '2026-08-06', 'numero' => 'FACT-991', 'proveedor_texto' => 'GRUPO BM', 'total' => 100.00]],
+    [['estado' => 'nueva', 'fecha' => '2026-08-06', 'numero' => 'FACT-991',
+      'proveedor' => 'GRUPO NACION', 'total' => 100.00]]
+);
+assertComparador($primera['resumen']['nueva'] === 1, 'compartir la primera palabra no los hace el mismo proveedor');
+
 try {
     PorPagarComparador::comparar([], array_fill(0, PorPagarComparador::MAX_LINEAS + 1, []));
     assertComparador(false, 'rechaza un archivo demasiado grande');
