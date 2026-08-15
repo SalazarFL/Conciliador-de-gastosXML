@@ -8,6 +8,12 @@ class NotaCredito extends Model
 {
     protected $table = 'notas_credito_listados';
 
+    /** Dos saldos con una diferencia menor a medio centavo son el mismo. */
+    private const EPSILON_SALDO = 0.005;
+
+    /** Tamaño de las escrituras agrupadas del importador. */
+    private const LOTE_IMPORTACION = 300;
+
     public function __construct()
     {
         Esquema::unaVez(static::class, function () { $this->ensureTables(); });
@@ -16,6 +22,35 @@ class NotaCredito extends Model
     private function ensureTables()
     {
         try {
+            // Una carga es el archivo que se recibió. Vive aparte del listado
+            // canónico porque el archivo es una foto y las líneas son el
+            // estado acumulado: exactamente la separación que usa Facturas ERP.
+            $this->execute("CREATE TABLE IF NOT EXISTS notas_credito_cargas (
+                id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                listado_id INT UNSIGNED NULL,
+                sociedad_id INT UNSIGNED NOT NULL,
+                listado_legacy_id INT UNSIGNED NULL,
+                archivo_origen VARCHAR(255) NOT NULL,
+                archivo_ruta VARCHAR(500) NULL,
+                archivo_hash CHAR(64) NOT NULL,
+                empresa_reporte VARCHAR(255) NULL,
+                periodo_desde DATE NULL,
+                periodo_hasta DATE NULL,
+                filas_leidas INT UNSIGNED NOT NULL DEFAULT 0,
+                insertadas INT UNSIGNED NOT NULL DEFAULT 0,
+                actualizadas INT UNSIGNED NOT NULL DEFAULT 0,
+                sin_cambio INT UNSIGNED NOT NULL DEFAULT 0,
+                recuperadas INT UNSIGNED NOT NULL DEFAULT 0,
+                filas_invalidas INT UNSIGNED NOT NULL DEFAULT 0,
+                usuario_id INT UNSIGNED NULL,
+                creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (id),
+                UNIQUE KEY uk_nc_carga_legacy (listado_legacy_id),
+                KEY idx_nc_carga_sociedad (sociedad_id, creado_en),
+                KEY idx_nc_carga_listado (listado_id),
+                KEY idx_nc_carga_hash (archivo_hash)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
             $this->execute("CREATE TABLE IF NOT EXISTS notas_credito_listados (
                 id INT UNSIGNED NOT NULL AUTO_INCREMENT,
                 sociedad_id INT UNSIGNED NOT NULL,
@@ -29,13 +64,14 @@ class NotaCredito extends Model
                 total_lineas INT UNSIGNED NOT NULL DEFAULT 0,
                 fecha_subida DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (id),
-                UNIQUE KEY uk_nc_archivo_hash (archivo_hash),
+                KEY idx_nc_archivo_hash (archivo_hash),
                 KEY idx_nc_listado_sociedad (sociedad_id, fecha_subida)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
             $this->execute("CREATE TABLE IF NOT EXISTS notas_credito_lineas (
                 id INT UNSIGNED NOT NULL AUTO_INCREMENT,
                 listado_id INT UNSIGNED NOT NULL,
+                listado_origen_id INT UNSIGNED NULL,
                 fila_origen INT UNSIGNED NOT NULL,
                 proveedor_codigo VARCHAR(50) NULL,
                 proveedor_nombre VARCHAR(255) NOT NULL,
@@ -49,24 +85,32 @@ class NotaCredito extends Model
                 moneda CHAR(3) NOT NULL,
                 monto DECIMAL(18,2) NOT NULL,
                 saldo DECIMAL(18,2) NOT NULL DEFAULT 0,
+                saldo_anterior DECIMAL(18,2) NULL,
                 monto_conversion DECIMAL(18,2) NOT NULL DEFAULT 0,
                 datos_origen LONGTEXT NULL,
+                carga_id INT UNSIGNED NULL,
+                carga_cambio_id INT UNSIGNED NULL,
+                saldo_cambiado_en DATETIME NULL,
                 factura_xml_id INT UNSIGNED NULL,
                 estado ENUM('sin_respaldo','coincide','con_diferencia') NOT NULL DEFAULT 'sin_respaldo',
                 diferencia DECIMAL(18,2) NULL,
-                metodo_match ENUM('ninguno','numero','atributos','manual') NOT NULL DEFAULT 'ninguno',
+                metodo_match ENUM('ninguno','numero','referencia','atributos','manual') NOT NULL DEFAULT 'ninguno',
                 score_proveedor DECIMAL(5,1) NULL,
                 match_manual TINYINT(1) NOT NULL DEFAULT 0,
                 bloqueo_automatico TINYINT(1) NOT NULL DEFAULT 0,
                 motivo_match VARCHAR(255) NULL,
+                creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 actualizado_en DATETIME NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
                 PRIMARY KEY (id),
                 UNIQUE KEY uk_nc_xml_por_listado (listado_id, factura_xml_id),
                 KEY idx_nc_linea_listado_estado (listado_id, estado),
+                KEY idx_nc_linea_listado_origen (listado_origen_id),
                 KEY idx_nc_lineas_clase (listado_id, clase, estado),
                 KEY idx_nc_linea_documento (documento),
                 KEY idx_nc_linea_nc_proveedor (nc_proveedor),
-                KEY idx_nc_linea_factura_xml (factura_xml_id)
+                KEY idx_nc_linea_factura_xml (factura_xml_id),
+                KEY idx_nc_linea_carga (carga_id),
+                KEY idx_nc_linea_carga_cambio (carga_cambio_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
             $this->execute("CREATE TABLE IF NOT EXISTS notas_credito_verificaciones (
@@ -109,6 +153,130 @@ class NotaCredito extends Model
         } catch (Throwable $e) {
             // database/migration_notas_credito.sql cubre instalaciones sin DDL en runtime.
         }
+
+        $this->agregarColumnasImportacion();
+        $this->sembrarCargasHistoricas();
+
+        // 'referencia' es el método que añadió el puente NC → factura acreditada
+        // (InformacionReferencia del XML). En una instalación ya creada el
+        // CREATE TABLE de arriba no la agrega, así que se amplía el ENUM.
+        try {
+            $columna = $this->fetchOne("SHOW COLUMNS FROM notas_credito_lineas LIKE 'metodo_match'");
+            if ($columna && strpos((string) ($columna['Type'] ?? ''), "'referencia'") === false) {
+                $this->execute("ALTER TABLE notas_credito_lineas
+                                MODIFY COLUMN metodo_match
+                                ENUM('ninguno','numero','referencia','atributos','manual')
+                                NOT NULL DEFAULT 'ninguno'");
+            }
+        } catch (Throwable $e) {
+        }
+    }
+
+    /**
+     * CREATE TABLE IF NOT EXISTS no modifica instalaciones ya creadas.
+     * Estas columnas convierten las líneas en un maestro acumulativo y dejan
+     * trazabilidad del saldo, sin tocar los campos del emparejamiento XML.
+     */
+    private function agregarColumnasImportacion()
+    {
+        $columnas = [
+            'listado_origen_id' => "ADD COLUMN listado_origen_id INT UNSIGNED NULL AFTER listado_id, ADD KEY idx_nc_linea_listado_origen (listado_origen_id)",
+            'saldo_anterior' => "ADD COLUMN saldo_anterior DECIMAL(18,2) NULL AFTER saldo",
+            'carga_id' => "ADD COLUMN carga_id INT UNSIGNED NULL AFTER datos_origen, ADD KEY idx_nc_linea_carga (carga_id)",
+            'carga_cambio_id' => "ADD COLUMN carga_cambio_id INT UNSIGNED NULL AFTER carga_id, ADD KEY idx_nc_linea_carga_cambio (carga_cambio_id)",
+            'saldo_cambiado_en' => "ADD COLUMN saldo_cambiado_en DATETIME NULL AFTER carga_cambio_id",
+            'creado_en' => "ADD COLUMN creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER motivo_match",
+        ];
+
+        try {
+            foreach ($columnas as $nombre => $ddl) {
+                $existe = (int) $this->fetchColumn(
+                    "SELECT COUNT(*) FROM information_schema.COLUMNS
+                      WHERE TABLE_SCHEMA = DATABASE()
+                        AND TABLE_NAME = 'notas_credito_lineas' AND COLUMN_NAME = ?",
+                    [$nombre]
+                );
+                if ($existe === 0) {
+                    $this->execute("ALTER TABLE notas_credito_lineas {$ddl}");
+                }
+            }
+
+            // Una migración interrumpida pudo alcanzar a crear la columna y
+            // no su índice. Se comprueban aparte para que el siguiente intento
+            // termine el esquema en vez de darlo por bueno solo por la columna.
+            $indicesLineas = [
+                'idx_nc_linea_listado_origen' => 'listado_origen_id',
+                'idx_nc_linea_carga' => 'carga_id',
+                'idx_nc_linea_carga_cambio' => 'carga_cambio_id',
+            ];
+            foreach ($indicesLineas as $nombre => $columna) {
+                $existe = (int) $this->fetchColumn(
+                    "SELECT COUNT(*) FROM information_schema.STATISTICS
+                      WHERE TABLE_SCHEMA = DATABASE()
+                        AND TABLE_NAME = 'notas_credito_lineas' AND INDEX_NAME = ?",
+                    [$nombre]
+                );
+                if ($existe === 0) {
+                    $this->execute(
+                        "ALTER TABLE notas_credito_lineas ADD KEY {$nombre} ({$columna})"
+                    );
+                }
+            }
+
+            // El hash servía para impedir una segunda foto. En el modelo
+            // acumulativo una foto repetida es válida y simplemente produce
+            // cero cambios; el hash queda como índice de auditoría, no UNIQUE.
+            $indice = $this->fetchOne(
+                "SELECT NON_UNIQUE FROM information_schema.STATISTICS
+                  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'notas_credito_listados'
+                    AND INDEX_NAME = 'uk_nc_archivo_hash' LIMIT 1"
+            );
+            $indiceNormal = (int) $this->fetchColumn(
+                "SELECT COUNT(*) FROM information_schema.STATISTICS
+                  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'notas_credito_listados'
+                    AND INDEX_NAME = 'idx_nc_archivo_hash'"
+            );
+            if ($indice && (int) $indice['NON_UNIQUE'] === 0) {
+                $this->execute(
+                    'ALTER TABLE notas_credito_listados DROP INDEX uk_nc_archivo_hash'
+                    . ($indiceNormal === 0 ? ', ADD KEY idx_nc_archivo_hash (archivo_hash)' : '')
+                );
+            } elseif ($indiceNormal === 0) {
+                $this->execute(
+                    'ALTER TABLE notas_credito_listados ADD KEY idx_nc_archivo_hash (archivo_hash)'
+                );
+            }
+        } catch (Throwable $e) {
+            // La migración SQL formal cubre servidores donde la aplicación no
+            // tiene permiso de ALTER. Las lecturas del módulo siguen funcionando.
+        }
+    }
+
+    /**
+     * Convierte las antiguas cabeceras (una por foto) en historial de cargas.
+     * Es idempotente por listado_legacy_id y no mueve ni elimina líneas.
+     */
+    private function sembrarCargasHistoricas()
+    {
+        try {
+            $this->execute(
+                "INSERT IGNORE INTO notas_credito_cargas
+                    (listado_id, sociedad_id, listado_legacy_id, archivo_origen, archivo_ruta,
+                     archivo_hash, empresa_reporte, periodo_desde, periodo_hasta,
+                     filas_leidas, insertadas, creado_en)
+                 SELECT l.id, l.sociedad_id, l.id, l.archivo_origen, l.archivo_ruta,
+                        l.archivo_hash, l.empresa_reporte, l.periodo_desde, l.periodo_hasta,
+                        l.total_lineas, l.total_lineas, l.fecha_subida
+                   FROM notas_credito_listados l
+                  WHERE NOT EXISTS (
+                        SELECT 1 FROM notas_credito_cargas existente
+                         WHERE existente.listado_id = l.id
+                  )"
+            );
+        } catch (Throwable $e) {
+            // Tabla aún no migrada o permisos limitados: se reintentará cuando
+            // cambie el esquema/código o mediante la migración manual.
+        }
     }
 
     public function begin()
@@ -134,6 +302,24 @@ class NotaCredito extends Model
         return self::getDB()->inTransaction();
     }
 
+    /** Serializa las decisiones de matching de un mismo acumulado. */
+    public function bloquearListado($listadoId)
+    {
+        return $this->fetchOne(
+            'SELECT id FROM notas_credito_listados WHERE id = ? FOR UPDATE',
+            [(int) $listadoId]
+        );
+    }
+
+    /** Bloquea una línea después de su cabecera; ese orden evita deadlocks. */
+    public function bloquearLinea($lineaId)
+    {
+        return $this->fetchOne(
+            'SELECT id, listado_id FROM notas_credito_lineas WHERE id = ? FOR UPDATE',
+            [(int) $lineaId]
+        );
+    }
+
     public function crearListado(array $data)
     {
         $sql = "INSERT INTO notas_credito_listados
@@ -156,11 +342,11 @@ class NotaCredito extends Model
     private const COLUMNAS_LINEA = [
         'listado_id', 'fila_origen', 'proveedor_codigo', 'proveedor_nombre', 'sucursal',
         'documento', 'clase', 'fecha', 'nc_proveedor', 'fecha_nc_proveedor', 'entrada_asociada',
-        'moneda', 'monto', 'saldo', 'monto_conversion', 'datos_origen',
+        'moneda', 'monto', 'saldo', 'monto_conversion', 'datos_origen', 'carga_id',
     ];
 
     /** Los valores de una línea, en el orden de COLUMNAS_LINEA. */
-    private function valoresLinea($listadoId, array $linea)
+    private function valoresLinea($listadoId, array $linea, $cargaId = null)
     {
         return [
             (int) $listadoId,
@@ -179,6 +365,7 @@ class NotaCredito extends Model
             (float) $linea['saldo'],
             (float) $linea['monto_conversion'],
             $linea['datos_origen'] ?: null,
+            $cargaId !== null ? (int) $cargaId : null,
         ];
     }
 
@@ -197,7 +384,7 @@ class NotaCredito extends Model
      * ida y vuelta: de a una, la carga se pasa del tiempo máximo de la
      * petición antes de llegar al final.
      */
-    public function crearLineasLote($listadoId, array $lineas, $tam = 200)
+    public function crearLineasLote($listadoId, array $lineas, $tam = 200, $cargaId = null)
     {
         $columnas = implode(', ', self::COLUMNAS_LINEA);
         $hueco = '(' . implode(', ', array_fill(0, count(self::COLUMNAS_LINEA), '?')) . ')';
@@ -206,7 +393,7 @@ class NotaCredito extends Model
         foreach (array_chunk(array_values($lineas), max(1, (int) $tam)) as $tanda) {
             $params = [];
             foreach ($tanda as $linea) {
-                foreach ($this->valoresLinea($listadoId, $linea) as $valor) {
+                foreach ($this->valoresLinea($listadoId, $linea, $cargaId) as $valor) {
                     $params[] = $valor;
                 }
             }
@@ -221,12 +408,572 @@ class NotaCredito extends Model
         return $insertadas;
     }
 
-    public function buscarPorHash($hash)
+    // ------------------------------------------------------------------
+    // Importación acumulativa
+    // ------------------------------------------------------------------
+
+    /**
+     * Identidad estable de una nota entre dos fotos del ERP.
+     *
+     * La sociedad se aplica en la consulta que arma el conjunto. La moneda se
+     * incluye porque forma parte del significado del monto: 100 CRC y 100 USD
+     * no pueden ser el mismo documento aunque los cuatro textos coincidan.
+     */
+    public static function claveCarga(array $linea)
     {
-        $row = $this->fetchOne(
-            "SELECT * FROM notas_credito_listados WHERE archivo_hash = ? LIMIT 1",
-            [(string) $hash]
+        $proveedor = trim((string) ($linea['proveedor_codigo'] ?? ''));
+        if ($proveedor === '') {
+            $proveedor = (string) ($linea['proveedor_nombre'] ?? '');
+        }
+
+        $documentoCrudo = (string) ($linea['documento'] ?? '');
+        $documento = ClaseNotaCredito::limpiar($documentoCrudo);
+        if ($documento === '') {
+            $documento = $documentoCrudo;
+        }
+
+        $partes = [
+            self::normalizarIdentidad($proveedor),
+            self::normalizarIdentidad((string) ($linea['sucursal'] ?? '')),
+            self::normalizarIdentidad($documento),
+            self::normalizarMoneda((string) ($linea['moneda'] ?? 'CRC')),
+            number_format(round((float) ($linea['monto'] ?? 0), 2), 2, '.', ''),
+        ];
+        return hash('sha256', implode('|', $partes));
+    }
+
+    private static function normalizarIdentidad($valor)
+    {
+        $valor = mb_strtoupper(trim((string) $valor), 'UTF-8');
+        return preg_replace('/\s+/u', ' ', $valor);
+    }
+
+    private static function normalizarMoneda($valor)
+    {
+        $valor = self::normalizarIdentidad($valor);
+        return in_array($valor, ['$', 'USD', 'DOLARES', 'DÓLARES'], true) ? 'USD' : 'CRC';
+    }
+
+    /** Regla única para fusionar decisiones XML de fotos heredadas. */
+    private static function debeTransferirMatchHistorico(array $actual, array $historica, array $xmlUsados)
+    {
+        // Una decisión manual o un desvínculo explícito del acumulado nunca
+        // se reemplazan con información de una foto anterior.
+        if (!empty($actual['match_manual']) || !empty($actual['bloqueo_automatico'])) {
+            return false;
+        }
+
+        $xmlActual = (int) ($actual['factura_xml_id'] ?? 0);
+        $xmlHistorico = (int) ($historica['factura_xml_id'] ?? 0);
+        $mismoXml = $xmlHistorico > 0 && $xmlHistorico === $xmlActual;
+        $xmlHistoricoLibre = $xmlHistorico > 0
+            && (!isset($xmlUsados[$xmlHistorico])
+                || (int) $xmlUsados[$xmlHistorico] === (int) $actual['id']);
+
+        if ($xmlActual === 0 && $xmlHistoricoLibre) {
+            return true;
+        }
+        if (!empty($historica['match_manual']) && ($mismoXml || $xmlHistoricoLibre)) {
+            return true;
+        }
+
+        // Desvincular manualmente deja XML NULL y bloqueo_automatico=1. Esa
+        // decisión también pertenece a la identidad y debe sobrevivir si la
+        // fila reciente todavía no tiene ninguna decisión propia.
+        return $xmlActual === 0
+            && $xmlHistorico === 0
+            && !empty($historica['bloqueo_automatico']);
+    }
+
+    /** Actualiza los mapas de una simulación o consolidación ya decidida. */
+    private static function aplicarMatchHistoricoEnMemoria(array $actual, array $historica, array &$xmlUsados)
+    {
+        $xmlActual = (int) ($actual['factura_xml_id'] ?? 0);
+        if ($xmlActual > 0
+            && isset($xmlUsados[$xmlActual])
+            && (int) $xmlUsados[$xmlActual] === (int) $actual['id']) {
+            unset($xmlUsados[$xmlActual]);
+        }
+        foreach (self::COLUMNAS_MATCH as $columna) {
+            $actual[$columna] = $historica[$columna] ?? null;
+        }
+        $xmlNuevo = (int) ($actual['factura_xml_id'] ?? 0);
+        if ($xmlNuevo > 0) {
+            $xmlUsados[$xmlNuevo] = (int) $actual['id'];
+        }
+        return $actual;
+    }
+
+    /**
+     * Calcula el efecto de un archivo sin escribir. Considera también fotos
+     * antiguas, porque al confirmar se recuperan sus documentos ausentes en el
+     * listado más reciente antes de aplicar el archivo nuevo.
+     */
+    public function previsualizarImportacion($sociedadId, array $lineas)
+    {
+        $sociedadId = (int) $sociedadId;
+        $listadoId = (int) $this->fetchColumn(
+            'SELECT id FROM notas_credito_listados WHERE sociedad_id = ? ORDER BY id DESC LIMIT 1',
+            [$sociedadId]
         );
+        $guardadas = $this->fetchAll(
+            "SELECT nl.*, nl.listado_id
+               FROM notas_credito_lineas nl
+               JOIN notas_credito_listados li ON li.id = nl.listado_id
+              WHERE li.sociedad_id = ?
+              ORDER BY li.id DESC, nl.id DESC",
+            [$sociedadId]
+        ) ?: [];
+
+        $acumuladas = [];
+        $xmlUsados = [];
+        foreach ($guardadas as $fila) {
+            if ((int) $fila['listado_id'] !== $listadoId) {
+                continue;
+            }
+            $clave = self::claveCarga($fila);
+            if (isset($acumuladas[$clave])) {
+                throw new Exception('El listado actual ya contiene identidades duplicadas.');
+            }
+            $acumuladas[$clave] = $fila;
+            if (!empty($fila['factura_xml_id'])) {
+                $xmlUsados[(int) $fila['factura_xml_id']] = (int) $fila['id'];
+            }
+        }
+
+        // Reproduce la misma regla de la consolidación real: una identidad
+        // antigua se recupera solo si no existe en el maestro y su XML no está
+        // reservado por otra identidad más reciente.
+        $recuperables = 0;
+        foreach ($guardadas as $fila) {
+            if ((int) $fila['listado_id'] === $listadoId) {
+                continue;
+            }
+            $clave = self::claveCarga($fila);
+            if (isset($acumuladas[$clave])) {
+                $actual = $acumuladas[$clave];
+                if (self::debeTransferirMatchHistorico($actual, $fila, $xmlUsados)) {
+                    $acumuladas[$clave] = self::aplicarMatchHistoricoEnMemoria(
+                        $actual,
+                        $fila,
+                        $xmlUsados
+                    );
+                }
+                continue;
+            }
+            $xmlId = (int) ($fila['factura_xml_id'] ?? 0);
+            if ($xmlId > 0 && isset($xmlUsados[$xmlId])) {
+                continue;
+            }
+            $acumuladas[$clave] = $fila;
+            if ($xmlId > 0) {
+                $xmlUsados[$xmlId] = (int) $fila['id'];
+            }
+            $recuperables++;
+        }
+
+        $resultado = [
+            'nuevas' => 0,
+            'actualizadas' => 0,
+            'sin_cambio' => 0,
+            'recuperables' => $recuperables,
+            'acumuladas' => count($acumuladas),
+        ];
+        $vistas = [];
+        foreach ($lineas as $linea) {
+            $clave = self::claveCarga($linea);
+            if (isset($vistas[$clave])) {
+                throw new Exception(
+                    'El archivo repite la misma nota (documento, proveedor, sucursal y monto) '
+                    . 'en las filas ' . $vistas[$clave] . ' y ' . (int) ($linea['fila_origen'] ?? 0) . '.'
+                );
+            }
+            $vistas[$clave] = (int) ($linea['fila_origen'] ?? 0);
+            if (!isset($acumuladas[$clave])) {
+                $resultado['nuevas']++;
+            } elseif (abs((float) $acumuladas[$clave]['saldo'] - (float) $linea['saldo']) >= self::EPSILON_SALDO) {
+                $resultado['actualizadas']++;
+            } else {
+                $resultado['sin_cambio']++;
+            }
+        }
+        return $resultado;
+    }
+
+    /**
+     * Consolida las fotos heredadas sin necesidad de esperar otro archivo.
+     * Los IDs se conservan y listado_origen_id permite auditar de qué foto se
+     * movió cada fila. No se crea una carga porque aquí no se recibió un CSV.
+     */
+    public function consolidarSociedad($sociedadId)
+    {
+        $sociedadId = (int) $sociedadId;
+        if ($sociedadId <= 0) {
+            throw new InvalidArgumentException('La sociedad no es válida.');
+        }
+
+        $this->begin();
+        try {
+            $this->fetchOne('SELECT id FROM sociedades WHERE id = ? FOR UPDATE', [$sociedadId]);
+            $listadoId = (int) $this->fetchColumn(
+                'SELECT id FROM notas_credito_listados
+                  WHERE sociedad_id = ? ORDER BY id DESC LIMIT 1 FOR UPDATE',
+                [$sociedadId]
+            );
+            if ($listadoId <= 0) {
+                $this->commit();
+                return ['listado_id' => 0, 'recuperadas' => 0, 'ids' => [], 'total' => 0];
+            }
+
+            $ids = $this->consolidarListadosAnteriores($sociedadId, $listadoId);
+            $total = (int) $this->fetchColumn(
+                'SELECT COUNT(*) FROM notas_credito_lineas WHERE listado_id = ?',
+                [$listadoId]
+            );
+            $this->execute(
+                'UPDATE notas_credito_listados SET total_lineas = ? WHERE id = ?',
+                [$total, $listadoId]
+            );
+            $this->commit();
+            return [
+                'listado_id' => $listadoId,
+                'recuperadas' => count($ids),
+                'ids' => $ids,
+                'total' => $total,
+            ];
+        } catch (Throwable $e) {
+            $this->rollback();
+            throw $e;
+        }
+    }
+
+    /**
+     * Aplica una foto del ERP al único conjunto acumulado de la sociedad.
+     * No elimina lo que no vino: inserta nuevas, actualiza saldos distintos y
+     * deja intactas (incluido su vínculo XML) las filas cuyo saldo no cambió.
+     */
+    public function importarConsolidado(array $lineas, array $meta, $usuarioId = null)
+    {
+        if (!$lineas) {
+            throw new InvalidArgumentException('El archivo no contiene notas válidas para importar.');
+        }
+        $sociedadId = (int) ($meta['sociedad_id'] ?? 0);
+        if ($sociedadId <= 0) {
+            throw new InvalidArgumentException('La carga de notas necesita una sociedad.');
+        }
+        $meta = array_merge([
+            'nombre' => 'Notas de crédito acumuladas',
+            'empresa_reporte' => null,
+            'periodo_desde' => null,
+            'periodo_hasta' => null,
+            'archivo_origen' => 'notas.csv',
+            'archivo_ruta' => '',
+            'archivo_hash' => hash('sha256', uniqid('nc_', true)),
+            'filas_leidas' => count($lineas),
+            'filas_invalidas' => 0,
+        ], $meta);
+
+        $this->begin();
+        try {
+            // Serializa las cargas de una misma sociedad, incluso cuando aún
+            // no existe listado canónico y dos peticiones llegan juntas.
+            $this->fetchOne('SELECT id FROM sociedades WHERE id = ? FOR UPDATE', [$sociedadId]);
+            $listado = $this->fetchOne(
+                'SELECT * FROM notas_credito_listados WHERE sociedad_id = ? ORDER BY id DESC LIMIT 1 FOR UPDATE',
+                [$sociedadId]
+            );
+            if (!$listado) {
+                $listadoId = $this->crearListado([
+                    'sociedad_id' => $sociedadId,
+                    'nombre' => (string) $meta['nombre'],
+                    'empresa_reporte' => $meta['empresa_reporte'],
+                    'periodo_desde' => $meta['periodo_desde'],
+                    'periodo_hasta' => $meta['periodo_hasta'],
+                    'archivo_origen' => (string) $meta['archivo_origen'],
+                    'archivo_ruta' => (string) $meta['archivo_ruta'],
+                    'archivo_hash' => (string) $meta['archivo_hash'],
+                    'total_lineas' => 0,
+                ]);
+            } else {
+                $listadoId = (int) $listado['id'];
+            }
+
+            $idsRecuperadas = $this->consolidarListadosAnteriores($sociedadId, $listadoId);
+            $recuperadas = count($idsRecuperadas);
+            $cargaId = $this->crearCarga($listadoId, $sociedadId, $meta, $usuarioId);
+
+            $existentes = [];
+            foreach ($this->fetchAll(
+                'SELECT id, proveedor_codigo, proveedor_nombre, sucursal, documento, moneda, monto, saldo
+                   FROM notas_credito_lineas WHERE listado_id = ? FOR UPDATE',
+                [$listadoId]
+            ) ?: [] as $fila) {
+                $clave = self::claveCarga($fila);
+                if (isset($existentes[$clave])) {
+                    throw new Exception('El acumulado contiene dos filas con la misma identidad; no se aplicó la carga.');
+                }
+                $existentes[$clave] = $fila;
+            }
+
+            $nuevas = [];
+            $cambios = [];
+            $sinCambio = 0;
+            $vistas = [];
+            $idsRecibidas = [];
+            foreach ($lineas as $linea) {
+                $clave = self::claveCarga($linea);
+                if (isset($vistas[$clave])) {
+                    throw new Exception(
+                        'El archivo repite la misma nota (documento, proveedor, sucursal y monto) '
+                        . 'en las filas ' . $vistas[$clave] . ' y ' . (int) ($linea['fila_origen'] ?? 0) . '.'
+                    );
+                }
+                $vistas[$clave] = (int) ($linea['fila_origen'] ?? 0);
+
+                if (!isset($existentes[$clave])) {
+                    $nuevas[] = $linea;
+                    continue;
+                }
+                $idsRecibidas[] = (int) $existentes[$clave]['id'];
+                $anterior = (float) $existentes[$clave]['saldo'];
+                if (abs($anterior - (float) $linea['saldo']) < self::EPSILON_SALDO) {
+                    $sinCambio++;
+                    continue;
+                }
+                $cambios[] = [
+                    'id' => (int) $existentes[$clave]['id'],
+                    'saldo_anterior' => $anterior,
+                    'saldo' => (float) $linea['saldo'],
+                ];
+            }
+
+            $this->crearLineasLote($listadoId, $nuevas, self::LOTE_IMPORTACION, $cargaId);
+            $idsNuevas = array_map('intval', array_column($this->fetchAll(
+                'SELECT id FROM notas_credito_lineas WHERE listado_id = ? AND carga_id = ? ORDER BY id',
+                [$listadoId, $cargaId]
+            ) ?: [], 'id'));
+            $this->actualizarSaldosLote($cambios, $cargaId);
+
+            $total = (int) $this->fetchColumn(
+                'SELECT COUNT(*) FROM notas_credito_lineas WHERE listado_id = ?',
+                [$listadoId]
+            );
+            $this->execute(
+                "UPDATE notas_credito_listados
+                    SET nombre = ?, empresa_reporte = ?, periodo_desde = ?, periodo_hasta = ?,
+                        archivo_origen = ?, archivo_ruta = ?, archivo_hash = ?,
+                        total_lineas = ?, fecha_subida = NOW()
+                  WHERE id = ?",
+                [
+                    (string) ($meta['nombre'] ?? 'Notas de crédito acumuladas'),
+                    $meta['empresa_reporte'] ?? null,
+                    $meta['periodo_desde'] ?? null,
+                    $meta['periodo_hasta'] ?? null,
+                    (string) ($meta['archivo_origen'] ?? 'notas.csv'),
+                    (string) ($meta['archivo_ruta'] ?? ''),
+                    (string) ($meta['archivo_hash'] ?? ''),
+                    $total,
+                    $listadoId,
+                ]
+            );
+            $this->execute(
+                "UPDATE notas_credito_cargas
+                    SET insertadas = ?, actualizadas = ?, sin_cambio = ?, recuperadas = ?
+                  WHERE id = ?",
+                [count($nuevas), count($cambios), $sinCambio, $recuperadas, $cargaId]
+            );
+            $this->commit();
+
+            return [
+                'listado_id' => $listadoId,
+                'carga_id' => $cargaId,
+                'insertadas' => count($nuevas),
+                'actualizadas' => count($cambios),
+                'sin_cambio' => $sinCambio,
+                'recuperadas' => $recuperadas,
+                'total' => $total,
+                // También se incluyen las identidades ya conocidas que vinieron
+                // en el archivo. Así una recarga idéntica reintenta cualquier
+                // verificación que hubiera fallado después del commit anterior.
+                'ids_verificar' => array_values(array_unique(array_merge(
+                    $idsRecuperadas,
+                    $idsNuevas,
+                    $idsRecibidas
+                ))),
+            ];
+        } catch (Throwable $e) {
+            $this->rollback();
+            throw $e;
+        }
+    }
+
+    private function crearCarga($listadoId, $sociedadId, array $meta, $usuarioId)
+    {
+        return (int) $this->insert(
+            "INSERT INTO notas_credito_cargas
+                (listado_id, sociedad_id, archivo_origen, archivo_ruta, archivo_hash,
+                 empresa_reporte, periodo_desde, periodo_hasta, filas_leidas,
+                 filas_invalidas, usuario_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (int) $listadoId,
+                (int) $sociedadId,
+                (string) ($meta['archivo_origen'] ?? 'notas.csv'),
+                (string) ($meta['archivo_ruta'] ?? ''),
+                (string) ($meta['archivo_hash'] ?? ''),
+                $meta['empresa_reporte'] ?? null,
+                $meta['periodo_desde'] ?? null,
+                $meta['periodo_hasta'] ?? null,
+                (int) ($meta['filas_leidas'] ?? 0),
+                (int) ($meta['filas_invalidas'] ?? 0),
+                $usuarioId !== null ? (int) $usuarioId : null,
+            ]
+        );
+    }
+
+    /** Mueve al maestro las identidades que solo vivían en fotos antiguas. */
+    private function consolidarListadosAnteriores($sociedadId, $listadoId)
+    {
+        $actuales = [];
+        $xmlUsados = [];
+        foreach ($this->fetchAll(
+            'SELECT * FROM notas_credito_lineas WHERE listado_id = ? ORDER BY id DESC FOR UPDATE',
+            [(int) $listadoId]
+        ) ?: [] as $fila) {
+            $clave = self::claveCarga($fila);
+            if (isset($actuales[$clave])) {
+                throw new Exception('El listado actual ya contiene identidades duplicadas.');
+            }
+            $actuales[$clave] = $fila;
+            if (!empty($fila['factura_xml_id'])) {
+                $xmlUsados[(int) $fila['factura_xml_id']] = (int) $fila['id'];
+            }
+        }
+
+        $anteriores = $this->fetchAll(
+            "SELECT nl.*
+               FROM notas_credito_lineas nl
+               JOIN notas_credito_listados li ON li.id = nl.listado_id
+              WHERE li.sociedad_id = ? AND li.id <> ?
+              ORDER BY li.id DESC, nl.id DESC
+              FOR UPDATE",
+            [(int) $sociedadId, (int) $listadoId]
+        ) ?: [];
+
+        $recuperadas = [];
+        foreach ($anteriores as $fila) {
+            $clave = self::claveCarga($fila);
+            if (isset($actuales[$clave])) {
+                // La fila reciente conserva saldo, ID y gestión. Si la misma
+                // identidad solo estaba vinculada en una foto anterior, se
+                // recupera esa decisión sin volver a crear la nota. Un match
+                // manual histórico también prevalece sobre uno automático,
+                // siempre que su XML no pertenezca ya a otra identidad actual.
+                $actual = $actuales[$clave];
+                if (self::debeTransferirMatchHistorico($actual, $fila, $xmlUsados)) {
+                    $this->transferirMatchHistorico((int) $actual['id'], $fila);
+                    $actuales[$clave] = self::aplicarMatchHistoricoEnMemoria(
+                        $actual,
+                        $fila,
+                        $xmlUsados
+                    );
+                }
+                continue;
+            }
+
+            $xmlId = (int) ($fila['factura_xml_id'] ?? 0);
+            if ($xmlId > 0 && isset($xmlUsados[$xmlId])) {
+                // La misma NC electrónica ya respalda otra identidad en la
+                // foto más reciente. En datos heredados esto corresponde a
+                // números corregidos entre cargas (por ejemplo, el proveedor
+                // pegado al final del documento). La fila reciente prevalece;
+                // recuperar la antigua crearía un duplicado falso. La fila
+                // histórica y su decisión manual, si la hubo, no se eliminan.
+                continue;
+            }
+
+            $this->execute(
+                'UPDATE notas_credito_lineas
+                    SET listado_origen_id = COALESCE(listado_origen_id, listado_id), listado_id = ?
+                  WHERE id = ?',
+                [(int) $listadoId, (int) $fila['id']]
+            );
+            $actuales[$clave] = $fila;
+            $actuales[$clave]['listado_id'] = (int) $listadoId;
+            if ($xmlId > 0) {
+                $xmlUsados[$xmlId] = (int) $fila['id'];
+            }
+            $recuperadas[] = (int) $fila['id'];
+        }
+        return $recuperadas;
+    }
+
+    /** Copia solo la decisión XML; saldo e identidad siguen siendo los recientes. */
+    private function transferirMatchHistorico($lineaId, array $historica)
+    {
+        return $this->execute(
+            "UPDATE notas_credito_lineas
+                SET factura_xml_id = ?, estado = ?, diferencia = ?, metodo_match = ?,
+                    score_proveedor = ?, match_manual = ?, bloqueo_automatico = ?,
+                    motivo_match = ?
+              WHERE id = ?",
+            [
+                !empty($historica['factura_xml_id']) ? (int) $historica['factura_xml_id'] : null,
+                (string) ($historica['estado'] ?? 'sin_respaldo'),
+                $historica['diferencia'] ?? null,
+                (string) ($historica['metodo_match'] ?? 'ninguno'),
+                $historica['score_proveedor'] ?? null,
+                !empty($historica['match_manual']) ? 1 : 0,
+                !empty($historica['bloqueo_automatico']) ? 1 : 0,
+                $historica['motivo_match'] ?? null,
+                (int) $lineaId,
+            ]
+        );
+    }
+
+    /** Solo toca el saldo y su auditoría; el matching XML queda intacto. */
+    private function actualizarSaldosLote(array $cambios, $cargaId)
+    {
+        foreach (array_chunk($cambios, self::LOTE_IMPORTACION) as $tanda) {
+            if (!$tanda) {
+                continue;
+            }
+            $saldo = 'saldo = CASE id';
+            $anterior = 'saldo_anterior = CASE id';
+            $params = [];
+            foreach ($tanda as $cambio) {
+                $saldo .= ' WHEN ? THEN ?';
+                array_push($params, (int) $cambio['id'], (float) $cambio['saldo']);
+            }
+            foreach ($tanda as $cambio) {
+                $anterior .= ' WHEN ? THEN ?';
+                array_push($params, (int) $cambio['id'], (float) $cambio['saldo_anterior']);
+            }
+            $ids = array_map(function ($cambio) { return (int) $cambio['id']; }, $tanda);
+            $this->execute(
+                "UPDATE notas_credito_lineas
+                    SET {$saldo} ELSE saldo END,
+                        {$anterior} ELSE saldo_anterior END,
+                        carga_cambio_id = ?, saldo_cambiado_en = NOW()
+                  WHERE id IN (" . implode(',', array_fill(0, count($ids), '?')) . ')',
+                array_merge($params, [(int) $cargaId], $ids)
+            );
+        }
+    }
+
+    public function buscarPorHash($hash, $sociedadId = 0)
+    {
+        $params = [(string) $hash];
+        $sql = "SELECT c.*, COALESCE(li.nombre, c.archivo_origen) AS nombre
+                  FROM notas_credito_cargas c
+                  LEFT JOIN notas_credito_listados li ON li.id = c.listado_id
+                 WHERE c.archivo_hash = ?";
+        if ((int) $sociedadId > 0) {
+            $sql .= ' AND c.sociedad_id = ?';
+            $params[] = (int) $sociedadId;
+        }
+        $sql .= ' ORDER BY c.creado_en DESC, c.id DESC LIMIT 1';
+        $row = $this->fetchOne($sql, $params);
         return $row ?: null;
     }
 
@@ -236,6 +983,9 @@ class NotaCredito extends Model
                 FROM notas_credito_listados l
                 JOIN sociedades s ON s.id = l.sociedad_id
                 WHERE l.sociedad_id = ?
+                  AND l.id = (SELECT MAX(actual.id)
+                                FROM notas_credito_listados actual
+                               WHERE actual.sociedad_id = l.sociedad_id)
                 ORDER BY l.id DESC
                 LIMIT " . max(1, (int) $limit);
         return $this->fetchAll($sql, [(int) $sociedadId]) ?: [];
@@ -498,9 +1248,13 @@ class NotaCredito extends Model
     public function proveedoresSinRespaldo()
     {
         return $this->fetchAll(
-            "SELECT DISTINCT listado_id, proveedor_nombre
-               FROM notas_credito_lineas
-              WHERE estado = 'sin_respaldo' AND proveedor_nombre <> ''"
+            "SELECT DISTINCT nl.listado_id, nl.proveedor_nombre
+               FROM notas_credito_lineas nl
+               JOIN notas_credito_listados li ON li.id = nl.listado_id
+              WHERE nl.estado = 'sin_respaldo' AND nl.proveedor_nombre <> ''
+                AND li.id = (SELECT MAX(actual.id)
+                               FROM notas_credito_listados actual
+                              WHERE actual.sociedad_id = li.sociedad_id)"
         ) ?: [];
     }
 
@@ -773,6 +1527,36 @@ class NotaCredito extends Model
         return $this->fetchAll($sql, [$cedula]) ?: [];
     }
 
+    /**
+     * A qué factura dice acreditar cada NC electrónica de la sociedad.
+     *
+     * Es el otro extremo del puente de las notas directas: el reporte del ERP
+     * numera la línea con el consecutivo de la FACTURA, y el XML de la nota
+     * cita esa misma factura en su InformacionReferencia. Con las dos puntas
+     * la nota queda identificada sin depender del monto.
+     *
+     * Se devuelve la referencia en crudo además del consecutivo ya extraído:
+     * el parser solo rellena consecutivo_ref cuando el proveedor escribió la
+     * clave de 50 dígitos, y unos cuantos ponen directamente el consecutivo de
+     * 20. Quien consume decide; acá no se adivina.
+     */
+    public function getReferenciasNcSociedad($cedula)
+    {
+        $cedula = preg_replace('/\D+/', '', (string) $cedula);
+        $sql = "SELECT r.factura_xml_id, r.consecutivo_ref, r.numero_ref, r.tipo_doc_ref
+                FROM facturas_xml_referencias r
+                INNER JOIN facturas_xml f ON f.id = r.factura_xml_id
+                WHERE f.tipo_documento = 'NC'
+                  AND REPLACE(REPLACE(REPLACE(REPLACE(f.receptor_id, '-', ''), ' ', ''), '.', ''), '/', '') = ?";
+        try {
+            return $this->fetchAll($sql, [$cedula]) ?: [];
+        } catch (Throwable $e) {
+            // Sin la tabla de detalle (instalación que aún no corrió el
+            // backfill) el verificador sigue con los demás caminos.
+            return [];
+        }
+    }
+
     public function getFacturaNcValida($facturaId, $cedula)
     {
         $cedula = preg_replace('/\D+/', '', (string) $cedula);
@@ -838,7 +1622,32 @@ class NotaCredito extends Model
     public function getListadosPorSociedad($sociedadId)
     {
         return $this->fetchAll(
-            "SELECT id FROM notas_credito_listados WHERE sociedad_id = ? ORDER BY id DESC",
+            "SELECT id FROM notas_credito_listados
+              WHERE sociedad_id = ? ORDER BY id DESC LIMIT 1",
+            [(int) $sociedadId]
+        ) ?: [];
+    }
+
+    /** Última foto recibida; no es otro conjunto de notas. */
+    public function ultimaCarga($sociedadId)
+    {
+        $row = $this->fetchOne(
+            "SELECT c.*, li.nombre AS listado_nombre
+               FROM notas_credito_cargas c
+               LEFT JOIN notas_credito_listados li ON li.id = c.listado_id
+              WHERE c.sociedad_id = ?
+              ORDER BY c.creado_en DESC, c.id DESC LIMIT 1",
+            [(int) $sociedadId]
+        );
+        return $row ?: null;
+    }
+
+    public function cargas($sociedadId, $limite = 20)
+    {
+        $limite = max(1, min(100, (int) $limite));
+        return $this->fetchAll(
+            "SELECT * FROM notas_credito_cargas
+              WHERE sociedad_id = ? ORDER BY creado_en DESC, id DESC LIMIT {$limite}",
             [(int) $sociedadId]
         ) ?: [];
     }

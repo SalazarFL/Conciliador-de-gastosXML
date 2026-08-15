@@ -210,6 +210,9 @@ assertSameNcv(null, $modelo->resultados[9]['facturaId'], 'el consecutivo exacto 
 $linea = lineaNcv(11, 'BIMBO DE COSTA RICA S.A.', 100.00);
 $linea['factura_xml_id'] = 110;
 $linea['match_manual'] = 1;
+$linea['estado'] = 'con_diferencia';
+$linea['diferencia'] = 0.01;
+$linea['metodo_match'] = 'manual';
 $linea['xml_total'] = 99.99;
 $modelo = new NotaCreditoModeloFalso(
     [$linea],
@@ -219,8 +222,7 @@ $modelo = new NotaCreditoModeloFalso(
     ]
 );
 NotasCreditoVerificador::verificarListado(1, $modelo);
-assertSameNcv(111, $modelo->resultados[11]['facturaId'], 'reemplaza un vínculo manual antiguo cuyo monto no era exacto');
-assertSameNcv(false, $modelo->resultados[11]['manual'], 'el reemplazo válido vuelve a ser automático');
+assertSameNcv(false, isset($modelo->resultados[11]), 'conserva un vínculo manual confirmado aunque tenga diferencia');
 
 // Una nota de ajuste interno no tiene documento electrónico. Aunque haya un
 // XML del mismo proveedor con el monto clavado, no se le debe enganchar: ese
@@ -278,5 +280,21 @@ $modelo = new NotaCreditoModeloFalso(
 );
 NotasCreditoVerificador::verificarListado(1, $modelo);
 assertSameNcv(140, $modelo->resultados[14]['facturaId'], 'una nota de costo sí se empareja');
+
+// La verificación incremental de una carga de saldos no vuelve a repartir los
+// XML que ya estaban asignados. La fila nueva ve el XML como ocupado y el
+// vínculo anterior permanece fuera de las escrituras pendientes.
+$existente = lineaNcv(20, 'BIMBO DE COSTA RICA S.A.', 5000.00);
+$existente['factura_xml_id'] = 200;
+$existente['estado'] = 'coincide';
+$existente['xml_total'] = 5000.00;
+$nueva = lineaNcv(21, 'BIMBO DE COSTA RICA S.A.', 5000.00);
+$modelo = new NotaCreditoModeloFalso(
+    [$existente, $nueva],
+    [facturaNcv(200, 'Bimbo de Costa Rica, S.A.', 5000.00, '2026-01-01')]
+);
+NotasCreditoVerificador::verificarListado(1, $modelo, 'carga_incremental', [20, 21]);
+assertSameNcv(false, isset($modelo->resultados[20]), 'la carga incremental no reescribe un vínculo existente');
+assertSameNcv(null, $modelo->resultados[21]['facturaId'], 'la fila nueva no roba un XML ya reservado');
 
 echo "OK: NotasCreditoVerificador\n";

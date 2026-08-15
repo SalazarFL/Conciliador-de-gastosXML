@@ -27,7 +27,7 @@ class NotasCreditoController extends Controller
         $rows = $listado ? $modelo->getLineasFiltradas($listadoId, $filters) : [];
 
         $this->render('notascredito/index', [
-            'title' => 'Notas de crédito - XMLConcilia',
+            'title' => 'Notas de crédito - Nexo Fiscal',
             'sociedadActiva' => $sociedad,
             'listados' => $listados,
             'listado' => $listado,
@@ -97,7 +97,7 @@ class NotasCreditoController extends Controller
         try {
             $sociedad = $this->loadModel('Sociedad')->getActiva();
             if (!$sociedad) {
-                throw new Exception('Debes seleccionar una sociedad activa antes de cargar el listado.');
+                throw new Exception('Debes seleccionar una sociedad activa antes de actualizar las notas.');
             }
 
             foreach (glob($tempDir . DIRECTORY_SEPARATOR . '*') ?: [] as $old) {
@@ -114,7 +114,9 @@ class NotasCreditoController extends Controller
             );
             $parsed = NotasCreditoCsvParser::parse($file['path']);
             $hash = hash_file('sha256', $file['path']);
-            $existing = $this->loadModel('NotaCredito')->buscarPorHash($hash);
+            $modelo = $this->loadModel('NotaCredito');
+            $existing = $modelo->buscarPorHash($hash, (int) $sociedad['id']);
+            $impacto = $modelo->previsualizarImportacion((int) $sociedad['id'], $parsed['lineas']);
 
             $this->json([
                 'ok' => true,
@@ -125,8 +127,9 @@ class NotasCreditoController extends Controller
                 'periodo_hasta' => $parsed['periodo_hasta'],
                 'estadisticas' => $parsed['estadisticas'],
                 'errores' => $parsed['errores'],
+                'impacto' => $impacto,
                 'duplicado' => $existing ? [
-                    'id' => (int) $existing['id'],
+                    'id' => (int) ($existing['listado_id'] ?? 0),
                     'nombre' => (string) $existing['nombre'],
                 ] : null,
                 'lineas' => array_slice($parsed['lineas'], 0, 200),
@@ -147,6 +150,7 @@ class NotasCreditoController extends Controller
         $token = basename(trim((string) $this->post('archivo_token', '')));
         $tempPath = $tempDir . DIRECTORY_SEPARATOR . $token;
         $permanentPath = null;
+        $guardado = false;
 
         try {
             if ($token === '' || !is_file($tempPath)) {
@@ -159,18 +163,10 @@ class NotasCreditoController extends Controller
 
             $parsed = NotasCreditoCsvParser::parse($tempPath);
             $hash = hash_file('sha256', $tempPath);
-            $existing = $modelo->buscarPorHash($hash);
-            if ($existing) {
-                @unlink($tempPath);
-                $this->redirectWithMessage(
-                    $this->url('/notas-credito?listado_id=' . (int) $existing['id']),
-                    'Ese archivo ya fue cargado como "' . $existing['nombre'] . '".',
-                    'warning'
-                );
-            }
 
             $originalName = basename(trim((string) $this->post('archivo_nombre', ''))) ?: $token;
-            $permanentName = 'notas_' . date('Ymd_His') . '_' . substr($hash, 0, 10) . '.csv';
+            $permanentName = 'notas_' . date('Ymd_His') . '_' . substr($hash, 0, 10)
+                . '_' . bin2hex(random_bytes(3)) . '.csv';
             $permanentPath = $this->uploadBase() . DIRECTORY_SEPARATOR . $permanentName;
             if (!is_dir($this->uploadBase()) && !mkdir($this->uploadBase(), 0777, true)) {
                 throw new Exception('No fue posible preparar el almacenamiento de notas.');
@@ -180,8 +176,7 @@ class NotasCreditoController extends Controller
             }
 
             $nombre = $this->buildListName($parsed);
-            $modelo->begin();
-            $listadoId = $modelo->crearListado([
+            $resultado = $modelo->importarConsolidado($parsed['lineas'], [
                 'sociedad_id' => (int) $sociedad['id'],
                 'nombre' => $nombre,
                 'empresa_reporte' => $parsed['empresa'],
@@ -190,14 +185,30 @@ class NotasCreditoController extends Controller
                 'archivo_origen' => $originalName,
                 'archivo_ruta' => $permanentPath,
                 'archivo_hash' => $hash,
-                'total_lineas' => count($parsed['lineas']),
-            ]);
-            $modelo->crearLineasLote($listadoId, $parsed['lineas']);
-            $modelo->commit();
+                'filas_leidas' => count($parsed['lineas']),
+                'filas_invalidas' => count($parsed['errores']),
+            ], $_SESSION['usuario_id'] ?? null);
+            $guardado = true;
+            $listadoId = (int) $resultado['listado_id'];
 
-            $stats = NotasCreditoVerificador::verificarListado($listadoId, $modelo, 'carga_inicial');
-            $message = count($parsed['lineas']) . ' notas importadas: '
-                . $stats['coincide'] . ' coinciden, '
+            if (!empty($resultado['ids_verificar'])) {
+                NotasCreditoVerificador::verificarListado(
+                    $listadoId,
+                    $modelo,
+                    'carga_incremental',
+                    $resultado['ids_verificar']
+                );
+            }
+            $stats = $modelo->resumen($listadoId);
+            $message = count($parsed['lineas']) . ' notas leídas: '
+                . $resultado['insertadas'] . ' nuevas, '
+                . $resultado['actualizadas'] . ' con saldo actualizado y '
+                . $resultado['sin_cambio'] . ' sin cambios.';
+            if ($resultado['recuperadas'] > 0) {
+                $message .= ' ' . $resultado['recuperadas']
+                    . ' notas de cargas anteriores se incorporaron al acumulado.';
+            }
+            $message .= ' Verificación XML: ' . $stats['coincide'] . ' coinciden, '
                 . $stats['con_diferencia'] . ' con diferencia y '
                 . $stats['sin_respaldo'] . ' sin respaldo.';
             if (!empty($parsed['errores'])) {
@@ -210,12 +221,14 @@ class NotasCreditoController extends Controller
             );
         } catch (Throwable $e) {
             $modelo->rollback();
-            if ($permanentPath && is_file($permanentPath)) {
+            if (!$guardado && $permanentPath && is_file($permanentPath)) {
                 @rename($permanentPath, $tempPath);
             }
             $this->redirectWithMessage(
-                $this->url('/carga'),
-                'No se pudo cargar el listado: ' . $e->getMessage(),
+                $guardado ? $this->url('/notas-credito') : $this->url('/carga'),
+                ($guardado
+                    ? 'Los saldos se actualizaron, pero falló la verificación XML: '
+                    : 'No se pudo actualizar el acumulado: ') . $e->getMessage(),
                 'error'
             );
         }
@@ -276,10 +289,22 @@ class NotasCreditoController extends Controller
                 );
             }
             unset($row);
+
+            // El monto exacto deja de ser requisito para aparecer en la lista.
+            // Lo era, y por eso una línea que el verificador ya había
+            // identificado por la referencia de su XML —misma factura, mismo
+            // proveedor, monto distinto por un céntimo— no ofrecía ni una sola
+            // candidata: la única forma de resolverla era no resolverla. Las
+            // exactas siguen primero; las demás quedan debajo, marcadas con su
+            // diferencia, que es lo que hay que mirar.
             $rows = array_values(array_filter($rows, function ($row) {
-                return !empty($row['monto_exacto']);
+                return !empty($row['monto_exacto']) || !empty($row['mismo_proveedor']);
             }));
             usort($rows, function ($a, $b) {
+                $porExacto = (int) !empty($b['monto_exacto']) <=> (int) !empty($a['monto_exacto']);
+                if ($porExacto !== 0) {
+                    return $porExacto;
+                }
                 $porProveedor = (int) $b['mismo_proveedor'] <=> (int) $a['mismo_proveedor'];
                 if ($porProveedor !== 0) {
                     return $porProveedor;
@@ -336,12 +361,10 @@ class NotasCreditoController extends Controller
         }
         $lineaId = (int) $this->post('linea_id', 0);
         $facturaId = (int) $this->post('factura_id', 0);
+        $modelo = null;
         try {
             $modelo = $this->loadModel('NotaCredito');
-            $linea = $modelo->getLinea($lineaId);
-            if (!$linea) {
-                throw new Exception('La línea del listado no existe.');
-            }
+            $linea = $this->bloquearLineaParaMatch($modelo, $lineaId);
             $factura = $modelo->getFacturaNcValida($facturaId, $linea['sociedad_cedula']);
             if (!$factura) {
                 throw new Exception('El XML seleccionado no es una NC válida de esta sociedad.');
@@ -353,8 +376,19 @@ class NotasCreditoController extends Controller
                 && !NotasCreditoVerificador::mismoNumeroNc((string) $linea['nc_proveedor'], $factura)) {
                 throw new Exception('No se puede vincular: el XML no tiene el consecutivo registrado en NC Proveedor.');
             }
-            if (!NotasCreditoVerificador::montosCoinciden($linea['monto'], $factura['total'])) {
-                throw new Exception('No se puede vincular: el monto del XML debe ser exactamente igual al monto del reporte.');
+            // El monto exacto dejó de ser una condición para vincular y pasó a
+            // ser una confirmación. Era una condición, y con eso las líneas que
+            // el verificador identifica por la referencia del XML —la nota dice
+            // a qué factura acredita— quedaban sin salida: se veía cuál era la
+            // nota y no se podía aceptar. Aceptarla no borra la diferencia:
+            // clasificar() la deja en 'con_diferencia', que es donde se cobra.
+            if (!NotasCreditoVerificador::montosCoinciden($linea['monto'], $factura['total'])
+                && (string) $this->post('aceptar_diferencia', '') !== '1') {
+                throw new Exception(
+                    'El monto del XML no es igual al del reporte (diferencia '
+                    . number_format(round((float) $linea['monto'] - (float) $factura['total'], 2), 2, '.', ',')
+                    . '). Confirmá la vinculación desde la lista de candidatas si aun así es la nota correcta.'
+                );
             }
             if ($modelo->facturaUsadaEnListado($linea['listado_id'], $facturaId, $lineaId)) {
                 throw new Exception('Esa NC XML ya está vinculada a otra fila de este listado.');
@@ -371,14 +405,21 @@ class NotasCreditoController extends Controller
             );
             $modelo->actualizarMatch(
                 $lineaId, $facturaId, $estado, $diferencia, 'manual',
-                round($score, 1), true, 'Vinculada manualmente.'
+                round($score, 1), true,
+                $estado === 'con_diferencia'
+                    ? 'Vinculada manualmente aceptando la diferencia de monto.'
+                    : 'Vinculada manualmente.'
             );
+            $modelo->commit();
             $this->redirectWithMessage(
                 $this->url('/notas-credito?listado_id=' . (int) $linea['listado_id']),
                 'La nota quedó vinculada manualmente.',
                 'success'
             );
         } catch (Throwable $e) {
+            if ($modelo) {
+                $modelo->rollback();
+            }
             $this->redirectWithMessage($this->url('/notas-credito'), $e->getMessage(), 'error');
         }
     }
@@ -388,47 +429,58 @@ class NotasCreditoController extends Controller
         if (!$this->isPost()) {
             $this->redirect($this->url('/notas-credito'));
         }
+        $modelo = null;
         try {
             $modelo = $this->loadModel('NotaCredito');
-            $linea = $modelo->getLinea((int) $this->post('linea_id', 0));
-            if (!$linea) {
-                throw new Exception('La línea no existe.');
-            }
+            $linea = $this->bloquearLineaParaMatch(
+                $modelo,
+                (int) $this->post('linea_id', 0)
+            );
             $modelo->actualizarMatch(
                 (int) $linea['id'], null, 'sin_respaldo', null, 'ninguno',
                 null, false, 'Desvinculada manualmente.', true
             );
+            $modelo->commit();
             $this->redirectWithMessage(
                 $this->url('/notas-credito?listado_id=' . (int) $linea['listado_id']),
                 'La NC XML fue desvinculada. La fila queda bloqueada para el matching automático.',
                 'warning'
             );
         } catch (Throwable $e) {
+            if ($modelo) {
+                $modelo->rollback();
+            }
             $this->redirectWithMessage($this->url('/notas-credito'), $e->getMessage(), 'error');
         }
     }
 
-    public function eliminar($id)
+    /**
+     * Relee la línea bajo el mismo lock que usa el verificador. La primera
+     * lectura ocurre fuera de la transacción solo para conocer qué cabecera
+     * bloquear; la segunda es la que autoriza la decisión manual.
+     */
+    private function bloquearLineaParaMatch($modelo, $lineaId)
     {
-        if (!$this->isPost()) {
-            $this->redirect($this->url('/notas-credito'));
+        $inicial = $modelo->getLinea((int) $lineaId);
+        if (!$inicial) {
+            throw new Exception('La línea del listado no existe.');
         }
-        try {
-            $modelo = $this->loadModel('NotaCredito');
-            $listado = $modelo->getListado((int) $id);
-            if (!$listado) {
-                throw new Exception('El listado no existe.');
-            }
-            $modelo->eliminarListado((int) $id);
-            $this->deleteAuditFile((string) $listado['archivo_ruta']);
-            $this->redirectWithMessage(
-                $this->url('/notas-credito'),
-                'El listado fue eliminado. Ningún XML ni proveedor fue afectado.',
-                'success'
-            );
-        } catch (Throwable $e) {
-            $this->redirectWithMessage($this->url('/notas-credito'), $e->getMessage(), 'error');
+
+        $modelo->begin();
+        $listadoId = (int) $inicial['listado_id'];
+        if (!$modelo->bloquearListado($listadoId)) {
+            throw new Exception('El acumulado de notas ya no existe.');
         }
+        $bloqueada = $modelo->bloquearLinea((int) $lineaId);
+        if (!$bloqueada || (int) $bloqueada['listado_id'] !== $listadoId) {
+            throw new Exception('La nota cambió de acumulado; recarga la pantalla e inténtalo de nuevo.');
+        }
+
+        $linea = $modelo->getLinea((int) $lineaId);
+        if (!$linea || (int) $linea['listado_id'] !== $listadoId) {
+            throw new Exception('La nota cambió mientras se procesaba; inténtalo de nuevo.');
+        }
+        return $linea;
     }
 
     private function uploadBase()
@@ -446,12 +498,4 @@ class NotasCreditoController extends Controller
         return 'Notas ' . date('d/m/Y H:i');
     }
 
-    private function deleteAuditFile($path)
-    {
-        $base = realpath($this->uploadBase());
-        $target = realpath((string) $path);
-        if ($base && $target && strpos($target, $base . DIRECTORY_SEPARATOR) === 0 && is_file($target)) {
-            @unlink($target);
-        }
-    }
 }

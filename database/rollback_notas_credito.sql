@@ -5,4 +5,5 @@
 DROP TABLE IF EXISTS `notas_credito_historial`;
 DROP TABLE IF EXISTS `notas_credito_verificaciones`;
 DROP TABLE IF EXISTS `notas_credito_lineas`;
+DROP TABLE IF EXISTS `notas_credito_cargas`;
 DROP TABLE IF EXISTS `notas_credito_listados`;

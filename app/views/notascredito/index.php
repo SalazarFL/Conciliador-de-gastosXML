@@ -30,23 +30,23 @@ function ncQuery(array $changes = []) {
 ?>
 
 <style>
-.nc-summary{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:10px;margin-bottom:16px}
-.nc-stat{background:#fff;border:1px solid var(--border);border-radius:10px;padding:13px 15px}
-.nc-stat strong{display:block;font-size:24px;color:var(--navy);line-height:1.1}.nc-stat span{font-size:11px;color:var(--text-muted);font-weight:700;text-transform:uppercase}
+.nc-summary{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:6px;margin-bottom:10px}
+.nc-stat{background:#fff;border:1px solid var(--border);border-radius:8px;padding:8px 10px}
+.nc-stat strong{display:block;font-size:20px;color:var(--navy);line-height:1.05}.nc-stat span{font-size:10px;color:var(--text-muted);font-weight:700;text-transform:uppercase}
 .nc-table-wrap{overflow:auto;max-height:68vh;border:1px solid var(--border);border-radius:9px}
-.nc-table{min-width:1750px}.nc-table thead th{position:sticky;z-index:3}.nc-table .nc-head-labels th{top:0}.nc-table .nc-search-row th{top:37px;padding:5px 4px;background:#f8fafc;z-index:4}
-.nc-table .nc-search-row input,.nc-table .nc-search-row select{width:100%;min-width:82px;height:28px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;padding:3px 6px;font-size:10.5px;color:var(--navy);outline:none}
+.nc-table{min-width:1650px}.nc-table thead th{position:sticky;z-index:3}.nc-table .nc-head-labels th{top:0}.nc-table .nc-search-row th{top:29px;padding:3px;background:#f8fafc;z-index:4}
+.nc-table .nc-search-row input,.nc-table .nc-search-row select{width:100%;min-width:78px;height:24px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;padding:2px 5px;font-size:10px;color:var(--navy);outline:none}
 .nc-table .nc-search-row input:focus,.nc-table .nc-search-row select:focus{border-color:var(--gold);box-shadow:0 0 0 2px rgba(212,160,23,.14)}
 .nc-table .nc-search-row .nc-search-wide{min-width:145px}.nc-table td{vertical-align:top}
 .nc-doc{max-width:230px;overflow-wrap:anywhere;font-weight:650;color:var(--navy)}
 .nc-provider{max-width:245px;white-space:normal}.nc-reason{font-size:10.5px;color:#64748b;max-width:190px;white-space:normal;margin-top:4px}
-.nc-actions{display:flex;gap:5px;align-items:center;flex-wrap:wrap;min-width:165px}
-.nc-history-grid{display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:8px;margin:12px 0}
-.nc-history-stat{border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:#f8fafc}.nc-history-stat strong{display:block;font-size:20px;color:var(--navy)}.nc-history-stat span{font-size:10px;text-transform:uppercase;color:var(--text-muted);font-weight:700}
+.nc-actions{display:flex;gap:4px;align-items:center;flex-wrap:wrap;min-width:150px}
+.nc-history-grid{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:6px;margin:8px 0}
+.nc-history-stat{border:1px solid var(--border);border-radius:7px;padding:7px 9px;background:#f8fafc}.nc-history-stat strong{display:block;font-size:17px;color:var(--navy)}.nc-history-stat span{font-size:9.5px;text-transform:uppercase;color:var(--text-muted);font-weight:700}
 .nc-transition{white-space:nowrap;font-weight:700}.nc-arrow{color:#94a3b8;margin:0 5px}
-.nc-modal{display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:1200;padding:4vh 3vw;overflow:auto}
+.nc-modal{display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:1200;padding:2vh 2vw;overflow:auto}
 .nc-modal.open{display:block}.nc-modal-panel{background:#fff;border-radius:12px;max-width:1100px;margin:auto;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden}
-.nc-modal-head{padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}.nc-modal-body{padding:16px 18px;max-height:70vh;overflow:auto}
+.nc-modal-head{padding:9px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}.nc-modal-body{padding:10px 13px;max-height:78vh;overflow:auto}
 .nc-close{margin-left:auto;background:none;border:0;font-size:23px;color:#64748b;cursor:pointer}
 .nc-period{font-size:11px;color:var(--text-muted)}
 @media(max-width:900px){.nc-summary{grid-template-columns:repeat(2,1fr)}}
@@ -54,7 +54,7 @@ function ncQuery(array $changes = []) {
 
 <div class="card mb-20">
     <div class="card-header mb-12" style="flex-wrap:wrap;">
-        <div class="card-title"><i class="fas fa-file-circle-minus" style="color:var(--gold);margin-right:6px;"></i>Cargar listado de notas de crédito</div>
+        <div class="card-title"><i class="fas fa-file-circle-minus" style="color:var(--gold);margin-right:6px;"></i>Notas de crédito acumuladas</div>
         <a href="<?= $baseUrl ?>/notas-xml" class="btn btn-primary btn-sm" style="margin-left:auto;"
            title="Importar comprobantes XML de notas de crédito">
             <i class="fas fa-file-code" style="margin-right:4px;"></i>Cargar notas XML
@@ -65,14 +65,13 @@ function ncQuery(array $changes = []) {
     <?php else: ?>
         <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">
             Sociedad: <strong style="color:var(--navy);"><?= htmlspecialchars($sociedadActiva['nombre']) ?></strong>.
-            Se acepta el reporte CSV “Notas de Crédito por Proveedor”.
+            Cada reporte CSV actualiza saldos y agrega los documentos que todavía no existen.
         </div>
         <a href="<?= $baseUrl ?>/carga" class="btn btn-primary btn-sm">
-            <i class="fas fa-inbox" style="margin-right:4px;"></i>Cargar listado
+            <i class="fas fa-inbox" style="margin-right:4px;"></i>Actualizar desde CSV
         </a>
         <div style="font-size:12px;color:var(--text-muted);margin-top:8px;">
-            El CSV se carga desde <a href="<?= $baseUrl ?>/carga">Carga de documentos</a>,
-            con vista previa antes de importar.
+            La vista previa indica cuántas notas son nuevas, cuántos saldos cambian y cuántas filas quedarán intactas.
         </div>
     <?php endif; ?>
 </div>
@@ -81,14 +80,10 @@ function ncQuery(array $changes = []) {
 <div class="card mb-20">
     <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
         <div style="flex:1;min-width:280px;">
-            <label style="font-size:11px;font-weight:700;color:var(--navy);">Listado por período</label>
-            <select class="form-control" onchange="location.href='<?= $baseUrl ?>/notas-credito?listado_id='+this.value">
-                <?php foreach ($listados as $item): ?>
-                <option value="<?= (int) $item['id'] ?>" <?= $listado && (int) $item['id'] === (int) $listado['id'] ? 'selected' : '' ?>>
-                    <?= htmlspecialchars($item['nombre']) ?> · <?= (int) $item['total_lineas'] ?> notas
-                </option>
-                <?php endforeach; ?>
-            </select>
+            <label style="font-size:11px;font-weight:700;color:var(--navy);">Estado acumulado de la sociedad</label>
+            <div style="font-size:14px;font-weight:750;color:var(--navy);padding-top:7px;">
+                <?= $listado ? number_format((int) $listado['total_lineas'], 0, ',', '.') : 0 ?> notas conservadas
+            </div>
         </div>
         <?php if ($listado): ?>
         <form method="POST" action="<?= $baseUrl ?>/notas-credito/verificar/<?= (int) $listado['id'] ?>">
@@ -98,15 +93,11 @@ function ncQuery(array $changes = []) {
                 data-listado="<?= (int) $listado['id'] ?>">
             <i class="fas fa-clock-rotate-left"></i> Historial
         </button>
-        <form method="POST" action="<?= $baseUrl ?>/notas-credito/eliminar/<?= (int) $listado['id'] ?>"
-              onsubmit="return confirm('¿Eliminar este listado y su CSV de auditoría? Los XML no serán eliminados.');">
-            <button class="btn btn-danger btn-sm"><i class="fas fa-trash"></i> Eliminar listado</button>
-        </form>
         <?php endif; ?>
     </div>
     <?php if ($listado): ?>
     <div class="nc-period" style="margin-top:8px;">
-        Archivo: <?= htmlspecialchars($listado['archivo_origen']) ?> ·
+        Última carga: <?= htmlspecialchars($listado['archivo_origen']) ?> ·
         Empresa del reporte: <?= htmlspecialchars($listado['empresa_reporte'] ?: '—') ?> ·
         Período: <?= ncFecha($listado['periodo_desde']) ?> al <?= ncFecha($listado['periodo_hasta']) ?>
     </div>
@@ -190,7 +181,7 @@ function ncQuery(array $changes = []) {
         <span>
             Mostrando <strong id="nc-result-count"><?= count($lineas) ?></strong> de
             <strong id="nc-list-total"><?= (int) ($resumen['total'] ?? 0) ?></strong> filas.
-            La búsqueda se aplica al listado completo. Desplázate horizontalmente para ver todas las columnas.
+            La búsqueda se aplica al acumulado completo. Desplázate horizontalmente para ver todas las columnas.
         </span>
         <?php if ($filtrosActivos): ?>
         <span class="badge badge-navy" style="font-size:10px;"><?= $filtrosActivos ?> filtro<?= $filtrosActivos === 1 ? '' : 's' ?></span>
@@ -230,7 +221,7 @@ function ncQuery(array $changes = []) {
             </thead>
             <tbody id="nc-lines-body">
             <?php if (empty($lineas)): ?>
-                <tr><td colspan="13" style="text-align:center;padding:28px;color:var(--text-muted);">No hay notas con estos filtros.</td></tr>
+                <tr><td colspan="13" style="text-align:center;padding:18px;color:var(--text-muted);">No hay notas con estos filtros.</td></tr>
             <?php endif; ?>
             <?php foreach ($lineas as $row): ?>
                 <?php
@@ -272,7 +263,10 @@ function ncQuery(array $changes = []) {
                             </button>
                             <?php if (!empty($row['factura_xml_id'])): ?>
                             <form method="POST" action="<?= $baseUrl ?>/notas-credito/desvincular"
-                                  onsubmit="return confirm('¿Desvincular esta NC XML y bloquear el matching automático para esta fila?');">
+                                  data-confirm="La nota de crédito XML se desvinculará y el emparejamiento automático quedará bloqueado para esta fila."
+                                  data-confirm-title="Desvincular nota de crédito"
+                                  data-confirm-type="warning"
+                                  data-confirm-accept="Desvincular">
                                 <input type="hidden" name="linea_id" value="<?= (int) $row['id'] ?>">
                                 <button class="btn btn-outline btn-sm" title="Desvincular"><i class="fas fa-link-slash"></i></button>
                             </form>
@@ -286,10 +280,10 @@ function ncQuery(array $changes = []) {
     </div>
 </div>
 <?php elseif (empty($listados)): ?>
-<div class="card" style="text-align:center;padding:36px;color:var(--text-muted);">
+<div class="card" style="text-align:center;padding:22px;color:var(--text-muted);">
     <i class="fas fa-file-circle-minus" style="font-size:34px;margin-bottom:12px;color:#cbd5e1;"></i>
-    <div style="font-weight:700;color:var(--navy);">Aún no hay listados de notas de crédito</div>
-    <div style="font-size:12px;margin-top:5px;">Selecciona el CSV del reporte para crear el primero.</div>
+    <div style="font-weight:700;color:var(--navy);">Aún no hay notas de crédito del ERP</div>
+    <div style="font-size:12px;margin-top:5px;">Carga el primer CSV para iniciar el acumulado.</div>
 </div>
 <?php endif; ?>
 
@@ -416,7 +410,7 @@ function ncQuery(array $changes = []) {
             '<td><div class="nc-actions">'+
                 '<button type="button" class="btn btn-outline btn-sm nc-link-btn" data-linea="'+Number(row.id)+'">' +
                 '<i class="fas fa-link"></i> '+(tieneXml ? 'Cambiar' : 'Vincular XML')+'</button>'+
-                (tieneXml ? '<form method="POST" action="'+BASE+'/notas-credito/desvincular" onsubmit="return confirm(\'¿Desvincular esta NC XML y bloquear el matching automático para esta fila?\');">' +
+                (tieneXml ? '<form method="POST" action="'+BASE+'/notas-credito/desvincular" data-confirm="La nota de crédito XML se desvinculará y el emparejamiento automático quedará bloqueado para esta fila." data-confirm-title="Desvincular nota de crédito" data-confirm-type="warning" data-confirm-accept="Desvincular">' +
                     '<input type="hidden" name="linea_id" value="'+Number(row.id)+'">' +
                     '<button class="btn btn-outline btn-sm" title="Desvincular"><i class="fas fa-link-slash"></i></button></form>' : '')+
                 '</div></td></tr>';
@@ -424,7 +418,7 @@ function ncQuery(array $changes = []) {
     function renderLines(rows) {
         if (!linesBody) return;
         if (!rows.length) {
-            linesBody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:28px;color:#64748b;">No hay notas con estos filtros.</td></tr>';
+            linesBody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:18px;color:#64748b;">No hay notas con estos filtros.</td></tr>';
             return;
         }
         linesBody.innerHTML = rows.map(lineRow).join('');
@@ -451,7 +445,7 @@ function ncQuery(array $changes = []) {
         }).join('');
         if (!selected) {
             summary.innerHTML = '<div class="alert alert-info" style="margin-top:12px;">Todavía no hay verificaciones guardadas. La próxima ejecución aparecerá aquí.</div>';
-            body.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:26px;color:#64748b;">Sin historial disponible.</td></tr>';
+            body.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:18px;color:#64748b;">Sin historial disponible.</td></tr>';
             return;
         }
         summary.innerHTML = '<div class="nc-history-grid">'+
@@ -461,7 +455,7 @@ function ncQuery(array $changes = []) {
             '<div class="nc-history-stat"><strong>'+Number(selected.cantidad_cambios)+'</strong><span>Cambios en esta ejecución</span></div></div>';
         var changes = data.cambios || [];
         if (!changes.length) {
-            body.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:26px;color:#64748b;">La verificación terminó sin modificar ninguna nota.</td></tr>';
+            body.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:18px;color:#64748b;">La verificación terminó sin modificar ninguna nota.</td></tr>';
             return;
         }
         body.innerHTML = changes.map(function (change) {
@@ -482,7 +476,7 @@ function ncQuery(array $changes = []) {
         var opener = document.getElementById('nc-history-open');
         if (!opener) return;
         var body = document.getElementById('nc-history-body');
-        body.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:26px;"><i class="fas fa-spinner fa-spin"></i> Cargando historial…</td></tr>';
+        body.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:18px;"><i class="fas fa-spinner fa-spin"></i> Cargando historial…</td></tr>';
         var url = BASE + '/notas-credito/historial/' + Number(opener.dataset.listado);
         if (verificationId) url += '?verificacion_id=' + Number(verificationId);
         fetch(url).then(function (response) { return response.json(); }).then(function (data) {
@@ -539,7 +533,7 @@ function ncQuery(array $changes = []) {
                 })
                 .catch(function (error) {
                     if (error.name === 'AbortError') return;
-                    linesBody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:28px;color:#dc2626;">'+esc(error.message)+'</td></tr>';
+                    linesBody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:18px;color:#dc2626;">'+esc(error.message)+'</td></tr>';
                     if (resultCount) resultCount.textContent = '0';
                 });
         }
@@ -569,7 +563,7 @@ function ncQuery(array $changes = []) {
     function loadCandidates() {
         var q = document.getElementById('nc-candidate-q').value || '';
         var body = document.getElementById('nc-candidate-body');
-        body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:24px;"><i class="fas fa-spinner fa-spin"></i> Buscando NC XML…</td></tr>';
+        body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:18px;"><i class="fas fa-spinner fa-spin"></i> Buscando NC XML…</td></tr>';
         fetch(BASE + '/notas-credito/candidatas?linea_id=' + currentLine + '&q=' + encodeURIComponent(q))
             .then(function (response) { return response.json(); })
             .then(function (data) {
@@ -578,17 +572,26 @@ function ncQuery(array $changes = []) {
                 document.getElementById('nc-link-meta').textContent =
                     line.documento + ' · ' + line.proveedor_nombre + ' · ' + money(line.monto, line.moneda);
                 if (!data.candidatas.length) {
-                    body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:28px;color:#64748b;">No hay NC XML disponibles con el mismo monto exacto.</td></tr>';
+                    body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:18px;color:#64748b;">No hay NC XML disponibles de este proveedor y moneda.</td></tr>';
                     return;
                 }
+                // Las de monto distinto ahora también se listan, pero no se
+                // vinculan de un clic: llevan la diferencia marcada y piden
+                // confirmación, para que aceptarla sea una decisión y no un
+                // descuido.
                 body.innerHTML = data.candidatas.map(function (row) {
-                    return '<tr><td class="nc-doc">'+esc(row.consecutivo_completo || row.numero_factura_asistente)+'</td>' +
+                    var exacto = !!row.monto_exacto;
+                    var extra = exacto ? '' : '<input type="hidden" name="aceptar_diferencia" value="1">';
+                    var confirma = exacto ? '' :
+                        ' data-confirm="El monto del XML no coincide con el reporte. La nota quedará marcada con diferencia." data-confirm-title="Vincular con diferencia" data-confirm-type="warning" data-confirm-accept="Vincular de todos modos"';
+                    return '<tr'+(exacto ? '' : ' style="background:#fffbeb;"')+'><td class="nc-doc">'+esc(row.consecutivo_completo || row.numero_factura_asistente)+'</td>' +
                         '<td>'+esc(row.proveedor_nombre)+'</td><td>'+dateEs(row.fecha_emision)+'</td>' +
-                        '<td class="right">'+money(row.total,row.moneda)+'</td><td class="right">'+money(row.diferencia,row.moneda)+'</td>' +
+                        '<td class="right">'+money(row.total,row.moneda)+'</td>' +
+                        '<td class="right"'+(exacto ? '' : ' style="color:#b45309;font-weight:700;"')+'>'+money(row.diferencia,row.moneda)+'</td>' +
                         '<td>'+Number(row.score_proveedor).toFixed(1)+'%</td><td>' +
-                        '<form method="POST" action="'+BASE+'/notas-credito/vincular">' +
-                        '<input type="hidden" name="linea_id" value="'+currentLine+'"><input type="hidden" name="factura_id" value="'+Number(row.id)+'">' +
-                        '<button class="btn btn-primary btn-sm"><i class="fas fa-link"></i> Vincular</button></form></td></tr>';
+                        '<form method="POST" action="'+BASE+'/notas-credito/vincular"'+confirma+'>' +
+                        '<input type="hidden" name="linea_id" value="'+currentLine+'"><input type="hidden" name="factura_id" value="'+Number(row.id)+'">' + extra +
+                        '<button class="btn '+(exacto ? 'btn-primary' : 'btn-outline')+' btn-sm"><i class="fas fa-link"></i> '+(exacto ? 'Vincular' : 'Vincular con diferencia')+'</button></form></td></tr>';
                 }).join('');
             })
             .catch(function (error) { body.innerHTML='<tr><td colspan="7" style="color:#dc2626;padding:20px;">'+esc(error.message)+'</td></tr>'; });
