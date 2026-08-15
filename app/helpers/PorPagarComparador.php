@@ -1,92 +1,85 @@
 <?php
 /**
- * Compara un archivo de pago contra las lineas guardadas de una semana.
+ * Compara un archivo de pago contra las facturas que la semana ya tiene.
  *
- * Es deliberadamente de solo lectura: clasifica y describe diferencias,
- * pero nunca crea, actualiza ni elimina facturas del listado existente.
+ * Se volvió mucho más simple de lo que era, y no por recortarlo: por lo que
+ * dejó de existir. Cuando el pago guardaba una copia de cada renglón del
+ * archivo, comparar significaba cotejar cuatro campos —número, proveedor,
+ * fecha, total— y decidir si un nombre escrito distinto era la misma factura o
+ * una nueva. De ahí salían los estados 'modificada' y la mitad de las reglas.
+ *
+ * Ahora el archivo no aporta datos: aporta una selección. Cada renglón se
+ * resuelve a una factura del ERP —eso lo hace PagoSemanalResolutor— y comparar
+ * es restar dos conjuntos de identificadores. No puede haber una factura
+ * "modificada" porque no hay copia que se desincronice: los datos son los del
+ * ERP, y son los mismos antes y después.
+ *
+ * Sigue siendo de solo lectura. Aplicar lo que sale de acá es una orden aparte.
  */
-
-require_once __DIR__ . '/FacturaMatcher.php';
 
 class PorPagarComparador
 {
-    /** Tope defensivo para evitar comparaciones abusivamente grandes. */
-    public const MAX_LINEAS = 10000;
-
     /**
-     * @param array $actuales  Lineas de porpagar_facturas (proveedor_texto).
-     * @param array $entrantes Lineas ya leidas del CSV/XLSX (proveedor).
-     * @return array Lineas clasificadas y resumen por estado.
+     * @param array $resolucion Salida de PagoSemanalResolutor::resolver().
+     * @param array $asignadas  Facturas del ERP hoy en el pago (id, documento,
+     *                          proveedor_nombre, fecha_emision, saldo…).
+     * @return array ['lineas' => [...], 'resumen' => [...]]
      */
-    public static function comparar(array $actuales, array $entrantes)
+    public static function comparar(array $resolucion, array $asignadas)
     {
-        if (count($actuales) > self::MAX_LINEAS || count($entrantes) > self::MAX_LINEAS) {
-            throw new InvalidArgumentException(
-                'El comparador admite hasta ' . number_format(self::MAX_LINEAS, 0, '.', ',') . ' facturas por listado.'
-            );
+        $actuales = [];
+        foreach ($asignadas as $factura) {
+            $actuales[(int) $factura['id']] = $factura;
         }
 
-        $actuales = array_values(array_map([self::class, 'normalizarActual'], $actuales));
-        $indiceActuales = self::indexarActuales($actuales);
-        $usadas = [];
-        $clavesEntrantes = [];
         $lineas = [];
+        $vistas = [];
 
-        foreach ($entrantes as $entrante) {
-            if (($entrante['estado'] ?? '') === 'error') {
-                $lineas[] = $entrante;
+        foreach ($resolucion['filas'] as $fila) {
+            $erpId = (int) ($fila['factura_erp_id'] ?? 0);
+            $estado = (string) $fila['estado'];
+
+            // Lo que el resolutor no pudo resolver se informa tal cual: no es
+            // una diferencia con la semana, es un problema del archivo o del
+            // reporte del ERP, y se arregla en otro sitio.
+            if ($estado !== 'resuelta') {
+                $lineas[] = self::linea($estado, $fila, null, $fila['motivo']);
                 continue;
             }
 
-            $nueva = self::normalizarEntrante($entrante);
-            $claveEntrante = self::claveDocumento($nueva);
-            if (isset($clavesEntrantes[$claveEntrante])) {
-                $nueva['estado'] = 'duplicada';
-                $nueva['motivo'] = 'La factura viene repetida dentro del archivo nuevo.';
-                $nueva['cambios'] = [];
-                $lineas[] = $nueva;
-                continue;
+            $vistas[$erpId] = true;
+            if (isset($actuales[$erpId])) {
+                $lineas[] = self::linea('igual', $fila, $actuales[$erpId],
+                    'Ya está en el pago de esta semana.');
+            } else {
+                $lineas[] = self::linea('nueva', $fila, null,
+                    'Entraría al pago de esta semana.');
             }
-            $clavesEntrantes[$claveEntrante] = true;
-
-            $indiceActual = self::buscarActual($nueva, $actuales, $usadas, $indiceActuales);
-            if ($indiceActual === null) {
-                $nueva['estado'] = 'nueva';
-                $nueva['motivo'] = 'No existe en el listado actual de la semana.';
-                $nueva['cambios'] = [];
-                $lineas[] = $nueva;
-                continue;
-            }
-
-            $usadas[$indiceActual] = true;
-            $actual = $actuales[$indiceActual];
-            $cambios = self::detectarCambios($actual, $nueva);
-            $nueva['estado'] = empty($cambios) ? 'igual' : 'modificada';
-            $nueva['motivo'] = empty($cambios)
-                ? 'Coincide con el listado actual.'
-                : 'Cambios: ' . implode(', ', array_keys($cambios)) . '.';
-            $nueva['cambios'] = $cambios;
-            $nueva['anterior'] = self::datosPublicos($actual);
-            $lineas[] = $nueva;
         }
 
-        // Lo que sigue en la semana pero no vino en el archivo se informa;
-        // no se interpreta como una orden de borrado.
-        foreach ($actuales as $indice => $actual) {
-            if (isset($usadas[$indice])) {
+        // Lo que la semana tiene y el archivo nuevo no menciona.
+        foreach ($actuales as $erpId => $factura) {
+            if (isset($vistas[$erpId])) {
                 continue;
             }
-            $faltante = self::datosPublicos($actual);
-            $faltante['estado'] = 'faltante';
-            $faltante['motivo'] = 'Existe en la semana, pero no aparece en el archivo nuevo. No se eliminará.';
-            $faltante['cambios'] = [];
-            $faltante['anterior'] = self::datosPublicos($actual);
-            $lineas[] = $faltante;
+            $lineas[] = [
+                'estado' => 'faltante',
+                'motivo' => 'Está en el pago pero no viene en el archivo nuevo.',
+                'factura_erp_id' => $erpId,
+                'numero' => (string) $factura['documento'],
+                'proveedor' => (string) ($factura['proveedor_nombre'] ?? ''),
+                'fecha' => (string) ($factura['fecha_emision'] ?? ''),
+                'saldo' => round((float) ($factura['saldo_pago'] ?? $factura['saldo'] ?? 0), 2),
+                'estado_respaldo' => (string) ($factura['estado'] ?? ($factura['estado_respaldo'] ?? '')),
+            ];
         }
 
-        $resumen = array_fill_keys(['nueva', 'modificada', 'igual', 'faltante', 'duplicada', 'error'], 0);
+        $resumen = array_fill_keys(
+            ['nueva', 'igual', 'faltante', 'ausente', 'ambigua', 'repetida', 'en_otro_pago', 'error'],
+            0
+        );
         foreach ($lineas as $linea) {
-            $estado = (string) ($linea['estado'] ?? 'error');
+            $estado = (string) $linea['estado'];
             if (isset($resumen[$estado])) {
                 $resumen[$estado]++;
             }
@@ -95,213 +88,24 @@ class PorPagarComparador
         return ['lineas' => $lineas, 'resumen' => $resumen];
     }
 
-    private static function normalizarActual(array $linea)
+    private static function linea($estado, array $fila, $erp, $motivo)
     {
+        $datos = $erp ?: ($fila['erp'] ?? null);
         return [
-            'id' => isset($linea['id']) ? (int) $linea['id'] : null,
-            'fecha' => self::fecha($linea['fecha'] ?? null),
-            'numero' => trim((string) ($linea['numero'] ?? '')),
-            'proveedor' => trim((string) ($linea['proveedor_texto'] ?? ($linea['proveedor'] ?? ''))),
-            'total' => round((float) ($linea['total'] ?? 0), 2),
+            'estado' => $estado,
+            'motivo' => (string) $motivo,
+            'factura_erp_id' => $fila['factura_erp_id'] ?? null,
+            // Lo que se enseña es lo que dice el ERP cuando la factura se
+            // encontró; solo cuando no se encontró se cae al texto del archivo,
+            // que es justo el caso en que hay que verlo para corregirlo.
+            'numero' => $datos ? (string) ($datos['documento'] ?? $fila['numero']) : (string) $fila['numero'],
+            'proveedor' => $datos
+                ? (string) ($datos['proveedor'] ?? ($datos['proveedor_nombre'] ?? $fila['proveedor']))
+                : (string) $fila['proveedor'],
+            'fecha' => $datos ? (string) ($datos['fecha'] ?? ($datos['fecha_emision'] ?? '')) : '',
+            'saldo' => round((float) $fila['saldo'], 2),
+            'saldo_erp' => $datos && isset($datos['saldo']) ? round((float) $datos['saldo'], 2) : null,
+            'estado_respaldo' => $erp ? (string) ($erp['estado'] ?? '') : '',
         ];
-    }
-
-    private static function normalizarEntrante(array $linea)
-    {
-        return [
-            'fecha' => self::fecha($linea['fecha'] ?? null),
-            'numero' => trim((string) ($linea['numero'] ?? '')),
-            'proveedor' => trim((string) ($linea['proveedor'] ?? ($linea['proveedor_texto'] ?? ''))),
-            'total' => round((float) ($linea['total'] ?? 0), 2),
-        ];
-    }
-
-    private static function datosPublicos(array $linea)
-    {
-        return [
-            'fecha' => $linea['fecha'],
-            'numero' => $linea['numero'],
-            'proveedor' => $linea['proveedor'],
-            'total' => $linea['total'],
-        ];
-    }
-
-    /** Elige la coincidencia de identidad mas clara entre las no usadas. */
-    private static function buscarActual(array $nueva, array $actuales, array $usadas, array $indiceActuales)
-    {
-        $mejorIndice = null;
-        $mejorPuntaje = -1;
-        $empates = 0;
-        $candidatos = [];
-
-        foreach (self::clavesNumero($nueva['numero']) as $claveNumero) {
-            foreach ($indiceActuales[$claveNumero] ?? [] as $indice) {
-                $candidatos[$indice] = true;
-            }
-        }
-        if (empty($candidatos)) {
-            return null;
-        }
-
-        foreach (array_keys($candidatos) as $indice) {
-            if (isset($usadas[$indice])) {
-                continue;
-            }
-            $actual = $actuales[$indice];
-
-            $scoreNumero = FacturaMatcher::similaridadNumero($nueva['numero'], $actual['numero']);
-            if ($scoreNumero < FacturaMatcher::NUMERO_RESCATE) {
-                continue;
-            }
-
-            $numeroExacto = self::texto($nueva['numero']) === self::texto($actual['numero']);
-            $proveedorExacto = self::texto($nueva['proveedor']) === self::texto($actual['proveedor']);
-            $proveedorEstricto = FacturaMatcher::mismoProveedor($nueva['proveedor'], $actual['proveedor']);
-            $proveedorRelacionado = $proveedorExacto || $proveedorEstricto
-                || self::unoEmpiezaIgualQueElOtro($nueva['proveedor'], $actual['proveedor']);
-            $mismoTotal = abs($nueva['total'] - $actual['total']) < 0.005;
-            $mismaFecha = $nueva['fecha'] !== null && $nueva['fecha'] === $actual['fecha'];
-
-            // El numero no es global entre proveedores: aun cuando numero,
-            // monto o fecha coincidan, el proveedor debe seguir siendo el
-            // mismo o una variante textual muy clara del nombre anterior.
-            if (!$proveedorRelacionado) {
-                continue;
-            }
-
-            $puntaje = ($numeroExacto ? 1000 : $scoreNumero)
-                + ($proveedorExacto ? 200 : 120)
-                + ($mismoTotal ? 40 : 0)
-                + ($mismaFecha ? 5 : 0);
-
-            if ($puntaje > $mejorPuntaje) {
-                $mejorIndice = $indice;
-                $mejorPuntaje = $puntaje;
-                $empates = 1;
-            } elseif ($puntaje === $mejorPuntaje) {
-                $empates++;
-            }
-        }
-
-        // Evita asociar al azar si dos proveedores tienen el mismo numero
-        // y ninguna otra caracteristica permite distinguirlos.
-        return $empates === 1 ? $mejorIndice : null;
-    }
-
-    /**
-     * ¿Un nombre es el otro con algo pegado al final?
-     *
-     * No es laxitud gratuita: son dos cosas que pasan de verdad en estos
-     * listados. Una, el reporte se anota a mano y durante meses esas notas
-     * entraron pegadas al nombre ("MARJAVA SUPERMERCADOS S.A YA DESCARGADO Y
-     * REVISADO" quedó así en 82 renglones de la semana 130826). Dos, el ERP
-     * corta el nombre a lo ancho de la columna, así que el mismo proveedor
-     * aparece entero en un archivo y truncado en otro.
-     *
-     * Sin esto, limpiar la lectura vuelve "nuevas" a las facturas que ya
-     * estaban, que es peor que el problema que se quería resolver.
-     *
-     * Se exigen al menos dos palabras en común para que no baste con que dos
-     * proveedores compartan la primera. El número ya tuvo que parecerse antes
-     * de llegar aquí, así que esto no empareja nada por sí solo.
-     */
-    private static function unoEmpiezaIgualQueElOtro($a, $b)
-    {
-        $tokensA = FacturaMatcher::tokenizarProveedor($a);
-        $tokensB = FacturaMatcher::tokenizarProveedor($b);
-
-        $corto = count($tokensA) <= count($tokensB) ? $tokensA : $tokensB;
-        $largo = $corto === $tokensA ? $tokensB : $tokensA;
-
-        if (count($corto) < 2 || count($corto) === count($largo)) {
-            return false;
-        }
-
-        return array_slice($largo, 0, count($corto)) === $corto;
-    }
-
-    private static function indexarActuales(array $actuales)
-    {
-        $indice = [];
-        foreach ($actuales as $posicion => $actual) {
-            foreach (self::clavesNumero($actual['numero']) as $clave) {
-                $indice[$clave][] = $posicion;
-            }
-        }
-        return $indice;
-    }
-
-    private static function clavesNumero($numero)
-    {
-        $claves = [];
-        $normalizado = FacturaMatcher::normalizarNumero($numero);
-        if ($normalizado !== '') {
-            $claves[] = 'n:' . $normalizado;
-        }
-        $nucleo = FacturaMatcher::nucleoNumerico($numero);
-        if ($nucleo !== '') {
-            $claves[] = 'c:' . $nucleo;
-            // El matcher admite que un consecutivo largo termine en el
-            // numero corto con relleno de ceros. Indexamos esos sufijos para
-            // conservar esa regla sin volver a una busqueda cuadratica.
-            $largo = strlen($nucleo);
-            for ($i = 0; $i < $largo - 3; $i++) {
-                if ($nucleo[$i] !== '0') {
-                    continue;
-                }
-                $sufijo = ltrim(substr($nucleo, $i + 1), '0');
-                if (strlen($sufijo) >= 3) {
-                    $claves[] = 'c:' . $sufijo;
-                }
-            }
-        }
-        // FacturaMatcher tambien reconoce cuando una secuencia numerica
-        // completa aparece dentro de un formato con serie o consecutivo.
-        foreach (FacturaMatcher::secuenciasNumericas($numero) as $secuencia) {
-            $claves[] = 'c:' . $secuencia;
-        }
-        return array_values(array_unique($claves));
-    }
-
-    /** Numero fuerte + mismo proveedor: no confunde numeraciones recicladas. */
-    private static function claveDocumento(array $linea)
-    {
-        // Conserva serie y prefijos alfabeticos: SERIE-A-100 y SERIE-B-100
-        // pueden ser facturas distintas aunque compartan el nucleo 100.
-        $numero = FacturaMatcher::normalizarNumero($linea['numero']);
-        $tokens = FacturaMatcher::tokenizarProveedor($linea['proveedor']);
-        sort($tokens, SORT_STRING);
-        $proveedor = !empty($tokens) ? implode(' ', $tokens) : self::texto($linea['proveedor']);
-        return $numero . '|' . $proveedor;
-    }
-
-    private static function detectarCambios(array $actual, array $nueva)
-    {
-        $cambios = [];
-        if (self::texto($actual['numero']) !== self::texto($nueva['numero'])) {
-            $cambios['número'] = ['anterior' => $actual['numero'], 'nuevo' => $nueva['numero']];
-        }
-        if (self::texto($actual['proveedor']) !== self::texto($nueva['proveedor'])) {
-            $cambios['proveedor'] = ['anterior' => $actual['proveedor'], 'nuevo' => $nueva['proveedor']];
-        }
-        if ($actual['fecha'] !== $nueva['fecha']) {
-            $cambios['fecha'] = ['anterior' => $actual['fecha'], 'nuevo' => $nueva['fecha']];
-        }
-        if (abs($actual['total'] - $nueva['total']) >= 0.005) {
-            $cambios['total'] = ['anterior' => $actual['total'], 'nuevo' => $nueva['total']];
-        }
-        return $cambios;
-    }
-
-    private static function texto($valor)
-    {
-        $texto = mb_strtoupper(trim((string) $valor), 'UTF-8');
-        return preg_replace('/\s+/', ' ', $texto);
-    }
-
-    private static function fecha($valor)
-    {
-        $valor = trim((string) $valor);
-        return preg_match('/^\d{4}-\d{2}-\d{2}$/', $valor) ? $valor : null;
     }
 }

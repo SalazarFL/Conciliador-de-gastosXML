@@ -12,8 +12,6 @@
  */
 $baseUrl = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 $sociedadActiva = $sociedadActiva ?? null;
-$semanas = $semanas ?? [];
-$semanaActiva = (int) ($semanaActiva ?? 0);
 $ultimas = $ultimas ?? ['listado_facturas' => null, 'listado_notas' => null];
 $carpetaRaiz = (string) ($carpetaRaiz ?? '');
 
@@ -30,45 +28,45 @@ function cargaHace($fecha)
 ?>
 
 <style>
-.carga-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(420px,1fr)); gap:16px; }
+.carga-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(360px,1fr)); gap:10px; }
 .carga-card { background:#fff; border:1px solid var(--border); border-radius:10px; overflow:hidden;
               border-left:4px solid var(--navy); display:flex; flex-direction:column; }
 .carga-card.es-xml { border-left-color:var(--gold); }
-.carga-head { padding:14px 18px 10px; }
-.carga-head h3 { margin:0 0 4px; font-size:15px; color:var(--navy); }
-.carga-head p  { margin:0; font-size:12.5px; color:var(--text-muted); line-height:1.55; }
-.carga-body { padding:12px 18px 16px; margin-top:auto; }
-.carga-ultima { font-size:11.5px; color:var(--text-muted); padding:8px 18px; background:var(--border-light);
+.carga-head { padding:10px 14px 7px; }
+.carga-head h3 { margin:0 0 2px; font-size:14px; color:var(--navy); }
+.carga-head p  { margin:0; font-size:12px; color:var(--text-muted); line-height:1.4; }
+.carga-body { padding:8px 14px 10px; margin-top:auto; }
+.carga-ultima { font-size:11px; color:var(--text-muted); padding:6px 14px; background:var(--border-light);
                 border-top:1px solid var(--border); }
-.carga-fila { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.carga-fila { display:flex; gap:7px; align-items:center; flex-wrap:wrap; }
 .carga-nombre { font-size:12px; color:var(--text-muted); font-style:italic; }
 .carga-modal { display:none; position:fixed; inset:0; background:rgba(15,23,42,.55); z-index:1000;
-               align-items:center; justify-content:center; padding:20px; }
+               align-items:center; justify-content:center; padding:12px; }
 .carga-modal.abierto { display:flex; }
 .carga-modal-panel { background:#fff; border-radius:10px; width:min(1000px,100%); max-height:88vh;
                      display:flex; flex-direction:column; overflow:hidden; }
-.carga-modal-head { padding:14px 18px; border-bottom:1px solid var(--border); display:flex; gap:10px;
+.carga-modal-head { padding:9px 13px; border-bottom:1px solid var(--border); display:flex; gap:8px;
                     align-items:center; }
 .carga-modal-head .cerrar { margin-left:auto; background:none; border:0; font-size:24px; cursor:pointer;
                             color:var(--text-muted); line-height:1; }
-.carga-modal-body { padding:16px 18px; overflow:auto; }
-.carga-modal-pie { padding:12px 18px; border-top:1px solid var(--border); display:flex;
-                   justify-content:flex-end; gap:8px; }
-.carga-resumen { display:flex; gap:18px; flex-wrap:wrap; font-size:12.5px; margin-bottom:12px; }
+.carga-modal-body { padding:10px 13px; overflow:auto; }
+.carga-modal-pie { padding:9px 13px; border-top:1px solid var(--border); display:flex;
+                   justify-content:flex-end; gap:7px; }
+.carga-resumen { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; margin-bottom:8px; }
 .carga-resumen b { color:var(--navy); }
 </style>
 
 <div class="card mb-20" style="border-left:4px solid var(--gold);">
-    <div style="padding:16px 20px;">
-        <h2 style="margin:0 0 6px;font-size:18px;color:var(--navy);">
+    <div style="padding:0;">
+        <h2 style="margin:0 0 3px;font-size:16px;color:var(--navy);">
             <i class="fas fa-inbox" style="margin-right:8px;color:var(--gold);"></i>
             Carga de documentos
         </h2>
-        <p style="margin:0;font-size:13px;color:var(--text-muted);line-height:1.6;">
+        <p style="margin:0;font-size:12.5px;color:var(--text-muted);line-height:1.45;">
             Todo lo que entra al sistema desde un archivo se carga aquí. Primero los listados del ERP,
             que dicen qué hay que pagar; después los comprobantes electrónicos que los respaldan.
         </p>
-        <p style="margin:8px 0 0;font-size:12.5px;color:var(--text-muted);line-height:1.6;">
+        <p style="margin:5px 0 0;font-size:12px;color:var(--text-muted);line-height:1.45;">
             El <strong>pago semanal</strong> se carga en
             <a href="<?= $baseUrl ?>/por-pagar">Pagos semanales</a> y las
             <strong>devoluciones</strong> en <a href="<?= $baseUrl ?>/devoluciones">Devoluciones</a>:
@@ -83,7 +81,7 @@ function cargaHace($fecha)
     los listados del ERP no dicen a qué empresa pertenecen y se sellan con la sociedad seleccionada.
 </div>
 <?php else: ?>
-<div style="font-size:12.5px;color:var(--text-muted);margin-bottom:14px;">
+<div style="font-size:12px;color:var(--text-muted);margin-bottom:9px;">
     Sociedad activa: <strong style="color:var(--navy);"><?= htmlspecialchars($sociedadActiva['nombre'], ENT_QUOTES, 'UTF-8') ?></strong>
     <?php if ($carpetaRaiz !== ''): ?>
     · Carpeta de documentos: <span style="font-family:Consolas,monospace;font-size:11.5px;"><?= htmlspecialchars($carpetaRaiz, ENT_QUOTES, 'UTF-8') ?></span>
@@ -125,9 +123,9 @@ function cargaHace($fecha)
     <!-- ── 2. Listado de notas de crédito ────────────────────────── -->
     <div class="carga-card">
         <div class="carga-head">
-            <h3><i class="fas fa-file-csv" style="margin-right:6px;color:var(--navy-light);"></i>Listado de notas de crédito</h3>
-            <p>Reporte <em>“Notas de Crédito por Proveedor”</em> en CSV. Se muestra una vista previa
-               antes de importar, porque el archivo trae filas que no siempre son notas.</p>
+            <h3><i class="fas fa-file-csv" style="margin-right:6px;color:var(--navy-light);"></i>Actualizar notas de crédito</h3>
+            <p>Reporte <em>“Notas de Crédito por Proveedor”</em> en CSV. La carga actualiza los saldos
+               del acumulado y agrega únicamente los documentos nuevos.</p>
         </div>
         <div class="carga-body">
             <form id="form-nc" action="<?= $baseUrl ?>/carga/listado-notas/previa" method="POST"
@@ -147,7 +145,7 @@ function cargaHace($fecha)
                 · <?= cargaHace($ultimas['listado_notas']['fecha']) ?>
                 · <a href="<?= $baseUrl ?>/notas-credito">ver Notas de crédito</a>
             <?php else: ?>
-                Todavía no se ha cargado ningún listado de notas.
+                Todavía no se ha cargado el reporte de notas.
             <?php endif; ?>
         </div>
     </div>
@@ -162,26 +160,14 @@ function cargaHace($fecha)
         <div class="carga-body">
             <form method="post" action="<?= $baseUrl ?>/carga/comprobantes-facturas"
                   enctype="multipart/form-data" id="form-xml">
-                <div style="margin-bottom:10px;">
-                    <label for="semana_id" style="display:block;font-size:12px;font-weight:700;color:var(--navy);margin-bottom:5px;">
-                        <i class="fas fa-calendar-week" style="margin-right:4px;color:var(--gold);"></i>Semana de trabajo
-                    </label>
-                    <select name="semana_id" id="semana_id" class="form-control" style="max-width:300px;font-size:13px;">
-                        <option value="" <?= $semanaActiva === 0 ? 'selected' : '' ?>>— Sin semana —</option>
-                        <?php foreach ($semanas as $sem): ?>
-                        <option value="<?= (int) $sem['id'] ?>" <?= $semanaActiva === (int) $sem['id'] ? 'selected' : '' ?>>
-                            <?= htmlspecialchars($sem['nombre'], ENT_QUOTES, 'UTF-8') ?>
-                        </option>
-                        <?php endforeach; ?>
-                        <option value="nueva">➕ Nueva semana…</option>
-                    </select>
-                    <div id="semana-nueva-box" style="display:none;margin-top:6px;">
-                        <input type="text" name="semana_nueva" id="semana_nueva" maxlength="100"
-                               placeholder="Semana <?= date('d/m/Y') ?>" class="form-control"
-                               style="max-width:300px;font-size:12.5px;">
-                    </div>
-                </div>
-
+                <!--
+                  Acá se elegía la semana a la que iban las facturas. Ya no se
+                  pregunta: al guardarse, cada comprobante busca su factura en
+                  el listado del ERP por el consecutivo, y si esa factura está
+                  en un pago semanal, hereda esa semana. Elegirla a mano era
+                  una decisión que nadie tenía por qué tomar, y equivocarse
+                  dejaba la factura fuera del pago sin que nada lo avisara.
+                -->
                 <input type="file" name="xml_files[]" id="xml_files" multiple accept=".xml" style="display:none;">
                 <div class="carga-fila">
                     <label for="xml_files" class="upload-file-btn"><i class="fas fa-folder-open"></i> Seleccionar XML</label>
@@ -204,7 +190,7 @@ function cargaHace($fecha)
             </div>
         </div>
         <div class="carga-ultima">
-            Van a la semana seleccionada · <a href="<?= $baseUrl ?>/facturas">ver Facturas XML</a>
+            Cada factura se engancha sola con su fila del ERP · <a href="<?= $baseUrl ?>/facturas">ver Facturas XML</a>
         </div>
     </div>
 
@@ -212,8 +198,8 @@ function cargaHace($fecha)
     <div class="carga-card es-xml">
         <div class="carga-head">
             <h3><i class="fas fa-file-code" style="margin-right:6px;color:var(--gold);"></i>Comprobantes XML de notas</h3>
-            <p>Las notas de crédito electrónicas (NC). Al terminar se vuelven a verificar los
-               listados de notas de la sociedad activa.</p>
+            <p>Las notas de crédito electrónicas (NC). Al terminar se vuelve a verificar el
+               acumulado de notas de la sociedad activa.</p>
         </div>
         <div class="carga-body">
             <form method="post" action="<?= $baseUrl ?>/carga/comprobantes-notas"
@@ -239,7 +225,7 @@ function cargaHace($fecha)
         <div class="carga-modal-head">
             <i class="fas fa-eye" style="color:var(--gold);"></i>
             <div>
-                <strong>Vista previa del listado</strong>
+                <strong>Vista previa de la actualización</strong>
                 <div id="nc-meta" style="font-size:12px;color:var(--text-muted);"></div>
             </div>
             <button class="cerrar" type="button" data-cerrar>&times;</button>
@@ -261,7 +247,7 @@ function cargaHace($fecha)
                 <input type="hidden" name="archivo_token" id="nc-token">
                 <input type="hidden" name="archivo_nombre" id="nc-original">
                 <button class="btn btn-primary btn-sm" id="nc-confirmar-btn">
-                    <i class="fas fa-database"></i> Importar listado
+                    <i class="fas fa-rotate"></i> Actualizar saldos
                 </button>
             </form>
         </div>
@@ -285,17 +271,6 @@ function cargaHace($fecha)
                 : (n === 1 ? input.files[0].name : n + ' archivos seleccionados');
         });
     });
-
-    // "Nueva semana…" abre el campo de texto.
-    var sel = document.getElementById('semana_id');
-    var caja = document.getElementById('semana-nueva-box');
-    if (sel && caja) {
-        sel.addEventListener('change', function () {
-            var nueva = sel.value === 'nueva';
-            caja.style.display = nueva ? 'block' : 'none';
-            if (nueva) { document.getElementById('semana_nueva').focus(); }
-        });
-    }
 
     function enviar(url, fd) {
         return fetch(url, { method: 'POST', body: fd, credentials: 'same-origin' })
@@ -348,20 +323,20 @@ function cargaHace($fecha)
                     document.getElementById('nc-meta').textContent =
                         (d.empresa || '') + (d.periodo_desde ? ' · ' + d.periodo_desde + ' al ' + d.periodo_hasta : '');
                     var s = d.estadisticas || {};
+                    var impacto = d.impacto || {};
                     document.getElementById('nc-resumen').innerHTML =
                         '<span>Notas: <b>' + (s.total || 0) + '</b></span>' +
-                        '<span>Proveedores: <b>' + (s.proveedores || 0) + '</b></span>' +
-                        '<span>Sucursales: <b>' + (s.sucursales || 0) + '</b></span>' +
-                        '<span>CRC / USD: <b>' + (s.crc || 0) + ' / ' + (s.usd || 0) + '</b></span>';
+                        '<span>Nuevas: <b>' + (impacto.nuevas || 0) + '</b></span>' +
+                        '<span>Saldo cambia: <b>' + (impacto.actualizadas || 0) + '</b></span>' +
+                        '<span>Sin cambios: <b>' + (impacto.sin_cambio || 0) + '</b></span>';
 
                     var aviso = document.getElementById('nc-aviso');
                     var confirmar = document.getElementById('nc-confirmar-btn');
                     aviso.innerHTML = '';
                     confirmar.disabled = false;
                     if (d.duplicado) {
-                        aviso.innerHTML = '<div class="alert alert-warning" style="margin-bottom:12px;">' +
-                            'Ese archivo ya fue cargado como <strong>' + d.duplicado.nombre + '</strong>.</div>';
-                        confirmar.disabled = true;
+                        aviso.innerHTML = '<div class="alert alert-info" style="margin-bottom:12px;">' +
+                            'Este mismo archivo ya fue procesado. Puedes aplicarlo de nuevo; las filas iguales no se tocarán.</div>';
                     } else if (d.errores && d.errores.length) {
                         aviso.innerHTML = '<div class="alert alert-warning" style="margin-bottom:12px;">' +
                             d.errores.length + ' fila(s) inválidas se van a omitir.</div>';
@@ -378,7 +353,9 @@ function cargaHace($fecha)
                     document.getElementById('nc-original').value = d.archivo || '';
                     modalNc.classList.add('abierto');
                 })
-                .catch(function (err) { alert(err.message); })
+                .catch(function (err) {
+                    AppDialog.alert(err.message, { title: 'No se pudo analizar el archivo', type: 'danger' });
+                })
                 .then(function () { btn.disabled = false; });
         });
     }
@@ -411,7 +388,12 @@ function cargaHace($fecha)
         formXml.addEventListener('submit', function (e) {
             e.preventDefault();
             var archivos = Array.prototype.slice.call(entrada.files);
-            if (!archivos.length) { alert('Seleccioná al menos un archivo XML.'); return; }
+            if (!archivos.length) {
+                AppDialog.alert('Selecciona al menos un archivo XML para comenzar la carga.', {
+                    title: 'Archivos requeridos', type: 'warning'
+                });
+                return;
+            }
 
             boton.disabled = true;
             panel.style.display = 'block';
@@ -419,17 +401,11 @@ function cargaHace($fecha)
             detalle.textContent = '';
             decir('Creando importación…');
 
-            var importacionId = 0, semanaDestino = '';
-            var nueva = document.getElementById('semana_nueva');
+            var importacionId = 0;
 
-            postJson(BASE + '/facturas/cola/iniciar', {
-                total_esperado: archivos.length,
-                semana_id: sel ? sel.value : '',
-                semana_nueva: nueva ? nueva.value : ''
-            })
+            postJson(BASE + '/facturas/cola/iniciar', { total_esperado: archivos.length })
             .then(function (inicio) {
                 importacionId = inicio.importacion_id;
-                semanaDestino = inicio.semana_id || '';
                 var cadena = Promise.resolve();
                 for (var i = 0; i < archivos.length; i += CHUNK) {
                     (function (desde) {
@@ -485,12 +461,12 @@ function cargaHace($fecha)
 
                 if (importadas === 0) {
                     decir(repetidas > 0 && fallos === 0
-                        ? 'Las ' + repetidas + ' facturas ya estaban en la semana seleccionada; no se duplicaron.'
+                        ? 'Las ' + repetidas + ' facturas ya estaban cargadas; no se duplicaron.'
                         : '⚠ Terminó sin facturas nuevas (' + fallos + ' con error). Revisá el detalle.');
                     boton.disabled = false;
                     return;
                 }
-                var destino = BASE + '/facturas' + (semanaDestino ? '?semana_id=' + semanaDestino : '');
+                var destino = BASE + '/facturas';
                 if (repetidas > 0 || fallos > 0) {
                     decir('Listo: ' + importadas + ' importadas, ' + repetidas + ' ya estaban y ' + fallos + ' con error.');
                     setTimeout(function () { window.location.href = destino; }, 3500);

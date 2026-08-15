@@ -1,9 +1,20 @@
 <?php
-require_once __DIR__ . '/../app/core/Model.php';
-require_once __DIR__ . '/../app/models/PorPagar.php';
+/**
+ * Verificación del pago semanal contra los comprobantes electrónicos.
+ *
+ * El emparejamiento dejó de ser difuso. La línea del pago es la factura del
+ * ERP, y esa fila trae en `documento` el consecutivo electrónico de veinte
+ * dígitos: el mismo número que el XML lleva en `consecutivo_completo`. Eso es
+ * una igualdad, no un parecido, y por eso desaparecieron los umbrales, los
+ * rescates y el aprendizaje de alias que hacían falta cuando lo que se cruzaba
+ * era el texto transcrito del archivo.
+ *
+ * Queda una vía difusa —el número interno corto, que sí se repite entre
+ * emisores— y ahí el proveedor sigue siendo obligatorio.
+ */
 require_once __DIR__ . '/../app/helpers/PorPagarVerificador.php';
 
-function assertPorPagar($condition, $message)
+function assertVerificador($condition, $message)
 {
     if (!$condition) {
         fwrite(STDERR, "FAIL: {$message}\n");
@@ -11,133 +22,145 @@ function assertPorPagar($condition, $message)
     }
 }
 
-class PorPagarModeloFalso
+class ErpFalso
 {
-    public $resultado = [];
-    public $asignacion = null;
+    public $lineas;
+    public $escrito = [];
+    public $semanaSincronizada = null;
 
-    public function getLineas($listadoId)
+    public function __construct(array $lineas) { $this->lineas = $lineas; }
+
+    public function getFacturasPagoParaMatching($listadoId) { return $this->lineas; }
+
+    public function actualizarRespaldoLote(array $filas)
     {
-        return [[
-            'id' => 1, 'numero' => '167', 'proveedor_texto' => 'Proveedor Demo S.A.',
-            'total' => 100.00, 'match_manual' => 0, 'factura_xml_id' => null,
-            'estado' => 'sin_respaldo',
-        ]];
+        foreach ($filas as $f) { $this->escrito[(int) $f['id']] = $f; }
+        return count($filas);
     }
 
-    public function getListado($listadoId)
-    {
-        return ['id' => $listadoId, 'semana_id' => 9];
-    }
-
-    public function getFacturasParaMatching($semanaId)
-    {
-        return [[
-            'id' => 50, 'semana_id' => null, 'numero_factura_asistente' => '00000167',
-            'consecutivo_completo' => '00100001010000000167', 'total' => 100.00,
-            'proveedor_nombre' => 'Proveedor Demo, S.A.',
-        ]];
-    }
-
-    public function actualizarMatch($lineaId, $facturaXmlId, $estado, $diferencia, $scoreNumero, $scoreProveedor)
-    {
-        $this->resultado = compact('lineaId', 'facturaXmlId', 'estado', 'diferencia');
-    }
-
-    public function asignarRespaldadasASemana($listadoId, $semanaId)
-    {
-        $this->asignacion = compact('listadoId', 'semanaId');
-        return 1;
-    }
+    public function sincronizarSemanaXml($listadoId) { $this->semanaSincronizada = $listadoId; return 1; }
 }
 
-$modelo = new PorPagarModeloFalso();
-$stats = PorPagarVerificador::verificarListado(3, $modelo);
-assertPorPagar($modelo->resultado['facturaXmlId'] === 50, 'una factura general puede respaldar el listado semanal');
-assertPorPagar($modelo->resultado['estado'] === 'respaldada', 'el monto exacto queda respaldado');
-assertPorPagar($modelo->asignacion === ['listadoId' => 3, 'semanaId' => 9], 'la coincidencia correcta se asigna a la semana');
-assertPorPagar($stats['respaldada'] === 1, 'contabiliza la coincidencia semanal');
-
-class PorPagarAsignacionSqlFalsa extends PorPagar
+class FacturasFalso
 {
-    public $sqlAsignacion = '';
-    public $paramsAsignacion = [];
-
-    public function __construct() {}
-
-    protected function execute($sql, $params = [])
-    {
-        $this->sqlAsignacion = $sql;
-        $this->paramsAsignacion = $params;
-        return 1;
-    }
+    public $xml;
+    public function __construct(array $xml) { $this->xml = $xml; }
+    public function getCandidatasParaPago() { return $this->xml; }
 }
 
-$asignacionSql = new PorPagarAsignacionSqlFalsa();
-$asignacionSql->asignarRespaldadasASemana(3, 9);
-assertPorPagar(strpos($asignacionSql->sqlAsignacion, "pf.estado = 'con_diferencia'") !== false,
-    'asigna a la semana una coincidencia automática aunque cambie el monto');
-assertPorPagar(strpos($asignacionSql->sqlAsignacion, 'pf.match_manual = 0') !== false,
-    'no aplica esta regla a una vinculación manual');
-
-/**
- * Importar desde Correo tiene que cruzar sola las facturas nuevas contra los
- * pagos semanales abiertos. Antes no lo hacía: el listado se quedaba "sin
- * respaldo" aunque el XML ya estuviera en la base, y solo se arreglaba
- * entrando a Por Pagar a darle a "Verificar de nuevo".
- */
-class PorPagarAbiertosFalso extends PorPagarModeloFalso
+function lineaErp($id, $documento, $proveedor, $monto, $corto = null, $manual = 0, $xmlId = null)
 {
-    public $verificados = [];
-    private $sinRespaldo;
-
-    public function __construct(array $sinRespaldo)
-    {
-        $this->sinRespaldo = $sinRespaldo;
-    }
-
-    /**
-     * Imita lo que hace la consulta real: solo abiertos, solo con líneas sin
-     * respaldo. El 1 está cerrado y el 2 ya está completo, así que ninguno
-     * llega hasta aquí.
-     */
-    public function idsAbiertosConFaltantes($limite = 10)
-    {
-        $ids = [];
-        foreach ($this->sinRespaldo as $id => $faltan) {
-            if ($faltan > 0 && $id !== 1) {
-                $ids[] = $id;
-            }
-        }
-        return array_slice($ids, 0, $limite);
-    }
-
-    public function resumenPorEstado($listadoId)
-    {
-        return ['sin_respaldo' => $this->sinRespaldo[$listadoId] ?? 0];
-    }
-
-    public function getListado($listadoId)
-    {
-        return ['id' => $listadoId, 'semana_id' => 9, 'estado' => 'abierto'];
-    }
-
-    public function getLineas($listadoId)
-    {
-        $this->verificados[] = (int) $listadoId;
-        return parent::getLineas($listadoId);
-    }
+    return ['id' => $id, 'documento' => $documento, 'numero_corto' => $corto,
+            'proveedor_nombre' => $proveedor, 'monto' => $monto, 'saldo' => $monto,
+            'saldo_pago' => $monto, 'factura_xml_id' => $xmlId,
+            'estado' => $xmlId ? 'respaldada' : 'sin_respaldo', 'diferencia' => null,
+            'match_manual' => $manual];
 }
 
-// El 1 está cerrado, el 2 ya tiene todo respaldado y al 3 le falta una línea.
-$abiertos = new PorPagarAbiertosFalso([1 => 5, 2 => 0, 3 => 1]);
-PorPagarVerificador::verificarAbiertos($abiertos);
+function xmlFila($id, $consecutivo, $proveedor, $total, $corto = null)
+{
+    return ['id' => $id, 'consecutivo_completo' => $consecutivo,
+            'numero_factura_asistente' => $corto ?? substr($consecutivo, -8),
+            'total' => $total, 'fecha_emision' => '2026-07-15', 'proveedor_nombre' => $proveedor];
+}
 
-assertPorPagar(in_array(3, $abiertos->verificados, true),
-    'un listado abierto al que le falta respaldo se vuelve a verificar');
-assertPorPagar(!in_array(1, $abiertos->verificados, true),
-    'un pago ya cerrado no se recalcula');
-assertPorPagar(!in_array(2, $abiertos->verificados, true),
-    'un listado ya completo no paga el coste de verificarse otra vez');
+$A = '00200001010000045587';
+$B = '00200001010000045588';
 
-echo "OK: PorPagarVerificador semanal\n";
+// ── Consecutivo igual y monto que cuadra: respaldada ─────────────
+$erp = new ErpFalso([lineaErp(1, $A, 'AGENCIAS JOP S.A.', 50000.00)]);
+$stats = PorPagarVerificador::verificarListado(9, $erp, new FacturasFalso([
+    xmlFila(100, $A, 'AGENCIAS JOP S.A.', 50000.00),
+]));
+assertVerificador($stats['respaldada'] === 1, 'el consecutivo igual respalda la factura');
+assertVerificador($erp->escrito[1]['factura_xml_id'] === 100, 'vincula el XML correcto');
+assertVerificador($erp->escrito[1]['score_numero'] === 100.0, 'el cruce por consecutivo vale 100');
+assertVerificador($erp->semanaSincronizada === 9, 'deja anotada la semana del comprobante');
+
+// ── El proveedor NO se comprueba cuando el consecutivo es igual ──
+// El consecutivo lo emite Hacienda y es único a nivel país: si coincide, es la
+// misma factura aunque los nombres estén escritos de forma distinta. Exigir el
+// proveedor acá solo dejaría sin respaldo lo que ya está probado.
+$erp = new ErpFalso([lineaErp(1, $A, 'COOPEAGRI', 50000.00)]);
+$stats = PorPagarVerificador::verificarListado(9, $erp, new FacturasFalso([
+    xmlFila(100, $A, 'COOPERATIVA AGRICOLA INDUSTRIAL Y DE SERVICIOS MULTIPLES EL GENERAL', 50000.00),
+]));
+assertVerificador($stats['respaldada'] === 1, 'un nombre irreconocible no rompe el cruce por consecutivo');
+
+// ── El monto no identifica: clasifica ────────────────────────────
+$erp = new ErpFalso([lineaErp(1, $A, 'AGENCIAS JOP S.A.', 50000.00)]);
+$stats = PorPagarVerificador::verificarListado(9, $erp, new FacturasFalso([
+    xmlFila(100, $A, 'AGENCIAS JOP S.A.', 49000.00),
+]));
+assertVerificador($stats['con_diferencia'] === 1, 'el monto distinto no descarta el XML: lo marca');
+assertVerificador($erp->escrito[1]['factura_xml_id'] === 100, 'la factura queda vinculada igual');
+assertVerificador($erp->escrito[1]['diferencia'] === 1000.00, 'guarda la diferencia contra el monto del ERP');
+
+// ── Sin XML ──────────────────────────────────────────────────────
+$erp = new ErpFalso([lineaErp(1, $A, 'AGENCIAS JOP S.A.', 50000.00)]);
+$stats = PorPagarVerificador::verificarListado(9, $erp, new FacturasFalso([
+    xmlFila(100, $B, 'AGENCIAS JOP S.A.', 50000.00),
+]));
+assertVerificador($stats['sin_respaldo'] === 1, 'otro consecutivo no sirve de respaldo');
+assertVerificador($erp->escrito[1]['factura_xml_id'] === null, 'no se inventa un vínculo');
+
+// ── Un XML respalda una sola factura ─────────────────────────────
+$erp = new ErpFalso([
+    lineaErp(1, $A, 'AGENCIAS JOP S.A.', 50000.00),
+    lineaErp(2, $A, 'AGENCIAS JOP S.A.', 50000.00),
+]);
+$stats = PorPagarVerificador::verificarListado(9, $erp, new FacturasFalso([
+    xmlFila(100, $A, 'AGENCIAS JOP S.A.', 50000.00),
+]));
+assertVerificador($stats['respaldada'] === 1 && $stats['sin_respaldo'] === 1,
+    'el mismo XML no puede respaldar dos facturas del pago');
+
+// ── Número corto: ahí sí manda el proveedor ──────────────────────
+$erp = new ErpFalso([lineaErp(1, 'FACT-12339', 'MERCORICA S.A.', 800.00, '12339')]);
+$stats = PorPagarVerificador::verificarListado(9, $erp, new FacturasFalso([
+    xmlFila(100, '00100001010000012339', 'DISTRIBUIDORA LA FLORIDA S.A.', 800.00, '00012339'),
+]));
+assertVerificador($stats['sin_respaldo'] === 1,
+    'con número corto y proveedor distinto no se empareja: ese número lo repiten muchos emisores');
+
+$erp = new ErpFalso([lineaErp(1, 'FACT-12339', 'MERCORICA S.A.', 800.00, '12339')]);
+$stats = PorPagarVerificador::verificarListado(9, $erp, new FacturasFalso([
+    xmlFila(100, '00100001010000012339', 'MERCORICA SOCIEDAD ANONIMA', 800.00, '00012339'),
+]));
+assertVerificador($stats['respaldada'] === 1, 'con número corto y el mismo proveedor sí empareja');
+
+// Dos candidatas igual de parecidas por número corto: no se elige ninguna.
+$erp = new ErpFalso([lineaErp(1, 'FACT-12339', 'MERCORICA S.A.', 800.00, '12339')]);
+$stats = PorPagarVerificador::verificarListado(9, $erp, new FacturasFalso([
+    xmlFila(100, '00100001010000012339', 'MERCORICA S.A.', 800.00, '00012339'),
+    xmlFila(101, '00200001010000012339', 'MERCORICA S.A.', 800.00, '00012339'),
+]));
+assertVerificador($stats['sin_respaldo'] === 1, 'un empate por número corto no se resuelve al azar');
+
+// ── Los vínculos manuales no se tocan ────────────────────────────
+$erp = new ErpFalso([lineaErp(1, $A, 'AGENCIAS JOP S.A.', 50000.00, null, 1, 999)]);
+$stats = PorPagarVerificador::verificarListado(9, $erp, new FacturasFalso([
+    xmlFila(100, $A, 'AGENCIAS JOP S.A.', 50000.00),
+]));
+assertVerificador(!isset($erp->escrito[1]), 'una factura vinculada a mano no se reescribe');
+assertVerificador($stats['respaldada'] === 1, 'pero sí cuenta en el resumen');
+
+// Y su XML no queda disponible para otra factura del mismo pago.
+$erp = new ErpFalso([
+    lineaErp(1, $A, 'AGENCIAS JOP S.A.', 50000.00, null, 1, 100),
+    lineaErp(2, $A, 'AGENCIAS JOP S.A.', 50000.00),
+]);
+PorPagarVerificador::verificarListado(9, $erp, new FacturasFalso([
+    xmlFila(100, $A, 'AGENCIAS JOP S.A.', 50000.00),
+]));
+assertVerificador($erp->escrito[2]['factura_xml_id'] === null,
+    'el XML de un vínculo manual no se le puede quitar a quien lo tiene');
+
+// ── Un pago vacío no hace nada ───────────────────────────────────
+$erp = new ErpFalso([]);
+$stats = PorPagarVerificador::verificarListado(9, $erp, new FacturasFalso([]));
+assertVerificador($stats === ['respaldada' => 0, 'con_diferencia' => 0, 'sin_respaldo' => 0],
+    'un pago sin facturas devuelve ceros y no escribe');
+assertVerificador($erp->escrito === [], 'y no escribe nada');
+
+echo "OK: verificador del pago semanal por consecutivo\n";

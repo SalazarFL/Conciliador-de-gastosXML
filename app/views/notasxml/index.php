@@ -7,14 +7,14 @@ foreach ([$desde ?? '', $hasta ?? '', $buscar ?? ''] as $valorFiltro) {
     if ((string) $valorFiltro !== '') { $filtrosActivos++; }
 }
 ?>
-<div class="card" style="margin-bottom:14px;">
+<div class="card" style="margin-bottom:10px;">
     <div class="card-header" style="flex-wrap:wrap;">
         <div class="card-title"><i class="fas fa-file-circle-minus" style="color:var(--gold);margin-right:6px;"></i>Notas de crédito XML</div>
         <a href="<?= $baseUrl ?>/notas-credito" class="btn btn-outline btn-sm" style="margin-left:auto;">
             <i class="fas fa-arrow-left" style="margin-right:4px;"></i>Volver a Notas de crédito
         </a>
     </div>
-    <div style="padding:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+    <div style="padding:0;display:flex;gap:7px;align-items:center;flex-wrap:wrap;">
         <a href="<?= $baseUrl ?>/carga" class="btn btn-primary btn-sm">
             <i class="fas fa-inbox" style="margin-right:5px;"></i>Ir a Carga de documentos
         </a>
@@ -22,7 +22,7 @@ foreach ([$desde ?? '', $hasta ?? '', $buscar ?? ''] as $valorFiltro) {
             Los archivos se cargan desde un solo lugar: listados del ERP y comprobantes XML.
         </span>
     </div>
-    <?php if (empty($carpetaRaiz)): ?><div style="margin:0 14px 14px;padding:9px 12px;background:#fff7ed;border:1px solid #fdba74;border-radius:7px;color:#9a3412;font-size:12px;">Configura primero la carpeta raíz desde el engranaje de Correo.</div><?php endif; ?>
+    <?php if (empty($carpetaRaiz)): ?><div style="margin:8px 0 0;padding:7px 9px;background:#fff7ed;border:1px solid #fdba74;border-radius:7px;color:#9a3412;font-size:11.5px;">Configura primero la carpeta raíz desde el engranaje de Correo.</div><?php endif; ?>
 </div>
 
 <div class="card">
@@ -54,10 +54,10 @@ foreach ([$desde ?? '', $hasta ?? '', $buscar ?? ''] as $valorFiltro) {
         <span class="badge badge-navy" style="font-size:10px;"><?= $filtrosActivos ?> filtro<?= $filtrosActivos === 1 ? '' : 's' ?></span>
         <?php endif; ?>
     </div>
-    <div style="overflow-x:auto;margin-top:12px;"><table class="data-table">
+    <div style="overflow-x:auto;margin-top:8px;"><table class="data-table">
         <thead><tr><th>Fecha</th><th>Proveedor</th><th>Consecutivo</th><th>Número</th><th>Moneda</th><th class="right">Subtotal</th><th class="right">IVA</th><th class="right">Total</th><th>PDF</th><th>Origen</th><th></th></tr></thead>
         <tbody>
-        <?php if (empty($notas)): ?><tr><td colspan="11" style="text-align:center;padding:28px;color:var(--text-muted);">No hay notas XML para este rango.</td></tr><?php endif; ?>
+        <?php if (empty($notas)): ?><tr><td colspan="11" style="text-align:center;padding:18px;color:var(--text-muted);">No hay notas XML para este rango.</td></tr><?php endif; ?>
         <?php foreach ($notas as $n): ?>
         <tr>
             <td><?= htmlspecialchars($n['fecha_emision']) ?></td><td><?= htmlspecialchars($n['proveedor_nombre'] ?? '—') ?></td>
@@ -70,7 +70,7 @@ foreach ([$desde ?? '', $hasta ?? '', $buscar ?? ''] as $valorFiltro) {
         <?php endforeach; ?>
         </tbody>
     </table></div>
-    <?php if (($paginas ?? 1) > 1): ?><div style="padding:12px;display:flex;justify-content:center;gap:8px;align-items:center;">
+    <?php if (($paginas ?? 1) > 1): ?><div style="padding:8px;display:flex;justify-content:center;gap:6px;align-items:center;">
         <?php if ($pagina > 1): ?><a class="btn btn-outline btn-sm" href="?<?= $queryBase ?>&pagina=<?= $pagina-1 ?>">← Anterior</a><?php endif; ?><span style="font-size:12px;">Página <?= (int)$pagina ?> de <?= (int)$paginas ?></span><?php if ($pagina < $paginas): ?><a class="btn btn-outline btn-sm" href="?<?= $queryBase ?>&pagina=<?= $pagina+1 ?>">Siguiente →</a><?php endif; ?>
     </div><?php endif; ?>
 </div>

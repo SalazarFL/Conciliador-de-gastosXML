@@ -96,7 +96,7 @@ PDO::ATTR_EMULATE_PREPARES => false
 
 ### config.php
 ```php
-'app_name' => 'XMLConcilia'
+'app_name' => 'Nexo Fiscal'
 'app_url' => 'http://localhost/xmlconcilia/public'
 'base_uri' => '/xmlconcilia/public'
 'environment' => 'development'

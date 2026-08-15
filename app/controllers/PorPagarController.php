@@ -1,35 +1,40 @@
 <?php
 /**
- * Controlador de "Facturas por pagar".
+ * Controlador del pago semanal.
  *
- * Cada semana se sube el listado del pago (Fecha, Numero, Proveedor, Total)
- * y se verifica contra las facturas XML del sistema:
- *   - respaldada: hay XML y el monto cuadra (±1 colón)
- *   - con_diferencia: hay XML pero el monto no cuadra
- *   - sin_respaldo: no se encontró el XML (botón "Buscar en correo")
- * La fecha del listado es informativa; no se compara.
+ * El pago de una semana es una selección de facturas del ERP, no una copia del
+ * archivo con que se eligieron. Cargar un listado significa: leer del archivo
+ * el documento, el proveedor y el saldo, buscar cada factura en Facturas ERP y
+ * marcarla como parte de la semana. Nada de lo que dice el archivo se guarda —
+ * el archivo no es un origen de datos, es una selección—.
+ *
+ * De ahí sale el resto del comportamiento del módulo:
+ *   - el checklist muestra los datos del ERP, que son los que cuadran contra
+ *     los totales del proveedor;
+ *   - el respaldo electrónico se cruza por consecutivo, que es una igualdad y
+ *     no un parecido;
+ *   - una factura que llega después por el correo se engancha sola, porque el
+ *     XML encuentra su fila del ERP y esa fila ya sabe a qué semana pertenece.
  */
 
 require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 require_once __DIR__ . '/../helpers/DocumentoArchivo.php';
 require_once __DIR__ . '/../helpers/NumeroFactura.php';
+require_once __DIR__ . '/../helpers/PagoSemanalResolutor.php';
 
 class PorPagarController extends Controller
 {
-    // Umbrales del matching: compartidos en FacturaMatcher (también los usa
-    // la advertencia al asignar semana desde el módulo de Facturas).
-
     public function __construct() { $this->requireAuth(); }
 
     public function index()
     {
         $modelo = $this->loadModel('PorPagar');
+        $erp = $this->loadModel('FacturaErp');
         $filtros = $this->filtrosListado();
 
         // El selector "Semana de trabajo" define lo que se muestra: semana_id=N
-        // = el listado de esa semana (se carga automáticamente); 0 = "Sin semana".
-        // Sin parámetro se usa la última semana elegida (compartida entre módulos
-        // vía sesión); al llegar en la URL se recuerda para los demás.
+        // = el pago de esa semana; 0 = "Sin semana". Sin parámetro se usa la
+        // última semana elegida (compartida entre módulos vía sesión).
         $semanaFiltro = $this->semanaActiva();
         if (isset($_GET['semana_id']) && $_GET['semana_id'] !== '') {
             $semanaFiltro = max(0, (int) $_GET['semana_id']);
@@ -38,8 +43,6 @@ class PorPagarController extends Controller
 
         $listados = $modelo->getListados(60, $semanaFiltro);
 
-        // El listado activo debe pertenecer al filtro; si no, se toma el más
-        // reciente de la semana elegida
         $listadoId = (int) $this->get('listado_id', 0);
         $idsValidos = array_map(function ($l) { return (int) $l['id']; }, $listados);
         if ($listadoId <= 0 || !in_array($listadoId, $idsValidos, true)) {
@@ -47,12 +50,12 @@ class PorPagarController extends Controller
         }
 
         $listado = $listadoId > 0 ? $modelo->getListado($listadoId) : null;
-        $lineas = $listado ? $modelo->getLineas($listadoId, $filtros) : [];
-        $resumen = $listado ? $modelo->resumenPorEstado($listadoId) : [];
+        $lineas = $listado ? $erp->getFacturasPago($listadoId, $filtros) : [];
+        $resumen = $listado ? $erp->resumenRespaldoPago($listadoId) : [];
 
-        // Término de búsqueda para el botón "Buscar en correo" de cada línea
+        // Término de búsqueda para el botón "Buscar en correo" de cada línea.
         foreach ($lineas as &$linea) {
-            $linea['numero_busqueda'] = $this->numeroBusqueda((string) $linea['numero']);
+            $linea['numero_busqueda'] = $this->numeroBusqueda((string) $linea['documento']);
         }
         unset($linea);
 
@@ -76,21 +79,16 @@ class PorPagarController extends Controller
         } catch (Throwable $e) {
         }
 
-        // Facturas de la semana que no respaldan ninguna línea del listado
-        // (alimenta el botón "Sin coincidencia" del checklist)
         $sinCoincidencia = 0;
-        if ($listado && !empty($listado['semana_id'])) {
+        if ($listado) {
             try {
-                $sinCoincidencia = count($modelo->getFacturasSinCoincidencia(
-                    (int) $listado['semana_id'],
-                    (int) $listado['id']
-                ));
+                $sinCoincidencia = count($erp->getXmlSinCoincidencia($listadoId));
             } catch (Throwable $e) {
             }
         }
 
         $this->render('porpagar/index', [
-            'title'           => 'Pagos semanales - XMLConcilia',
+            'title'           => 'Pagos semanales - Nexo Fiscal',
             'listados'        => $listados,
             'listado'         => $listado,
             'lineas'          => $lineas,
@@ -104,7 +102,7 @@ class PorPagarController extends Controller
         ]);
     }
 
-    /** Normaliza los buscadores del checklist de facturas por pagar. */
+    /** Normaliza los buscadores del checklist. */
     private function filtrosListado()
     {
         $q = mb_substr(trim((string) $this->get('q', '')), 0, 150, 'UTF-8');
@@ -155,16 +153,17 @@ class PorPagarController extends Controller
         return checkdate((int) $m[2], (int) $m[3], (int) $m[1]) ? $valor : '';
     }
 
-    /**
-     * Sube el listado semanal (CSV/XLSX), crea el listado con sus líneas y
-     * ejecuta la verificación contra las facturas XML.
-     */
-    public function subir()
-    {
-        if (!$this->isPost()) {
-            $this->redirect($this->url('/por-pagar'));
-        }
+    // ── Carga del listado ──────────────────────────────────────────
 
+    /**
+     * Lee el archivo y resuelve cada fila contra Facturas ERP.
+     *
+     * No escribe: lo comparten la vista previa, la carga y la actualización,
+     * y que las tres hagan la misma lectura es lo que permite confirmar sobre
+     * lo que se ve en pantalla. El archivo temporal se borra siempre.
+     */
+    private function leerYResolver($erp, $listadoId = 0, $conservarArchivo = false)
+    {
         require_once __DIR__ . '/../helpers/FileUploader.php';
         require_once __DIR__ . '/../helpers/Validator.php';
         require_once __DIR__ . '/../helpers/XlsxReader.php';
@@ -172,360 +171,77 @@ class PorPagarController extends Controller
         $config = require __DIR__ . '/../config/config.php';
         $uploadDir = rtrim($config['uploads_path'], '/\\') . DIRECTORY_SEPARATOR . 'porpagar';
         $maxSize = $config['max_upload_size'] ?? 10485760;
+        $rutaTemporal = '';
+        $conservar = (bool) $conservarArchivo;
 
         try {
-            // Archivo recién elegido, o el que la vista previa dejó guardado
-            // (archivo_token) cuando el usuario confirma la importación
-            $token = basename(trim((string) $this->post('archivo_token', '')));
-            if ($token !== '') {
-                $ruta = $uploadDir . DIRECTORY_SEPARATOR . $token;
-                if (!is_file($ruta)) {
-                    throw new Exception('La vista previa expiró. Vuelve a elegir el archivo.');
-                }
-                $file = [
-                    'path' => $ruta,
-                    'original_name' => trim((string) $this->post('archivo_nombre', '')) ?: $token,
-                ];
-            } else {
-                $file = FileUploader::uploadSingle('listado_file', $uploadDir, ['csv', 'xlsx', 'xls'], $maxSize);
-            }
-
-            $ext = strtolower(pathinfo($file['path'], PATHINFO_EXTENSION));
-            if (!in_array($ext, ['csv', 'xlsx'], true)) {
-                $ext = strtolower(pathinfo($file['original_name'], PATHINFO_EXTENSION));
-            }
-            if ($ext === 'xls') {
-                throw new Exception('El formato .xls no está soportado. Guarda el archivo como .xlsx o .csv.');
-            }
-
-            $modelo = $this->loadModel('PorPagar');
-
-            $sociedadId = null;
-            try {
-                $activa = $this->loadModel('Sociedad')->getActiva();
-                $sociedadId = $activa ? (int) $activa['id'] : null;
-            } catch (Throwable $e) {
-            }
-
-            // Semana contra la que se verificará este listado
-            $semanaId = null;
-            $semanaModel = null;
-            try {
-                $semanaModel = $this->loadModel('Semana');
-                $semanaId = $semanaModel->resolverSeleccion(
-                    (string) $this->post('semana_id', ''),
-                    (string) $this->post('semana_nueva', '')
-                );
-            } catch (Throwable $e) {
-            }
-
-            $semana = null;
-            if (!empty($semanaId) && $semanaModel !== null) {
-                $semana = $semanaModel->findById((int) $semanaId);
-                $carpetaSolicitada = trim((string) $this->post('carpeta_pago', ''));
-                if ($carpetaSolicitada === '') {
-                    $carpetaSolicitada = (string) ($semana['carpeta_pago'] ?? ($semana['nombre'] ?? ''));
-                }
-                $carpetaPago = DocumentoArchivo::normalizarCarpetaPago($carpetaSolicitada);
-                if ($carpetaPago === '') {
-                    throw new Exception('Selecciona una carpeta válida para el pago semanal.');
-                }
-                $semanaModel->configurarCarpetaPago((int) $semanaId, $carpetaPago);
-                (new DocumentoArchivo())->prepararCarpetaPagoSemanal($carpetaPago);
-                $semana['carpeta_pago'] = $carpetaPago;
-            }
-
-            // El nombre del listado se genera solo (organizado por semana).
-            $nombre = 'Pago ' . date('d/m/Y H:i');
-            if (!empty($semanaId)) {
-                try {
-                    if (!empty($semana['nombre'])) {
-                        $nombre = 'Pago ' . $semana['nombre'];
-                    }
-                } catch (Throwable $e) {
-                }
-            }
-
-            // Analiza y clasifica el archivo (nueva / repetida / error)
-            // contra el listado existente de la semana; la vista previa
-            // usa exactamente el mismo método.
-            $analisis = $this->analizarListado($file['path'], $ext, $semanaId, $modelo);
-            $listadoExistente = $analisis['listado_existente'];
-
-            // El pago semanal no inventa facturas: paga las que el ERP ya
-            // reportó. Se comprueba ACÁ y no al cerrar —donde la validación ya
-            // existía— porque enterarse al final significa haber emparejado la
-            // semana entera antes de descubrir que faltaba cargar el reporte.
-            $this->exigirRespaldoEnErp($analisis['lineas']);
-
-            if ($listadoExistente !== null) {
-                if (($listadoExistente['estado'] ?? 'abierto') === 'cerrado') {
-                    throw new Exception('El pago de esta semana ya está cerrado. Crea otra semana para cargar más facturas.');
-                }
-                $listadoId = (int) $listadoExistente['id'];
-                $nombre = (string) $listadoExistente['nombre'];
-            } else {
-                $listadoId = (int) $modelo->crearListado($nombre, $sociedadId, $file['original_name'], $semanaId);
-            }
-
-            $exitosos = 0;
-            $fallidos = 0;
-            $omitidas = 0;
-
-            $nuevas = [];
-            foreach ($analisis['lineas'] as $lineaArchivo) {
-                if ($lineaArchivo['estado'] === 'error') {
-                    $fallidos++;
-                    continue;
-                }
-                if ($lineaArchivo['estado'] === 'repetida') {
-                    $omitidas++;
-                    continue;
-                }
-
-                $nuevas[] = [
-                    'fecha' => $lineaArchivo['fecha'] ?: null,   // informativa
-                    'numero' => $lineaArchivo['numero'],
-                    'proveedor' => $lineaArchivo['proveedor'],
-                    'total' => $lineaArchivo['total'],
-                ];
-            }
-            $exitosos = $modelo->crearLineasLote($listadoId, $nuevas);
-
-            if (is_file($file['path'])) {
-                @unlink($file['path']);
-            }
-
-            if ($exitosos === 0) {
-                if ($listadoExistente === null) {
-                    // Listado recién creado y vacío: se borra y se avisa
-                    $modelo->eliminarListado($listadoId);
-                    $this->redirectWithMessage($this->url('/por-pagar'),'No se pudo leer ninguna línea del listado. Verifica las columnas Fecha, Numero, Proveedor y Total.', 'error');
-                }
-                // Aunque no haya líneas nuevas, reaplica la carpeta elegida
-                // a los respaldos existentes de la semana.
-                $statsSinCambios = $this->ejecutarMatching($listadoId, $modelo);
-                // Modo añadir: el archivo no trae nada nuevo.
-                $mensajeSinCambios = $omitidas > 0
-                    ? "Sin líneas nuevas: las {$omitidas} facturas ya estaban en \"{$nombre}\"."
-                    : 'No se pudo leer ninguna línea del listado. Verifica las columnas Fecha, Numero, Proveedor y Total.';
-                $this->redirectWithMessage(
-                    $this->url('/por-pagar?listado_id=' . $listadoId . '&semana_id=' . (int) $semanaId),
-                    $mensajeSinCambios,
-                    $omitidas > 0 ? 'warning' : 'error'
-                );
-            }
-
-            $modelo->actualizarTotalLineas($listadoId);
-            $stats = $this->ejecutarMatching($listadoId, $modelo);
-
-            $msg = ($listadoExistente !== null
-                    ? "Listado \"{$nombre}\": +{$exitosos} facturas nuevas añadidas"
-                    : "Listado \"{$nombre}\": {$exitosos} facturas")
-                . ($omitidas > 0 ? " ({$omitidas} ya estaban, omitidas)" : '')
-                . ($fallidos > 0 ? " ({$fallidos} filas descartadas)" : '')
-                . " — {$stats['respaldada']} respaldadas, {$stats['con_diferencia']} con diferencia, {$stats['sin_respaldo']} sin respaldo.";
-
-            // Volver al contexto de la semana del listado recién subido
-            $this->redirectWithMessage(
-                $this->url('/por-pagar?listado_id=' . $listadoId . (!empty($semanaId) ? '&semana_id=' . (int) $semanaId : '')),
-                $msg,
-                $stats['sin_respaldo'] + $stats['con_diferencia'] > 0 ? 'warning' : 'success'
-            );
-        } catch (Throwable $e) {
-            $this->redirectWithMessage($this->url('/por-pagar'),'Error al subir el listado: ' . $e->getMessage(), 'error');
-        }
-    }
-
-    /**
-     * Vista previa de la importación (POST, JSON): sube el archivo, lo
-     * analiza SIN importar nada y devuelve la clasificación línea por
-     * línea (nueva / ya estaba / error). El archivo queda guardado y
-     * subir() lo consume después vía 'archivo_token' al confirmar.
-     */
-    public function previsualizar()
-    {
-        if (!$this->isPost()) {
-            $this->json(['ok' => false, 'message' => 'Metodo no permitido.'], 405);
-        }
-
-        require_once __DIR__ . '/../helpers/FileUploader.php';
-        require_once __DIR__ . '/../helpers/Validator.php';
-        require_once __DIR__ . '/../helpers/XlsxReader.php';
-
-        $config = require __DIR__ . '/../config/config.php';
-        $uploadDir = rtrim($config['uploads_path'], '/\\') . DIRECTORY_SEPARATOR . 'porpagar';
-        $maxSize = $config['max_upload_size'] ?? 10485760;
-
-        try {
-            // Limpieza oportunista de vistas previas abandonadas (> 6 horas)
+            // Limpieza oportunista de vistas previas abandonadas (> 6 horas).
             foreach (glob($uploadDir . DIRECTORY_SEPARATOR . '*') ?: [] as $viejo) {
                 if (is_file($viejo) && filemtime($viejo) < time() - 21600) {
                     @unlink($viejo);
                 }
             }
 
-            $file = FileUploader::uploadSingle('listado_file', $uploadDir, ['csv', 'xlsx', 'xls'], $maxSize);
-
-            $ext = strtolower(pathinfo($file['original_name'], PATHINFO_EXTENSION));
-            if ($ext === 'xls') {
-                @unlink($file['path']);
-                $this->json(['ok' => false, 'message' => 'El formato .xls no está soportado. Guarda el archivo como .xlsx o .csv.'], 422);
-            }
-
-            // Una semana recién escrita ("Nueva semana…") aún no existe en
-            // BD, así que no puede tener listado previo: se analiza sin él.
-            $semanaSel = trim((string) $this->post('semana_id', ''));
-            $semanaId = ctype_digit($semanaSel) ? (int) $semanaSel : 0;
-
-            $modelo = $this->loadModel('PorPagar');
-            $analisis = $this->analizarListado($file['path'], $ext, $semanaId, $modelo);
-
-            $nuevas = 0;
-            $repetidas = 0;
-            $errores = 0;
-            $montoNuevas = 0.0;
-            foreach ($analisis['lineas'] as $l) {
-                if ($l['estado'] === 'nueva') {
-                    $nuevas++;
-                    $montoNuevas += (float) $l['total'];
-                } elseif ($l['estado'] === 'repetida') {
-                    $repetidas++;
-                } else {
-                    $errores++;
+            // Archivo recién elegido, o el que la vista previa dejó guardado y
+            // que la confirmación consume por su token.
+            $token = basename(trim((string) $this->post('archivo_token', '')));
+            if ($token !== '') {
+                $rutaTemporal = $uploadDir . DIRECTORY_SEPARATOR . $token;
+                if (!is_file($rutaTemporal)) {
+                    throw new Exception('La vista previa expiró. Volvé a elegir el archivo.');
                 }
-            }
-
-            // Lo mismo que va a bloquear la carga, pero dicho antes de
-            // confirmar: sin esto la vista previa sale toda en verde y el
-            // error aparece recién al apretar Importar.
-            $sinErp = [];
-            try {
-                $numeros = [];
-                foreach ($analisis['lineas'] as $l) {
-                    if (($l['estado'] ?? '') !== 'error' && trim((string) $l['numero']) !== '') {
-                        $numeros[] = (string) $l['numero'];
-                    }
+                $nombre = trim((string) $this->post('archivo_nombre', '')) ?: $token;
+            } else {
+                if (isset($_FILES['listado_file']['name']) && is_array($_FILES['listado_file']['name'])) {
+                    throw new Exception('Selecciona un solo archivo.');
                 }
-                $sinErp = $this->loadModel('FacturaErp')->faltantesEnErp($numeros);
-            } catch (Throwable $e) {
-                $sinErp = [];
+                $file = FileUploader::uploadSingle('listado_file', $uploadDir, ['csv', 'xlsx', 'xls'], $maxSize);
+                $rutaTemporal = (string) $file['path'];
+                $nombre = (string) $file['original_name'];
             }
 
-            $this->json([
-                'ok' => true,
-                'token' => basename($file['path']),
-                'archivo' => $file['original_name'],
-                'carpeta_pago' => DocumentoArchivo::normalizarCarpetaPago((string) $this->post('carpeta_pago', '')),
-                'listado_existente' => $analisis['listado_existente'] !== null
-                    ? (string) $analisis['listado_existente']['nombre'] : null,
-                'nuevas' => $nuevas,
-                'repetidas' => $repetidas,
-                'errores' => $errores,
-                'monto_nuevas' => round($montoNuevas, 2),
-                'sin_erp' => count($sinErp),
-                'sin_erp_muestra' => array_slice($sinErp, 0, 5),
-                'lineas' => array_slice($analisis['lineas'], 0, 1000),
-            ]);
-        } catch (Throwable $e) {
-            $this->json(['ok' => false, 'message' => $e->getMessage()], 422);
-        }
-    }
-
-    /**
-     * Comparador independiente (POST, JSON). Lee un CSV/XLSX y contrasta
-     * todas sus facturas con el listado actual de la semana seleccionada.
-     * Es de solo lectura: el archivo temporal se elimina y la base de datos
-     * no recibe INSERT, UPDATE ni DELETE.
-     */
-    public function compararListado()
-    {
-        if (!$this->isPost()) {
-            $this->json(['ok' => false, 'message' => 'Metodo no permitido.'], 405);
-        }
-
-        require_once __DIR__ . '/../helpers/FileUploader.php';
-        require_once __DIR__ . '/../helpers/Validator.php';
-        require_once __DIR__ . '/../helpers/XlsxReader.php';
-        require_once __DIR__ . '/../helpers/PorPagarComparador.php';
-
-        $config = require __DIR__ . '/../config/config.php';
-        $uploadDir = rtrim($config['uploads_path'], '/\\') . DIRECTORY_SEPARATOR . 'porpagar';
-        $maxSize = $config['max_upload_size'] ?? 10485760;
-        $rutaTemporal = '';
-
-        try {
-            $semanaSel = trim((string) $this->post('semana_id', ''));
-            if (!ctype_digit($semanaSel) || (int) $semanaSel <= 0) {
-                throw new Exception('Selecciona una semana existente para hacer la comparacion.');
-            }
-            $semanaId = (int) $semanaSel;
-            $semana = $this->loadModel('Semana')->findById($semanaId);
-            if ($semana === null) {
-                throw new Exception('La semana seleccionada ya no existe.');
-            }
-            if (isset($_FILES['listado_file']['name']) && is_array($_FILES['listado_file']['name'])) {
-                throw new Exception('Selecciona un solo archivo para comparar.');
-            }
-
-            $file = FileUploader::uploadSingle('listado_file', $uploadDir, ['csv', 'xlsx', 'xls'], $maxSize);
-            $rutaTemporal = (string) $file['path'];
-            $ext = strtolower(pathinfo($file['original_name'], PATHINFO_EXTENSION));
+            $ext = strtolower(pathinfo($nombre, PATHINFO_EXTENSION));
             if ($ext === 'xls') {
-                throw new Exception('El formato .xls no esta soportado. Guarda el archivo como .xlsx o .csv.');
+                throw new Exception('El formato .xls no está soportado. Guarda el archivo como .xlsx o .csv.');
+            }
+            if (!in_array($ext, ['csv', 'xlsx'], true)) {
+                $ext = strtolower(pathinfo($rutaTemporal, PATHINFO_EXTENSION));
             }
             if (!in_array($ext, ['csv', 'xlsx'], true)) {
                 throw new Exception('Selecciona un archivo CSV o XLSX.');
             }
 
-            $modelo = $this->loadModel('PorPagar');
-            $analisisLectura = $this->analizarListado($rutaTemporal, $ext, $semanaId, $modelo);
-            $listado = $analisisLectura['listado_existente'];
-            $actuales = $listado !== null
-                ? $modelo->getLineas((int) $listado['id'])
-                : [];
-            $comparacion = PorPagarComparador::comparar($actuales, $analisisLectura['lineas']);
+            $filas = $this->leerFilas($rutaTemporal, $ext);
+            $resolucion = PagoSemanalResolutor::resolver($filas, $erp->getIndicePago(), (int) $listadoId);
 
-            if (is_file($rutaTemporal)) {
+            return [
+                'archivo' => $nombre,
+                'token' => $conservar ? basename($rutaTemporal) : null,
+                'resolucion' => $resolucion,
+            ];
+        } finally {
+            if (!$conservar && $rutaTemporal !== '' && is_file($rutaTemporal)) {
                 @unlink($rutaTemporal);
             }
-
-            $this->json([
-                'ok' => true,
-                'archivo' => (string) $file['original_name'],
-                'semana' => (string) ($semana['nombre'] ?? ('Semana #' . $semanaId)),
-                'listado_existente' => $listado !== null ? (string) $listado['nombre'] : null,
-                'resumen' => $comparacion['resumen'],
-                'lineas' => $comparacion['lineas'],
-                'total_resultados' => count($comparacion['lineas']),
-                'solo_lectura' => true,
-            ]);
-        } catch (Throwable $e) {
-            if ($rutaTemporal !== '' && is_file($rutaTemporal)) {
-                @unlink($rutaTemporal);
-            }
-            $this->json(['ok' => false, 'message' => $e->getMessage()], 422);
         }
     }
 
     /**
-     * Lee un archivo de listado y clasifica cada línea contra el listado
-     * existente de la semana (si lo hay): 'nueva' (se importaría),
-     * 'repetida' (ya está en el listado o viene doble en el archivo) o
-     * 'error' (fila ilegible, con su motivo). NO escribe nada: lo usan
-     * tanto la vista previa como la importación real.
+     * Filas crudas del archivo: documento, proveedor y saldo.
+     *
+     * Se aceptan los dos formatos de siempre —la tabla con encabezados y el
+     * reporte agrupado que exporta el sistema de la empresa— porque son los que
+     * la gente tiene. Lo que cambió es qué se hace con ellos: la fecha ya no se
+     * lee (la pone el ERP) y el importe se usa para desempatar, no para
+     * guardarlo.
      */
-    private function analizarListado($rutaArchivo, $ext, $semanaId, $modelo)
+    private function leerFilas($rutaArchivo, $ext)
     {
         $dataset = $ext === 'csv'
             ? $this->readCsvData($rutaArchivo)
             : XlsxReader::readFirstSheet($rutaArchivo);
         $dataset = $this->normalizarDataset($dataset);
 
-        // Dos formatos aceptados: el plano con columnas Fecha/Numero/
-        // Proveedor/Total, y el reporte agrupado que exporta el sistema
-        // de la empresa ("Proveedor <código> <nombre>" + filas FACT-…),
-        // que se aplana automáticamente.
         $map = $this->buildHeaderMap($dataset['header']);
         $registros = null;
         try {
@@ -541,93 +257,476 @@ class PorPagarController extends Controller
             $registros = [];
             foreach ($dataset['rows'] as $row) {
                 $registros[] = [
-                    'fecha' => $this->getValue($row, $map, ['fecha']),
-                    'numero' => $this->getValue($row, $map, ['numero']),
+                    'numero' => $this->getValue($row, $map, ['numero', 'documento']),
                     'proveedor' => $this->getValue($row, $map, ['proveedor']),
-                    'total' => $this->getValue($row, $map, ['total']),
+                    'total' => $this->getValue($row, $map, ['saldo', 'total']),
                 ];
             }
         }
 
-        // ¿La semana ya tiene listado? → modo "solo añadir nuevas": lo
-        // repetido (mismo número y proveedor) se omite al importar.
-        $listadoExistente = null;
-        if (!empty($semanaId)) {
-            $previos = $modelo->getListados(1, (int) $semanaId);
-            $listadoExistente = !empty($previos) ? $previos[0] : null;
-        }
-
-        $clavesVistas = [];
-        $clavesNumeroTotal = [];
-        if ($listadoExistente !== null) {
-            foreach ($modelo->getLineas((int) $listadoExistente['id']) as $lineaPrevia) {
-                $clavesVistas[$this->claveLinea((string) $lineaPrevia['numero'], (string) $lineaPrevia['proveedor_texto'])] = true;
-                $clavesNumeroTotal[$this->claveNumeroTotal((string) $lineaPrevia['numero'], $lineaPrevia['total'])] = true;
-            }
-        }
-
-        $lineas = [];
+        $filas = [];
         foreach ($registros as $row) {
             try {
-                $fecha = Validator::parseDate($row['fecha']);
-                $numero = trim((string) $row['numero']);
-                $proveedor = trim((string) $row['proveedor']);
-                $monto = Validator::parseAmount($row['total']);
+                $numero = trim((string) ($row['numero'] ?? ''));
+                $proveedor = trim((string) ($row['proveedor'] ?? ''));
+                $saldo = Validator::parseAmount($row['total'] ?? ($row['saldo'] ?? 0));
 
                 // Números que Excel entrega como 26546.0
                 if (preg_match('/^\d+\.0$/', $numero)) {
                     $numero = substr($numero, 0, -2);
                 }
 
-                if ($numero === '' && $proveedor === '' && $monto <= 0) {
+                if ($numero === '' && $proveedor === '' && $saldo <= 0) {
                     continue; // fila totalmente vacía: ni contarla
                 }
                 if ($numero === '') {
-                    throw new Exception('Número vacío.');
-                }
-                if ($proveedor === '') {
-                    throw new Exception('Proveedor vacío.');
-                }
-                if ($monto <= 0) {
-                    throw new Exception('Total inválido.');
+                    throw new Exception('Número de documento vacío.');
                 }
 
-                // Repetida por número+proveedor, o por número+monto exacto:
-                // esta segunda atrapa la misma factura cuando el proveedor
-                // viene escrito distinto entre archivos (recortado vs completo)
-                $clave = $this->claveLinea($numero, $proveedor);
-                $claveNT = $this->claveNumeroTotal($numero, $monto);
-                $estado = (isset($clavesVistas[$clave]) || isset($clavesNumeroTotal[$claveNT])) ? 'repetida' : 'nueva';
-                $clavesVistas[$clave] = true;
-                $clavesNumeroTotal[$claveNT] = true;
-
-                $lineas[] = [
-                    'estado' => $estado,
-                    'motivo' => '',
-                    'fecha' => $fecha ?: null,   // informativa: inválida no bloquea
+                $filas[] = [
+                    'estado' => 'leida',
                     'numero' => $numero,
                     'proveedor' => $proveedor,
-                    'total' => $monto,
+                    'saldo' => $saldo,
                 ];
             } catch (Throwable $e) {
-                $lineas[] = [
+                $filas[] = [
                     'estado' => 'error',
                     'motivo' => $e->getMessage(),
-                    'fecha' => null,
                     'numero' => trim((string) ($row['numero'] ?? '')),
                     'proveedor' => trim((string) ($row['proveedor'] ?? '')),
-                    'total' => 0.0,
+                    'saldo' => 0.0,
                 ];
             }
         }
 
-        return ['lineas' => $lineas, 'listado_existente' => $listadoExistente];
+        return $filas;
     }
 
     /**
-     * Re-verifica un listado contra las facturas actuales (después de
-     * importar más facturas desde el correo).
+     * Vista previa (POST, JSON): dice qué haría la carga sin hacer nada.
      */
+    public function previsualizar()
+    {
+        if (!$this->isPost()) {
+            $this->json(['ok' => false, 'message' => 'Metodo no permitido.'], 405);
+        }
+
+        try {
+            $erp = $this->loadModel('FacturaErp');
+            $semanaId = $this->semanaSolicitada();
+            $listadoPrevio = $this->listadoDeSemana($semanaId);
+            $listadoId = $listadoPrevio ? (int) $listadoPrevio['id'] : 0;
+
+            $datos = $this->leerYResolver($erp, $listadoId, true);
+            $resumen = $datos['resolucion']['resumen'];
+
+            $montoResuelto = 0.0;
+            foreach ($datos['resolucion']['filas'] as $fila) {
+                if ($fila['estado'] === 'resuelta' && $fila['erp']) {
+                    $montoResuelto += (float) $fila['erp']['saldo'];
+                }
+            }
+
+            $this->json([
+                'ok' => true,
+                'archivo' => $datos['archivo'],
+                'token' => $datos['token'],
+                'carpeta_pago' => DocumentoArchivo::normalizarCarpetaPago((string) $this->post('carpeta_pago', '')),
+                'listado_existente' => $listadoPrevio ? (string) $listadoPrevio['nombre'] : null,
+                'listado_cerrado' => $listadoPrevio && ($listadoPrevio['estado'] ?? 'abierto') === 'cerrado',
+                'resumen' => $resumen,
+                'monto_resuelto' => round($montoResuelto, 2),
+                'lineas' => array_slice($datos['resolucion']['filas'], 0, 1000),
+                'total_resultados' => count($datos['resolucion']['filas']),
+            ]);
+        } catch (Throwable $e) {
+            $this->json(['ok' => false, 'message' => $e->getMessage()], 422);
+        }
+    }
+
+    /**
+     * Carga el listado: marca en Facturas ERP las facturas que se pagan.
+     */
+    public function subir()
+    {
+        if (!$this->isPost()) {
+            $this->redirect($this->url('/por-pagar'));
+        }
+
+        @set_time_limit(300);
+
+        try {
+            $modelo = $this->loadModel('PorPagar');
+            $erp = $this->loadModel('FacturaErp');
+
+            $semanaId = $this->semanaSolicitada(true);
+            $semana = $this->prepararSemana($semanaId);
+
+            $listadoPrevio = $this->listadoDeSemana($semanaId);
+            if ($listadoPrevio && ($listadoPrevio['estado'] ?? 'abierto') === 'cerrado') {
+                throw new Exception('El pago de esta semana ya está cerrado. Creá otra semana para cargar más facturas.');
+            }
+            $listadoId = $listadoPrevio ? (int) $listadoPrevio['id'] : 0;
+
+            $datos = $this->leerYResolver($erp, $listadoId);
+            $resolucion = $datos['resolucion'];
+            $resumen = $resolucion['resumen'];
+
+            if ($resumen['resuelta'] < 1) {
+                throw new Exception(
+                    'Ninguna factura del archivo está en Facturas ERP. '
+                    . 'Cargá primero el reporte "Facturas por Proveedor" que las incluya, en Carga de documentos.'
+                );
+            }
+
+            // Todo o nada: media semana cargada obliga a llevar en la cabeza
+            // cuáles entraron. Si algo no resolvió, se dice y no se escribe.
+            $this->exigirResolucionCompleta($resumen, $resolucion['filas']);
+
+            $sociedadId = null;
+            try {
+                $activa = $this->loadModel('Sociedad')->getActiva();
+                $sociedadId = $activa ? (int) $activa['id'] : null;
+            } catch (Throwable $e) {
+            }
+
+            if ($listadoId <= 0) {
+                $nombre = !empty($semana['nombre']) ? 'Pago ' . $semana['nombre'] : 'Pago ' . date('d/m/Y H:i');
+                $listadoId = (int) $modelo->crearListado($nombre, $sociedadId, $datos['archivo'], $semanaId);
+            }
+            $nombre = $listadoPrevio ? (string) $listadoPrevio['nombre'] : ('Pago ' . ($semana['nombre'] ?? ''));
+
+            $yaEstaban = $erp->contarPago($listadoId);
+            $erp->asignarAPago($resolucion['ids'], $semanaId, $listadoId);
+            $modelo->actualizarTotalLineas($listadoId);
+
+            $stats = $this->ejecutarMatching($listadoId, $erp);
+            $total = $erp->contarPago($listadoId);
+            $nuevas = max(0, $total - $yaEstaban);
+
+            $msg = ($listadoPrevio
+                    ? "Pago \"{$nombre}\": +{$nuevas} facturas nuevas (total {$total})"
+                    : "Pago \"{$nombre}\": {$total} facturas del ERP")
+                . " — {$stats['respaldada']} respaldadas, {$stats['con_diferencia']} con diferencia, {$stats['sin_respaldo']} sin respaldo.";
+
+            $this->redirectWithMessage(
+                $this->url('/por-pagar?listado_id=' . $listadoId . '&semana_id=' . (int) $semanaId),
+                $msg,
+                $stats['sin_respaldo'] + $stats['con_diferencia'] > 0 ? 'warning' : 'success'
+            );
+        } catch (Throwable $e) {
+            $this->redirectWithMessage($this->url('/por-pagar'), 'Error al cargar el pago: ' . $e->getMessage(), 'error');
+        }
+    }
+
+    /**
+     * Corta la carga si alguna fila del archivo no encontró su factura.
+     *
+     * La regla de negocio no cambió —el pago semanal no inventa facturas, paga
+     * las que el ERP ya reportó—, pero ahora se comprueba resolviendo de
+     * verdad en vez de preguntando si el número existe. El mensaje nombra las
+     * primeras, que es lo que hace falta para ir a cargar el reporte correcto.
+     */
+    private function exigirResolucionCompleta(array $resumen, array $filas)
+    {
+        $problemas = [];
+        foreach (['ausente' => 'no están en Facturas ERP',
+                  'ambigua' => 'tienen más de una factura posible en el ERP',
+                  'en_otro_pago' => 'ya están asignadas a otro pago semanal',
+                  'error' => 'no se pudieron leer'] as $estado => $texto) {
+            if (empty($resumen[$estado])) {
+                continue;
+            }
+            $muestra = [];
+            foreach ($filas as $fila) {
+                if ($fila['estado'] === $estado && count($muestra) < 5) {
+                    $muestra[] = $fila['numero'] !== '' ? $fila['numero'] : '(sin número)';
+                }
+            }
+            $problemas[] = $resumen[$estado] . ' ' . $texto . ' (' . implode(', ', $muestra)
+                . ($resumen[$estado] > count($muestra) ? ', …' : '') . ')';
+        }
+
+        if ($problemas) {
+            throw new Exception('No se cargó nada: ' . implode('; ', $problemas)
+                . '. Corregí el archivo o cargá el reporte del ERP que falte.');
+        }
+    }
+
+    private function semanaSolicitada($permitirNueva = false)
+    {
+        $seleccion = trim((string) $this->post('semana_id', ''));
+        if ($permitirNueva) {
+            $semanaId = $this->loadModel('Semana')->resolverSeleccion(
+                $seleccion,
+                (string) $this->post('semana_nueva', '')
+            );
+            if (empty($semanaId)) {
+                throw new Exception('Elegí la semana de trabajo del pago.');
+            }
+            return (int) $semanaId;
+        }
+
+        if (!ctype_digit($seleccion) || (int) $seleccion <= 0) {
+            throw new Exception('Seleccioná una semana existente.');
+        }
+        return (int) $seleccion;
+    }
+
+    /** Deja lista la carpeta del pago semanal de la semana elegida. */
+    private function prepararSemana($semanaId)
+    {
+        $semanaModel = $this->loadModel('Semana');
+        $semana = $semanaModel->findById((int) $semanaId);
+        if ($semana === null) {
+            throw new Exception('La semana seleccionada ya no existe.');
+        }
+
+        $carpetaSolicitada = trim((string) $this->post('carpeta_pago', ''));
+        if ($carpetaSolicitada === '') {
+            $carpetaSolicitada = (string) ($semana['carpeta_pago'] ?? ($semana['nombre'] ?? ''));
+        }
+        $carpetaPago = DocumentoArchivo::normalizarCarpetaPago($carpetaSolicitada);
+        if ($carpetaPago === '') {
+            throw new Exception('Seleccioná una carpeta válida para el pago semanal.');
+        }
+        $semanaModel->configurarCarpetaPago((int) $semanaId, $carpetaPago);
+        try {
+            (new DocumentoArchivo())->prepararCarpetaPagoSemanal($carpetaPago);
+        } catch (Throwable $e) {
+            // Sin carpeta raíz configurada el pago se carga igual; los
+            // archivos se acomodan cuando alguien la configure.
+        }
+        $semana['carpeta_pago'] = $carpetaPago;
+        return $semana;
+    }
+
+    private function listadoDeSemana($semanaId)
+    {
+        if ((int) $semanaId <= 0) {
+            return null;
+        }
+        $previos = $this->loadModel('PorPagar')->getListados(1, (int) $semanaId);
+        return !empty($previos) ? $previos[0] : null;
+    }
+
+    // ── Comparar y actualizar ──────────────────────────────────────
+
+    /**
+     * Comparador (POST, JSON): qué facturas entrarían y cuáles saldrían si se
+     * aplicara este archivo. De solo lectura.
+     */
+    public function compararListado()
+    {
+        if (!$this->isPost()) {
+            $this->json(['ok' => false, 'message' => 'Metodo no permitido.'], 405);
+        }
+
+        require_once __DIR__ . '/../helpers/PorPagarComparador.php';
+
+        try {
+            $erp = $this->loadModel('FacturaErp');
+            $semanaId = $this->semanaSolicitada();
+            $semana = $this->loadModel('Semana')->findById($semanaId);
+            if ($semana === null) {
+                throw new Exception('La semana seleccionada ya no existe.');
+            }
+
+            $listado = $this->listadoDeSemana($semanaId);
+            $listadoId = $listado ? (int) $listado['id'] : 0;
+
+            $datos = $this->leerYResolver($erp, $listadoId);
+            $asignadas = $listadoId > 0 ? $erp->getFacturasPago($listadoId) : [];
+            $comparacion = PorPagarComparador::comparar($datos['resolucion'], $asignadas);
+
+            $this->json([
+                'ok' => true,
+                'archivo' => $datos['archivo'],
+                'semana' => (string) ($semana['nombre'] ?? ('Semana #' . $semanaId)),
+                'listado_existente' => $listado ? (string) $listado['nombre'] : null,
+                'listado_cerrado' => $listado && ($listado['estado'] ?? 'abierto') === 'cerrado',
+                'resumen' => $comparacion['resumen'],
+                'lineas' => $comparacion['lineas'],
+                'total_resultados' => count($comparacion['lineas']),
+                'solo_lectura' => true,
+            ]);
+        } catch (Throwable $e) {
+            $this->json(['ok' => false, 'message' => $e->getMessage()], 422);
+        }
+    }
+
+    /**
+     * Deja el pago de la semana igual al archivo nuevo (POST, JSON).
+     *
+     * Lo que entra se marca en Facturas ERP; lo que sale se desmarca y vuelve a
+     * "pendiente". Después los XML y PDF se acomodan: los de las facturas que
+     * salieron regresan al árbol por fecha de emisión y los de las que entraron
+     * se reúnen en la carpeta del pago.
+     */
+    public function actualizarListado()
+    {
+        if (!$this->isPost()) {
+            $this->json(['ok' => false, 'message' => 'Metodo no permitido.'], 405);
+        }
+
+        require_once __DIR__ . '/../helpers/PorPagarComparador.php';
+        @set_time_limit(300);
+
+        try {
+            $modelo = $this->loadModel('PorPagar');
+            $erp = $this->loadModel('FacturaErp');
+            $semanaId = $this->semanaSolicitada();
+
+            $listado = $this->listadoDeSemana($semanaId);
+            if ($listado === null) {
+                throw new Exception('Esta semana todavía no tiene pago que actualizar. Usá "Vista previa" para cargarlo por primera vez.');
+            }
+            if (($listado['estado'] ?? 'abierto') === 'cerrado') {
+                throw new Exception('El pago de esta semana ya está cerrado: no se puede actualizar.');
+            }
+            $listadoId = (int) $listado['id'];
+
+            $datos = $this->leerYResolver($erp, $listadoId);
+            $asignadas = $erp->getFacturasPago($listadoId);
+            $comparacion = PorPagarComparador::comparar($datos['resolucion'], $asignadas);
+            $resumen = $comparacion['resumen'];
+
+            if ((int) $resumen['nueva'] + (int) $resumen['igual'] < 1) {
+                throw new Exception('El archivo no resolvió ninguna factura del ERP; no se actualizó nada.');
+            }
+            $this->exigirComparacionConfirmada($resumen);
+
+            $entran = [];
+            $salen = [];
+            foreach ($comparacion['lineas'] as $linea) {
+                if ($linea['estado'] === 'nueva') {
+                    $entran[] = (int) $linea['factura_erp_id'];
+                } elseif ($linea['estado'] === 'faltante') {
+                    $salen[] = (int) $linea['factura_erp_id'];
+                }
+            }
+
+            // Una fila ilegible no dice "quitá esta factura", pero se ve igual:
+            // la que estaba sale como ausente y se iría con las demás.
+            if ($salen && (int) $resumen['error'] > 0) {
+                throw new Exception(sprintf(
+                    'El archivo tiene %d fila(s) ilegibles y %d factura(s) quedarían fuera del pago; no se actualizó nada. '
+                    . 'Corregí el archivo y volvé a comparar.',
+                    (int) $resumen['error'],
+                    count($salen)
+                ));
+            }
+
+            if (!$entran && !$salen) {
+                $this->json([
+                    'ok' => true,
+                    'sin_cambios' => true,
+                    'message' => 'El pago ya coincide con el archivo: no había nada que actualizar.',
+                ]);
+            }
+
+            // Los XML de las que salen, antes de soltarlos: son los archivos
+            // que hay que devolver a su carpeta por fecha.
+            $xmlDeLasQueSalen = [];
+            foreach ($asignadas as $factura) {
+                if (in_array((int) $factura['id'], $salen, true) && !empty($factura['factura_xml_id'])) {
+                    $xmlDeLasQueSalen[] = (int) $factura['factura_xml_id'];
+                }
+            }
+
+            $modelo->begin();
+            try {
+                $quitadas = $salen ? $erp->quitarDePago($salen, $listadoId) : 0;
+                $anadidas = $entran ? $erp->asignarAPago($entran, $semanaId, $listadoId) : 0;
+                $modelo->actualizarTotalLineas($listadoId);
+                $modelo->commit();
+            } catch (Throwable $e) {
+                $modelo->rollback();
+                throw $e;
+            }
+
+            $erp->soltarSemanaXml($xmlDeLasQueSalen);
+            $stats = $this->ejecutarMatching($listadoId, $erp);
+
+            $xmlDespues = $erp->idsXmlDePago($listadoId);
+            $archivos = $this->reubicarArchivos(array_merge(
+                array_diff($xmlDeLasQueSalen, $xmlDespues),
+                array_diff($xmlDespues, $xmlDeLasQueSalen)
+            ));
+
+            $this->json([
+                'ok' => true,
+                'sin_cambios' => false,
+                'listado_id' => $listadoId,
+                'semana_id' => $semanaId,
+                'anadidas' => $anadidas,
+                'quitadas' => $quitadas,
+                'estados' => $stats,
+                'archivos' => $archivos,
+            ]);
+        } catch (Throwable $e) {
+            $this->json(['ok' => false, 'message' => $e->getMessage()], 422);
+        }
+    }
+
+    /**
+     * Corta si el archivo dejó de dar el mismo resultado que la comparación
+     * que se confirmó. Sin esto se estaría desmarcando facturas a ciegas.
+     */
+    private function exigirComparacionConfirmada(array $resumen)
+    {
+        foreach (['nueva', 'faltante'] as $clave) {
+            $esperado = trim((string) $this->post('esperado_' . $clave, ''));
+            if (!ctype_digit($esperado)) {
+                throw new Exception('No llegó la comparación que se está confirmando. Volvé a comparar.');
+            }
+            if ((int) $esperado !== (int) $resumen[$clave]) {
+                throw new Exception('El archivo ya no da el mismo resultado que la comparación en pantalla; no se actualizó nada. Volvé a comparar antes de actualizar.');
+            }
+        }
+    }
+
+    /**
+     * Devuelve cada XML/PDF a la carpeta que le toca según cómo quedó el pago.
+     * El destino lo decide el organizador leyendo la base; acá solo se le
+     * nombran las facturas que cambiaron de lado.
+     */
+    private function reubicarArchivos(array $facturaIds)
+    {
+        $resultado = ['movidos' => 0, 'por_fecha' => 0, 'pago_semanal' => 0, 'aviso' => ''];
+
+        $facturaIds = array_values(array_unique(array_filter(array_map('intval', $facturaIds))));
+        if (!$facturaIds) {
+            return $resultado;
+        }
+        if (DocumentoArchivo::raizConfigurada() === '') {
+            $resultado['aviso'] = 'No hay carpeta raíz configurada: los archivos quedaron donde estaban.';
+            return $resultado;
+        }
+
+        try {
+            require_once __DIR__ . '/../helpers/OrganizadorDocumentos.php';
+            $resumen = (new OrganizadorDocumentos())->organizarIds($facturaIds, false);
+            if (!empty($resumen['omitido_por_bloqueo'])) {
+                $resultado['aviso'] = 'Hay otra ordenación en curso en esta computadora: los archivos no se movieron.';
+                return $resultado;
+            }
+            $resultado['movidos'] = (int) ($resumen['movidos'] ?? 0);
+            $resultado['por_fecha'] = (int) ($resumen['por_fecha'] ?? 0);
+            $resultado['pago_semanal'] = (int) ($resumen['pago_semanal'] ?? 0);
+            if (!empty($resumen['errores'])) {
+                $resultado['aviso'] = $resumen['errores'] . ' documento(s) no se pudieron mover.';
+            }
+        } catch (Throwable $e) {
+            $resultado['aviso'] = 'No se pudieron mover los archivos: ' . $e->getMessage();
+        }
+
+        return $resultado;
+    }
+
+    // ── Verificar, cerrar, eliminar ────────────────────────────────
+
     public function verificar($id)
     {
         if (!$this->isPost()) {
@@ -636,80 +735,36 @@ class PorPagarController extends Controller
 
         try {
             $modelo = $this->loadModel('PorPagar');
+            $erp = $this->loadModel('FacturaErp');
             $registro = $modelo->getListado((int) $id);
             if ($registro === null) {
-                $this->redirectWithMessage($this->url('/por-pagar'), 'El listado no existe.', 'error');
+                $this->redirectWithMessage($this->url('/por-pagar'), 'El pago semanal no existe.', 'error');
             }
+
+            $destino = '/por-pagar?listado_id=' . (int) $id . '&semana_id=' . (int) ($registro['semana_id'] ?? 0);
             if (($registro['estado'] ?? 'abierto') === 'cerrado') {
-                $this->redirectWithMessage(
-                    $this->url('/por-pagar?listado_id=' . (int) $id . '&semana_id=' . (int) ($registro['semana_id'] ?? 0)),
-                    'El pago semanal ya está cerrado; sus coincidencias quedaron congeladas.',
-                    'warning'
-                );
+                $this->redirectWithMessage($this->url($destino),
+                    'El pago semanal ya está cerrado; sus coincidencias quedaron congeladas.', 'warning');
             }
 
-            $stats = $this->ejecutarMatching((int) $id, $modelo);
-
-            // Volver al contexto de la semana del listado verificado
-            $qsSemana = !empty($registro['semana_id']) ? '&semana_id=' . (int) $registro['semana_id'] : '';
+            $stats = $this->ejecutarMatching((int) $id, $erp);
             $this->redirectWithMessage(
-                $this->url('/por-pagar?listado_id=' . (int) $id . $qsSemana),
+                $this->url($destino),
                 "Verificación actualizada: {$stats['respaldada']} respaldadas, {$stats['con_diferencia']} con diferencia, {$stats['sin_respaldo']} sin respaldo.",
                 $stats['sin_respaldo'] + $stats['con_diferencia'] > 0 ? 'warning' : 'success'
             );
         } catch (Throwable $e) {
-            $this->redirectWithMessage($this->url('/por-pagar'),'No se pudo verificar: ' . $e->getMessage(), 'error');
+            $this->redirectWithMessage($this->url('/por-pagar'), 'No se pudo verificar: ' . $e->getMessage(), 'error');
         }
     }
 
     /**
-     * Cierra el pago y refleja sus facturas emparejadas en Facturas ERP con
-     * el estado "Asignada a una semana".
-     */
-    /**
-     * Corta la carga si alguna factura del pago semanal no está en ningún
-     * listado de facturas del ERP.
+     * Cierra el pago semanal.
      *
-     * Es todo o nada por decisión del negocio: media semana cargada obliga a
-     * llevar en la cabeza cuáles líneas entraron y cuáles no. El mensaje dice
-     * cuántas faltan y nombra las primeras, que es lo que hace falta para ir a
-     * cargar el reporte que corresponde.
-     *
-     * Las filas que el lector marcó 'error' no se cuentan: no llegaron a ser
-     * una factura y ya se reportan aparte.
+     * Cerrar dejó de ser el momento en que las facturas del ERP se asignan —eso
+     * ya pasó al cargar—. Ahora solo congela: nadie añade, quita ni reempareja
+     * nada más en esta semana.
      */
-    private function exigirRespaldoEnErp(array $lineas)
-    {
-        $numeros = [];
-        foreach ($lineas as $linea) {
-            if (($linea['estado'] ?? '') === 'error') {
-                continue;
-            }
-            $numero = trim((string) ($linea['numero'] ?? ''));
-            if ($numero !== '') {
-                $numeros[] = $numero;
-            }
-        }
-        if (!$numeros) {
-            return;
-        }
-
-        $faltantes = $this->loadModel('FacturaErp')->faltantesEnErp($numeros);
-        if (!$faltantes) {
-            return;
-        }
-
-        $muestra = array_slice($faltantes, 0, 5);
-        throw new Exception(sprintf(
-            '%d de %d facturas del listado no están en ningún listado de facturas del ERP: %s%s. '
-            . 'Cargá primero el reporte "Facturas por Proveedor" que las incluya, en Carga de documentos.',
-            count($faltantes),
-            count($numeros),
-            implode(', ', $muestra),
-            count($faltantes) > count($muestra) ? ', …' : ''
-        ));
-    }
-
     public function cerrar($id)
     {
         if (!$this->isPost()) {
@@ -717,36 +772,38 @@ class PorPagarController extends Controller
         }
 
         $modelo = $this->loadModel('PorPagar');
+        $erp = $this->loadModel('FacturaErp');
         $listado = $modelo->getListado((int) $id);
         if ($listado === null) {
             $this->redirectWithMessage($this->url('/por-pagar'), 'El pago semanal no existe.', 'error');
         }
 
-        $destino = $this->url(
-            '/por-pagar?listado_id=' . (int) $id . '&semana_id=' . (int) ($listado['semana_id'] ?? 0)
-        );
+        $destino = $this->url('/por-pagar?listado_id=' . (int) $id . '&semana_id=' . (int) ($listado['semana_id'] ?? 0));
 
         try {
-            if (($listado['estado'] ?? 'abierto') !== 'cerrado') {
-                // Toma la foto final de coincidencias justo antes del cierre.
-                $this->ejecutarMatching((int) $id, $modelo);
+            if (($listado['estado'] ?? 'abierto') === 'cerrado') {
+                $this->redirectWithMessage($destino, 'El pago semanal ya estaba cerrado.', 'warning');
             }
-            $resultado = $this->loadModel('FacturaErp')->cerrarPagoSemanal(
-                (int) $id,
-                $_SESSION['usuario_id'] ?? null
-            );
 
-            if (!empty($resultado['ya_cerrado'])) {
-                $mensaje = 'El pago semanal ya estaba cerrado.';
-                $tipo = 'warning';
-            } else {
-                $mensaje = sprintf(
-                    'Pago semanal cerrado: %s factura(s) quedaron como "Asignada a una semana" en Facturas ERP.',
-                    number_format((int) $resultado['asignadas'], 0, ',', '.')
-                );
-                $tipo = 'success';
+            $resumen = $erp->resumenRespaldoPago((int) $id);
+            $sinRespaldo = (int) ($resumen['sin_respaldo'] ?? 0);
+            if ($sinRespaldo > 0 && (string) $this->post('aceptar_sin_respaldo', '') !== '1') {
+                $this->redirectWithMessage($destino,
+                    "No se cerró: {$sinRespaldo} factura(s) todavía no tienen XML. Conseguilas o confirmá el cierre aceptándolo.",
+                    'warning');
             }
-            $this->redirectWithMessage($destino, $mensaje, $tipo);
+
+            // Foto final antes de congelar.
+            $this->ejecutarMatching((int) $id, $erp);
+            if ($modelo->cerrar((int) $id, $_SESSION['usuario_id'] ?? null) !== 1) {
+                throw new Exception('El pago semanal cambió mientras se intentaba cerrar.');
+            }
+
+            $total = $erp->contarPago((int) $id);
+            $this->redirectWithMessage($destino, sprintf(
+                'Pago semanal cerrado: %s factura(s) del ERP quedaron asignadas a la semana.',
+                number_format($total, 0, ',', '.')
+            ), 'success');
         } catch (Throwable $e) {
             $this->redirectWithMessage($destino, 'No se pudo cerrar el pago semanal: ' . $e->getMessage(), 'error');
         }
@@ -759,16 +816,21 @@ class PorPagarController extends Controller
         }
 
         try {
+            $erp = $this->loadModel('FacturaErp');
+            $xmlIds = $erp->idsXmlDePago((int) $id);
             $this->loadModel('PorPagar')->eliminarListado((int) $id);
-            $this->redirectWithMessage($this->url('/por-pagar'),'Listado eliminado.', 'success');
+            $erp->soltarSemanaXml($xmlIds);
+            $this->reubicarArchivos($xmlIds);
+            $this->redirectWithMessage($this->url('/por-pagar'),
+                'Pago semanal eliminado. Sus facturas del ERP volvieron a quedar disponibles.', 'success');
         } catch (Throwable $e) {
-            $this->redirectWithMessage($this->url('/por-pagar'),'No se pudo eliminar: ' . $e->getMessage(), 'error');
+            $this->redirectWithMessage($this->url('/por-pagar'), 'No se pudo eliminar: ' . $e->getMessage(), 'error');
         }
     }
 
     /**
-     * Elimina una sola factura del listado. El comprobante XML que pudiera
-     * estar vinculado queda intacto y vuelve a estar disponible para matching.
+     * Saca una factura del pago. Ni la factura del ERP ni el XML se eliminan:
+     * la primera vuelve a "pendiente" y el segundo queda libre otra vez.
      */
     public function eliminarFactura($id)
     {
@@ -777,22 +839,27 @@ class PorPagarController extends Controller
         }
 
         try {
-            $modelo = $this->loadModel('PorPagar');
-            $linea = $modelo->eliminarLinea((int) $id);
-            if ($linea === null) {
-                $this->redirectWithMessage(
-                    $this->url('/por-pagar'),
-                    'La factura del listado no existe o ya fue eliminada.',
-                    'error'
-                );
+            $erp = $this->loadModel('FacturaErp');
+            $factura = $erp->getFacturaPago((int) $id);
+            if ($factura === null || empty($factura['porpagar_listado_id'])) {
+                $this->redirectWithMessage($this->url('/por-pagar'),
+                    'Esa factura no está en ningún pago semanal.', 'error');
+            }
+            if (($factura['listado_estado'] ?? 'abierto') === 'cerrado') {
+                throw new Exception('El pago semanal está cerrado y sus facturas ya no se pueden quitar.');
             }
 
-            $listadoId = (int) $linea['listado_id'];
-            $listado = $modelo->getListado($listadoId);
-            $destino = '/por-pagar?listado_id=' . $listadoId;
-            if ($listado !== null) {
-                $destino .= '&semana_id=' . (int) ($listado['semana_id'] ?? 0);
+            $listadoId = (int) $factura['porpagar_listado_id'];
+            $xmlId = (int) ($factura['factura_xml_id'] ?? 0);
+
+            $erp->quitarDePago([(int) $id], $listadoId);
+            $this->loadModel('PorPagar')->actualizarTotalLineas($listadoId);
+            if ($xmlId > 0) {
+                $erp->soltarSemanaXml([$xmlId]);
+                $this->reubicarArchivos([$xmlId]);
             }
+
+            $destino = '/por-pagar?listado_id=' . $listadoId . '&semana_id=' . (int) ($factura['listado_semana_id'] ?? 0);
             $filtrosRetorno = array_filter($this->filtrosListado(), function ($valor) {
                 return $valor !== '' && $valor !== null;
             });
@@ -800,33 +867,29 @@ class PorPagarController extends Controller
                 $destino .= '&' . http_build_query($filtrosRetorno);
             }
 
-            $numero = trim((string) ($linea['numero'] ?? ''));
-            $mensaje = $numero !== ''
-                ? 'La factura ' . $numero . ' fue eliminada del listado. El XML asociado no fue eliminado.'
-                : 'La factura fue eliminada del listado. El XML asociado no fue eliminado.';
-
-            $this->redirectWithMessage($this->url($destino), $mensaje, 'success');
+            $this->redirectWithMessage($this->url($destino),
+                'La factura ' . trim((string) $factura['documento']) . ' salió del pago. '
+                . 'Ni la factura del ERP ni su XML fueron eliminados.', 'success');
         } catch (Throwable $e) {
-            $this->redirectWithMessage(
-                $this->url('/por-pagar'),
-                'No se pudo eliminar la factura del listado: ' . $e->getMessage(),
-                'error'
-            );
+            $this->redirectWithMessage($this->url('/por-pagar'),
+                'No se pudo quitar la factura del pago: ' . $e->getMessage(), 'error');
         }
     }
 
+    // ── Vínculo manual ─────────────────────────────────────────────
+
     /**
-     * JSON del botón "Sin coincidencia": facturas XML de la semana que no
-     * respaldan ninguna línea del listado, las líneas aún sin respaldo
-     * (para vincular a mano) y las semanas (para mover la factura).
+     * JSON del botón "Sin coincidencia": XML de la semana que no respaldan
+     * ninguna factura del pago, y las facturas del pago aún sin respaldo.
      */
     public function sinCoincidencia()
     {
         try {
-            $modelo = $this->loadModel('PorPagar');
-            $listado = $modelo->getListado((int) $this->get('listado_id', 0));
-            if ($listado === null || empty($listado['semana_id'])) {
-                $this->json(['ok' => false, 'message' => 'El listado no existe o no tiene semana asignada.'], 404);
+            $erp = $this->loadModel('FacturaErp');
+            $listadoId = (int) $this->get('listado_id', 0);
+            $listado = $this->loadModel('PorPagar')->getListado($listadoId);
+            if ($listado === null) {
+                $this->json(['ok' => false, 'message' => 'El pago semanal no existe.'], 404);
             }
 
             $facturas = array_map(function ($f) {
@@ -837,16 +900,16 @@ class PorPagarController extends Controller
                     'total'     => (float) $f['total'],
                     'fecha'     => (string) ($f['fecha_emision'] ?? ''),
                 ];
-            }, $modelo->getFacturasSinCoincidencia((int) $listado['semana_id'], (int) $listado['id']));
+            }, $erp->getXmlSinCoincidencia($listadoId));
 
             $lineas = array_map(function ($l) {
                 return [
                     'id'        => (int) $l['id'],
-                    'numero'    => (string) $l['numero'],
-                    'proveedor' => (string) $l['proveedor_texto'],
-                    'total'     => (float) $l['total'],
+                    'numero'    => (string) $l['documento'],
+                    'proveedor' => (string) $l['proveedor_nombre'],
+                    'total'     => (float) $l['monto'],
                 ];
-            }, $modelo->getLineasSinRespaldo((int) $listado['id']));
+            }, $erp->getFacturasPago($listadoId, ['estado' => 'sin_respaldo']));
 
             $semanas = [];
             try {
@@ -858,7 +921,7 @@ class PorPagarController extends Controller
 
             $this->json([
                 'ok'        => true,
-                'semana_id' => (int) $listado['semana_id'],
+                'semana_id' => (int) ($listado['semana_id'] ?? 0),
                 'facturas'  => $facturas,
                 'lineas'    => $lineas,
                 'semanas'   => $semanas,
@@ -869,10 +932,9 @@ class PorPagarController extends Controller
     }
 
     /**
-     * Vincula a mano una línea del listado con una factura XML (botón
-     * "Sin coincidencia"). El número y el proveedor ya no se evalúan:
-     * solo el monto clasifica respaldada / con_diferencia, y la marca
-     * match_manual protege el vínculo de "Verificar de nuevo".
+     * Vincula a mano una factura del pago con un XML. El número y el proveedor
+     * ya no se evalúan: solo el monto clasifica, y match_manual protege el
+     * vínculo de la verificación automática.
      */
     public function forzar()
     {
@@ -881,54 +943,40 @@ class PorPagarController extends Controller
         }
 
         try {
-            $modelo = $this->loadModel('PorPagar');
-            $linea = $modelo->getLinea((int) $this->post('linea_id', 0));
-            $factura = $modelo->getFacturaParaMatching((int) $this->post('factura_id', 0));
+            $erp = $this->loadModel('FacturaErp');
+            $facturaModel = $this->loadModel('Factura');
 
-            if ($linea === null || $factura === null) {
-                $this->json(['ok' => false, 'message' => 'La línea o la factura no existen.'], 404);
+            $lineaErp = $erp->getFacturaPago((int) $this->post('linea_id', 0));
+            $xml = $facturaModel->findById((int) $this->post('factura_id', 0));
+            if ($lineaErp === null || !$xml) {
+                $this->json(['ok' => false, 'message' => 'La factura del pago o el XML no existen.'], 404);
             }
-            if (($linea['listado_estado'] ?? 'abierto') === 'cerrado') {
+            if (($lineaErp['listado_estado'] ?? 'abierto') === 'cerrado') {
                 $this->json(['ok' => false, 'message' => 'El pago semanal está cerrado y ya no se puede modificar.'], 409);
             }
 
-            // Una factura solo puede respaldar una línea del listado
-            foreach ($modelo->getLineas((int) $linea['listado_id']) as $otra) {
-                if ((int) ($otra['factura_xml_id'] ?? 0) === (int) $factura['id']
-                    && (int) $otra['id'] !== (int) $linea['id']) {
-                    $this->json(['ok' => false, 'message' => 'Esa factura ya respalda la línea "' . $otra['numero'] . '".'], 409);
+            $listadoId = (int) $lineaErp['porpagar_listado_id'];
+            foreach ($erp->getFacturasPagoParaMatching($listadoId) as $otra) {
+                if ((int) ($otra['factura_xml_id'] ?? 0) === (int) $xml['id']
+                    && (int) $otra['id'] !== (int) $lineaErp['id']) {
+                    $this->json(['ok' => false, 'message' => 'Ese XML ya respalda la factura "' . $otra['documento'] . '".'], 409);
                 }
             }
 
-            $diferencia = round((float) $linea['total'] - (float) $factura['total'], 2);
+            $diferencia = round((float) $lineaErp['monto'] - (float) $xml['total'], 2);
             $estado = abs($diferencia) <= FacturaMatcher::TOLERANCIA_CRC ? 'respaldada' : 'con_diferencia';
 
-            $modelo->actualizarMatchManual(
-                (int) $linea['id'],
-                (int) $factura['id'],
+            $erp->actualizarRespaldoManual(
+                (int) $lineaErp['id'],
+                (int) $xml['id'],
                 $estado,
                 $estado === 'con_diferencia' ? $diferencia : null
             );
 
-            // Si los nombres no se parecían, esta vinculación acaba de
-            // enseñar una equivalencia que nadie podía deducir. Se guarda para
-            // que valga en todas las demás facturas del mismo proveedor.
-            $aliasTexto = $this->aprenderAliasProveedor($linea, $factura);
+            $aliasTexto = $this->aprenderAliasProveedor($lineaErp, $xml);
             $aprendido = $aliasTexto !== '';
 
-            // Asigna la semana y mueve el par XML/PDF si el vínculo manual
-            // quedó respaldado correctamente.
-            $this->ejecutarMatching((int) $linea['listado_id'], $modelo);
-
-            // Con un alias nuevo hay que revisar de nuevo lo que quedó sin
-            // respaldo: puede que varias líneas se resuelvan de una vez.
-            $reprocesadas = $aprendido
-                ? $this->reprocesarListadosAbiertos($modelo, (int) $linea['listado_id'])
-                : 0;
-
-            // El alias vale igual para las notas de crédito, que se comparan
-            // con el mismo emparejador. Antes había que entrar a ese módulo y
-            // pedir «Verificar de nuevo» para que se enterara.
+            $this->ejecutarMatching($listadoId, $erp);
             $ncResueltas = $aprendido ? $this->reprocesarNotasCredito($aliasTexto) : 0;
 
             $this->json([
@@ -936,7 +984,6 @@ class PorPagarController extends Controller
                 'estado' => $estado,
                 'diferencia' => $diferencia,
                 'alias_aprendido' => $aprendido,
-                'lineas_resueltas' => $reprocesadas,
                 'notas_resueltas' => $ncResueltas,
             ]);
         } catch (Throwable $e) {
@@ -944,21 +991,20 @@ class PorPagarController extends Controller
         }
     }
 
-    /** Exporta el checklist del listado como un libro XLSX real. */
+    /** Exporta el checklist del pago como un libro XLSX real. */
     public function exportar()
     {
         try {
             require_once __DIR__ . '/../helpers/XlsxWriter.php';
 
             $listadoId = (int) $this->get('listado_id', 0);
-            $modelo = $this->loadModel('PorPagar');
-            $listado = $modelo->getListado($listadoId);
+            $listado = $this->loadModel('PorPagar')->getListado($listadoId);
             if ($listado === null) {
-                throw new Exception('Listado no encontrado.');
+                throw new Exception('Pago semanal no encontrado.');
             }
 
-            $lineas = $modelo->getLineas($listadoId, $this->filtrosListado());
-            $headers = ['Fecha', 'Número', 'Proveedor', 'Total listado', 'Número XML', 'Total XML', 'Diferencia', 'Estado'];
+            $lineas = $this->loadModel('FacturaErp')->getFacturasPago($listadoId, $this->filtrosListado());
+            $headers = ['Fecha', 'Documento', 'Proveedor', 'Monto ERP', 'Saldo', 'Número XML', 'Total XML', 'Diferencia', 'Estado'];
             $etiquetas = [
                 'respaldada' => 'Respaldada',
                 'con_diferencia' => 'Con diferencia',
@@ -970,25 +1016,24 @@ class PorPagarController extends Controller
             foreach ($lineas as $ri => $linea) {
                 $estado = (string) ($linea['estado'] ?? '');
                 $rows[] = [
-                    (string) ($linea['fecha'] ?? ''),
-                    (string) $linea['numero'],
-                    (string) $linea['proveedor_texto'],
-                    round((float) $linea['total'], 2),
-                    $linea['xml_numero'] !== null
-                        ? NumeroFactura::xmlOchoDigitos($linea['xml_numero'])
-                        : '',
+                    (string) ($linea['fecha_emision'] ?? ''),
+                    (string) $linea['documento'],
+                    (string) $linea['proveedor_nombre'],
+                    round((float) $linea['monto'], 2),
+                    round((float) $linea['saldo_pago'], 2),
+                    $linea['xml_numero'] !== null ? NumeroFactura::xmlOchoDigitos($linea['xml_numero']) : '',
                     $linea['xml_total'] !== null ? round((float) $linea['xml_total'], 2) : '',
                     $linea['diferencia'] !== null ? round((float) $linea['diferencia'], 2) : '',
                     $etiquetas[$estado] ?? $estado,
                 ];
-                $cellStyles[$ri][7] = $estado === 'respaldada' ? 3 : 2;
+                $cellStyles[$ri][8] = $estado === 'respaldada' ? 3 : 2;
             }
 
             $nombreBase = trim((string) ($listado['semana_nombre'] ?? $listado['nombre'] ?? $listadoId));
             $nombreBase = preg_replace('/[^A-Za-z0-9_-]+/', '_', $nombreBase);
             $nombreBase = trim((string) $nombreBase, '_') ?: (string) $listadoId;
             $nombreArchivo = 'por_pagar_' . $nombreBase . '_' . date('Ymd_His') . '.xlsx';
-            $anchos = [13, 20, 38, 16, 22, 16, 16, 18];
+            $anchos = [13, 24, 38, 16, 16, 22, 16, 16, 18];
 
             $tmpFile = XlsxWriter::generate($headers, $rows, 'Pagos semanales', $cellStyles, $anchos);
             XlsxWriter::send($tmpFile, $nombreArchivo);
@@ -1001,47 +1046,42 @@ class PorPagarController extends Controller
         }
     }
 
-    // ── Matching listado ↔ facturas XML ────────────────────────────
+    // ── Auxiliares ─────────────────────────────────────────────────
 
-    /**
-     * Cruza cada línea del listado con la mejor factura XML disponible.
-     * La lógica vive en PorPagarVerificador: es compartida con la
-     * re-verificación automática que corre al asignar facturas a una
-     * semana (desde Facturas, la subida directa o la cola del correo).
-     */
-    private function ejecutarMatching($listadoId, $modelo)
+    private function ejecutarMatching($listadoId, $erp)
     {
         require_once __DIR__ . '/../helpers/PorPagarVerificador.php';
-        return PorPagarVerificador::verificarListado($listadoId, $modelo);
+        return PorPagarVerificador::verificarListado($listadoId, $erp, $this->loadModel('Factura'));
     }
 
     /**
-     * Aprende la equivalencia de nombre que acaba de revelar un
-     * emparejamiento manual.
+     * Aprende la equivalencia de nombre que revela un emparejamiento manual.
      *
      * El caso: el ERP dice "COOPEAGRI" y el XML dice "COOPERATIVA AGRICOLA
      * INDUSTRIAL Y DE SERVICIOS MULTIPLES EL GENERAL". No comparten ni una
-     * palabra, así que ninguna comparación por parecido los va a juntar —
-     * tampoco bajando el umbral, que solo traería falsos positivos. La única
-     * fuente válida es la persona que emparejó a mano.
+     * palabra, así que ninguna comparación por parecido los va a juntar. La
+     * única fuente válida es la persona que emparejó a mano.
      *
-     * Solo se aprende cuando hacía falta: si los nombres YA se parecían lo
-     * suficiente, el vínculo manual fue por otra razón (un número raro, por
-     * ejemplo) y guardar un alias no aportaría nada.
+     * Al pago semanal ya casi no le hace falta —cruza por consecutivo—, pero a
+     * las notas de crédito sí, y el alias vale para las dos.
      */
-    private function aprenderAliasProveedor(array $linea, array $factura)
+    private function aprenderAliasProveedor(array $lineaErp, array $xml)
     {
-        $textoErp = trim((string) ($linea['proveedor_texto'] ?? ''));
-        $proveedorId = (int) ($factura['proveedor_id'] ?? 0);
+        $textoErp = trim((string) ($lineaErp['proveedor_nombre'] ?? ''));
+        $proveedorId = (int) ($xml['proveedor_id'] ?? 0);
         if ($textoErp === '' || $proveedorId <= 0) {
             return '';
         }
 
-        $score = FacturaMatcher::similaridadTexto(
-            $textoErp,
-            (string) ($factura['proveedor_nombre'] ?? '')
-        );
-        if ($score >= FacturaMatcher::UMBRAL_PROVEEDOR) {
+        $nombreXml = '';
+        try {
+            $proveedor = $this->loadModel('Proveedor')->findById($proveedorId);
+            $nombreXml = (string) ($proveedor['razon_social'] ?? '');
+        } catch (Throwable $e) {
+        }
+
+        if ($nombreXml !== ''
+            && FacturaMatcher::similaridadTexto($textoErp, $nombreXml) >= FacturaMatcher::UMBRAL_PROVEEDOR) {
             return ''; // se parecían; no hay nada que enseñar
         }
 
@@ -1053,21 +1093,10 @@ class PorPagarController extends Controller
             );
             return $aprendido ? $textoErp : '';
         } catch (Throwable $e) {
-            // Que no se pueda aprender no debe tumbar el vínculo manual, que
-            // es lo que la persona pidió.
             return '';
         }
     }
 
-    /**
-     * Vuelve a verificar los listados de notas de crédito donde el alias
-     * recién aprendido puede rescatar algo.
-     *
-     * Solo entran los listados que tienen líneas sin respaldo de ese mismo
-     * proveedor: repasarlos todos costaría segundos por listado sin ninguna
-     * posibilidad de cambiar nada. El límite acota el peor caso, porque esto
-     * cuelga del clic de un vínculo manual y la persona está esperando.
-     */
     private function reprocesarNotasCredito($aliasTexto, $limite = 3)
     {
         $resueltas = 0;
@@ -1103,74 +1132,17 @@ class PorPagarController extends Controller
         return $resueltas;
     }
 
-    /**
-     * Vuelve a verificar los listados abiertos después de aprender un alias.
-     *
-     * Es la mitad que hace útil lo anterior: enseñar la equivalencia una vez
-     * tiene que resolver TODAS las facturas del mismo proveedor que estaban
-     * sin respaldo, no solo la que se emparejó a mano. Devuelve cuántas
-     * líneas pasaron a tener respaldo.
-     *
-     * Los listados cerrados no se tocan: un pago ya cerrado no se recalcula.
-     */
-    private function reprocesarListadosAbiertos($modelo, $listadoYaProcesado = 0)
-    {
-        $resueltas = 0;
-        try {
-            foreach ($modelo->getListados(60) as $l) {
-                $id = (int) $l['id'];
-                if ($id === (int) $listadoYaProcesado || ($l['estado'] ?? 'abierto') === 'cerrado') {
-                    continue;
-                }
-                $antes = (int) ($modelo->resumenPorEstado($id)['sin_respaldo'] ?? 0);
-                if ($antes === 0) {
-                    continue; // nada que rescatar en este listado
-                }
-                $this->ejecutarMatching($id, $modelo);
-                $despues = (int) ($modelo->resumenPorEstado($id)['sin_respaldo'] ?? 0);
-                $resueltas += max(0, $antes - $despues);
-            }
-        } catch (Throwable $e) {
-            // El vínculo manual ya quedó guardado; esto es un extra.
-        }
-        return $resueltas;
-    }
-
-    /**
-     * Término de búsqueda para el correo: el número corto de la factura
-     * (regla compartida con la tarjeta de navegación del módulo Correo).
-     */
     private function numeroBusqueda($numero)
     {
         return FacturaMatcher::terminoBusquedaCorreo($numero);
     }
 
-    /**
-     * Clave de deduplicación de una línea del listado: número + proveedor
-     * normalizados (mayúsculas, espacios colapsados). Con ella, resubir un
-     * listado de la semana solo añade las facturas que no estaban.
-     */
-    private function claveLinea($numero, $proveedor)
-    {
-        $numero = mb_strtoupper(preg_replace('/\s+/', ' ', trim((string) $numero)), 'UTF-8');
-        $proveedor = mb_strtoupper(preg_replace('/\s+/', ' ', trim((string) $proveedor)), 'UTF-8');
-        return $numero . '|' . $proveedor;
-    }
-
-    /**
-     * Segunda clave de deduplicación: número + monto exacto al centavo.
-     * Atrapa la misma factura cuando el proveedor viene escrito distinto
-     * entre archivos (p. ej. "...DE LECHE" recortado en uno y
-     * "...DE LECHE DOS PINOS R.L." completo en otro): que dos proveedores
-     * distintos compartan número Y monto exacto es prácticamente imposible.
-     */
-    private function claveNumeroTotal($numero, $total)
-    {
-        $numero = mb_strtoupper(preg_replace('/\s+/', ' ', trim((string) $numero)), 'UTF-8');
-        return $numero . '|' . number_format((float) $total, 2, '.', '');
-    }
-
     // ── Lectura del archivo (mismo patrón del importador de gastos) ──
+    //
+    // Las dos claves de deduplicación que vivían acá —número+proveedor y
+    // número+monto— desaparecieron con la copia de los datos. Una factura ya no
+    // puede entrar dos veces al pago porque entrar es marcar una fila del ERP,
+    // y una fila o está marcada o no lo está.
 
     /**
      * Reporte agrupado del sistema de la empresa (sin fila de encabezados):
@@ -1398,20 +1370,41 @@ class PorPagarController extends Controller
         return null;
     }
 
+    /**
+     * Las tres columnas que el pago necesita: documento, proveedor y saldo.
+     *
+     * La fecha dejó de pedirse. Se pedía porque se guardaba, y guardarla era el
+     * problema: la fecha de la factura la tiene el ERP y no hay razón para
+     * aceptar una segunda versión que puede no coincidir. Cualquier otra
+     * columna que traiga el archivo se ignora sin quejarse.
+     */
     private function validateRequiredColumns(array $map)
     {
-        // El IVA ya no forma parte del listado; si viene, simplemente se ignora
-        $required = ['fecha', 'numero', 'proveedor', 'total'];
-        $missing = [];
+        $requeridas = [
+            'documento' => ['numero', 'documento'],
+            'proveedor' => ['proveedor'],
+            'saldo'     => ['saldo', 'total'],
+        ];
+        $faltan = [];
 
-        foreach ($required as $column) {
-            if (!isset($map[$column])) {
-                $missing[] = $column;
+        foreach ($requeridas as $etiqueta => $alternativas) {
+            $encontrada = false;
+            foreach ($alternativas as $columna) {
+                if (isset($map[$this->normalizeHeaderKey($columna)])) {
+                    $encontrada = true;
+                    break;
+                }
+            }
+            if (!$encontrada) {
+                $faltan[] = $etiqueta;
             }
         }
 
-        if (!empty($missing)) {
-            throw new Exception('El archivo debe incluir las columnas: Fecha, Numero, Proveedor y Total. Faltan: ' . implode(', ', $missing));
+        if ($faltan) {
+            throw new Exception(
+                'El archivo debe incluir las columnas Numero (o Documento), Proveedor y Saldo (o Total). Faltan: '
+                . implode(', ', $faltan)
+            );
         }
     }
 

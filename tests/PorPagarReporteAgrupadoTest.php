@@ -19,6 +19,7 @@
  * tomaba por una fila más. Dos de los 140 grupos de ese archivo.
  */
 require_once __DIR__ . '/../app/core/Controller.php';
+require_once __DIR__ . '/../app/core/Model.php';
 require_once __DIR__ . '/../app/controllers/PorPagarController.php';
 
 function assertReporte($condicion, $mensaje)

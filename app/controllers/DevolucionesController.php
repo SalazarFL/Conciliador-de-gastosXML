@@ -22,7 +22,7 @@ class DevolucionesController extends Controller
         ];
 
         $this->render('devoluciones/index', [
-            'title' => 'Devoluciones - XMLConcilia',
+            'title' => 'Devoluciones - Nexo Fiscal',
             'sociedadActiva' => $sociedad,
             'devoluciones' => $modelo->listar($filtros),
             'resumen' => $modelo->resumen($sociedad ? (int) $sociedad['id'] : null),
@@ -124,7 +124,7 @@ class DevolucionesController extends Controller
         }
 
         $this->render('devoluciones/detalle', [
-            'title' => 'Devolución ' . $dev['numero'] . ' - XMLConcilia',
+            'title' => 'Devolución ' . $dev['numero'] . ' - Nexo Fiscal',
             'dev' => $dev,
             'lineas' => $modelo->getLineas((int) $id),
             'matches' => $matches,

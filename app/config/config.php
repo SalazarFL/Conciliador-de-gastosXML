@@ -21,7 +21,7 @@ $ambiente = ($local['environment'] ?? '') === 'production' ? 'production' : 'dev
 
 return [
     // Información de la aplicación
-    'app_name'    => 'XMLConcilia',
+    'app_name'    => 'Nexo Fiscal',
     'app_version' => '1.0.0',
     'app_url'     => '',
 
@@ -43,8 +43,7 @@ return [
     'uploads_path'       => dirname(__DIR__, 2) . '/public/uploads',
     'max_upload_size'    => 10485760, // 10 MB
     'allowed_extensions' => [
-        'xml'    => ['xml'],
-        'gastos' => ['csv', 'xlsx', 'xls'],
+        'xml' => ['xml'],
     ],
 
     // Configuración de sesión
@@ -63,14 +62,8 @@ return [
     // Vacío = buscar 'pdftotext' en el PATH del sistema.
     'pdftotext_path' => (string) ($local['pdftotext_path'] ?? ''),
 
-    // Configuración de conciliación
-    'conciliacion' => [
-        'peso_numero_factura'  => 60,
-        'peso_proveedor'       => 40,
-        'umbral_exacto'        => 100,
-        'umbral_probable'      => 75,
-        'umbral_bajo'          => 50,
-        'tolerancia_redondeo'  => 0.05,
-        'tolerancia_porcentaje' => 1,
-    ],
+    // Los pesos y umbrales del viejo módulo de Conciliación salieron de aquí
+    // con él. Los que quedaron en uso viven junto al código que los aplica:
+    // FacturaMatcher (umbrales de número y proveedor, tolerancia en colones)
+    // y PagoSemanalResolutor (tolerancia de saldo).
 ];

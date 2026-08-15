@@ -34,7 +34,7 @@ if (!empty($dev['advertencias'])) {
     <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/devoluciones"><i class="fas fa-arrow-left"></i> Volver al listado</a>
 </div>
 
-<div class="card" style="margin-bottom:14px;">
+<div class="card" style="margin-bottom:10px;">
     <div class="card-header">
         <div class="card-title">
             <i class="fas fa-rotate-left" style="color:var(--gold);margin-right:6px;"></i>
@@ -47,12 +47,15 @@ if (!empty($dev['advertencias'])) {
                 <button class="btn btn-outline btn-sm" type="submit"><i class="fas fa-rotate"></i> Re-verificar</button>
             </form>
             <form method="post" action="<?= $baseUrl ?>/devoluciones/eliminar/<?= (int) $dev['id'] ?>"
-                  onsubmit="return confirm('¿Eliminar esta devolución y sus vínculos?');">
+                  data-confirm="Se eliminarán esta devolución y todos sus vínculos. Esta acción no se puede deshacer."
+                  data-confirm-title="Eliminar devolución"
+                  data-confirm-type="danger"
+                  data-confirm-accept="Eliminar">
                 <button class="btn btn-outline btn-sm" type="submit" style="color:#991b1b;"><i class="fas fa-trash"></i></button>
             </form>
         </div>
     </div>
-    <div style="padding:14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;font-size:13px;">
+    <div style="padding:9px 11px;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:7px;font-size:12.5px;">
         <div><strong>Proveedor:</strong><br><?= htmlspecialchars((string) ($dev['proveedor_local'] ?: $dev['proveedor_nombre_erp'] ?: '—')) ?>
             <?php if (empty($dev['proveedor_id'])): ?><br><span class="badge" style="background:#fee2e2;color:#991b1b;">Sin equivalente local</span><?php endif; ?>
         </div>
@@ -89,7 +92,7 @@ if (!empty($dev['advertencias'])) {
         if ($f['estado'] === 'confirmado') { $confirmado = $f; break; }
     }
 ?>
-<div class="card" style="margin-bottom:14px;">
+<div class="card" style="margin-bottom:10px;">
     <div class="card-header">
         <div class="card-title">
             <?= htmlspecialchars($labelObjetivo[$objetivo] ?? $objetivo) ?> ·
@@ -100,7 +103,10 @@ if (!empty($dev['advertencias'])) {
         </div>
         <?php if ($confirmado): ?>
         <form method="post" action="<?= $baseUrl ?>/devoluciones/desvincular" style="margin-left:auto;"
-              onsubmit="return confirm('¿Quitar el vínculo y re-verificar?');">
+              data-confirm="Se quitará el vínculo actual y la devolución volverá a verificarse."
+              data-confirm-title="Desvincular nota de crédito"
+              data-confirm-type="warning"
+              data-confirm-accept="Desvincular">
             <input type="hidden" name="devolucion_id" value="<?= (int) $dev['id'] ?>">
             <input type="hidden" name="objetivo" value="<?= htmlspecialchars($objetivo) ?>">
             <button class="btn btn-outline btn-sm" type="submit"><i class="fas fa-link-slash"></i> Desvincular</button>

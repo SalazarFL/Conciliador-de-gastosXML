@@ -30,7 +30,7 @@ class SeguimientoController extends Controller
         $resumen = $modelo->resumen($filtros);
 
         $this->render('seguimiento/index', [
-            'title' => 'Seguimiento - XMLConcilia',
+            'title' => 'Seguimiento - Nexo Fiscal',
             'sociedadActiva' => $sociedad,
             'filas' => $this->decorar($cola['filas']),
             'paginacion' => [

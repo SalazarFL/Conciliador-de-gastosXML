@@ -66,20 +66,20 @@ foreach ($resumenTipos as $r) { if ($r['severidad'] === 'alerta') { $alertas += 
     $urlVigentes = $baseUrl . '/facturas-erp/incidencias' . ($sinVer ? '?' . http_build_query($sinVer) : '');
     $urlDescartadas = $baseUrl . '/facturas-erp/incidencias?' . http_build_query(array_merge($sinVer, ['ver' => 'descartadas']));
     ?>
-    <div style="display:flex;gap:4px;margin-bottom:14px;border-bottom:1px solid var(--border,#e5e7eb);">
+    <div style="display:flex;gap:3px;margin-bottom:9px;border-bottom:1px solid var(--border,#e5e7eb);">
         <a href="<?= htmlspecialchars($urlVigentes) ?>"
-           style="padding:7px 14px;font-size:12.5px;text-decoration:none;border-bottom:2px solid <?= $viendoDescartadas ? 'transparent' : 'var(--navy)' ?>;color:<?= $viendoDescartadas ? 'var(--text-muted)' : 'var(--navy)' ?>;font-weight:<?= $viendoDescartadas ? '400' : '700' ?>;">
+           style="padding:5px 10px;font-size:12px;text-decoration:none;border-bottom:2px solid <?= $viendoDescartadas ? 'transparent' : 'var(--navy)' ?>;color:<?= $viendoDescartadas ? 'var(--text-muted)' : 'var(--navy)' ?>;font-weight:<?= $viendoDescartadas ? '400' : '700' ?>;">
             Vigentes
         </a>
         <a href="<?= htmlspecialchars($urlDescartadas) ?>"
-           style="padding:7px 14px;font-size:12.5px;text-decoration:none;border-bottom:2px solid <?= $viendoDescartadas ? 'var(--navy)' : 'transparent' ?>;color:<?= $viendoDescartadas ? 'var(--navy)' : 'var(--text-muted)' ?>;font-weight:<?= $viendoDescartadas ? '700' : '400' ?>;">
+           style="padding:5px 10px;font-size:12px;text-decoration:none;border-bottom:2px solid <?= $viendoDescartadas ? 'var(--navy)' : 'transparent' ?>;color:<?= $viendoDescartadas ? 'var(--navy)' : 'var(--text-muted)' ?>;font-weight:<?= $viendoDescartadas ? '700' : '400' ?>;">
             Descartadas<?= $totalDescartadas > 0 ? ' (' . number_format($totalDescartadas) . ')' : '' ?>
         </a>
     </div>
 
     <!-- Filtro rápido por tipo -->
     <?php if ($resumenTipos): ?>
-    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;">
+    <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:9px;">
         <?php
         $sinTipo = $query; unset($sinTipo['tipo']);
         $urlTodos = $baseUrl . '/facturas-erp/incidencias' . ($sinTipo ? '?' . http_build_query($sinTipo) : '');
@@ -195,7 +195,10 @@ foreach ($resumenTipos as $r) { if ($r['severidad'] === 'alerta') { $alertas += 
             </button>
             <?php if ($total > count($incidencias)): ?>
             <button type="submit" name="todas_del_filtro" value="1" class="btn btn-outline btn-sm"
-                    onclick="return confirm('¿Descartar las <?= number_format($total) ?> incidencias que cumplen este filtro?');">
+                    data-confirm="Se descartarán las <?= number_format($total) ?> incidencias que cumplen el filtro actual."
+                    data-confirm-title="Descartar incidencias filtradas"
+                    data-confirm-type="warning"
+                    data-confirm-accept="Descartar todas">
                 Descartar las <?= number_format($total) ?> del filtro
             </button>
             <?php endif; ?>
@@ -221,7 +224,7 @@ foreach ($resumenTipos as $r) { if ($r['severidad'] === 'alerta') { $alertas += 
             <tbody>
                 <?php if (!$incidencias): ?>
                 <tr>
-                    <td colspan="9" class="muted" style="text-align:center;padding:28px;">
+                    <td colspan="9" class="muted" style="text-align:center;padding:18px;">
                         <?php if ($viendoDescartadas): ?>
                             No hay incidencias descartadas.
                         <?php elseif ($total === 0 && !$query): ?>
@@ -329,7 +332,9 @@ document.addEventListener('DOMContentLoaded', function () {
         if (ev.submitter && ev.submitter.name === 'todas_del_filtro') return;
         if (document.querySelectorAll('.fe-inc-check:checked').length === 0) {
             ev.preventDefault();
-            alert('Seleccioná al menos una incidencia.');
+            AppDialog.alert('Selecciona al menos una incidencia para continuar.', {
+                title: 'No hay incidencias seleccionadas', type: 'warning'
+            });
         }
     });
 });

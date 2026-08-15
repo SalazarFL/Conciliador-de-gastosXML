@@ -55,8 +55,8 @@ $modelo->cola([
 
 assertSeguimientoFiltro(strpos($modelo->sqlFilas, 'l.saldo AS saldo') !== false,
     'el saldo de las notas llega a la cola');
-assertSeguimientoFiltro(strpos($modelo->sqlFilas, 'pf.total AS saldo') !== false,
-    'el total pendiente del pago semanal llega como saldo operativo');
+assertSeguimientoFiltro(strpos($modelo->sqlFilas, 'COALESCE(pe.saldo_pago, pe.saldo) AS saldo') !== false,
+    'el saldo del pago semanal sale de la factura del ERP, no de una copia');
 assertSeguimientoFiltro(strpos($modelo->sqlFilas, 'ABS(c.saldo) > 0.005') !== false,
     'activas exige un saldo distinto de cero');
 assertSeguimientoFiltro(strpos($modelo->sqlFilas, 'c.documento LIKE ?') !== false

@@ -216,7 +216,7 @@ function feMonto($v)
             <tbody>
                 <?php if (!$facturas): ?>
                 <tr>
-                    <td colspan="10" class="muted" style="text-align:center;padding:28px;">
+                    <td colspan="10" class="muted" style="text-align:center;padding:18px;">
                         <?= $total === 0 && !$queryFiltros
                             ? 'Todavía no se ha cargado ningún listado. Subí el CSV del ERP para empezar.'
                             : 'Ninguna factura coincide con el filtro.' ?>

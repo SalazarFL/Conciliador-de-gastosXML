@@ -12,7 +12,7 @@ from docx.shared import Cm, Inches, Pt, RGBColor
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "docs" / "Guia_de_estudio_XMLConcilia.docx"
+OUTPUT = ROOT / "docs" / "Guia_de_estudio_Nexo_Fiscal.docx"
 
 NAVY = "0C2461"
 BLUE = "1E5AA8"
@@ -279,7 +279,7 @@ def configure_document(doc):
 
     header = section.header.paragraphs[0]
     header.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    add_run_text(header, "XMLConcilia  |  Guía de estudio", bold=True, color=NAVY, size=8.5)
+    add_run_text(header, "Nexo Fiscal  |  Guía de estudio", bold=True, color=NAVY, size=8.5)
     add_page_number(section.footer.paragraphs[0])
 
     # Pide a Word actualizar automáticamente el índice al abrir el archivo.
@@ -326,11 +326,11 @@ def build_document():
     # 1
     doc.add_heading("1. La idea general del sistema", level=1)
     add_rich_paragraph(doc, [
-        "XMLConcilia es una aplicación web que ayuda a responder una pregunta de negocio: ",
+        "Nexo Fiscal es una aplicación web que ayuda a responder una pregunta de negocio: ",
         ("“¿Las facturas que se planea pagar tienen un comprobante electrónico que las respalde y sus datos coinciden?”", {"bold": True, "color": NAVY}),
         " Para responderla, reúne información procedente del correo, de archivos XML y de listados CSV/XLSX, la organiza por empresa y semana, y compara los documentos."
     ])
-    add_callout(doc, "La metáfora más útil", "Piensa en el sistema como una mesa de revisión. A un lado está el listado de lo que se desea pagar; al otro, las facturas electrónicas. XMLConcilia coloca cada factura junto a su línea probable, muestra las diferencias y deja los casos dudosos para decisión humana.")
+    add_callout(doc, "La metáfora más útil", "Piensa en el sistema como una mesa de revisión. A un lado está el listado de lo que se desea pagar; al otro, las facturas electrónicas. Nexo Fiscal coloca cada factura junto a su línea probable, muestra las diferencias y deja los casos dudosos para decisión humana.")
 
     doc.add_heading("1.1 Flujo operativo actual", level=2)
     add_flow(doc, [
@@ -879,17 +879,17 @@ def build_document():
 
     doc.add_heading("Cierre", level=1)
     add_rich_paragraph(doc, [
-        "La mejor manera de entender XMLConcilia es seguir siempre la misma cadena: ",
+        "La mejor manera de entender Nexo Fiscal es seguir siempre la misma cadena: ",
         ("contexto → entrada → validación → almacenamiento → comparación → estado → acción humana", {"bold": True, "color": NAVY}),
         ". La sociedad y la semana establecen el contexto; Correo/Carga XML aportan evidencia; Facturas por pagar compara; Reportes permite estudiar el resultado."
     ])
     add_callout(doc, "Resumen en una frase", "El sistema organiza comprobantes electrónicos y los cruza con lo que se piensa pagar, automatizando coincidencias claras y dejando visibles los casos que necesitan criterio humano.", GREEN, "3A8D52")
 
     # Propiedades y guardado
-    doc.core_properties.title = "Guía de estudio de XMLConcilia"
+    doc.core_properties.title = "Guía de estudio de Nexo Fiscal"
     doc.core_properties.subject = "Explicación funcional y técnica para principiantes"
-    doc.core_properties.author = "Codex, a partir del código del proyecto XMLConcilia"
-    doc.core_properties.keywords = "XMLConcilia, guía, MVC, correo, XML, facturas por pagar, conciliación"
+    doc.core_properties.author = "Codex, a partir del código del proyecto Nexo Fiscal"
+    doc.core_properties.keywords = "Nexo Fiscal, guía, MVC, correo, XML, facturas por pagar, conciliación"
     doc.core_properties.comments = "Generado desde la revisión del código disponible el 20-07-2026."
 
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)

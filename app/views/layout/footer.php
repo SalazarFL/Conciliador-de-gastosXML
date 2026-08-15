@@ -7,10 +7,6 @@
 </div>
 <!-- /app-layout -->
 
-<!-- Scripts -->
-<?php $_ap = rtrim(parse_url(defined('APP_URL') ? APP_URL : '/xmlconcilia/public', PHP_URL_PATH), '/'); ?>
-<script src="<?= $_ap ?>/assets/js/app.js"></script>
-
 <script>
 // Sidebar toggle (mobile)
 (function () {

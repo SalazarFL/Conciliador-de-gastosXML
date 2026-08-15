@@ -1,6 +1,6 @@
 -- =========================================
 -- MIGRACIÓN INICIAL - 000_init.sql
--- Sistema: XMLConcilia (VerificadorXMLConciliacion)
+-- Sistema: Nexo Fiscal
 -- Descripción: Creación inicial de base de datos y tablas
 -- Fecha: 2026-02-03
 -- =========================================

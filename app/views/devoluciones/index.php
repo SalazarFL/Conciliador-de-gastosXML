@@ -16,9 +16,9 @@ $labelTipo = function ($tipo) {
     return $tipo === 'boleta_local' ? 'Boleta (Ventas)' : 'Devolución (Cambios)';
 };
 ?>
-<div class="card" style="margin-bottom:14px;">
+<div class="card" style="margin-bottom:10px;">
     <div class="card-header"><div class="card-title"><i class="fas fa-rotate-left" style="color:var(--gold);margin-right:6px;"></i>Devoluciones a proveedor</div></div>
-    <form method="post" action="<?= $baseUrl ?>/devoluciones/subir" enctype="multipart/form-data" style="padding:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+    <form method="post" action="<?= $baseUrl ?>/devoluciones/subir" enctype="multipart/form-data" style="padding:0;display:flex;gap:7px;align-items:center;flex-wrap:wrap;">
         <input type="file" name="pdf_files[]" accept=".pdf" multiple required class="form-control" style="max-width:520px;">
         <button class="btn btn-primary" type="submit"><i class="fas fa-upload"></i> Importar reportes PDF</button>
         <span style="font-size:12px;color:var(--text-muted);">Acepta "Facturas Boleta Local" y "Reporte de Devolución a Proveedor". Cada PDF se cuadra contra sus totales; si no cuadra, se rechaza.</span>
@@ -37,7 +37,7 @@ $labelTipo = function ($tipo) {
         </form>
     </div>
 
-    <div style="display:flex;gap:10px;flex-wrap:wrap;padding:12px 14px 0;">
+    <div style="display:flex;gap:6px;flex-wrap:wrap;padding:7px 0 0;">
         <a href="<?= $baseUrl ?>/devoluciones" style="text-decoration:none;"><span class="badge badge-navy">Todas: <?= (int) $resumen['total'] ?></span></a>
         <a href="<?= $baseUrl ?>/devoluciones?estado=verificada" style="text-decoration:none;"><span class="badge badge-green">Verificadas: <?= (int) $resumen['verificada'] ?></span></a>
         <a href="<?= $baseUrl ?>/devoluciones?estado=parcial" style="text-decoration:none;"><span class="badge" style="background:#fef3c7;color:#92400e;">Parciales: <?= (int) $resumen['parcial'] ?></span></a>
@@ -73,14 +73,14 @@ $labelTipo = function ($tipo) {
         </div>
     </form>
 
-    <div style="overflow-x:auto;margin-top:12px;"><table class="data-table">
+    <div style="overflow-x:auto;margin-top:8px;"><table class="data-table">
         <thead><tr>
             <th>Fecha</th><th>Tipo</th><th>N°</th><th>Proveedor</th><th>Factura (boleta)</th>
             <th class="right">NC esperadas</th><th>Vínculos</th><th>Estado</th><th></th>
         </tr></thead>
         <tbody>
         <?php if (empty($devoluciones)): ?>
-        <tr><td colspan="9" style="text-align:center;padding:28px;color:var(--text-muted);">No hay reportes importados con estos filtros.</td></tr>
+        <tr><td colspan="9" style="text-align:center;padding:18px;color:var(--text-muted);">No hay reportes importados con estos filtros.</td></tr>
         <?php endif; ?>
         <?php foreach ($devoluciones as $d): ?>
         <?php

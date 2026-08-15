@@ -557,8 +557,8 @@ $moneda = function ($valor, $mon = 'CRC') {
             <div class="card-title" id="dlg-titulo">Acción</div>
             <button type="button" class="seg-panel-x" data-cerrar-dialogo aria-label="Cerrar">&times;</button>
         </header>
-        <div style="padding:18px;">
-            <p id="dlg-texto" style="font-size:13px;color:var(--text-muted);margin-bottom:14px;"></p>
+        <div style="padding:11px 13px;">
+            <p id="dlg-texto" style="font-size:12.5px;color:var(--text-muted);margin-bottom:9px;"></p>
 
             <div class="form-group" id="dlg-campo-dias" hidden>
                 <label class="form-label" for="dlg-dias">Volver a mostrarlo en</label>
@@ -612,7 +612,7 @@ $moneda = function ($valor, $mon = 'CRC') {
 .seg-tabla .seg-search-row th { padding: 5px 4px; background: #F8FAFC; }
 .seg-tabla .seg-search-row input,
 .seg-tabla .seg-search-row select {
-  width: 100%; min-width: 78px; height: 28px; padding: 3px 6px;
+  width: 100%; min-width: 78px; height: 24px; padding: 2px 5px;
   border: 1px solid #CBD5E1; border-radius: 5px; background: #FFF;
   color: var(--navy); font-size: 10.5px; outline: none;
 }
@@ -636,8 +636,8 @@ $moneda = function ($valor, $mon = 'CRC') {
 .seg-chip-hist { background: #EDEFF3; color: #6B7280; border-color: #DDE1E8; }
 
 .seg-acciones {
-  display: flex; align-items: center; justify-content: space-between; gap: 14px;
-  flex-wrap: wrap; padding: 11px 22px; margin: 0 -24px;
+  display: flex; align-items: center; justify-content: space-between; gap: 9px;
+  flex-wrap: wrap; padding: 8px 14px; margin: 0 -16px;
   background: linear-gradient(90deg, rgba(12,36,97,.06), rgba(240,165,0,.06));
   border-bottom: 1px solid var(--border-light);
 }
@@ -666,13 +666,13 @@ $moneda = function ($valor, $mon = 'CRC') {
 }
 @keyframes segEntra { from { transform: translateX(28px); opacity: .4; } to { transform: none; opacity: 1; } }
 .seg-panel-cab {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 15px 20px; background: #FAFCFF; border-bottom: 1px solid var(--border-light);
+  display: flex; align-items: center; justify-content: space-between; gap: 9px;
+  padding: 9px 13px; background: #FAFCFF; border-bottom: 1px solid var(--border-light);
 }
 .seg-panel-x { background: none; border: none; font-size: 26px; line-height: 1;
                color: var(--text-muted); cursor: pointer; padding: 0 4px; }
 .seg-panel-x:hover { color: var(--navy); }
-.seg-panel-cuerpo { padding: 18px 20px; overflow-y: auto; flex: 1; }
+.seg-panel-cuerpo { padding: 11px 13px; overflow-y: auto; flex: 1; }
 
 .seg-dialogo {
   position: relative; margin: auto; width: min(480px, calc(100% - 32px));
@@ -681,12 +681,12 @@ $moneda = function ($valor, $mon = 'CRC') {
 }
 
 .seg-datos { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-             gap: 12px; margin-bottom: 18px; }
+             gap: 8px; margin-bottom: 11px; }
 .seg-dato-et { font-size: 10px; font-weight: 700; letter-spacing: .08em;
                text-transform: uppercase; color: var(--text-muted); }
 .seg-dato-v  { font-size: 13px; color: var(--navy); font-weight: 600; word-break: break-word; }
 
-.seg-linea { display: flex; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--border-light); }
+.seg-linea { display: flex; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--border-light); }
 .seg-linea:last-child { border-bottom: none; }
 .seg-linea-punto { width: 8px; height: 8px; border-radius: 50%; background: var(--gold);
                    margin-top: 6px; flex-shrink: 0; }
@@ -833,7 +833,7 @@ $moneda = function ($valor, $mon = 'CRC') {
             window.location.reload();
         })
         .catch(function (err) {
-            alert(err.message);
+            AppDialog.alert(err.message, { title: 'No se pudo guardar', type: 'danger' });
             boton.disabled = false;
             boton.innerHTML = '<i class="fas fa-check"></i> Aplicar';
         });
@@ -867,7 +867,7 @@ $moneda = function ($valor, $mon = 'CRC') {
     function abrirPanel(origen, ref) {
         panel.hidden = false;
         document.getElementById('panel-cuerpo').innerHTML =
-            '<div style="text-align:center;padding:40px;color:var(--text-muted);">' +
+            '<div style="text-align:center;padding:22px;color:var(--text-muted);">' +
             '<i class="fas fa-spinner fa-spin fa-2x"></i></div>';
 
         fetch(BASE + '/seguimiento/detalle?origen=' + encodeURIComponent(origen)
@@ -910,7 +910,7 @@ $moneda = function ($valor, $mon = 'CRC') {
         html += '</div>';
 
         // Los dos archivos que tiene que tener todo documento.
-        html += '<div class="seg-dato-et" style="margin-bottom:6px;">Respaldo</div><div style="display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap;">';
+        html += '<div class="seg-dato-et" style="margin-bottom:5px;">Respaldo</div><div style="display:flex;gap:7px;margin-bottom:10px;flex-wrap:wrap;">';
         html += f.xml_ok
             ? '<a class="btn btn-outline btn-sm" target="_blank" href="' + BASE + '/documentos/xml/' + f.factura_xml_id + '"><i class="fas fa-code"></i> Ver XML</a>'
             : '<span class="badge badge-miss"><i class="fas fa-code"></i> Sin XML</span>';
@@ -927,11 +927,11 @@ $moneda = function ($valor, $mon = 'CRC') {
 
         if (f.motivo_match) {
             html += '<div class="seg-dato-et">Por qué no cuadró</div>' +
-                    '<div style="font-size:12.5px;color:var(--text);margin-bottom:18px;">' + esc(f.motivo_match) + '</div>';
+                    '<div style="font-size:12.5px;color:var(--text);margin-bottom:10px;">' + esc(f.motivo_match) + '</div>';
         }
         if (f.motivo) {
             html += '<div class="seg-dato-et">Motivo registrado</div>' +
-                    '<div style="font-size:12.5px;color:var(--text);margin-bottom:18px;">' + esc(f.motivo) + '</div>';
+                    '<div style="font-size:12.5px;color:var(--text);margin-bottom:10px;">' + esc(f.motivo) + '</div>';
         }
 
         html += '<div class="seg-dato-et" style="margin-bottom:4px;">Bitácora</div>';

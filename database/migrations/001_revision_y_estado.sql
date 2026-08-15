@@ -1,6 +1,6 @@
 -- =========================================
 -- MIGRACIÓN 001: Sistema de Revisión Manual y Auditoría
--- Sistema: XMLConcilia
+-- Sistema: Nexo Fiscal
 -- Fecha: 2026-02-12
 -- Propósito: Agregar estado "requiere_revision" y campos de auditoría
 -- IMPORTANTE: Esta migración es incremental y segura de ejecutar

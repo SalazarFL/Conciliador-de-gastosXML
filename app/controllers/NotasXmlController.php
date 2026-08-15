@@ -18,7 +18,7 @@ class NotasXmlController extends Controller
         $page = min($page, $paginas);
 
         $this->render('notasxml/index', [
-            'title' => 'Notas de crédito · Carga XML - XMLConcilia',
+            'title' => 'Notas de crédito · Carga XML - Nexo Fiscal',
             'notas' => $modelo->getNotasXml($desde, $hasta, $buscar, $page, $perPage),
             'desde' => $desde, 'hasta' => $hasta, 'buscar' => $buscar,
             'pagina' => $page, 'paginas' => $paginas, 'total' => $total,

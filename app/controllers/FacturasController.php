@@ -69,7 +69,7 @@ class FacturasController extends Controller
 		}
 
 		$this->render('facturas/index', [
-			'title'             => 'Facturas - XMLConcilia',
+			'title'             => 'Facturas - Nexo Fiscal',
 			'facturas'          => $facturas,
 			'historial'         => $historial,
 			'importacionActiva' => $importacionActiva,
@@ -145,95 +145,13 @@ class FacturasController extends Controller
 	}
 
 	/**
-	 * Asignar o cambiar la semana de una factura desde el botón de la
-	 * columna Semana (AJAX). semana_id: '' quita la semana, N la asigna,
-	 * 'nueva' crea una con el nombre de semana_nueva.
+	 * Asignar la semana de una factura a mano salió del sistema junto con su
+	 * botón. La semana de un comprobante ya no se elige: la hereda de la
+	 * factura del ERP a la que respalda, y esa factura sabe en qué pago
+	 * semanal está. Forzarla por fuera no la metía en ningún pago —el cruce va
+	 * por consecutivo— y sí podía sacarle el par XML/PDF de la carpeta del
+	 * pago, que se decide comparando ambas semanas.
 	 */
-	public function semanaAsignar()
-	{
-		if (!$this->isPost()) {
-			$this->redirect($this->url('/facturas'));
-		}
-
-		$facturaId = (int) $this->post('factura_id', 0);
-
-		try {
-			$facturaModel = $this->loadModel('Factura');
-			$factura = $facturaModel->findById($facturaId);
-			if ($facturaId <= 0 || empty($factura)) {
-				$this->json(['ok' => false, 'message' => 'La factura no existe.'], 404);
-			}
-
-			$semanaId = $this->resolverSemana();
-			$semanaAnterior = (int) ($factura['semana_id'] ?? 0);
-			$facturaModel->asignarSemana($facturaId, $semanaId);
-
-			// La verificación del listado por pagar corre sola: al entrar a
-			// la semana nueva y al salir de la anterior (su línea pierde el
-			// respaldo). Reemplaza al botón "Verificar de nuevo".
-			$this->verificarSemanasPorPagar([$semanaAnterior, (int) $semanaId]);
-
-			// Si la semana ya tiene listado del pago y la factura no coincide
-			// con ninguna de sus líneas, se avisa: el toast aparece tras el
-			// reload gracias al flash de sesión.
-			$advertencia = null;
-			if (!empty($semanaId)) {
-				$advertencia = $this->advertenciaSinCoincidencia($facturaId, (int) $semanaId);
-				if ($advertencia !== null) {
-					if (session_status() === PHP_SESSION_NONE) {
-						session_start();
-					}
-					$_SESSION['flash_message'] = [
-						'message' => $advertencia,
-						'type' => 'warning',
-						'details' => [],
-					];
-					session_write_close();
-				}
-			}
-
-			$this->json([
-				'ok' => true,
-				'semana_id' => !empty($semanaId) ? (int) $semanaId : '',
-				'warning' => $advertencia,
-			]);
-		} catch (Throwable $e) {
-			$this->json(['ok' => false, 'message' => 'No se pudo asignar la semana: ' . $e->getMessage()], 500);
-		}
-	}
-
-	/**
-	 * ¿La factura respalda alguna línea del listado del pago de esa semana?
-	 * Devuelve el texto de advertencia si no coincide con ninguna, o null si
-	 * coincide, no hay listado o la factura es NC/ND (esas no respaldan pagos).
-	 */
-	private function advertenciaSinCoincidencia($facturaId, $semanaId)
-	{
-		try {
-			$porPagar = $this->loadModel('PorPagar');
-
-			$listados = $porPagar->getListados(1, $semanaId);
-			if (empty($listados)) {
-				return null; // sin listado aún: nada contra qué comparar
-			}
-
-			$factura = $porPagar->getFacturaParaMatching((int) $facturaId);
-			if ($factura === null) {
-				return null;
-			}
-
-			foreach ($porPagar->getLineas((int) $listados[0]['id']) as $linea) {
-				if (FacturaMatcher::facturaRespaldaLinea($linea, $factura)) {
-					return null;
-				}
-			}
-
-			return 'La factura quedó asignada a la semana, pero no coincide con ninguna línea del listado "'
-				. $listados[0]['nombre'] . '". Revísala en Pagos semanales con el botón "Sin coincidencia".';
-		} catch (Throwable $e) {
-			return null; // el aviso nunca debe romper la asignación
-		}
-	}
 
 	/**
 	 * Re-verifica los listados por pagar de las semanas indicadas. Corre
@@ -246,10 +164,11 @@ class FacturasController extends Controller
 	{
 		try {
 			require_once __DIR__ . '/../helpers/PorPagarVerificador.php';
-			$modelo = $this->loadModel('PorPagar');
+			$erp = $this->loadModel('FacturaErp');
+			$facturas = $this->loadModel('Factura');
 			foreach (array_unique(array_map('intval', $semanaIds)) as $sid) {
 				if ($sid > 0) {
-					PorPagarVerificador::verificarSemana($sid, $modelo);
+					PorPagarVerificador::verificarSemana($sid, $erp, $facturas);
 				}
 			}
 		} catch (Throwable $e) {
@@ -577,7 +496,7 @@ class FacturasController extends Controller
 			}
 
 			$this->render('facturas/detalle', [
-				'title' => 'Detalle de Factura - XMLConcilia',
+				'title' => 'Detalle de Factura - Nexo Fiscal',
 				'factura' => $factura
 			]);
 		} catch (Exception $e) {

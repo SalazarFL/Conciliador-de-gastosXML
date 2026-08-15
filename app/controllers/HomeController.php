@@ -39,17 +39,19 @@ class HomeController extends Controller
         }
 
         try {
-            $porPagar = $this->loadModel('PorPagar');
-            $listados = $porPagar->getListados(1);
+            $listados = $this->loadModel('PorPagar')->getListados(1);
             if (!empty($listados)) {
                 $ultimoListado = $listados[0];
-                $resumenListado = $porPagar->resumenPorEstado((int) $ultimoListado['id']);
+                // El semáforo del pago vive en las facturas del ERP marcadas
+                // para esa semana, no en una tabla de líneas propia.
+                $resumenListado = $this->loadModel('FacturaErp')
+                    ->resumenRespaldoPago((int) $ultimoListado['id']);
             }
         } catch (Throwable $e) {
         }
 
         $this->render('home/index', [
-            'title' => 'Inicio - XMLConcilia',
+            'title' => 'Inicio - Nexo Fiscal',
             'stats' => $stats,
             'sociedades' => $sociedades,
             'sociedadActiva' => $sociedadActiva,

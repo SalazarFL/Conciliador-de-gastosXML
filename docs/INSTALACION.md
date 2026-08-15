@@ -1,4 +1,4 @@
-# Instalar XMLConcilia en una computadora
+# Instalar Nexo Fiscal en una computadora
 
 Cómo está montado: la **aplicación** se instala en la computadora de cada
 persona, la **base de datos** es una sola en el servidor, y los **documentos**

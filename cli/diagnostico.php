@@ -26,7 +26,7 @@ if (in_array('--json', $argv, true)) {
 
 $simbolos = ['ok' => '  OK  ', 'aviso' => ' AVISO', 'error' => ' ERROR'];
 
-echo "\nXMLConcilia · diagnóstico de instalación\n";
+echo "\nNexo Fiscal · diagnóstico de instalación\n";
 echo "Equipo: {$informe['equipo']}    {$informe['generado_en']}\n";
 echo str_repeat('-', 72), "\n";
 

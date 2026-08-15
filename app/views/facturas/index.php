@@ -23,7 +23,7 @@ $urlLimpiarFiltros = $baseUrl . '/facturas?' . http_build_query($parametrosLimpi
 <!-- CARGA DE FACTURAS XML -->
 
 <!-- Semana de trabajo + acceso a la carga -->
-<div class="card" style="margin-bottom:14px;">
+<div class="card" style="margin-bottom:10px;">
     <div class="card-header">
         <div>
             <div class="card-title">
@@ -35,7 +35,7 @@ $urlLimpiarFiltros = $baseUrl . '/facturas?' . http_build_query($parametrosLimpi
         </a>
     </div>
 
-    <div style="padding:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+    <div style="padding:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         <!-- Este selector NO es un formulario de carga: filtra la lista de
              abajo. Vivía dentro del formulario de subida y se fue con él, pero
              la lista lo sigue necesitando. -->
@@ -54,7 +54,7 @@ $urlLimpiarFiltros = $baseUrl . '/facturas?' . http_build_query($parametrosLimpi
         </a>
 
         <?php if (!empty($facturas)): ?>
-        <span class="badge badge-navy" style="font-size:12px;padding:6px 14px;">
+        <span class="badge badge-navy" style="font-size:11px;padding:3px 9px;">
             <i class="fas fa-layer-group"></i>
             <?= count($facturas) ?> factura<?= count($facturas) !== 1 ? 's' : '' ?>
             <?php if ($importacionActiva): ?>
@@ -98,11 +98,6 @@ function semanaCambio(sel) {
                 </span>
                 <?php endif; ?>
             </div>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;">
-            <a href="<?= $baseUrl ?>/conciliacion" class="btn btn-outline btn-sm">
-                <i class="fas fa-check-double"></i> Ir a Conciliación
-            </a>
         </div>
     </div>
 
@@ -217,12 +212,6 @@ function semanaCambio(sel) {
                             <?php else: ?>
                             <span style="color:#cbd5e1;">—</span>
                             <?php endif; ?>
-                            <button type="button" class="btn btn-outline btn-sm"
-                                    style="padding:2px 7px;font-size:10px;margin-left:4px;"
-                                    title="<?= empty($f['semana_id']) ? 'Asignar semana' : 'Cambiar de semana' ?>"
-                                    onclick="semAsignar(this, <?= (int) $f['id'] ?>, <?= (int) ($f['semana_id'] ?? 0) ?>)">
-                                <i class="fas fa-pen"></i>
-                            </button>
                         </td>
                         <td class="right muted"><?= number_format((float)($f['iva'] ?? 0), 2) ?></td>
                         <td class="right" style="font-weight:700;"><?= number_format((float)($f['total'] ?? 0), 2) ?></td>
@@ -251,80 +240,13 @@ function semanaCambio(sel) {
     </div>
 </div>
 
-<script>
-// ── Asignar / cambiar semana desde la columna Semana ──
-// El lápiz convierte la celda en un selector; al elegir se guarda por AJAX
-// y se recarga la vista (si la factura ya no corresponde al filtro, sale
-// de la lista, que es lo esperado).
-var SEMANAS_LISTA = <?= json_encode(array_map(function ($s) {
-    return ['id' => (int) $s['id'], 'nombre' => (string) $s['nombre']];
-}, $semanas), JSON_UNESCAPED_UNICODE) ?>;
-
-function semAsignar(btn, facturaId, semanaActual) {
-    var td = btn.closest('td');
-    var original = td.innerHTML;
-
-    var sel = document.createElement('select');
-    sel.className = 'form-control';
-    sel.style.cssText = 'font-size:11.5px;padding:3px 6px;max-width:190px;display:inline-block;';
-
-    var opciones = [['', '— Sin semana —']];
-    SEMANAS_LISTA.forEach(function (s) { opciones.push([String(s.id), s.nombre]); });
-    opciones.push(['nueva', '➕ Nueva semana…']);
-    opciones.forEach(function (o) {
-        var op = document.createElement('option');
-        op.value = o[0];
-        op.textContent = o[1];
-        if (o[0] === (semanaActual ? String(semanaActual) : '')) op.selected = true;
-        sel.appendChild(op);
-    });
-
-    td.innerHTML = '';
-    td.appendChild(sel);
-    sel.focus();
-
-    var guardando = false;
-
-    // Clic fuera sin elegir = cancelar y restaurar la celda
-    sel.addEventListener('blur', function () {
-        if (!guardando) td.innerHTML = original;
-    });
-
-    sel.addEventListener('change', function () {
-        var valor = sel.value;
-        var nombreNueva = '';
-
-        if (valor === 'nueva') {
-            nombreNueva = prompt('Nombre de la nueva semana:', 'Semana <?= date('d/m/Y') ?>');
-            if (nombreNueva === null) { td.innerHTML = original; return; }
-        } else if (valor === (semanaActual ? String(semanaActual) : '')) {
-            td.innerHTML = original;
-            return;
-        }
-
-        guardando = true;
-        sel.disabled = true;
-
-        var fd = new FormData();
-        fd.append('factura_id', facturaId);
-        fd.append('semana_id', valor);
-        fd.append('semana_nueva', nombreNueva);
-
-        fetch('<?= $baseUrl ?>/facturas/semana', { method: 'POST', body: fd, credentials: 'same-origin' })
-            .then(function (res) {
-                return res.json().catch(function () { return null; }).then(function (body) {
-                    if (!res.ok || !body || body.ok === false) {
-                        throw new Error((body && body.message) || ('Error HTTP ' + res.status));
-                    }
-                    return body;
-                });
-            })
-            .then(function () { window.location.reload(); })
-            .catch(function (err) {
-                alert('No se pudo cambiar la semana: ' + err.message);
-                td.innerHTML = original;
-            });
-    });
-}
-
-</script>
+<!--
+  Aquí estaba el lápiz para asignar o cambiar la semana de una factura a mano.
+  Salió porque la semana dejó de ser algo que se elige: una factura pertenece a
+  la semana del pago en el que está su fila del ERP. Cambiarla por fuera ya no
+  la metía en ningún pago —el emparejamiento va por consecutivo, no por
+  semana— y encima podía sacar su XML y su PDF de la carpeta del pago, porque
+  esa carpeta se decide comparando la semana del comprobante con la del pago.
+  Para mover una factura de semana se saca o se mete en el pago que
+  corresponda, desde Pagos semanales.
+-->

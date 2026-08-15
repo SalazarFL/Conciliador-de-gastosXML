@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Iniciar Sesión — XMLConcilia</title>
+    <title>Iniciar Sesión — Nexo Fiscal</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -15,14 +15,14 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 24px;
+            padding: 10px;
         }
 
-        .login-wrap { width: 100%; max-width: 420px; }
+        .login-wrap { width: 100%; max-width: 390px; }
 
         .login-card {
             background: #fff;
-            border-radius: 20px;
+            border-radius: 14px;
             box-shadow: 0 12px 48px rgba(12,36,97,.14), 0 2px 8px rgba(12,36,97,.08);
             overflow: hidden;
         }
@@ -30,35 +30,35 @@
         /* ── Header con logo ── */
         .login-header {
             background: linear-gradient(160deg, #0C2461 0%, #1a3a7c 100%);
-            padding: 40px 40px 32px;
+            padding: 20px 26px 18px;
             text-align: center;
         }
 
         .login-logo-text {
-            font-size: 32px;
+            font-size: 24px;
             font-weight: 800;
             letter-spacing: .5px;
-            margin-bottom: 18px;
+            margin-bottom: 8px;
             line-height: 1;
         }
 
-        .login-logo-text .xml  { color: #F0A500; }
-        .login-logo-text .conc { color: #fff; }
+        .login-logo-text .nexo   { color: #F0A500; }
+        .login-logo-text .fiscal { color: #fff; }
 
         .login-header-divider {
             width: 40px;
             height: 3px;
             background: #F0A500;
             border-radius: 2px;
-            margin: 0 auto 16px;
+            margin: 0 auto 8px;
         }
 
         .login-header h1 {
             color: #fff;
-            font-size: 20px;
+            font-size: 18px;
             font-weight: 800;
             letter-spacing: .3px;
-            margin-bottom: 6px;
+            margin-bottom: 4px;
         }
 
         .login-header p {
@@ -67,20 +67,20 @@
         }
 
         /* ── Cuerpo del formulario ── */
-        .login-body { padding: 36px 40px 28px; }
+        .login-body { padding: 17px 26px 15px; }
 
         .alert-error {
             background: #fff;
             border-left: 4px solid #ef4444;
             border-radius: 10px;
             box-shadow: 0 2px 10px rgba(239,68,68,.12);
-            padding: 13px 16px;
+            padding: 9px 11px;
             color: #1a202c;
             font-size: 13px;
-            margin-bottom: 24px;
+            margin-bottom: 10px;
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 8px;
             animation: slideDown .3s ease;
         }
 
@@ -106,7 +106,7 @@
             to   { opacity: 1; transform: translateY(0); }
         }
 
-        .form-group { margin-bottom: 22px; }
+        .form-group { margin-bottom: 10px; }
 
         .form-label {
             display: block;
@@ -115,14 +115,14 @@
             color: #0C2461;
             text-transform: uppercase;
             letter-spacing: .6px;
-            margin-bottom: 7px;
+            margin-bottom: 4px;
         }
 
         .input-wrap { position: relative; }
 
         .input-wrap i {
             position: absolute;
-            left: 14px;
+            left: 11px;
             top: 50%;
             transform: translateY(-50%);
             color: #8a9ab0;
@@ -132,10 +132,10 @@
 
         .form-input {
             width: 100%;
-            padding: 12px 14px 12px 44px;
+            padding: 8px 10px 8px 34px;
             border: 1.5px solid #dde6f0;
-            border-radius: 10px;
-            font-size: 14px;
+            border-radius: 8px;
+            font-size: 13px;
             color: #1a2b4a;
             background: #f7fafd;
             transition: border-color .2s, box-shadow .2s;
@@ -152,12 +152,12 @@
 
         .btn-login {
             width: 100%;
-            padding: 14px;
+            padding: 8px;
             background: #F0A500;
             border: none;
-            border-radius: 10px;
+            border-radius: 8px;
             color: #0C2461;
-            font-size: 15px;
+            font-size: 13.5px;
             font-weight: 800;
             cursor: pointer;
             letter-spacing: .3px;
@@ -166,7 +166,7 @@
             align-items: center;
             justify-content: center;
             gap: 8px;
-            margin-top: 6px;
+            margin-top: 3px;
         }
 
         .btn-login:hover {
@@ -179,7 +179,7 @@
         /* ── Footer de la tarjeta ── */
         .login-footer {
             text-align: center;
-            padding: 16px 40px 20px;
+            padding: 8px 26px 10px;
             border-top: 1px solid #f0f4f8;
             font-size: 12px;
             color: #aab4c0;
@@ -187,8 +187,8 @@
 
         /* ── Responsive ── */
         @media (max-width: 480px) {
-            .login-body, .login-header { padding-left: 24px; padding-right: 24px; }
-            .login-footer { padding-left: 24px; padding-right: 24px; }
+            .login-body, .login-header { padding-left: 18px; padding-right: 18px; }
+            .login-footer { padding-left: 18px; padding-right: 18px; }
         }
     </style>
 </head>
@@ -200,11 +200,11 @@
         <!-- Header -->
         <div class="login-header">
             <div class="login-logo-text">
-                <span class="xml">XML</span><span class="conc"> Concilia</span>
+                <span class="nexo">Nexo</span><span class="fiscal"> Fiscal</span>
             </div>
             <div class="login-header-divider"></div>
             <h1>Bienvenido</h1>
-            <p>Sistema de Conciliación de Facturas</p>
+            <p>Control documental y conciliación</p>
         </div>
 
         <!-- Formulario -->

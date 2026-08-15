@@ -117,7 +117,10 @@ $totalLineas   = $respaldadas + $conDiferencia + $sinRespaldo;
                             <i class="fas fa-pen"></i>
                         </button>
                         <form method="POST" action="<?= $baseUrl ?>/sociedades/eliminar/<?= (int) $soc['id'] ?>" style="display:inline;"
-                              onsubmit="return confirm('¿Eliminar la sociedad <?= htmlspecialchars($soc['nombre'], ENT_QUOTES) ?>?');">
+                              data-confirm="¿Quieres eliminar la sociedad <?= htmlspecialchars($soc['nombre'], ENT_QUOTES) ?>?"
+                              data-confirm-title="Eliminar sociedad"
+                              data-confirm-type="danger"
+                              data-confirm-accept="Eliminar">
                             <button type="submit" class="btn btn-outline btn-sm" title="Eliminar" style="color:#b91c1c;border-color:#fed7d7;">
                                 <i class="fas fa-trash-can"></i>
                             </button>
@@ -151,22 +154,22 @@ $totalLineas   = $respaldadas + $conDiferencia + $sinRespaldo;
     </div>
 
     <!-- ── Accesos rápidos ── -->
-    <div style="display:flex;flex-direction:column;gap:8px;">
+    <div style="display:flex;flex-direction:column;gap:6px;">
         <?php
         $accesos = [
             ['/por-pagar', 'fa-file-invoice-dollar', 'Pagos semanales', 'Verificar el listado del pago semanal', 'rgba(15,118,110,.09)', '#0f766e'],
             ['/correo', 'fa-envelope-open-text', 'Facturas desde Correo', 'Buscar e importar XML y PDF del buzón', 'rgba(240,165,0,.10)', 'var(--gold-dark)'],
             ['/facturas-erp', 'fa-file-invoice-dollar', 'Facturas ERP', 'Consultar el ERP y cargar facturas XML', 'rgba(27,58,107,.09)', 'var(--navy)'],
-            ['/reportes', 'fa-chart-bar', 'Reportes', 'Filtrar y exportar datos', 'rgba(27,58,107,.07)', 'var(--navy-light)'],
+            ['/seguimiento', 'fa-list-check', 'Seguimiento', 'Lo que falta de respaldo o no cuadra', 'rgba(27,58,107,.07)', 'var(--navy-light)'],
         ];
         ?>
         <?php foreach ($accesos as $a): ?>
-        <a href="<?= $baseUrl . $a[0] ?>" class="card" style="text-decoration:none;transition:transform .14s,box-shadow .14s;padding:14px 18px;margin-top:0;"
+        <a href="<?= $baseUrl . $a[0] ?>" class="card" style="text-decoration:none;transition:transform .14s,box-shadow .14s;padding:9px 12px;margin-top:0;"
            onmouseover="this.style.transform='translateY(-3px)';this.style.boxShadow='0 12px 32px rgba(27,58,107,.14)'"
            onmouseout="this.style.transform='';this.style.boxShadow=''">
-            <div style="display:flex;align-items:center;gap:5px;">
-                <div style="width:42px;height:42px;border-radius:11px;background:<?= $a[4] ?>;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-                    <i class="fas <?= $a[1] ?>" style="font-size:18px;color:<?= $a[5] ?>;"></i>
+            <div style="display:flex;align-items:center;gap:9px;">
+                <div style="width:34px;height:34px;border-radius:9px;background:<?= $a[4] ?>;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                    <i class="fas <?= $a[1] ?>" style="font-size:15px;color:<?= $a[5] ?>;"></i>
                 </div>
                 <div style="flex:1;">
                     <div style="font-size:13.5px;font-weight:700;color:var(--navy);"><?= $a[2] ?></div>

@@ -20,7 +20,7 @@ class UsuariosController extends Controller
     {
         $usuarios = $this->model->getAll();
         $this->render('usuarios/index', [
-            'title'    => 'Usuarios — XMLConcilia',
+            'title'    => 'Usuarios — Nexo Fiscal',
             'usuarios' => $usuarios,
         ]);
     }
@@ -36,7 +36,7 @@ class UsuariosController extends Controller
             }
             // Volver al formulario con error
             $this->render('usuarios/crear', [
-                'title' => 'Nuevo Usuario — XMLConcilia',
+                'title' => 'Nuevo Usuario — Nexo Fiscal',
                 'error' => $error,
                 'old'   => $_POST,
             ]);
@@ -44,7 +44,7 @@ class UsuariosController extends Controller
         }
 
         $this->render('usuarios/crear', [
-            'title' => 'Nuevo Usuario — XMLConcilia',
+            'title' => 'Nuevo Usuario — Nexo Fiscal',
             'error' => null,
             'old'   => [],
         ]);
@@ -66,7 +66,7 @@ class UsuariosController extends Controller
                 $this->redirectWithMessage($this->url('/usuarios'), 'Usuario actualizado correctamente.', 'success');
             }
             $this->render('usuarios/editar', [
-                'title'   => 'Editar Usuario — XMLConcilia',
+                'title'   => 'Editar Usuario — Nexo Fiscal',
                 'usuario' => $usuario,
                 'error'   => $error,
                 'old'     => $_POST,
@@ -75,7 +75,7 @@ class UsuariosController extends Controller
         }
 
         $this->render('usuarios/editar', [
-            'title'   => 'Editar Usuario — XMLConcilia',
+            'title'   => 'Editar Usuario — Nexo Fiscal',
             'usuario' => $usuario,
             'error'   => null,
             'old'     => [],

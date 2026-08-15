@@ -45,7 +45,7 @@ class CargaController extends Controller
         }
 
         $this->render('carga/index', [
-            'title'          => 'Carga de documentos - XMLConcilia',
+            'title'          => 'Carga de documentos - Nexo Fiscal',
             'sociedadActiva' => $sociedad,
             'semanas'        => $semanas,
             'semanaActiva'   => $semanaActiva,
@@ -80,13 +80,14 @@ class CargaController extends Controller
         }
 
         try {
-            $listados = $sociedad ? $this->loadModel('NotaCredito')->getListados((int) $sociedad['id'], 1) : [];
-            if (!empty($listados)) {
-                $ultimo = $listados[0];
+            $ultimo = $sociedad
+                ? $this->loadModel('NotaCredito')->ultimaCarga((int) $sociedad['id'])
+                : null;
+            if ($ultimo) {
                 $ultimas['listado_notas'] = [
-                    'nombre' => (string) ($ultimo['nombre'] ?? ''),
-                    'fecha'  => (string) ($ultimo['fecha_subida'] ?? ''),
-                    'lineas' => (int) ($ultimo['total_lineas'] ?? 0),
+                    'nombre' => (string) ($ultimo['archivo_origen'] ?? ''),
+                    'fecha'  => (string) ($ultimo['creado_en'] ?? ''),
+                    'lineas' => (int) ($ultimo['filas_leidas'] ?? 0),
                 ];
             }
         } catch (Throwable $e) {

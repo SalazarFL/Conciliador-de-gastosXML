@@ -274,15 +274,16 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             <?php if ($pendientes > 0): ?>
             <span class="badge badge-navy" style="font-size:9px;padding:1px 5px;"><?= $pendientes ?></span>
             <?php endif; ?>
+            <!--
+              Acá había un selector de semana. Importar una factura obligaba a
+              saber de antemano a qué semana pertenecía y a decirlo; si se
+              elegía mal o se dejaba en blanco, la factura quedaba fuera del
+              pago y había que ir a buscarla. Ya no hace falta: al importar, el
+              comprobante encuentra su factura en el listado del ERP por el
+              consecutivo, y si esa factura está en un pago semanal hereda la
+              semana sola. No hay nada que elegir porque no hay nada que decidir.
+            -->
             <div class="correo-bandeja-acciones" style="margin-left:auto;display:flex;gap:3px;align-items:center;">
-                <select id="sel-semana-imp" class="form-control" title="Semana a la que se asignan las facturas al importar"
-                        style="font-size:10px;padding:2px 4px;max-width:112px;" <?= $pendientes === 0 ? 'disabled' : '' ?>>
-                    <option value="" <?= (int) ($semanaActiva ?? 0) === 0 ? 'selected' : '' ?>>Semana…</option>
-                    <?php foreach ($semanas as $sem): ?>
-                    <option value="<?= (int) $sem['id'] ?>" <?= (int) ($semanaActiva ?? 0) === (int) $sem['id'] ? 'selected' : '' ?>><?= htmlspecialchars($sem['nombre']) ?></option>
-                    <?php endforeach; ?>
-                    <option value="nueva">➕ Nueva…</option>
-                </select>
                 <input type="checkbox" id="cb-todas" title="Seleccionar todas" <?= empty($bandeja) ? 'disabled' : '' ?>>
                 <button type="button" class="btn btn-primary btn-sm" id="btn-importar" title="Importar seleccionadas"
                         <?= $pendientes === 0 ? 'disabled' : '' ?>>
@@ -406,7 +407,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
 <!-- Visor en memoria: el servidor transmite el adjunto y no guarda copias. -->
 <div id="modal-adjunto" role="dialog" aria-modal="true" aria-labelledby="visor-adjunto-nombre"
-     style="display:none;position:fixed;inset:0;background:rgba(12,36,97,.62);z-index:500;align-items:center;justify-content:center;padding:18px;">
+     style="display:none;position:fixed;inset:0;background:rgba(12,36,97,.62);z-index:500;align-items:center;justify-content:center;padding:10px;">
     <div style="background:#fff;border-radius:12px;width:min(1100px,96vw);height:min(820px,94vh);display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(12,36,97,.35);overflow:hidden;">
         <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--border);background:#f8fafc;">
             <i class="fas fa-eye" style="color:var(--gold);"></i>
@@ -425,7 +426,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             <iframe id="visor-adjunto-pdf" title="Vista previa PDF"
                     style="display:none;border:0;width:100%;height:100%;background:#fff;"></iframe>
             <pre id="visor-adjunto-xml"
-                 style="display:none;margin:0;width:100%;height:100%;box-sizing:border-box;overflow:auto;padding:16px;background:#fff;color:#0f172a;font:12px/1.5 Consolas,Monaco,monospace;white-space:pre-wrap;word-break:break-word;"></pre>
+                 style="display:none;margin:0;width:100%;height:100%;box-sizing:border-box;overflow:auto;padding:10px;background:#fff;color:#0f172a;font:12px/1.5 Consolas,Monaco,monospace;white-space:pre-wrap;word-break:break-word;"></pre>
         </div>
         <div style="padding:6px 12px;border-top:1px solid var(--border);font-size:10.5px;color:var(--text-muted);background:#fff;">
             Vista temporal: no se guarda en la base de datos ni se crea una copia en el servidor.
@@ -435,9 +436,9 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
 <?php if ($modoCorreo === 'descargas'): ?>
 <div id="modal-incidencias" role="dialog" aria-modal="true" aria-labelledby="incidencias-titulo"
-     style="display:none;position:fixed;inset:0;background:rgba(12,36,97,.55);z-index:520;align-items:center;justify-content:center;padding:18px;">
+     style="display:none;position:fixed;inset:0;background:rgba(12,36,97,.55);z-index:520;align-items:center;justify-content:center;padding:10px;">
     <div style="background:#fff;border-radius:12px;width:min(1250px,97vw);height:min(800px,94vh);display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(12,36,97,.35);overflow:hidden;">
-        <div style="display:flex;align-items:center;gap:10px;padding:12px 15px;border-bottom:1px solid var(--border);background:#f8fafc;">
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 11px;border-bottom:1px solid var(--border);background:#f8fafc;">
             <i class="fas fa-triangle-exclamation" style="color:var(--gold);"></i>
             <div style="flex:1;min-width:0;">
                 <div id="incidencias-titulo" style="font-size:14px;font-weight:800;color:var(--navy);">Historial de incidencias</div>
@@ -446,7 +447,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             <button type="button" id="incidencias-cerrar" aria-label="Cerrar"
                     style="background:none;border:none;font-size:24px;color:#64748b;cursor:pointer;line-height:1;padding:0 3px;">&times;</button>
         </div>
-        <div style="display:flex;gap:8px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);flex-wrap:wrap;">
+        <div style="display:flex;gap:6px;align-items:center;padding:7px 10px;border-bottom:1px solid var(--border);flex-wrap:wrap;">
             <input type="text" id="incidencias-q" class="form-control" style="min-width:260px;flex:1;font-size:12px;"
                    placeholder="Buscar por asunto, motivo, remitente o carpeta">
             <select id="incidencias-tipo" class="form-control" style="width:auto;min-width:210px;font-size:12px;">
@@ -463,7 +464,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
         <!-- Acciones en lote. Descartar no borra: marca lo revisado para que
              deje de contar, y la marca sobrevive a reprocesar el correo. -->
-        <div style="display:flex;gap:8px;align-items:center;padding:9px 14px;border-bottom:1px solid var(--border);
+        <div style="display:flex;gap:6px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--border);
                     flex-wrap:wrap;background:#fffdf7;">
             <label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--navy);font-weight:700;">
                 <input type="checkbox" id="incidencias-todos"> Seleccionar la página
@@ -488,10 +489,10 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                 <thead style="position:sticky;top:0;z-index:2;background:#f3f7fb;">
                     <tr><th style="width:34px;"></th><th>Fecha</th><th>Lote</th><th>Tipo</th><th>Asunto del correo</th><th>Motivo</th><th>Carpeta</th><th></th></tr>
                 </thead>
-                <tbody id="incidencias-body"><tr><td colspan="8" style="padding:30px;text-align:center;color:var(--text-muted);">Cargando…</td></tr></tbody>
+                <tbody id="incidencias-body"><tr><td colspan="8" style="padding:18px;text-align:center;color:var(--text-muted);">Cargando…</td></tr></tbody>
             </table>
         </div>
-        <div style="display:flex;justify-content:center;align-items:center;gap:8px;padding:9px 14px;border-top:1px solid var(--border);background:#f8fafc;">
+        <div style="display:flex;justify-content:center;align-items:center;gap:6px;padding:6px 10px;border-top:1px solid var(--border);background:#f8fafc;">
             <button type="button" id="incidencias-prev" class="btn btn-outline btn-sm"><i class="fas fa-chevron-left"></i> Anterior</button>
             <span id="incidencias-pagina" style="font-size:11.5px;color:var(--text-muted);min-width:110px;text-align:center;">Página 1 de 1</span>
             <button type="button" id="incidencias-next" class="btn btn-outline btn-sm">Siguiente <i class="fas fa-chevron-right"></i></button>
@@ -502,8 +503,8 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
 <!-- Modal de configuración (engranaje de la barra superior). -->
 <div id="modal-config" style="display:none;position:fixed;inset:0;background:rgba(12,36,97,.45);z-index:400;align-items:center;justify-content:center;">
-    <div style="background:#fff;border-radius:12px;max-width:540px;width:92%;padding:20px 22px;box-shadow:0 16px 48px rgba(12,36,97,.3);max-height:92vh;overflow-y:auto;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+    <div style="background:#fff;border-radius:11px;max-width:540px;width:92%;padding:13px 15px;box-shadow:0 16px 48px rgba(12,36,97,.3);max-height:94vh;overflow-y:auto;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;">
             <div style="font-size:15px;font-weight:800;color:var(--navy);">
                 <i class="fas fa-gear" style="color:var(--gold);margin-right:6px;"></i>Configuración del módulo
             </div>
@@ -1683,7 +1684,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     // ── Buscar en el buzón (servidor IMAP) ──
     // opts.origenBusqueda distingue la lupa de la tarjeta de la lupa y los
     // filtros propios de la bandeja.
-    function cargarCorreos(opts) {
+    async function cargarCorreos(opts) {
         opts = (opts && typeof opts === 'object' && !(opts instanceof Event)) ? opts : {};
         var texto = inputBuscar ? inputBuscar.value.trim() : '';
         var paginaSolicitada = Math.max(1, parseInt(opts.pagina || 1, 10) || 1);
@@ -1697,7 +1698,10 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         } : {};
 
         if (selDias.value === '0' && texto === '' && !buscarEnCarpeta) {
-            if (!confirm('Vas a listar TODO el buzón sin término de búsqueda; puede tardar y solo se muestran los 500 más recientes. ¿Continuar?')) {
+            if (!(await AppDialog.confirm(
+                'La búsqueda recorrerá todo el buzón sin un término específico. Puede tardar y mostrará como máximo los 500 correos más recientes.',
+                { title: 'Buscar en todo el buzón', type: 'warning', confirmText: 'Buscar de todos modos' }
+            ))) {
                 return;
             }
         }
@@ -1808,7 +1812,9 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                     window.location.href = BASE + '/correo' + (qsCuenta.length ? '?' + qsCuenta.join('&') : '');
                 })
                 .catch(function (err) {
-                    alert('No se pudo cambiar de cuenta: ' + err.message);
+                    AppDialog.alert(err.message, {
+                        title: 'No se pudo cambiar la cuenta', type: 'danger'
+                    });
                     selCuenta.disabled = false;
                 });
         });
@@ -2031,6 +2037,19 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         autoRefrescar();
     };
 
+    // El botón de configuración de la barra superior está en todas las
+    // pantallas, pero el modal vive acá. Desde fuera se llega con ?config=1 y
+    // se abre solo; después se limpia el parámetro para que recargar o volver
+    // atrás no lo vuelva a abrir.
+    if (modalCfg && new URLSearchParams(window.location.search).get('config') === '1') {
+        window.abrirConfigCorreo();
+        if (window.history.replaceState) {
+            var limpia = new URL(window.location.href);
+            limpia.searchParams.delete('config');
+            window.history.replaceState({}, '', limpia.toString());
+        }
+    }
+
     function cerrarConfig() { if (modalCfg) modalCfg.style.display = 'none'; }
 
     if (modalCfg) {
@@ -2246,8 +2265,11 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         });
 
         Array.prototype.forEach.call(document.querySelectorAll('.cta-eliminar'), function (btn) {
-            btn.addEventListener('click', function () {
-                if (!confirm('¿Eliminar la cuenta "' + btn.dataset.nombre + '"? Su índice local dejará de usarse.')) return;
+            btn.addEventListener('click', async function () {
+                if (!(await AppDialog.confirm(
+                    'La cuenta "' + btn.dataset.nombre + '" se eliminará y su índice local dejará de utilizarse.',
+                    { title: 'Eliminar cuenta de correo', type: 'danger', confirmText: 'Eliminar cuenta' }
+                ))) return;
                 postJson(BASE + '/correo/cuentas/eliminar', { id: btn.dataset.id })
                     .then(function () { window.location.href = BASE + '/correo'; })
                     .catch(function (err) { cfgMostrarMsg(err.message, true); });
@@ -2491,7 +2513,9 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     // ── Procesar correos seleccionados ──
     function procesarItems(items) {
         if (!items.length) {
-            alert('Marca al menos un correo para procesar.');
+            AppDialog.alert('Selecciona al menos un correo para iniciar el procesamiento.', {
+                title: 'No hay correos seleccionados', type: 'warning'
+            });
             return;
         }
 
@@ -2583,18 +2607,6 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         });
     }
 
-    // Recordar la semana elegida en la bandeja para los demás módulos.
-    // "Nueva…" se crea recién al importar; aquí solo se guardan semanas reales
-    // o "Sin semana" (valor vacío → 0).
-    var selSemanaImpPersist = document.getElementById('sel-semana-imp');
-    if (selSemanaImpPersist) {
-        selSemanaImpPersist.addEventListener('change', function () {
-            if (selSemanaImpPersist.value === 'nueva') return;
-            postJson(BASE + '/correo/semana/usar', { semana_id: selSemanaImpPersist.value || 0 })
-                .catch(function () {}); // recordar la semana es best-effort
-        });
-    }
-
     function idsSeleccionados(filtroEstado) {
         return Array.prototype.slice.call(document.querySelectorAll('.cb-row:checked'))
             .filter(function (cb) { return !filtroEstado || cb.dataset.estado === filtroEstado; })
@@ -2605,18 +2617,14 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         btnImportar.addEventListener('click', function () {
             var ids = idsSeleccionados('pendiente');
             if (!ids.length) {
-                alert('Marca al menos una factura pendiente para importar.');
+                AppDialog.alert('Selecciona al menos una factura pendiente para importarla.', {
+                    title: 'No hay facturas seleccionadas', type: 'warning'
+                });
                 return;
             }
 
-            // Semana de trabajo a la que quedarán asignadas las facturas
-            var selSemanaImp = document.getElementById('sel-semana-imp');
-            var semanaId = selSemanaImp ? selSemanaImp.value : '';
-            var semanaNueva = '';
-            if (semanaId === 'nueva') {
-                semanaNueva = prompt('Nombre de la semana nueva:', 'Semana ' + new Date().toLocaleDateString('es-CR'));
-                if (semanaNueva === null) return; // canceló
-            }
+            // Ya no se pregunta la semana: cada comprobante encuentra su
+            // factura en el listado del ERP y hereda de ahí la que le toque.
 
             btnImportar.disabled = true;
             if (btnDescartar) btnDescartar.disabled = true;
@@ -2630,11 +2638,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             var avisoCarpeta = '';
             var avisosArchivos = [];
 
-            postJson(BASE + '/correo/importar', {
-                ids: ids.join(','),
-                semana_id: semanaId,
-                semana_nueva: semanaNueva
-            })
+            postJson(BASE + '/correo/importar', { ids: ids.join(',') })
                 .then(function (r) {
                     importacionId = r.importacion_id;
                     archivosGuardados = r.archivos_guardados || 0;
@@ -2716,13 +2720,18 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     }
 
     if (btnDescartar) {
-        btnDescartar.addEventListener('click', function () {
+        btnDescartar.addEventListener('click', async function () {
             var ids = idsSeleccionados(null);
             if (!ids.length) {
-                alert('Marca al menos una fila para descartar.');
+                AppDialog.alert('Selecciona al menos una fila para descartarla.', {
+                    title: 'No hay filas seleccionadas', type: 'warning'
+                });
                 return;
             }
-            if (!confirm('¿Descartar ' + ids.length + ' fila' + (ids.length !== 1 ? 's' : '') + '? Se elimina su XML; los PDF guardados se conservan.')) {
+            if (!(await AppDialog.confirm(
+                'Se descartarán ' + ids.length + ' fila' + (ids.length !== 1 ? 's' : '') + '. Los archivos XML se eliminarán; los PDF guardados se conservarán.',
+                { title: 'Descartar filas seleccionadas', type: 'danger', confirmText: 'Descartar' }
+            ))) {
                 return;
             }
 
@@ -2733,7 +2742,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                         + r.descartadas + ' fila' + (r.descartadas !== 1 ? 's' : '') + ' descartada' + (r.descartadas !== 1 ? 's' : '') + '.', true);
                 })
                 .catch(function (err) {
-                    alert('No fue posible descartar: ' + err.message);
+                    AppDialog.alert(err.message, { title: 'No fue posible descartar', type: 'danger' });
                     btnDescartar.disabled = false;
                 });
         });
@@ -2885,7 +2894,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
     function cargarHistorial(pagina) {
         historialPagina = Math.max(1, Number(pagina || 1));
-        historialBody.innerHTML = '<tr><td colspan="8" style="padding:30px;text-align:center;color:#64748b;"><i class="fas fa-spinner fa-spin"></i> Cargando incidencias…</td></tr>';
+        historialBody.innerHTML = '<tr><td colspan="8" style="padding:18px;text-align:center;color:#64748b;"><i class="fas fa-spinner fa-spin"></i> Cargando incidencias…</td></tr>';
         post('/correo/general/incidencias', {
             pagina: historialPagina,
             q: historialQ.value || '',
@@ -2919,7 +2928,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             historialTipo.value = tipoActual;
 
             if (!(r.rows || []).length) {
-                historialBody.innerHTML = '<tr><td colspan="8" style="padding:30px;text-align:center;color:#64748b;">No hay incidencias con estos filtros.</td></tr>';
+                historialBody.innerHTML = '<tr><td colspan="8" style="padding:18px;text-align:center;color:#64748b;">No hay incidencias con estos filtros.</td></tr>';
                 actualizarMarcadas();
                 return;
             }
@@ -2951,7 +2960,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             historialTodos.checked = false;
             actualizarMarcadas();
         }).catch(function (e) {
-            historialBody.innerHTML = '<tr><td colspan="7" style="padding:30px;text-align:center;color:#b91c1c;">'+escapeHtml(e.message)+'</td></tr>';
+            historialBody.innerHTML = '<tr><td colspan="7" style="padding:18px;text-align:center;color:#b91c1c;">'+escapeHtml(e.message)+'</td></tr>';
         });
     }
 
@@ -3018,7 +3027,9 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                 cargarHistorial(1);
                 avisarIncidencias(r.message);
             })
-            .catch(function (err) { alert(err.message); })
+            .catch(function (err) {
+                AppDialog.alert(err.message, { title: 'No fue posible descartar', type: 'danger' });
+            })
             .then(function () { boton.disabled = false; boton.innerHTML = original; });
     }
 
@@ -3030,12 +3041,12 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
     // "Todas las del filtro" alcanza lo que NO está en pantalla: el caso real
     // son 194 cédulas ajenas repartidas en cuatro páginas.
-    historialDescartarTodas.addEventListener('click', function () {
+    historialDescartarTodas.addEventListener('click', async function () {
         var tipo = historialTipo.value ? ('de tipo "' + historialTipo.value + '" ') : '';
-        if (!confirm('Se van a descartar TODAS las incidencias ' + tipo + 'que cumplen el filtro actual, ' +
-                     'estén o no en esta página.
-
-No se borra nada: se pueden restaurar.')) return;
+        if (!(await AppDialog.confirm(
+            'Se descartarán todas las incidencias ' + tipo + 'que cumplen el filtro actual, aunque no estén en esta página.\n\nNo se borrará información y podrás restaurarlas después.',
+            { title: 'Descartar todas las incidencias filtradas', type: 'warning', confirmText: 'Descartar todas' }
+        ))) return;
         descartar({
             todas: 1,
             q: historialQ.value || '',
@@ -3050,7 +3061,9 @@ No se borra nada: se pueden restaurar.')) return;
         historialRestaurar.disabled = true;
         post('/correo/incidencias/restaurar', { ids: JSON.stringify(ids) })
             .then(function (r) { historialTodos.checked = false; cargarHistorial(1); avisarIncidencias(r.message); })
-            .catch(function (err) { alert(err.message); })
+            .catch(function (err) {
+                AppDialog.alert(err.message, { title: 'No se pudieron restaurar', type: 'danger' });
+            })
             .then(function () { historialRestaurar.disabled = false; });
     });
 
@@ -3092,12 +3105,22 @@ No se borra nada: se pueden restaurar.')) return;
     iniciar.addEventListener('click', function(){
         var desde=document.getElementById('general-desde').value, hasta=document.getElementById('general-hasta').value;
         var correo=document.getElementById('general-correo').value.trim();
-        if (!desde || !hasta) { alert('Indica ambas fechas.'); return; }
-        if (correo && !document.getElementById('general-correo').checkValidity()) { alert('Indica un correo válido.'); return; }
+        if (!desde || !hasta) {
+            AppDialog.alert('Selecciona la fecha inicial y la fecha final del periodo.', {
+                title: 'Periodo incompleto', type: 'warning'
+            });
+            return;
+        }
+        if (correo && !document.getElementById('general-correo').checkValidity()) {
+            AppDialog.alert('Escribe una dirección de correo válida o deja el campo vacío.', {
+                title: 'Correo no válido', type: 'warning'
+            });
+            return;
+        }
         var incluirProcesados = document.getElementById('general-incluir-procesados').checked;
         iniciar.disabled=true; estado.textContent='Calculando correos candidatos…';
         post('/correo/general/estimar', {fecha_desde:desde, fecha_hasta:hasta, correo_busqueda:correo})
-            .then(function(r){
+            .then(async function(r){
                 var filtro = correo ? ' que coinciden con ' + correo : '';
                 var yaVistos = Number(r.procesados || 0);
                 // Con la casilla marcada se revisa todo el rango; si no, solo
@@ -3110,7 +3133,9 @@ No se borra nada: se pueden restaurar.')) return;
                         : '\n\nSe omiten ' + yaVistos + ' ya procesados en corridas anteriores.';
                 }
                 if (aRevisar === 0) mensaje += '\n\nNo hay nada nuevo que revisar en este rango.';
-                if (!confirm(mensaje + '\n\n¿Iniciar?')) throw new Error('__cancelado__');
+                if (!(await AppDialog.confirm(mensaje, {
+                    title: 'Iniciar revisión de correos', type: 'info', confirmText: 'Iniciar revisión'
+                }))) throw new Error('__cancelado__');
                 estado.textContent='Creando el lote…';
                 return post('/correo/general/crear', {
                     fecha_desde:desde, fecha_hasta:hasta, correo_busqueda:correo,
@@ -3123,7 +3148,14 @@ No se borra nada: se pueden restaurar.')) return;
     });
     pausar.addEventListener('click', function(){ detenido=true; post('/correo/general/pausar',{lote_id:lote.id}).then(function(r){render(r.lote,[]);}); });
     reanudar.addEventListener('click', function(){ detenido=false; post('/correo/general/reanudar',{lote_id:lote.id}).then(function(r){render(r.lote,[]);paso();}); });
-    cancelar.addEventListener('click', function(){ if(!confirm('Se detendrá lo pendiente; lo ya importado se conserva.'))return; detenido=true; post('/correo/general/cancelar',{lote_id:lote.id}).then(function(r){render(r.lote,[]);}); });
+    cancelar.addEventListener('click', async function () {
+        if (!(await AppDialog.confirm(
+            'Se detendrá el trabajo pendiente. Los documentos que ya se importaron se conservarán.',
+            { title: 'Cancelar procesamiento', type: 'warning', confirmText: 'Detener proceso' }
+        ))) return;
+        detenido = true;
+        post('/correo/general/cancelar', { lote_id: lote.id }).then(function (r) { render(r.lote, []); });
+    });
 
     render(lote, []);
     if (lote && lote.estado === 'ejecutando') paso();

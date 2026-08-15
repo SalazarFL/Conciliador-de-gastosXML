@@ -47,7 +47,9 @@ $proveedorId = 0;
 $limpiar = function () use ($pdo, $marca, &$socA, &$socB) {
     foreach ([$socA, $socB] as $id) {
         if ($id <= 0) { continue; }
-        $pdo->prepare('DELETE FROM porpagar_facturas WHERE listado_id IN (SELECT id FROM porpagar_listados WHERE sociedad_id = ?)')->execute([$id]);
+        // El pago semanal ya no tiene líneas propias: sus facturas son filas
+        // de facturas_erp marcadas, y esas se sueltan, no se borran.
+        $pdo->prepare('UPDATE facturas_erp SET porpagar_listado_id = NULL, semana_id = NULL WHERE porpagar_listado_id IN (SELECT id FROM porpagar_listados WHERE sociedad_id = ?)')->execute([$id]);
         $pdo->prepare('DELETE FROM porpagar_listados WHERE sociedad_id = ?')->execute([$id]);
         $pdo->prepare('DELETE FROM facturas_xml WHERE sociedad_id = ?')->execute([$id]);
         $pdo->prepare('DELETE FROM facturas_erp WHERE sociedad_id = ?')->execute([$id]);
@@ -130,11 +132,18 @@ try {
     assertAislamiento((int) $resumenA['saldo'] === 1000, 'el saldo del ERP de A no suma el de B');
 
     // ── Matching del pago semanal ──
-    // Ambas tienen una factura con el mismo consecutivo: A solo debe ver la suya.
-    $candidatasA = (new PorPagar())->setSociedad($socA)->getFacturasParaMatching(0);
-    assertAislamiento(count($candidatasA) === 1, 'el matching de A considera solo sus facturas');
+    // Ambas tienen una factura con el mismo consecutivo: A solo debe ver la
+    // suya. El cruce del pago es por consecutivo y el consecutivo se repite
+    // entre sociedades, así que sin este filtro A se respaldaría con el
+    // comprobante de B.
+    $candidatasA = (new Factura())->setSociedad($socA)->getCandidatasParaPago();
+    assertAislamiento(count($candidatasA) === 1, 'el matching de A considera solo sus comprobantes');
     assertAislamiento($candidatasA[0]['consecutivo_completo'] === '00100001010000991001',
-        'el matching de A toma su propia factura');
+        'el matching de A toma su propio comprobante');
+
+    // El índice con que se resuelve un archivo de pago tampoco cruza empresas.
+    $indiceA = (new FacturaErp())->setSociedad($socA)->getIndicePago();
+    assertAislamiento(count($indiceA) === 1, 'el índice de facturas ERP de A no incluye las de B');
 
     // ── Semanas ──
     $semanaA = (int) (new Semana())->setSociedad($socA)->crear('Semana A ' . $marca, $socA);

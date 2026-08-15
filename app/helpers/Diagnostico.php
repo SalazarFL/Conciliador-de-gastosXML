@@ -86,7 +86,7 @@ class Diagnostico
     {
         $necesarias = ['pdo_mysql' => 'leer y escribir en la base',
                        'imap' => 'capturar facturas del correo',
-                       'zip' => 'descargar conciliaciones en ZIP',
+                       'zip' => 'leer los XLSX que se cargan y generar los que se exportan',
                        'mbstring' => 'nombres con tildes y ñ'];
         $faltan = [];
         foreach ($necesarias as $ext => $paraQue) {

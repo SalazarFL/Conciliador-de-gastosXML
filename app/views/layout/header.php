@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <title><?= htmlspecialchars($title ?? 'XMLConcilia — Arrendadora BM PZ S.A.') ?></title>
+    <title><?= htmlspecialchars($title ?? 'Nexo Fiscal — Arrendadora BM PZ S.A.') ?></title>
 
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -14,6 +14,8 @@
     $_ap = rtrim(parse_url(defined('APP_URL') ? APP_URL : '/xmlconcilia/public', PHP_URL_PATH), '/');
     $_cssFile = __DIR__ . '/../../../public/assets/css/styles.css';
     $_cssVer  = is_file($_cssFile) ? filemtime($_cssFile) : time();
+    $_jsFile  = __DIR__ . '/../../../public/assets/js/app.js';
+    $_jsVer   = is_file($_jsFile) ? filemtime($_jsFile) : time();
     ?>
     <link rel="stylesheet" href="<?= $_ap ?>/assets/css/styles.css?v=<?= $_cssVer ?>">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
@@ -21,6 +23,9 @@
     <meta http-equiv="Expires" content="0">
 </head>
 <body>
+
+<!-- Se carga antes de las vistas para que sus acciones puedan usar AppDialog. -->
+<script src="<?= $_ap ?>/assets/js/app.js?v=<?= $_jsVer ?>"></script>
 
 <?php
 $baseUrl    = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
@@ -53,9 +58,6 @@ $pageLabels = [
     'notas-credito'=> 'Notas de crédito',
     'devoluciones' => 'Devoluciones',
     'notas-xml'    => 'Notas de crédito · Carga XML',
-    'gastos'       => 'Carga de Gastos CSV',
-    'conciliacion' => 'Conciliación',
-    'reportes'     => 'Reportes y Exportación',
     'usuarios'     => 'Gestión de Usuarios',
     'carga'        => 'Carga de documentos',
     'diagnostico'  => 'Diagnóstico de la instalación',
@@ -96,10 +98,10 @@ if (!isset($sociedadActiva)) {
         <div class="sidebar-logo">
             <a href="<?= $baseUrl ?>/" style="text-decoration:none;">
                 <div class="logo-full" style="font-size:22px;font-weight:800;letter-spacing:.5px;line-height:1.1;text-align:center;">
-                    <span style="color:var(--gold);">XML</span><span style="color:#fff;"> Concilia</span>
+                    <span style="color:var(--gold);">Nexo</span><span style="color:#fff;"> Fiscal</span>
                 </div>
-                <div class="logo-mini" title="XML Concilia">
-                    <span style="color:var(--gold);">X</span><span style="color:#fff;">C</span>
+                <div class="logo-mini" title="Nexo Fiscal">
+                    <span style="color:var(--gold);">N</span><span style="color:#fff;">F</span>
                 </div>
             </a>
         </div>
@@ -158,11 +160,6 @@ if (!isset($sociedadActiva)) {
                 <span class="nav-label">Facturas ERP</span>
             </a>
 
-            <a href="<?= $baseUrl ?>/reportes" class="<?= navActive('reportes', $uriClean) ?>" title="Reportes">
-                <span class="nav-icon"><i class="fas fa-chart-bar"></i></span>
-                <span class="nav-label">Reportes</span>
-            </a>
-
             <?php if (!empty($_SESSION['user_is_admin'])): ?>
             <div class="sidebar-section-label" style="margin-top:16px;">Administración</div>
             <a href="<?= $baseUrl ?>/usuarios" class="<?= navActive('usuarios', $uriClean) ?>" title="Usuarios">
@@ -211,13 +208,13 @@ if (!isset($sociedadActiva)) {
 
         <!-- Topbar -->
         <div class="topbar">
-            <div class="topbar-left" style="display:flex;align-items:center;gap:14px;min-width:0;">
+            <div class="topbar-left" style="display:flex;align-items:center;gap:9px;min-width:0;">
                 <h2 style="white-space:nowrap;"><?= htmlspecialchars($currentLabel) ?></h2>
 
                 <?php // El modo de Correo va junto al título: es de qué trata la
                       // pantalla entera, no un control más dentro de ella.
                 if (isset($modoCorreo) && strpos($uriClean, '/correo') !== false): ?>
-                <div style="display:flex;align-items:center;gap:6px;padding-left:14px;
+                <div style="display:flex;align-items:center;gap:5px;padding-left:9px;
                             border-left:1px solid var(--border-light);"
                      title="El buzón y su árbol de carpetas se mantienen en los tres modos.">
                     <?php foreach ([
@@ -235,29 +232,42 @@ if (!isset($sociedadActiva)) {
                 </div>
                 <?php endif; ?>
             </div>
-            <div class="topbar-right" style="display:flex;align-items:center;gap:14px;">
+            <div class="topbar-right">
                 <?php if (!empty($_SESSION['user_id'])): ?>
-                <?php if (strpos($uriClean, '/correo') !== false): ?>
-                <button type="button" onclick="if (window.abrirConfigCorreo) window.abrirConfigCorreo()"
-                        style="font-size:12px;color:#0C2461;background:transparent;cursor:pointer;display:flex;align-items:center;gap:5px;padding:5px 12px;border:1.5px solid #c3d0e8;border-radius:8px;font-weight:600;transition:background .2s;"
+                <?php
+                // La configuración estaba solo en Correo, que es donde vive el
+                // modal, y quien necesitaba cambiar la carpeta raíz desde
+                // cualquier otra pantalla tenía que saber que se guardaba ahí.
+                // No es una opción del correo: la carpeta de XML y PDF la usan
+                // todos los módulos. Ahora el botón está siempre; dentro de
+                // Correo abre el modal, y desde fuera lleva a Correo con el
+                // modal ya abierto.
+                $enCorreo = strpos($uriClean, '/correo') !== false;
+                ?>
+                <button type="button"
+                        onclick="<?= $enCorreo
+                            ? 'if (window.abrirConfigCorreo) window.abrirConfigCorreo()'
+                            : 'window.location.href=' . json_encode($baseUrl . '/correo?config=1') ?>"
+                        class="topbar-action"
+                        style="font-size:11.5px;color:#0C2461;background:transparent;cursor:pointer;display:flex;align-items:center;gap:4px;padding:3px 8px;border:1px solid #c3d0e8;border-radius:7px;font-weight:600;transition:background .2s;"
                         onmouseover="this.style.background='#eef3fb'" onmouseout="this.style.background='transparent'"
-                        title="Configuración: carpeta destino y cédula de la empresa">
+                        title="Configuración: carpeta raíz de XML y PDF, cuentas de correo y respaldo">
                     <i class="fas fa-gear"></i>
                 </button>
-                <?php endif; ?>
                 <?php if ($sociedadActiva): ?>
-                <span style="font-size:12px;color:var(--navy);background:var(--gold-pale);border:1px solid var(--gold-light);border-radius:999px;padding:5px 12px;display:flex;align-items:center;gap:6px;font-weight:600;"
+                <span class="topbar-society" style="font-size:11.5px;color:var(--navy);background:var(--gold-pale);border:1px solid var(--gold-light);border-radius:999px;padding:3px 8px;display:flex;align-items:center;gap:5px;font-weight:600;"
                       title="Sociedad activa">
                     <i class="fas fa-building" style="color:var(--gold-dark);font-size:13px;"></i>
                     <?= htmlspecialchars($sociedadActiva['nombre']) ?>
                 </span>
                 <?php endif; ?>
-                <span style="font-size:12px;color:#4a5568;display:flex;align-items:center;gap:6px;">
-                    <i class="fas fa-user-circle" style="color:#0C2461;font-size:16px;"></i>
+                <span class="topbar-user" style="font-size:11.5px;color:#4a5568;display:flex;align-items:center;gap:5px;">
+                    <i class="fas fa-user-circle" style="color:#0C2461;font-size:14px;"></i>
                     <?= htmlspecialchars($_SESSION['user_nombre'] ?? $_SESSION['user_username'] ?? '') ?>
                 </span>
                 <a href="<?= $baseUrl ?>/logout"
-                   style="font-size:12px;color:#e53e3e;text-decoration:none;display:flex;align-items:center;gap:5px;padding:5px 12px;border:1.5px solid #fed7d7;border-radius:8px;font-weight:600;transition:background .2s;"
+                   class="topbar-action"
+                   style="font-size:11.5px;color:#e53e3e;text-decoration:none;display:flex;align-items:center;gap:4px;padding:3px 8px;border:1px solid #fed7d7;border-radius:7px;font-weight:600;transition:background .2s;"
                    onmouseover="this.style.background='#fff5f5'" onmouseout="this.style.background='transparent'"
                    title="Cerrar sesión">
                     <i class="fas fa-sign-out-alt"></i> Salir

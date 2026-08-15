@@ -75,62 +75,10 @@ class Proveedor extends Model
         return $this->execute($sql, $params);
     }
     
-    /**
-     * Buscar proveedores (autocompletado)
-     */
-    public function buscar($termino)
-    {
-        $sql = "SELECT id, rfc, razon_social 
-                FROM {$this->table} 
-                WHERE rfc LIKE ? OR razon_social LIKE ?
-                ORDER BY razon_social
-                LIMIT 20";
-        
-        $param = '%' . $termino . '%';
-        return $this->fetchAll($sql, [$param, $param]);
-    }
-    
-    /**
-     * Listado de nombres únicos de proveedores (facturas + gastos)
-     */
-    public function getListado()
-    {
-        $sql = "SELECT DISTINCT nombre FROM (
-                    SELECT p.razon_social AS nombre FROM {$this->table} p
-                    WHERE p.razon_social IS NOT NULL AND p.razon_social <> ''
-                    UNION
-                    SELECT g.proveedor_texto AS nombre FROM gastos_consolidados g
-                    WHERE g.proveedor_texto IS NOT NULL AND g.proveedor_texto <> ''
-                ) t ORDER BY nombre";
-        return $this->fetchAll($sql);
-    }
-
-    /**
-     * Obtener proveedores con estadísticas
-     */
-    public function getAllWithStats()
-    {
-        $sql = "SELECT p.*,
-                    COALESCE(f.total_facturas, 0) as total_facturas,
-                    COALESCE(g.total_gastos, 0) as total_gastos,
-                    COALESCE(f.monto_facturas, 0) as monto_facturas,
-                    COALESCE(g.monto_gastos, 0) as monto_gastos
-                FROM {$this->table} p
-                LEFT JOIN (
-                    SELECT proveedor_id, COUNT(*) as total_facturas, COALESCE(SUM(total), 0) as monto_facturas
-                    FROM facturas_xml
-                    WHERE tipo_documento IS NULL OR tipo_documento = 'FE'
-                    GROUP BY proveedor_id
-                ) f ON p.id = f.proveedor_id
-                LEFT JOIN (
-                    SELECT proveedor_texto, COUNT(*) as total_gastos, COALESCE(SUM(suma_total), 0) as monto_gastos
-                    FROM gastos_consolidados
-                    GROUP BY proveedor_texto
-                ) g ON p.razon_social = g.proveedor_texto
-                ORDER BY p.razon_social";
-        
-        return $this->fetchAll($sql);
-    }
+    // Aquí había tres consultas más: buscar() para un autocompletado que
+    // ninguna pantalla llegó a usar, y getListado() y getAllWithStats(), que
+    // unían proveedores con `gastos_consolidados`. Esa tabla se fue con el
+    // módulo de Gastos, así que las dos últimas ya ni siquiera podían correr.
 
     private function normalizarRazonSocial($value)
     {

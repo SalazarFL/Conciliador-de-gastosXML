@@ -135,22 +135,27 @@ class Seguimiento extends Model
               FROM notas_credito_lineas l
               JOIN notas_credito_listados li ON li.id = l.listado_id
               LEFT JOIN facturas_xml x ON x.id = l.factura_xml_id
-             WHERE l.clase IN ('directa', 'costo', 'cambio', 'revisar')";
+             WHERE l.clase IN ('directa', 'costo', 'cambio', 'revisar')
+               AND li.id = (SELECT MAX(actual.id)
+                              FROM notas_credito_listados actual
+                             WHERE actual.sociedad_id = li.sociedad_id)";
 
+        // La línea del pago semanal ES la factura del ERP: el documento, el
+        // proveedor y el saldo salen de ahí y no de una copia del archivo.
         $pp = "SELECT
                 'pago_semanal' AS origen,
-                pf.id AS referencia_id,
-                pf.numero AS documento,
+                pe.id AS referencia_id,
+                pe.documento AS documento,
                 NULL AS clase,
-                pf.proveedor_texto AS proveedor,
-                NULL AS sucursal,
-                pf.fecha AS fecha,
+                pe.proveedor_nombre AS proveedor,
+                pe.sucursal AS sucursal,
+                pe.fecha_emision AS fecha,
                 'CRC' AS moneda,
-                pf.total AS monto,
-                pf.total AS saldo,
-                pf.diferencia AS diferencia,
+                pe.monto AS monto,
+                COALESCE(pe.saldo_pago, pe.saldo) AS saldo,
+                pe.diferencia AS diferencia,
                 NULL AS motivo_match,
-                pf.factura_xml_id AS factura_xml_id,
+                pe.factura_xml_id AS factura_xml_id,
                 li.id AS contexto_id,
                 li.nombre AS contexto,
                 li.sociedad_id AS sociedad_id,
@@ -158,11 +163,11 @@ class Seguimiento extends Model
                 x.ruta_pdf AS ruta_pdf,
                 x.estado_pdf AS estado_pdf,
                 x.consecutivo_completo AS consecutivo,
-                " . sprintf($tarea, 'pf.estado', 'pf.estado') . " AS tarea,
-                COALESCE(ABS(pf.diferencia), pf.total) AS en_juego
-              FROM porpagar_facturas pf
-              JOIN porpagar_listados li ON li.id = pf.listado_id
-              LEFT JOIN facturas_xml x ON x.id = pf.factura_xml_id
+                " . sprintf($tarea, 'pe.estado_respaldo', 'pe.estado_respaldo') . " AS tarea,
+                COALESCE(ABS(pe.diferencia), COALESCE(pe.saldo_pago, pe.saldo)) AS en_juego
+              FROM facturas_erp pe
+              JOIN porpagar_listados li ON li.id = pe.porpagar_listado_id
+              LEFT JOIN facturas_xml x ON x.id = pe.factura_xml_id
              WHERE li.estado <> 'cerrado'";
 
         return "({$nc}) UNION ALL ({$pp})";

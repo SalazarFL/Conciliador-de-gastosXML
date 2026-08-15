@@ -26,13 +26,13 @@ $error   = $error ?? null;
     </div>
 
     <?php if ($error): ?>
-    <div style="margin:0 24px 0;padding:12px 16px;background:#fff5f5;border:1.5px solid #fca5a5;border-radius:10px;color:#b91c1c;font-size:13px;display:flex;align-items:center;gap:10px;">
+    <div style="margin:0 16px;padding:8px 11px;background:#fff5f5;border:1px solid #fca5a5;border-radius:8px;color:#b91c1c;font-size:12.5px;display:flex;align-items:center;gap:7px;">
         <i class="fas fa-exclamation-circle"></i> <?= htmlspecialchars($error) ?>
     </div>
     <?php endif; ?>
 
-    <form method="post" action="<?= $baseUrl ?>/usuarios/crear" style="padding:24px;">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;">
+    <form method="post" action="<?= $baseUrl ?>/usuarios/crear" style="padding:12px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
 
             <div style="grid-column:1/-1;">
                 <label class="form-label-inline">Nombre completo <span style="color:#e53e3e">*</span></label>
@@ -69,14 +69,14 @@ $error   = $error ?? null;
 
         </div>
 
-        <div style="display:flex;gap:24px;margin-top:22px;padding-top:18px;border-top:1px solid var(--border-light,#E4ECF7);">
-            <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:14px;color:var(--navy);">
+        <div style="display:flex;gap:9px;margin-top:10px;padding-top:9px;border-top:1px solid var(--border-light,#E4ECF7);">
+            <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:13px;color:var(--navy);">
                 <input type="checkbox" name="activo" value="1"
                        <?= isset($old['activo']) || empty($old) ? 'checked' : '' ?>
                        style="width:16px;height:16px;accent-color:var(--gold);">
                 <span><strong>Cuenta activa</strong></span>
             </label>
-            <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:14px;color:var(--navy);">
+            <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:13px;color:var(--navy);">
                 <input type="checkbox" name="is_admin" value="1"
                        <?= !empty($old['is_admin']) ? 'checked' : '' ?>
                        style="width:16px;height:16px;accent-color:var(--gold);">
@@ -84,7 +84,7 @@ $error   = $error ?? null;
             </label>
         </div>
 
-        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:24px;">
+        <div style="display:flex;justify-content:flex-end;gap:7px;margin-top:16px;">
             <a href="<?= $baseUrl ?>/usuarios" class="btn btn-outline">Cancelar</a>
             <button type="submit" class="btn btn-primary">
                 <i class="fas fa-save"></i> Crear Usuario
@@ -101,14 +101,14 @@ $error   = $error ?? null;
     color: var(--navy);
     text-transform: uppercase;
     letter-spacing: .5px;
-    margin-bottom: 6px;
+    margin-bottom: 3px;
 }
 .form-control-inline {
     width: 100%;
-    padding: 10px 13px;
+    padding: 7px 9px;
     border: 1.5px solid #dde6f0;
-    border-radius: 9px;
-    font-size: 14px;
+    border-radius: 7px;
+    font-size: 13px;
     color: #1a2b4a;
     background: #f7fafd;
     transition: border-color .2s, box-shadow .2s;

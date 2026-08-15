@@ -2,6 +2,7 @@
 require_once __DIR__ . '/XmlParser.php';
 require_once __DIR__ . '/DocumentoArchivo.php';
 require_once __DIR__ . '/../models/Factura.php';
+require_once __DIR__ . '/../models/FacturaErp.php';
 require_once __DIR__ . '/../models/FacturaXmlDetalle.php';
 require_once __DIR__ . '/../models/Proveedor.php';
 require_once __DIR__ . '/../models/Sociedad.php';
@@ -140,6 +141,7 @@ class XmlDocumentImporter
             $this->extraerDetalle((int) $id, (string) $archivado['ruta_xml']);
         }
 
+        $enganche = $this->engancharConErp($tipo, (int) $id, $doc);
 
         return [
             'estado' => 'importado',
@@ -148,7 +150,36 @@ class XmlDocumentImporter
             'pdf_pendiente' => $archivado['estado_pdf'] !== 'disponible',
             'documento' => $doc,
             'archivado' => $archivado,
+            'erp' => $enganche,
+            'semana_id' => $enganche['semana_id'] ?? null,
         ];
+    }
+
+    /**
+     * Busca la factura del ERP que corresponde a este comprobante y las
+     * empareja.
+     *
+     * Solo facturas: una nota de crédito no respalda un pago semanal.
+     *
+     * Nunca lanza. Que el enganche falle no puede tumbar una importación que ya
+     * está guardada y archivada; si no engancha, el comprobante queda igual que
+     * antes y la verificación del pago lo recoge después.
+     */
+    private function engancharConErp($tipo, $facturaId, array $doc)
+    {
+        if ($tipo !== 'FE') {
+            return ['estado' => 'no_aplica'];
+        }
+        try {
+            return (new FacturaErp())->engancharXml(
+                $facturaId,
+                (string) ($doc['consecutivo_completo'] ?? ''),
+                (string) ($doc['numero_factura_asistente'] ?? ''),
+                (float) ($doc['total'] ?? 0)
+            );
+        } catch (Throwable $e) {
+            return ['estado' => 'error', 'mensaje' => $e->getMessage()];
+        }
     }
 
     private function completarExistente(array $existente, $xmlPath, $pdfPath, array $doc, array $contexto)
@@ -205,6 +236,14 @@ class XmlDocumentImporter
             $this->extraerDetalle((int) $existente['id'], $ruta);
         }
 
+        // Un comprobante que ya estaba puede no haberse enganchado nunca —
+        // llegó antes de que su factura entrara a un pago—. Se reintenta.
+        $enganche = $this->engancharConErp($tipo, (int) $existente['id'], $doc);
+        if (!empty($enganche['semana_id'])) {
+            $semanaDestino = (int) $enganche['semana_id'];
+            $moverSemana = $semanaAnterior !== $semanaDestino;
+            $mismaSemana = !$moverSemana;
+        }
 
         $pdfDisponible = !empty($cambios['ruta_pdf']) || (!empty($existente['ruta_pdf']) && is_file((string) $existente['ruta_pdf']));
         $estado = $moverSemana
@@ -221,6 +260,7 @@ class XmlDocumentImporter
             'duplicado_misma_semana' => $mismaSemana,
             'documento' => $doc,
             'archivado' => $cambios,
+            'erp' => $enganche,
         ];
     }
 

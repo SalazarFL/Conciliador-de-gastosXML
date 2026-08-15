@@ -1,6 +1,6 @@
 -- =========================================
 -- ESQUEMA DE BASE DE DATOS
--- Sistema: XMLConcilia (VerificadorXMLConciliacion)
+-- Sistema: Nexo Fiscal
 -- Motor: MySQL 5.7+ / XAMPP
 -- Charset: utf8mb4
 -- =========================================

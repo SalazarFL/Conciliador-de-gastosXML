@@ -1,9 +1,11 @@
-# VerificadorXMLConciliacion
+# Nexo Fiscal
 
-Sistema de verificación y conciliación de facturas XML con gastos.
+Sistema de control documental y conciliación fiscal.
 
 ## Descripción
-Aplicación web desarrollada en PHP con arquitectura MVC para la gestión y conciliación de facturas XML contra registros de gastos.
+Aplicación web desarrollada en PHP con arquitectura MVC para integrar correo,
+comprobantes XML y PDF, facturas del ERP, pagos semanales, notas de crédito,
+devoluciones y seguimiento documental.
 
 ## Estructura del Proyecto
 - **public/**: Punto de entrada y recursos públicos
@@ -28,10 +30,11 @@ problema.
 Comprobación rápida de cualquier instalación: `php cli/diagnostico.php`
 
 ## Características
-- Carga de facturas XML (CFDI)
-- Registro de gastos
-- Conciliación automática
-- Generación de reportes
+- Captura y procesamiento de documentos desde correo
+- Carga de comprobantes XML y PDF
+- Conciliación con facturas del ERP
+- Gestión de pagos semanales y notas de crédito
+- Seguimiento de documentos e incidencias
 
 ---
 Desarrollado para gestión de conciliación fiscal.

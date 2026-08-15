@@ -57,10 +57,10 @@ function ppFecha($f) {
         </div>
     </div>
     <style>
-    #pp-form-subir { display: grid; grid-template-columns: minmax(240px, 1.4fr) minmax(180px, 1fr) minmax(220px, 1.2fr) auto; gap: 12px 16px; align-items: start; }
-    #pp-form-subir .pp-campo-label { min-height: 17px; }
-    #pp-form-subir .pp-acciones { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding-top: 21px; }
-    #pp-form-subir .pp-campo-ayuda { font-size: 10.5px; color: var(--text-muted); margin-top: 4px; }
+    #pp-form-subir { display: grid; grid-template-columns: minmax(220px, 1.4fr) minmax(165px, 1fr) minmax(200px, 1.2fr) auto; gap: 8px 10px; align-items: start; }
+    #pp-form-subir .pp-campo-label { min-height: 15px; }
+    #pp-form-subir .pp-acciones { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; padding-top: 17px; }
+    #pp-form-subir .pp-campo-ayuda { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
     @media (max-width: 900px) { #pp-form-subir { grid-template-columns: 1fr 1fr; } #pp-form-subir .pp-acciones { padding-top: 0; grid-column: 1 / -1; } }
     @media (max-width: 560px) { #pp-form-subir { grid-template-columns: 1fr; } }
     </style>
@@ -168,7 +168,7 @@ function ppUpdateFileDisplay(input) {
 <!-- ── Vista previa de la importación ── -->
 <div id="ppv-overlay" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:1000;overflow:auto;">
     <div style="background:#fff;border-radius:12px;max-width:780px;width:92%;margin:5vh auto;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.25);">
-        <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0;">
+        <div style="padding:9px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;flex-shrink:0;">
             <i class="fas fa-eye" style="color:var(--gold);font-size:16px;"></i>
             <div style="flex:1;min-width:0;">
                 <div style="font-size:15px;font-weight:800;color:var(--navy);">Vista previa de la importación</div>
@@ -176,10 +176,10 @@ function ppUpdateFileDisplay(input) {
             </div>
             <button type="button" id="ppv-cerrar" style="background:none;border:none;font-size:20px;color:#94a3b8;cursor:pointer;line-height:1;">&times;</button>
         </div>
-        <div id="ppv-resumen" style="padding:10px 18px;display:flex;gap:16px;flex-wrap:wrap;font-size:13px;border-bottom:1px solid var(--border);flex-shrink:0;"></div>
+        <div id="ppv-resumen" style="padding:7px 13px;display:flex;gap:10px;flex-wrap:wrap;font-size:12px;border-bottom:1px solid var(--border);flex-shrink:0;"></div>
         <!-- Facturas que no están en ningún listado del ERP: bloquean la carga. -->
-        <div id="ppv-sin-erp" style="display:none;margin:10px 18px 0;padding:10px 12px;background:#fef2f2;
-             border:1px solid #fecaca;border-radius:7px;color:#991b1b;font-size:12.5px;line-height:1.6;
+        <div id="ppv-sin-erp" style="display:none;margin:7px 13px 0;padding:7px 9px;background:#fef2f2;
+             border:1px solid #fecaca;border-radius:7px;color:#991b1b;font-size:12px;line-height:1.5;
              flex-shrink:0;"></div>
         <div style="overflow:auto;flex:1;">
             <table class="data-table" style="font-size:12.5px;">
@@ -189,7 +189,7 @@ function ppUpdateFileDisplay(input) {
                 <tbody id="ppv-tbody"></tbody>
             </table>
         </div>
-        <div style="padding:12px 18px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;flex-shrink:0;">
+        <div style="padding:8px 13px;border-top:1px solid var(--border);display:flex;gap:7px;justify-content:flex-end;flex-shrink:0;">
             <button type="button" class="btn btn-outline btn-sm" id="ppv-cancelar">Cancelar</button>
             <button type="button" class="btn btn-primary btn-sm" id="ppv-importar"></button>
         </div>
@@ -199,7 +199,7 @@ function ppUpdateFileDisplay(input) {
 <!-- Comparacion independiente contra el listado actual de la semana -->
 <div id="ppc-overlay" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:1010;overflow:auto;">
     <div style="background:#fff;border-radius:12px;max-width:1120px;width:95%;margin:4vh auto;max-height:91vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.25);">
-        <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0;">
+        <div style="padding:9px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;flex-shrink:0;">
             <i class="fas fa-code-compare" style="color:var(--gold);font-size:17px;"></i>
             <div style="flex:1;min-width:0;">
                 <div style="font-size:15px;font-weight:800;color:var(--navy);">Comparación con el listado actual</div>
@@ -207,11 +207,12 @@ function ppUpdateFileDisplay(input) {
             </div>
             <button type="button" id="ppc-cerrar" style="background:none;border:none;font-size:20px;color:#94a3b8;cursor:pointer;line-height:1;">&times;</button>
         </div>
-        <div style="padding:9px 18px;background:#f8fafc;border-bottom:1px solid var(--border);font-size:12px;color:#475569;flex-shrink:0;">
+        <div id="ppc-aviso" style="padding:6px 13px;background:#f8fafc;border-bottom:1px solid var(--border);font-size:11.5px;color:#475569;flex-shrink:0;">
             <i class="fas fa-shield-halved" style="color:#16a34a;margin-right:5px;"></i>
-            Esta comparación es de solo lectura: no agrega, actualiza ni elimina facturas.
+            Comparar no cambia nada. Para dejar la semana igual al archivo, usá
+            <strong>Actualizar el listado</strong>.
         </div>
-        <div id="ppc-resumen" style="padding:10px 18px;display:flex;gap:14px;flex-wrap:wrap;font-size:13px;border-bottom:1px solid var(--border);flex-shrink:0;"></div>
+        <div id="ppc-resumen" style="padding:7px 13px;display:flex;gap:9px;flex-wrap:wrap;font-size:12px;border-bottom:1px solid var(--border);flex-shrink:0;"></div>
         <div style="overflow:auto;flex:1;">
             <table class="data-table" style="font-size:12px;min-width:980px;">
                 <thead>
@@ -224,8 +225,12 @@ function ppUpdateFileDisplay(input) {
             </table>
         </div>
         <div id="ppc-limite" style="display:none;padding:7px 18px;border-top:1px solid var(--border);font-size:11px;color:var(--text-muted);"></div>
-        <div style="padding:12px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;flex-shrink:0;">
+        <div style="padding:8px 13px;border-top:1px solid var(--border);display:flex;gap:7px;align-items:center;flex-shrink:0;">
+            <div id="ppc-nota" style="flex:1;min-width:0;font-size:11.5px;color:var(--text-muted);line-height:1.4;"></div>
             <button type="button" class="btn btn-outline btn-sm" id="ppc-aceptar">Cerrar comparación</button>
+            <button type="button" class="btn btn-primary btn-sm" id="ppc-actualizar" style="display:none;">
+                <i class="fas fa-rotate"></i> Actualizar el listado
+            </button>
         </div>
     </div>
 </div>
@@ -233,7 +238,7 @@ function ppUpdateFileDisplay(input) {
 <!-- ── Formato de archivo esperado ── -->
 <div id="ppf-overlay" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:1000;overflow:auto;">
     <div style="background:#fff;border-radius:12px;max-width:640px;width:92%;margin:6vh auto;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.25);">
-        <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;">
+        <div style="padding:9px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;">
             <i class="fas fa-table-list" style="color:var(--gold);font-size:16px;"></i>
             <div style="flex:1;min-width:0;">
                 <div style="font-size:15px;font-weight:800;color:var(--navy);">Formato del archivo esperado</div>
@@ -242,7 +247,7 @@ function ppUpdateFileDisplay(input) {
             <button type="button" onclick="ppCerrarFormato()" style="background:none;border:none;font-size:20px;color:#94a3b8;cursor:pointer;line-height:1;">&times;</button>
         </div>
 
-        <div style="padding:16px 18px;">
+        <div style="padding:10px 13px;">
             <!-- ── Formato 1: tabla simple con encabezados ── -->
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
                 <span style="background:var(--navy);color:#fff;border-radius:5px;padding:2px 9px;font-size:11.5px;font-weight:800;flex-shrink:0;">Formato 1</span>
@@ -283,7 +288,7 @@ function ppUpdateFileDisplay(input) {
             </div>
 
             <!-- Descripción de cada columna -->
-            <div style="margin-top:16px;display:flex;flex-direction:column;gap:9px;">
+            <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px;">
                 <div style="display:flex;gap:10px;align-items:flex-start;">
                     <code style="background:var(--navy);color:#fff;padding:2px 8px;border-radius:5px;font-size:11.5px;font-weight:700;flex-shrink:0;">Fecha</code>
                     <span style="font-size:12.5px;color:var(--text-muted);">Fecha de la factura. Solo informativa: <strong>no se compara</strong> al conciliar.</span>
@@ -302,13 +307,13 @@ function ppUpdateFileDisplay(input) {
                 </div>
             </div>
 
-            <div style="margin-top:14px;background:var(--gold-pale, #fffbeb);border:1px solid var(--gold-light, #fde68a);border-radius:8px;padding:10px 12px;font-size:12px;color:#78350f;display:flex;gap:8px;align-items:flex-start;">
+            <div style="margin-top:9px;background:var(--gold-pale, #fffbeb);border:1px solid var(--gold-light, #fde68a);border-radius:8px;padding:7px 9px;font-size:11.5px;color:#78350f;display:flex;gap:7px;align-items:flex-start;">
                 <i class="fas fa-lightbulb" style="color:var(--gold-dark);margin-top:2px;"></i>
                 <span>Los encabezados deben llamarse exactamente <code>Fecha</code>, <code>Numero</code>, <code>Proveedor</code> y <code>Total</code>. El orden de las columnas no importa.</span>
             </div>
 
             <!-- ── Formato 2: reporte agrupado del sistema de la empresa ── -->
-            <div style="display:flex;align-items:center;gap:8px;margin:20px 0 10px;">
+            <div style="display:flex;align-items:center;gap:7px;margin:12px 0 8px;">
                 <span style="background:var(--navy);color:#fff;border-radius:5px;padding:2px 9px;font-size:11.5px;font-weight:800;flex-shrink:0;">Formato 2</span>
                 <span style="font-size:12.5px;font-weight:700;color:var(--navy);">Reporte agrupado por proveedor (sin fila de encabezados)</span>
             </div>
@@ -347,7 +352,7 @@ function ppUpdateFileDisplay(input) {
                 </table>
             </div>
 
-            <div style="margin-top:12px;display:flex;flex-direction:column;gap:9px;">
+            <div style="margin-top:9px;display:flex;flex-direction:column;gap:6px;">
                 <div style="display:flex;gap:10px;align-items:flex-start;">
                     <code style="background:var(--navy);color:#fff;padding:2px 8px;border-radius:5px;font-size:11.5px;font-weight:700;flex-shrink:0;">Proveedor…</code>
                     <span style="font-size:12.5px;color:var(--text-muted);">La línea <strong>"Proveedor &lt;código&gt; &lt;nombre&gt;"</strong> abre un grupo: las facturas de abajo toman ese proveedor.</span>
@@ -362,13 +367,13 @@ function ppUpdateFileDisplay(input) {
                 </div>
             </div>
 
-            <div style="margin-top:14px;background:var(--gold-pale, #fffbeb);border:1px solid var(--gold-light, #fde68a);border-radius:8px;padding:10px 12px;font-size:12px;color:#78350f;display:flex;gap:8px;align-items:flex-start;">
+            <div style="margin-top:9px;background:var(--gold-pale, #fffbeb);border:1px solid var(--gold-light, #fde68a);border-radius:8px;padding:7px 9px;font-size:11.5px;color:#78350f;display:flex;gap:7px;align-items:flex-start;">
                 <i class="fas fa-lightbulb" style="color:var(--gold-dark);margin-top:2px;"></i>
-                <span>Este es el reporte tal como lo exporta el sistema de la empresa: se sube <strong>sin modificarlo</strong> y XMLConcilia lo reconoce y lo aplana solo.</span>
+                <span>Este es el reporte tal como lo exporta el sistema de la empresa: se sube <strong>sin modificarlo</strong> y Nexo Fiscal lo reconoce y lo aplana solo.</span>
             </div>
         </div>
 
-        <div style="padding:12px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;">
+        <div style="padding:8px 13px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;">
             <button type="button" class="btn btn-primary btn-sm" onclick="ppCerrarFormato()">Entendido</button>
         </div>
     </div>
@@ -387,12 +392,19 @@ document.addEventListener('keydown', function (e) {
 
 <script>
 // Comparador separado: usa el archivo seleccionado, pero nunca llama a la
-// importacion ni conserva el archivo temporal en el servidor.
+// importacion ni conserva el archivo temporal en el servidor. Desde el
+// resultado se puede aplicar lo que se ve, y eso sí escribe: va por otra
+// ruta, pide confirmacion y reenvia los numeros que estan en pantalla para
+// que el servidor rechace la orden si el archivo dejo de dar lo mismo.
 (function () {
     var form = document.getElementById('pp-form-subir');
     var btn = document.getElementById('pp-btn-comparar');
     var overlay = document.getElementById('ppc-overlay');
     if (!form || !btn || !overlay) return;
+
+    var btnActualizar = document.getElementById('ppc-actualizar');
+    var nota = document.getElementById('ppc-nota');
+    var ultima = null;
 
     function cerrar() { overlay.style.display = 'none'; }
     document.getElementById('ppc-cerrar').addEventListener('click', cerrar);
@@ -413,42 +425,35 @@ document.addEventListener('keydown', function (e) {
     function fecha(f) {
         return f ? String(f).split('-').reverse().join('/') : '—';
     }
-    function valorCambio(campo, valor) {
-        if (campo === 'total') return '₡' + monto(valor);
-        if (campo === 'fecha') return fecha(valor);
-        return valor == null || valor === '' ? '—' : String(valor);
-    }
-    function detalle(l) {
-        if (l.estado !== 'modificada') return esc(l.motivo || '');
-        return Object.keys(l.cambios || {}).map(function (campo) {
-            var cambio = l.cambios[campo];
-            return '<div style="margin-bottom:3px;"><strong>' + esc(campo) + ':</strong> '
-                + '<span style="color:#64748b;">' + esc(valorCambio(campo, cambio.anterior)) + '</span>'
-                + ' <i class="fas fa-arrow-right" style="font-size:9px;color:#94a3b8;margin:0 3px;"></i> '
-                + '<span style="color:#9a3412;font-weight:700;">' + esc(valorCambio(campo, cambio.nuevo)) + '</span></div>';
-        }).join('');
-    }
-
+    // "Modificada" ya no existe: el pago no guarda copia de los datos del
+    // archivo, así que no hay nada que se pueda desincronizar. Lo que sí hay
+    // son filas que no encontraron su factura en el ERP, y esas son las que
+    // hay que ver.
     var estilos = {
-        nueva: ['Nueva', '#dcfce7', '#166534'],
-        modificada: ['Modificada', '#ffedd5', '#9a3412'],
-        igual: ['Sin cambios', '#e2e8f0', '#475569'],
-        faltante: ['Ausente', '#dbeafe', '#1e40af'],
-        duplicada: ['Duplicada', '#fef3c7', '#92400e'],
+        nueva: ['Entra', '#dcfce7', '#166534'],
+        igual: ['Ya está', '#e2e8f0', '#475569'],
+        faltante: ['Sale', '#dbeafe', '#1e40af'],
+        ausente: ['No está en ERP', '#fee2e2', '#991b1b'],
+        ambigua: ['Ambigua', '#fef3c7', '#92400e'],
+        repetida: ['Repetida', '#fef3c7', '#92400e'],
+        en_otro_pago: ['En otro pago', '#ede9fe', '#5b21b6'],
         error: ['Error', '#fee2e2', '#991b1b']
     };
 
     function pintar(r) {
         var x = r.resumen || {};
         document.getElementById('ppc-destino').textContent = r.semana + ' · ' + r.archivo
-            + (r.listado_existente ? ' · Contra "' + r.listado_existente + '"' : ' · La semana todavía no tiene listado');
+            + (r.listado_existente ? ' · Contra "' + r.listado_existente + '"' : ' · La semana todavía no tiene pago');
+        var problemas = (x.ausente || 0) + (x.ambigua || 0) + (x.en_otro_pago || 0) + (x.error || 0);
         document.getElementById('ppc-resumen').innerHTML =
-            '<span style="color:#166534;font-weight:800;">' + (x.nueva || 0) + ' nuevas</span>'
-            + '<span style="color:#9a3412;font-weight:800;">' + (x.modificada || 0) + ' modificadas</span>'
-            + '<span style="color:#475569;font-weight:700;">' + (x.igual || 0) + ' sin cambios</span>'
-            + '<span style="color:#1e40af;font-weight:700;">' + (x.faltante || 0) + ' ausentes del archivo nuevo</span>'
-            + ((x.duplicada || 0) ? '<span style="color:#92400e;">' + x.duplicada + ' duplicadas</span>' : '')
-            + ((x.error || 0) ? '<span style="color:#991b1b;">' + x.error + ' con error</span>' : '');
+            '<span style="color:#166534;font-weight:800;">' + (x.nueva || 0) + ' entran</span>'
+            + '<span style="color:#475569;font-weight:700;">' + (x.igual || 0) + ' ya están</span>'
+            + '<span style="color:#1e40af;font-weight:800;">' + (x.faltante || 0) + ' salen</span>'
+            + ((x.ausente || 0) ? '<span style="color:#991b1b;font-weight:700;">' + x.ausente + ' no están en el ERP</span>' : '')
+            + ((x.ambigua || 0) ? '<span style="color:#92400e;">' + x.ambigua + ' ambiguas</span>' : '')
+            + ((x.en_otro_pago || 0) ? '<span style="color:#5b21b6;">' + x.en_otro_pago + ' en otro pago</span>' : '')
+            + ((x.error || 0) ? '<span style="color:#991b1b;">' + x.error + ' ilegibles</span>' : '')
+            + (problemas === 0 ? '' : '');
 
         document.getElementById('ppc-tbody').innerHTML = (r.lineas || []).map(function (l) {
             var estilo = estilos[l.estado] || estilos.error;
@@ -456,13 +461,19 @@ document.addEventListener('keydown', function (e) {
                 + ';border-radius:10px;padding:2px 8px;font-size:10.5px;font-weight:800;white-space:nowrap;">'
                 + estilo[0] + '</span>';
             var opacidad = l.estado === 'igual' ? ' style="opacity:.68;"' : '';
+            // Cuando la factura se encontró, el saldo que manda es el del ERP;
+            // el del archivo solo se muestra si difiere, que es un aviso.
+            var saldo = '₡' + monto(l.saldo_erp != null ? l.saldo_erp : l.saldo);
+            if (l.saldo_erp != null && Math.abs(l.saldo_erp - l.saldo) >= 0.01) {
+                saldo += '<div style="font-size:10.5px;color:#b45309;">archivo: ₡' + monto(l.saldo) + '</div>';
+            }
             return '<tr' + opacidad + '>'
                 + '<td>' + badge + '</td>'
                 + '<td style="white-space:nowrap;font-weight:650;">' + esc(l.numero) + '</td>'
                 + '<td style="max-width:245px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + attr(l.proveedor) + '">' + esc(l.proveedor) + '</td>'
                 + '<td style="white-space:nowrap;">' + fecha(l.fecha) + '</td>'
-                + '<td class="right" style="white-space:nowrap;">₡' + monto(l.total) + '</td>'
-                + '<td style="line-height:1.35;">' + detalle(l) + '</td>'
+                + '<td class="right" style="white-space:nowrap;">' + saldo + '</td>'
+                + '<td style="line-height:1.35;">' + esc(l.motivo || '') + '</td>'
                 + '</tr>';
         }).join('');
 
@@ -473,18 +484,119 @@ document.addEventListener('keydown', function (e) {
         } else {
             limite.style.display = 'none';
         }
+        prepararActualizar(r);
         overlay.style.display = 'block';
     }
+
+    // El boton solo aparece cuando de verdad hay algo que aplicar: sin listado
+    // previo lo que corresponde es la vista previa, y un pago cerrado ya no
+    // se toca.
+    function prepararActualizar(r) {
+        ultima = r;
+        var x = r.resumen || {};
+        var cambios = (x.nueva || 0) + (x.faltante || 0);
+
+        btnActualizar.disabled = false;
+        btnActualizar.innerHTML = '<i class="fas fa-rotate"></i> Actualizar el listado';
+
+        if (!r.listado_existente) {
+            btnActualizar.style.display = 'none';
+            nota.textContent = 'Esta semana todavía no tiene listado: cargalo con "Vista previa".';
+            return;
+        }
+        if (r.listado_cerrado) {
+            btnActualizar.style.display = 'none';
+            nota.textContent = 'El pago de esta semana está cerrado: su listado ya no se puede actualizar.';
+            return;
+        }
+        if (cambios === 0) {
+            btnActualizar.style.display = 'none';
+            nota.textContent = 'El listado ya coincide con el archivo.';
+            return;
+        }
+
+        btnActualizar.style.display = '';
+        nota.innerHTML = 'Al actualizar entran <strong>' + (x.nueva || 0)
+            + '</strong> facturas del ERP y salen <strong>' + (x.faltante || 0) + '</strong>.';
+    }
+
+    // Se recorre el mismo archivo del formulario: el servidor lo vuelve a leer
+    // y a comparar, y los "esperado_*" son los numeros que la persona esta
+    // aceptando. Si no cuadran, no escribe nada.
+    btnActualizar.addEventListener('click', async function () {
+        if (!ultima) return;
+        var x = ultima.resumen || {};
+        var archivo = document.getElementById('pp-listado-file');
+        if (!archivo.files.length) {
+            AppDialog.alert('El archivo ya no está seleccionado. Vuelve a elegirlo y ejecuta la comparación.', {
+                title: 'Archivo no disponible', type: 'warning'
+            });
+            return;
+        }
+
+        var aviso = 'Se va a dejar "' + ultima.listado_existente + '" igual que el archivo:\n\n'
+            + '  • ' + (x.nueva || 0) + ' facturas del ERP entran al pago\n'
+            + '  • ' + (x.faltante || 0) + ' salen y vuelven a quedar pendientes\n\n'
+            + 'Las facturas del ERP no se eliminan: solo dejan de estar en esta semana.\n'
+            + 'El XML y el PDF de las que salgan vuelven a su carpeta por fecha de emisión, '
+            + 'y los de las que entren se reúnen en la carpeta del pago semanal.\n\n'
+            + 'Esto no se puede deshacer. ¿Continuar?';
+        if (!(await AppDialog.confirm(aviso, {
+            title: 'Actualizar pago semanal',
+            type: 'warning',
+            confirmText: 'Actualizar listado'
+        }))) return;
+
+        var fd = new FormData(form);
+        fd.append('esperado_nueva', x.nueva || 0);
+        fd.append('esperado_faltante', x.faltante || 0);
+
+        btnActualizar.disabled = true;
+        btnActualizar.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Actualizando…';
+        fetch('<?= $baseUrl ?>/por-pagar/actualizar-listado', {
+            method: 'POST', body: fd, credentials: 'same-origin'
+        })
+            .then(function (res) { return res.json().catch(function () { throw new Error('Respuesta inválida del servidor.'); }); })
+            .then(function (res) {
+                if (!res.ok) throw new Error(res.message || 'No se pudo actualizar el listado.');
+                if (res.sin_cambios) {
+                    AppDialog.alert(res.message, { title: 'El listado ya está actualizado', type: 'info' });
+                    cerrar();
+                    return;
+                }
+                var arch = res.archivos || {};
+                var partes = ['Pago actualizado: +' + res.anadidas + ' facturas entraron, '
+                    + res.quitadas + ' salieron.'];
+                if (arch.por_fecha) partes.push(arch.por_fecha + ' documento(s) volvieron a su carpeta por fecha.');
+                if (arch.pago_semanal) partes.push(arch.pago_semanal + ' se reunieron en la carpeta del pago.');
+                if (arch.aviso) partes.push(arch.aviso);
+                return AppDialog.alert(partes.join('\n'), {
+                    title: 'Pago semanal actualizado', type: 'success'
+                }).then(function () {
+                    window.location.href = '<?= $baseUrl ?>/por-pagar?listado_id=' + res.listado_id
+                        + '&semana_id=' + res.semana_id;
+                });
+            })
+            .catch(function (err) {
+                AppDialog.alert(err.message, { title: 'No se pudo actualizar el listado', type: 'danger' });
+                btnActualizar.disabled = false;
+                btnActualizar.innerHTML = '<i class="fas fa-rotate"></i> Actualizar el listado';
+            });
+    });
 
     btn.addEventListener('click', function () {
         var archivo = document.getElementById('pp-listado-file');
         var semana = form.querySelector('[name="semana_id"]');
         if (!archivo.files.length) {
-            alert('Selecciona un archivo CSV o XLSX primero.');
+            AppDialog.alert('Selecciona un archivo CSV o XLSX antes de comparar.', {
+                title: 'Archivo requerido', type: 'warning'
+            });
             return;
         }
         if (!/^\d+$/.test(semana.value) || Number(semana.value) <= 0) {
-            alert('Selecciona una semana existente para hacer la comparación.');
+            AppDialog.alert('Selecciona una semana existente para realizar la comparación.', {
+                title: 'Semana requerida', type: 'warning'
+            });
             return;
         }
 
@@ -498,7 +610,9 @@ document.addEventListener('keydown', function (e) {
                 if (!r.ok) throw new Error(r.message || 'No se pudo comparar el listado.');
                 pintar(r);
             })
-            .catch(function (err) { alert(err.message); })
+            .catch(function (err) {
+                AppDialog.alert(err.message, { title: 'No se pudo comparar el listado', type: 'danger' });
+            })
             .then(function () {
                 btn.disabled = false;
                 btn.innerHTML = '<i class="fas fa-code-compare"></i> Comparar listado';
@@ -540,7 +654,9 @@ document.addEventListener('keydown', function (e) {
         e.preventDefault();
         var fileInput = document.getElementById('pp-listado-file');
         if (!fileInput.files.length) {
-            alert('Seleccioná un archivo CSV o XLSX primero.');
+            AppDialog.alert('Selecciona un archivo CSV o XLSX para generar la vista previa.', {
+                title: 'Archivo requerido', type: 'warning'
+            });
             return;
         }
         var fd = new FormData(form);
@@ -555,67 +671,82 @@ document.addEventListener('keydown', function (e) {
                 pintar(r);
                 overlay.style.display = 'block';
             })
-            .catch(function (err) { alert(err.message); })
+            .catch(function (err) {
+                AppDialog.alert(err.message, { title: 'No se pudo analizar el archivo', type: 'danger' });
+            })
             .then(function () {
                 btnSubir.disabled = false;
                 btnSubir.innerHTML = '<i class="fas fa-eye"></i> Vista previa';
             });
     });
 
+    // La vista previa dejó de contar "nuevas contra el listado" y pasó a contar
+    // qué se encontró en Facturas ERP, que es lo que decide si la carga puede
+    // hacerse: lo que no está en el ERP no se paga.
+    var estilosPrev = {
+        resuelta: ['en el ERP', '#dcfce7', '#166534'],
+        ausente: ['no está en ERP', '#fee2e2', '#991b1b'],
+        ambigua: ['ambigua', '#fef3c7', '#92400e'],
+        repetida: ['repetida', '#fef3c7', '#92400e'],
+        en_otro_pago: ['en otro pago', '#ede9fe', '#5b21b6'],
+        error: ['ilegible', '#fee2e2', '#991b1b']
+    };
+
     function pintar(r) {
-        document.getElementById('ppv-destino').textContent = r.listado_existente
-            ? 'Se añadirán SOLO las nuevas al listado existente "' + r.listado_existente + '" · ' + r.archivo + ' · Carpeta: ' + r.carpeta_pago
-            : 'Se creará un listado nuevo · ' + r.archivo + ' · Carpeta: ' + r.carpeta_pago;
+        var x = r.resumen || {};
+        var problemas = (x.ausente || 0) + (x.ambigua || 0) + (x.en_otro_pago || 0) + (x.error || 0);
+
+        document.getElementById('ppv-destino').textContent = (r.listado_existente
+            ? 'Se añadirán al pago existente "' + r.listado_existente + '"'
+            : 'Se creará el pago de la semana')
+            + ' · ' + r.archivo + (r.carpeta_pago ? ' · Carpeta: ' + r.carpeta_pago : '');
 
         document.getElementById('ppv-resumen').innerHTML =
-            '<span style="color:#16a34a;font-weight:800;">' + r.nuevas + ' nueva' + (r.nuevas !== 1 ? 's' : '') + '</span>' +
-            '<span style="color:var(--text-muted);">₡' + fmtMonto(r.monto_nuevas) + ' en nuevas</span>' +
-            (r.repetidas ? '<span style="color:#b45309;font-weight:600;">' + r.repetidas + ' ya estaba' + (r.repetidas !== 1 ? 'n' : '') + ' (se omiten)</span>' : '') +
-            (r.errores ? '<span style="color:#b91c1c;font-weight:600;">' + r.errores + ' fila' + (r.errores !== 1 ? 's' : '') + ' ilegible' + (r.errores !== 1 ? 's' : '') + '</span>' : '');
+            '<span style="color:#16a34a;font-weight:800;">' + (x.resuelta || 0) + ' encontradas en el ERP</span>' +
+            '<span style="color:var(--text-muted);">₡' + fmtMonto(r.monto_resuelto || 0) + '</span>' +
+            (problemas ? '<span style="color:#b91c1c;font-weight:700;">' + problemas + ' sin resolver</span>' : '');
 
         document.getElementById('ppv-tbody').innerHTML = (r.lineas || []).map(function (l) {
-            var badge;
-            if (l.estado === 'nueva') {
-                badge = '<span style="background:#dcfce7;color:#166534;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700;white-space:nowrap;">nueva</span>';
-            } else if (l.estado === 'repetida') {
-                badge = '<span style="background:#fef3c7;color:#92400e;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700;white-space:nowrap;">ya estaba</span>';
-            } else {
-                badge = '<span style="background:#fee2e2;color:#991b1b;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700;white-space:nowrap;" title="' + esc(l.motivo) + '">error</span>';
-            }
-            var fecha = l.fecha ? String(l.fecha).split('-').reverse().join('/') : '—';
-            return '<tr' + (l.estado !== 'nueva' ? ' style="opacity:.55;"' : '') + '>'
+            var estilo = estilosPrev[l.estado] || estilosPrev.error;
+            var badge = '<span style="background:' + estilo[1] + ';color:' + estilo[2]
+                + ';border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700;white-space:nowrap;" title="'
+                + esc(l.motivo || '') + '">' + estilo[0] + '</span>';
+            var erp = l.erp || null;
+            var fecha = erp && erp.fecha ? String(erp.fecha).split('-').reverse().join('/') : '—';
+            return '<tr' + (l.estado !== 'resuelta' ? ' style="opacity:.6;"' : '') + '>'
                 + '<td>' + badge + '</td>'
-                + '<td style="white-space:nowrap;font-weight:600;">' + esc(l.numero) + '</td>'
-                + '<td style="max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + esc(l.proveedor) + '">' + esc(l.proveedor) + '</td>'
+                + '<td style="white-space:nowrap;font-weight:600;">' + esc(erp ? erp.documento : l.numero) + '</td>'
+                + '<td style="max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'
+                + esc(erp ? erp.proveedor : l.proveedor) + '">' + esc(erp ? erp.proveedor : l.proveedor) + '</td>'
                 + '<td style="white-space:nowrap;">' + fecha + '</td>'
-                + '<td class="right" style="white-space:nowrap;">' + fmtMonto(l.total) + '</td>'
+                + '<td class="right" style="white-space:nowrap;">' + fmtMonto(erp ? erp.saldo : l.saldo) + '</td>'
                 + '</tr>';
         }).join('');
 
-        // Facturas que no están en ningún listado del ERP: la importación las
-        // rechaza entera, así que se dice acá y se apaga el botón. Enterarse
-        // al confirmar obligaba a repetir todo el camino.
+        // Todo o nada: si algo no se resolvió, la carga se rechaza entera. Se
+        // dice acá y se apaga el botón; enterarse al confirmar obligaba a
+        // repetir todo el camino.
         var avisoErp = document.getElementById('ppv-sin-erp');
-        if (r.sin_erp > 0) {
+        if (problemas > 0) {
+            var muestra = (r.lineas || []).filter(function (l) { return l.estado !== 'resuelta'; })
+                .slice(0, 5).map(function (l) { return l.numero || '(sin número)'; });
             avisoErp.style.display = 'block';
-            avisoErp.innerHTML = '<strong>' + r.sin_erp + ' factura' + (r.sin_erp !== 1 ? 's' : '') +
-                ' no está' + (r.sin_erp !== 1 ? 'n' : '') + ' en ningún listado de facturas del ERP:</strong> ' +
-                (r.sin_erp_muestra || []).map(esc).join(', ') +
-                (r.sin_erp > (r.sin_erp_muestra || []).length ? ', …' : '') +
-                '<br>El pago semanal no se puede cargar hasta que el reporte “Facturas por Proveedor” que las incluya esté cargado en ' +
-                '<a href="<?= $baseUrl ?>/carga">Carga de documentos</a>.';
+            avisoErp.innerHTML = '<strong>' + problemas + ' fila' + (problemas !== 1 ? 's' : '')
+                + ' no se pudo resolver contra Facturas ERP:</strong> ' + muestra.map(esc).join(', ')
+                + (problemas > muestra.length ? ', …' : '')
+                + '<br>El pago no se carga hasta que todas resuelvan. Si faltan facturas, cargá el reporte '
+                + '“Facturas por Proveedor” que las incluya en <a href="<?= $baseUrl ?>/carga">Carga de documentos</a>.';
         } else {
             avisoErp.style.display = 'none';
             avisoErp.innerHTML = '';
         }
 
-        var bloqueado = r.nuevas === 0 || r.sin_erp > 0;
-        btnImportar.disabled = bloqueado;
-        btnImportar.innerHTML = r.sin_erp > 0
-            ? 'Faltan facturas en el ERP'
-            : (r.nuevas === 0
-                ? 'Nada nuevo que importar'
-                : '<i class="fas fa-check-double"></i> Importar ' + r.nuevas + ' nueva' + (r.nuevas !== 1 ? 's' : ''));
+        btnImportar.disabled = problemas > 0 || (x.resuelta || 0) === 0;
+        btnImportar.innerHTML = problemas > 0
+            ? 'Hay filas sin resolver'
+            : ((x.resuelta || 0) === 0
+                ? 'Nada que cargar'
+                : '<i class="fas fa-check-double"></i> Cargar ' + x.resuelta + ' factura' + (x.resuelta !== 1 ? 's' : ''));
     }
 
     btnImportar.addEventListener('click', function () {
@@ -738,7 +869,10 @@ document.addEventListener('keydown', function (e) {
         </a>
         <?php if (!$pagoCerrado): ?>
         <form method="POST" action="<?= $baseUrl ?>/por-pagar/cerrar/<?= (int) $listado['id'] ?>" style="display:inline;"
-              onsubmit="return confirm('¿Cerrar este pago semanal? Las facturas emparejadas quedarán asignadas a esta semana en Facturas ERP y el listado ya no se podrá modificar.');">
+              data-confirm="Las facturas emparejadas quedarán asignadas a esta semana en Facturas ERP y el listado ya no se podrá modificar."
+              data-confirm-title="Cerrar pago semanal"
+              data-confirm-type="warning"
+              data-confirm-accept="Cerrar pago">
             <button type="submit" class="btn btn-primary btn-sm"
                     <?= $sinRespaldo > 0 ? 'disabled' : '' ?>
                     title="<?= $sinRespaldo > 0 ? 'Primero empareja todas las facturas con su XML' : 'Cerrar y asignar las facturas en el módulo ERP' ?>">
@@ -746,7 +880,10 @@ document.addEventListener('keydown', function (e) {
             </button>
         </form>
         <form method="POST" action="<?= $baseUrl ?>/por-pagar/eliminar/<?= (int) $listado['id'] ?>" style="display:inline;"
-              onsubmit="return confirm('¿Eliminar este listado y sus resultados?');">
+              data-confirm="Se eliminarán el listado y todos sus resultados. Esta acción no se puede deshacer."
+              data-confirm-title="Eliminar listado"
+              data-confirm-type="danger"
+              data-confirm-accept="Eliminar">
             <button type="submit" class="btn btn-outline btn-sm" title="Eliminar listado" style="color:#b91c1c;border-color:#fed7d7;">
                 <i class="fas fa-trash-can"></i>
             </button>
@@ -829,9 +966,9 @@ document.addEventListener('keydown', function (e) {
                 <tr>
                     <th style="width:120px;">Estado</th>
                     <th>Fecha</th>
-                    <th>Número</th>
+                    <th>Documento ERP</th>
                     <th>Proveedor</th>
-                    <th class="right">Total listado</th>
+                    <th class="right">Saldo</th>
                     <th>Factura XML</th>
                     <th class="right">Diferencia</th>
                     <th class="center" style="width:155px;">Acciones</th>
@@ -850,16 +987,16 @@ document.addEventListener('keydown', function (e) {
                         <span class="badge" style="background:#f1f5f9;color:#475569;"><i class="fas fa-file-circle-question"></i> Sin respaldo</span>
                         <?php endif; ?>
                     </td>
-                    <td style="white-space:nowrap;"><?= ppFecha($linea['fecha']) ?></td>
+                    <td style="white-space:nowrap;"><?= ppFecha($linea['fecha_emision']) ?></td>
                     <td style="max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:var(--navy);"
-                        title="<?= htmlspecialchars($linea['numero']) ?>">
-                        <?= htmlspecialchars($linea['numero']) ?>
+                        title="<?= htmlspecialchars($linea['documento']) ?>">
+                        <?= htmlspecialchars($linea['documento']) ?>
                     </td>
                     <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
-                        title="<?= htmlspecialchars($linea['proveedor_texto']) ?>">
-                        <?= htmlspecialchars($linea['proveedor_texto']) ?>
+                        title="<?= htmlspecialchars($linea['proveedor_nombre']) ?>">
+                        <?= htmlspecialchars($linea['proveedor_nombre']) ?>
                     </td>
-                    <td class="right" style="white-space:nowrap;"><?= number_format((float) $linea['total'], 2) ?></td>
+                    <td class="right" style="white-space:nowrap;"><?= number_format((float) $linea['saldo_pago'], 2) ?></td>
                     <td style="white-space:nowrap;">
                         <?php if (!empty($linea['factura_xml_id'])): ?>
                         <?php if (!empty($linea['match_manual'])): ?>
@@ -897,7 +1034,10 @@ document.addEventListener('keydown', function (e) {
                         <?php if (!$pagoCerrado): ?>
                         <form method="POST" action="<?= $baseUrl ?>/por-pagar/factura/eliminar/<?= (int) $linea['id'] ?>?<?= htmlspecialchars($queryRetornoFiltros) ?>"
                               style="display:inline;margin-left:4px;"
-                              onsubmit="return confirm('¿Eliminar esta factura del listado? La factura XML asociada no se eliminará.');">
+                              data-confirm="La factura saldrá de este listado, pero su XML asociado se conservará."
+                              data-confirm-title="Quitar factura del listado"
+                              data-confirm-type="danger"
+                              data-confirm-accept="Quitar">
                             <button type="submit" class="btn btn-outline btn-sm"
                                     title="Eliminar factura del listado" aria-label="Eliminar factura del listado"
                                     style="color:#b91c1c;border-color:#fed7d7;">
@@ -910,7 +1050,7 @@ document.addEventListener('keydown', function (e) {
                 <?php endforeach; ?>
                 <?php else: ?>
                 <tr>
-                    <td colspan="8" style="padding:28px;text-align:center;color:var(--text-muted);">
+                    <td colspan="8" style="padding:18px;text-align:center;color:var(--text-muted);">
                         <i class="fas fa-search" style="font-size:20px;color:#cbd5e1;display:block;margin-bottom:7px;"></i>
                         No se encontraron facturas con los filtros seleccionados.
                         <a href="<?= htmlspecialchars($urlLimpiarFiltros) ?>" style="margin-left:4px;">Limpiar filtros</a>
@@ -926,7 +1066,7 @@ document.addEventListener('keydown', function (e) {
 <!-- ── Facturas sin coincidencia (de la semana, fuera del listado) ── -->
 <div id="pps-overlay" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:1000;overflow:auto;">
     <div style="background:#fff;border-radius:12px;max-width:860px;width:94%;margin:5vh auto;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.25);">
-        <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0;">
+        <div style="padding:9px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;flex-shrink:0;">
             <i class="fas fa-triangle-exclamation" style="color:var(--gold-dark);font-size:16px;"></i>
             <div style="flex:1;min-width:0;">
                 <div style="font-size:15px;font-weight:800;color:var(--navy);">Facturas sin coincidencia</div>
@@ -939,11 +1079,11 @@ document.addEventListener('keydown', function (e) {
             <button type="button" onclick="ppsCerrar()" style="background:none;border:none;font-size:20px;color:#94a3b8;cursor:pointer;line-height:1;">&times;</button>
         </div>
         <div id="pps-body" style="overflow:auto;flex:1;padding:6px 0;">
-            <div style="padding:30px;text-align:center;color:var(--text-muted);font-size:13px;">
+            <div style="padding:18px;text-align:center;color:var(--text-muted);font-size:12.5px;">
                 <i class="fas fa-spinner fa-spin"></i> Cargando…
             </div>
         </div>
-        <div style="padding:12px 18px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;flex-shrink:0;">
+        <div style="padding:8px 13px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;flex-shrink:0;">
             <button type="button" class="btn btn-outline btn-sm" onclick="ppsCerrar()">Cerrar</button>
         </div>
     </div>
@@ -978,7 +1118,7 @@ function ppsAbrir() {
         })
         .catch(function (err) {
             document.getElementById('pps-body').innerHTML =
-                '<div style="padding:30px;text-align:center;color:#b91c1c;font-size:13px;">' + ppsEsc(err.message) + '</div>';
+                '<div style="padding:18px;text-align:center;color:#b91c1c;font-size:12.5px;">' + ppsEsc(err.message) + '</div>';
         });
 }
 function ppsCerrar() { document.getElementById('pps-overlay').style.display = 'none'; }
@@ -993,16 +1133,11 @@ function ppsPintar(r) {
     var body = document.getElementById('pps-body');
 
     if (!r.facturas.length) {
-        body.innerHTML = '<div style="padding:30px;text-align:center;color:var(--text-muted);font-size:13px;">'
+        body.innerHTML = '<div style="padding:18px;text-align:center;color:var(--text-muted);font-size:12.5px;">'
             + '<i class="fas fa-circle-check" style="color:var(--ok);margin-right:6px;"></i>'
             + 'Todas las facturas de la semana coinciden con el listado.</div>';
         return;
     }
-
-    var opcionesSemana = '<option value="">— Sin semana —</option>' + r.semanas
-        .filter(function (s) { return s.id !== r.semana_id; })
-        .map(function (s) { return '<option value="' + s.id + '">' + ppsEsc(s.nombre) + '</option>'; })
-        .join('');
 
     body.innerHTML = r.facturas.map(function (f) {
         var fecha = f.fecha ? String(f.fecha).split(' ')[0].split('-').reverse().join('/') : '—';
@@ -1026,9 +1161,6 @@ function ppsPintar(r) {
             +   '<span style="font-size:12px;color:var(--text-muted);">' + fecha + '</span>'
             + '</div>'
             + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12px;">'
-            +   '<select id="pps-sem-' + f.id + '" class="form-control" style="font-size:12px;padding:4px 8px;width:auto;max-width:200px;">' + opcionesSemana + '</select>'
-            +   '<button type="button" class="btn btn-outline btn-sm" onclick="ppsMover(' + f.id + ')"><i class="fas fa-calendar-week"></i> Mover de semana</button>'
-            +   '<span style="color:#cbd5e1;">|</span>'
             +   (r.lineas.length
                     ? '<select id="pps-lin-' + f.id + '" class="form-control" style="font-size:12px;padding:4px 8px;width:auto;max-width:340px;">' + opcionesLinea + '</select>'
                       + '<button type="button" class="btn btn-outline btn-sm" onclick="ppsVincular(' + f.id + ')" style="color:#92400e;border-color:#fde68a;"><i class="fas fa-link"></i> Vincular (solo monto)</button>'
@@ -1038,26 +1170,20 @@ function ppsPintar(r) {
     }).join('');
 }
 
-function ppsMover(facturaId) {
-    var sel = document.getElementById('pps-sem-' + facturaId);
-    var fd = new FormData();
-    fd.append('factura_id', facturaId);
-    fd.append('semana_id', sel.value);
-    fd.append('semana_nueva', '');
+// "Mover de semana" vivía acá. Se fue porque la semana de un comprobante dejó
+// de ser algo que se elige: la hereda de la factura del ERP que respalda. Un
+// XML suelto que no respalda nada no pertenece a ninguna semana, y forzarle una
+// no lo metía en ningún pago —el cruce va por consecutivo— pero sí podía
+// sacarle el archivo de la carpeta del pago. Lo que se hace con un XML suelto
+// es vincularlo a la factura que le toca, que es el botón de al lado.
 
-    fetch(PPS_BASE + '/facturas/semana', { method: 'POST', body: fd, credentials: 'same-origin' })
-        .then(function (r) { return r.json(); })
-        .then(function (r) {
-            if (!r.ok) throw new Error(r.message || 'No se pudo mover.');
-            window.location.reload();
-        })
-        .catch(function (err) { alert(err.message); });
-}
-
-function ppsVincular(facturaId) {
+async function ppsVincular(facturaId) {
     var sel = document.getElementById('pps-lin-' + facturaId);
     if (!sel || !sel.value) return;
-    if (!confirm('El número y el proveedor no coinciden: se vinculará a la fuerza y solo se comparará el monto. ¿Continuar?')) {
+    if (!(await AppDialog.confirm(
+        'El número y el proveedor no coinciden. El vínculo se forzará y únicamente se comparará el monto.',
+        { title: 'Vincular solo por monto', type: 'warning', confirmText: 'Vincular de todos modos' }
+    ))) {
         return;
     }
 
@@ -1067,7 +1193,7 @@ function ppsVincular(facturaId) {
 
     fetch(PPS_BASE + '/por-pagar/forzar', { method: 'POST', body: fd, credentials: 'same-origin' })
         .then(function (r) { return r.json(); })
-        .then(function (r) {
+        .then(async function (r) {
             if (!r.ok) throw new Error(r.message || 'No se pudo vincular.');
 
             // Si los nombres no se parecían, el sistema acaba de aprender que
@@ -1081,18 +1207,20 @@ function ppsVincular(facturaId) {
                     msg += '\n\nCon eso se resolvieron ' + r.lineas_resueltas
                         + ' línea(s) más que estaban sin respaldo.';
                 }
-                alert(msg);
+                await AppDialog.alert(msg, { title: 'Vínculo creado', type: 'success' });
             }
             window.location.reload();
         })
-        .catch(function (err) { alert(err.message); });
+        .catch(function (err) {
+            AppDialog.alert(err.message, { title: 'No se pudo crear el vínculo', type: 'danger' });
+        });
 }
 </script>
 <?php endif; ?>
 
 <?php else: ?>
 
-<div class="card" style="text-align:center;padding:40px 20px;color:var(--text-muted);">
+<div class="card" style="text-align:center;padding:22px 14px;color:var(--text-muted);">
     <i class="fas fa-file-invoice-dollar" style="font-size:34px;color:#cbd5e1;margin-bottom:10px;display:block;"></i>
     <div style="font-size:14px;font-weight:700;color:var(--navy);margin-bottom:4px;">
         No hay listados <?= $semanaFiltro === 0 ? 'sin semana' : 'para esta semana' ?>

@@ -1,6 +1,6 @@
 -- =========================================
 -- MIGRACIÓN COMPLEMENTARIA: Campos Normalizados
--- Sistema: XMLConcilia
+-- Sistema: Nexo Fiscal
 -- Fecha: 2026-02-12
 -- Propósito: Agregar campos normalizados faltantes para fuzzy matching
 -- EJECUTAR DESPUÉS DE: schema.sql + 001_revision_y_estado.sql

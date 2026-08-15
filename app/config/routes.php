@@ -55,7 +55,6 @@ $router->post('/facturas/cola/agregar', 'FacturasController@colaAgregar');
 $router->post('/facturas/cola/procesar', 'FacturasController@colaProcesar');
 $router->get('/facturas/cola/estado/{id}', 'FacturasController@colaEstado');
 $router->get('/facturas/ver/{id}', 'FacturasController@ver');
-$router->post('/facturas/semana', 'FacturasController@semanaAsignar');
 
 // --- RUTAS DE NOTAS DE CRÉDITO XML ---
 $router->get('/notas-xml', 'NotasXmlController@index');
@@ -71,7 +70,6 @@ $router->post('/correo/config', 'CorreoController@config');
 $router->post('/correo/cuentas/guardar', 'CorreoController@cuentaGuardar');
 $router->post('/correo/cuentas/eliminar', 'CorreoController@cuentaEliminar');
 $router->post('/correo/cuentas/usar', 'CorreoController@cuentaUsar');
-$router->post('/correo/semana/usar', 'CorreoController@semanaUsar');
 $router->post('/correo/cuentas/probar', 'CorreoController@cuentaProbar');
 $router->post('/correo/carpetas', 'CorreoController@carpetas');
 $router->post('/correo/carpetas-buzon', 'CorreoController@carpetasBuzon');
@@ -113,6 +111,7 @@ $router->get('/por-pagar', 'PorPagarController@index');
 $router->post('/por-pagar/subir', 'PorPagarController@subir');
 $router->post('/por-pagar/previsualizar', 'PorPagarController@previsualizar');
 $router->post('/por-pagar/comparar-listado', 'PorPagarController@compararListado');
+$router->post('/por-pagar/actualizar-listado', 'PorPagarController@actualizarListado');
 $router->post('/por-pagar/verificar/{id}', 'PorPagarController@verificar');
 $router->post('/por-pagar/cerrar/{id}', 'PorPagarController@cerrar');
 $router->post('/por-pagar/eliminar/{id}', 'PorPagarController@eliminar');
@@ -136,7 +135,6 @@ $router->get('/notas-credito/historial/{id}', 'NotasCreditoController@historial'
 $router->get('/notas-credito/candidatas', 'NotasCreditoController@candidatas');
 $router->post('/notas-credito/vincular', 'NotasCreditoController@vincular');
 $router->post('/notas-credito/desvincular', 'NotasCreditoController@desvincular');
-$router->post('/notas-credito/eliminar/{id}', 'NotasCreditoController@eliminar');
 
 // --- RUTAS DE DEVOLUCIONES (reportes PDF del ERP ↔ NC electrónicas) ---
 $router->get('/devoluciones', 'DevolucionesController@index');
@@ -151,22 +149,19 @@ $router->post('/devoluciones/desvincular', 'DevolucionesController@desvincular')
 $router->post('/devoluciones/eliminar/{id}', 'DevolucionesController@eliminar');
 $router->get('/devoluciones/pdf/{id}', 'DevolucionesController@pdf');
 
-// --- RUTAS DE GASTOS (legado: fuera del menú, accesible por URL) ---
-$router->get('/gastos', 'GastosController@index');
-$router->post('/gastos/subir', 'GastosController@subir');
-
-// --- RUTAS DE CONCILIACIÓN ---
-$router->get('/conciliacion', 'ConciliacionController@index');
-$router->post('/conciliacion/ejecutar', 'ConciliacionController@ejecutar');
-$router->post('/conciliacion/revisar/{id}', 'ConciliacionController@revisar');
-$router->get('/conciliacion/descargar-xml', 'ConciliacionController@descargarXml');
-$router->get('/conciliacion/mapa-nombres', 'ConciliacionController@mapaNombresPdf');
-
-// --- RUTAS DE REPORTES ---
-$router->get('/reportes', 'ReportesController@index');
-$router->get('/reportes/preview', 'ReportesController@preview');
-$router->get('/reportes/exportar', 'ReportesController@exportar');
-$router->get('/reportes/importaciones', 'ReportesController@importaciones');
+// Acá vivían Gastos, Conciliación y Reportes. Los tres salieron del sistema.
+//
+// Conciliación cruzaba las facturas XML contra un listado de "gastos" cargado
+// aparte, y Gastos existía solo para alimentarla. Ese cruce lo hace hoy el pago
+// semanal contra Facturas ERP, que es el registro real de la empresa y no un
+// archivo suelto; las tres tablas de aquella época (conciliaciones,
+// conciliacion_corridas, gastos_consolidados, gastos_raw) quedaron en cero
+// filas, o sea que el flujo nunca llegó a usarse en serio.
+//
+// Reportes exportaba justamente esas tres cosas: conciliación, gastos y un
+// listado de facturas. Lo que hoy se exporta sale de cada módulo, con los
+// filtros de ese módulo (pago semanal, notas de crédito, seguimiento,
+// facturas ERP), que es donde la gente ya está mirando los datos.
 
 // --- RUTAS DE USUARIOS (solo admin) ---
 $router->get('/usuarios',              'UsuariosController@index');
@@ -176,6 +171,6 @@ $router->get('/usuarios/editar/{id}',  'UsuariosController@editar');
 $router->post('/usuarios/editar/{id}', 'UsuariosController@editar');
 $router->post('/usuarios/eliminar/{id}', 'UsuariosController@eliminar');
 
-// --- RUTAS DE API (AJAX) ---
-$router->get('/api/proveedores/buscar', 'ProveedoresController@buscar');
-$router->get('/api/estadisticas', 'ReportesController@estadisticas');
+// Las dos rutas de API que había —buscar proveedores y estadísticas— no las
+// llamaba ninguna pantalla: quedaron de una versión anterior. Cada módulo
+// resuelve hoy sus propias búsquedas con su propio endpoint.

@@ -2,11 +2,15 @@
 /**
  * Similitud de números de factura y nombres de proveedor.
  *
- * Extraído del motor de conciliación (ConciliacionController) para que el
- * módulo "Facturas por pagar" use exactamente las mismas reglas: núcleo
- * numérico (la secuencia de dígitos más larga sin ceros a la izquierda),
- * consecutivos de Hacienda que terminan en el número corto, tokens de
- * proveedor con iniciales/abreviaturas y sin sufijos societarios.
+ * Las reglas: núcleo numérico (la secuencia de dígitos más larga sin ceros a
+ * la izquierda), consecutivos de Hacienda que terminan en el número corto, y
+ * tokens de proveedor con iniciales/abreviaturas y sin sufijos societarios.
+ *
+ * Nacieron en el viejo módulo de Conciliación y se sacaron aquí para
+ * compartirlas. Ese módulo ya no existe; hoy las usan las notas de crédito,
+ * las devoluciones y el número corto del pago semanal —el único caso que le
+ * queda al pago, porque cuando el ERP trae consecutivo el cruce es una
+ * igualdad y no pasa por acá—.
  */
 
 class FacturaMatcher

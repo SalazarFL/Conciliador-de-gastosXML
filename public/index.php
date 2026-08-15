@@ -1,7 +1,7 @@
 <?php
 /**
  * Punto de entrada de la aplicación
- * XMLConcilia - Verificador de Facturas XML vs Gastos
+ * Nexo Fiscal - Control documental y conciliación
  */
 
 // Servir archivos estáticos directamente si mod_rewrite no los intercepta.

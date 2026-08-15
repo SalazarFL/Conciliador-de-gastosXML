@@ -30,8 +30,8 @@ foreach ($informe['revisiones'] as $r) {
 ?>
 
 <div class="card mb-20" style="border-left:4px solid <?= $colorTitulo ?>;">
-    <div style="padding:18px 20px;">
-        <h2 style="margin:0 0 6px;font-size:19px;color:<?= $colorTitulo ?>;">
+    <div style="padding:10px 12px;">
+        <h2 style="margin:0 0 4px;font-size:17px;color:<?= $colorTitulo ?>;">
             <i class="fas <?= $colores[$informe['estado']][2] ?>" style="margin-right:8px;"></i>
             <?= htmlspecialchars($resumen[$informe['estado']], ENT_QUOTES, 'UTF-8') ?>
         </h2>
@@ -40,7 +40,7 @@ foreach ($informe['revisiones'] as $r) {
             · <?= htmlspecialchars((string) $informe['generado_en'], ENT_QUOTES, 'UTF-8') ?>
             · <?= $cuenta['ok'] ?> correcto(s), <?= $cuenta['aviso'] ?> por atender, <?= $cuenta['error'] ?> con error
         </p>
-        <p style="margin:10px 0 0;color:var(--text-muted);font-size:13px;">
+        <p style="margin:6px 0 0;color:var(--text-muted);font-size:12.5px;">
             Si vas a pedir ayuda con un problema, manda una captura de esta página:
             dice en qué computadora estás y qué le falta a esta instalación.
         </p>
@@ -49,7 +49,7 @@ foreach ($informe['revisiones'] as $r) {
 
 <div class="card">
     <div class="table-wrap">
-    <table class="table">
+    <table class="data-table">
         <thead>
             <tr>
                 <th style="width:130px;">Estado</th>
@@ -70,8 +70,8 @@ foreach ($informe['revisiones'] as $r) {
                 <td>
                     <div><?= htmlspecialchars($r['detalle'], ENT_QUOTES, 'UTF-8') ?></div>
                     <?php if ($r['que_hacer'] !== ''): ?>
-                    <div style="margin-top:8px;padding:10px 12px;background:var(--border-light);
-                                border-radius:6px;font-size:13px;line-height:1.6;">
+                    <div style="margin-top:6px;padding:7px 9px;background:var(--border-light);
+                                border-radius:6px;font-size:12.5px;line-height:1.5;">
                         <strong style="color:var(--navy);">Qué hacer:</strong>
                         <pre style="margin:4px 0 0;font-family:Consolas,monospace;font-size:12.5px;
                                     white-space:pre-wrap;word-break:break-word;"><?=
@@ -86,7 +86,7 @@ foreach ($informe['revisiones'] as $r) {
     </div>
 </div>
 
-<p style="margin:16px 0 0;color:var(--text-muted);font-size:13px;">
+<p style="margin:10px 0 0;color:var(--text-muted);font-size:12.5px;">
     Lo mismo desde la consola, por si hay que enviarlo por escrito:
     <code>php cli/diagnostico.php</code>
 </p>
@@ -106,12 +106,12 @@ $autoIni   = $respaldo['automatico'] ?? ['activo' => false, 'hora' => ''];
 $horaIni   = ($autoIni['hora'] ?? '') !== '' ? $autoIni['hora'] : '22:00';
 ?>
 <div class="card mt-20" id="respaldo-card" style="border-left:4px solid var(--navy);">
-    <div style="padding:18px 20px;">
-        <h2 style="margin:0 0 6px;font-size:17px;color:var(--navy);">
+    <div style="padding:10px 12px;">
+        <h2 style="margin:0 0 4px;font-size:16px;color:var(--navy);">
             <i class="fas fa-database" style="margin-right:8px;"></i>
             Respaldo de la base de datos
         </h2>
-        <p style="margin:0 0 14px;color:var(--text-muted);font-size:13px;line-height:1.6;">
+        <p style="margin:0 0 9px;color:var(--text-muted);font-size:12.5px;line-height:1.5;">
             Genera una copia de la base y la deja en la carpeta compartida, donde SharePoint
             la sincroniza al resto de las computadoras. <strong>Hay que apretarlo en la
             computadora que sí alcanza la base</strong> — desde otra tendría que salir por la
@@ -140,8 +140,8 @@ $horaIni   = ($autoIni['hora'] ?? '') !== '' ? $autoIni['hora'] : '22:00';
             <span id="respaldo-msg" style="font-size:13px;color:var(--text-muted);"></span>
         </div>
 
-        <div style="margin-top:14px;padding:12px 14px;background:var(--border-light);border-radius:6px;
-                    font-size:13px;line-height:1.7;">
+        <div style="margin-top:9px;padding:8px 10px;background:var(--border-light);border-radius:6px;
+                    font-size:12.5px;line-height:1.5;">
             <div>
                 <strong style="color:var(--navy);">Carpeta:</strong>
                 <span style="font-family:Consolas,monospace;font-size:12.5px;word-break:break-all;">
@@ -155,7 +155,7 @@ $horaIni   = ($autoIni['hora'] ?? '') !== '' ? $autoIni['hora'] : '22:00';
         </div>
 
         <!-- Automático -->
-        <div style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <div style="margin-top:9px;display:flex;gap:7px;align-items:center;flex-wrap:wrap;">
             <span style="font-size:13px;color:var(--navy);"><strong>Todas las noches a las</strong></span>
             <input type="time" id="respaldo-hora" value="<?= htmlspecialchars($horaIni, ENT_QUOTES, 'UTF-8') ?>"
                    style="padding:5px 8px;border:1px solid var(--border);border-radius:5px;font-size:13px;">
@@ -172,14 +172,14 @@ $horaIni   = ($autoIni['hora'] ?? '') !== '' ? $autoIni['hora'] : '22:00';
         </div>
 
         <!-- Lo que hay hoy en la carpeta compartida -->
-        <div style="margin-top:16px;">
+        <div style="margin-top:10px;">
             <div style="font-size:13px;color:var(--navy);margin-bottom:6px;">
                 <strong>Respaldos en la carpeta compartida</strong>
             </div>
             <div id="respaldo-lista"></div>
         </div>
 
-        <p style="margin:14px 0 0;color:var(--text-muted);font-size:12.5px;line-height:1.6;">
+        <p style="margin:9px 0 0;color:var(--text-muted);font-size:12px;line-height:1.5;">
             Lo mismo desde la consola: <code>php cli/respaldar_base.php</code>.
             Para levantarlo en la otra computadora, cuando el archivo ya sincronizó:
             <code>.\scripts\copiar-base.ps1 -Desde ultimo</code>
@@ -228,7 +228,7 @@ $horaIni   = ($autoIni['hora'] ?? '') !== '' ? $autoIni['hora'] : '22:00';
                 'Todavía no hay ninguno.</div>';
             return;
         }
-        var html = '<table class="table" style="font-size:13px;"><tbody>';
+        var html = '<table class="data-table" style="font-size:12.5px;"><tbody>';
         archivos.forEach(function (a, i) {
             html += '<tr>' +
                 '<td style="font-family:Consolas,monospace;font-size:12.5px;word-break:break-all;">' +

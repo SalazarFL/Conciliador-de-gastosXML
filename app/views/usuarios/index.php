@@ -93,7 +93,10 @@ $selfId   = (int) ($_SESSION['user_id'] ?? 0);
                             </a>
                             <?php if ((int)$u['id'] !== $selfId): ?>
                             <form method="post" action="<?= $baseUrl ?>/usuarios/eliminar/<?= (int)$u['id'] ?>"
-                                  onsubmit="return confirm('¿Eliminar a <?= htmlspecialchars(addslashes($u['nombre'])) ?>? Esta acción no se puede deshacer.')">
+                                  data-confirm="¿Quieres eliminar a <?= htmlspecialchars($u['nombre'], ENT_QUOTES) ?>? Esta acción no se puede deshacer."
+                                  data-confirm-title="Eliminar usuario"
+                                  data-confirm-type="danger"
+                                  data-confirm-accept="Eliminar">
                                 <button type="submit" class="btn btn-sm"
                                         style="background:#fff5f5;border:1.5px solid #fed7d7;color:#c53030;"
                                         title="Eliminar">

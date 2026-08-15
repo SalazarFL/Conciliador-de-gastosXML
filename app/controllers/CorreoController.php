@@ -220,7 +220,7 @@ class CorreoController extends Controller
         }
 
         $this->render('correo/index', [
-            'title'           => 'Correo - XMLConcilia',
+            'title'           => 'Correo - Nexo Fiscal',
             'imapDisponible'  => MailFetcher::extensionDisponible(),
             // Dos ausencias distintas que antes se contaban igual: no haber
             // registrado ninguna cuenta, o tenerlas todas asignadas a otra
@@ -1457,7 +1457,10 @@ class CorreoController extends Controller
     {
         try {
             require_once __DIR__ . '/../helpers/PorPagarVerificador.php';
-            PorPagarVerificador::verificarAbiertos($this->loadModel('PorPagar'));
+            PorPagarVerificador::verificarAbiertos(
+                $this->loadModel('FacturaErp'),
+                $this->loadModel('Factura')
+            );
         } catch (Throwable $e) {
         }
     }
@@ -1571,20 +1574,13 @@ class CorreoController extends Controller
                 $this->json(['ok' => false, 'message' => 'Las filas seleccionadas no tienen XML pendiente de importar (¿ya se importaron o falta el archivo?).'], 422);
             }
 
-            // Semana de trabajo elegida en la bandeja: las facturas
-            // importadas quedan asignadas a ella
+            // Importar ya no pide semana. La semana de un comprobante se
+            // deduce: al guardarlo, el importador busca su factura en el
+            // listado del ERP por el consecutivo, y si esa factura está en un
+            // pago semanal, el comprobante hereda esa semana y el pago se
+            // actualiza solo. Elegirla a mano era una decisión que nadie tenía
+            // por qué tomar —y equivocarse dejaba la factura fuera del pago—.
             $semanaId = null;
-            try {
-                $semanaId = $this->loadModel('Semana')->resolverSeleccion(
-                    (string) $this->post('semana_id', ''),
-                    (string) $this->post('semana_nueva', '')
-                );
-                // Recordar la semana elegida al importar para los demás módulos
-                if (!empty($semanaId)) {
-                    $this->setSemanaActiva($semanaId);
-                }
-            } catch (Throwable $e) {
-            }
 
             require_once __DIR__ . '/../helpers/InvoiceImportQueue.php';
             $service = new InvoiceImportQueue();
@@ -2674,20 +2670,9 @@ POWERSHELL;
     /**
      * Elige la cuenta con la que se trabaja (POST, JSON).
      */
-    /**
-     * Guardar la semana de trabajo activa al cambiar el selector de la bandeja
-     * (POST, JSON), para que se recuerde en los demás módulos. semana_id vacío
-     * o 0 = "Sin semana".
-     */
-    public function semanaUsar()
-    {
-        if (!$this->isPost()) {
-            $this->json(['ok' => false, 'message' => 'Metodo no permitido.'], 405);
-        }
-
-        $this->setSemanaActiva((int) $this->post('semana_id', 0));
-        $this->json(['ok' => true, 'semana_id' => $this->semanaActiva()]);
-    }
+    // Recordar la semana elegida en la bandeja se fue con el selector: la
+    // bandeja ya no pregunta a qué semana va lo que se importa, porque cada
+    // comprobante la hereda de su factura del ERP.
 
     public function cuentaUsar()
     {
@@ -3042,7 +3027,7 @@ POWERSHELL;
     private function scriptPicker($archivoResultado, $carpetaInicial, $rutaDll)
     {
         $plantilla = <<<'POWERSHELL'
-# Selector de carpeta de XMLConcilia: muestra el dialogo nativo de Windows
+# Selector de carpeta de Nexo Fiscal: muestra el diálogo nativo de Windows
 # y escribe la ruta elegida (o CANCEL / ERROR ...) en el archivo resultado.
 $ErrorActionPreference = 'Stop'
 $resultado = '{{RESULTADO}}'
@@ -3174,12 +3159,12 @@ public static class XmlConciliaSelector
     } catch { $moderno = $false }
 
     if ($moderno) {
-        $ruta = [XmlConciliaSelector]::Mostrar($dueno.Handle, 'Carpeta destino de XML y PDF - XMLConcilia', $inicial)
+        $ruta = [XmlConciliaSelector]::Mostrar($dueno.Handle, 'Carpeta destino de XML y PDF - Nexo Fiscal', $inicial)
         if ($null -eq $ruta) { Escribir 'CANCEL'; exit 0 }
     } else {
         # Respaldo: dialogo clasico de seleccion de carpeta
         $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-        $dlg.Description = 'Carpeta destino de XML y PDF - XMLConcilia'
+        $dlg.Description = 'Carpeta destino de XML y PDF - Nexo Fiscal'
         $dlg.ShowNewFolderButton = $true
         if ($inicial -ne '' -and (Test-Path -LiteralPath $inicial)) { $dlg.SelectedPath = $inicial }
         if ($dlg.ShowDialog($dueno) -ne [System.Windows.Forms.DialogResult]::OK) { Escribir 'CANCEL'; exit 0 }

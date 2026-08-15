@@ -137,6 +137,12 @@ class FacturaErp extends Model
             `semana_id` INT UNSIGNED NULL DEFAULT NULL,
             `porpagar_listado_id` INT UNSIGNED NULL DEFAULT NULL,
             `asignada_semana_en` DATETIME NULL DEFAULT NULL,
+            `factura_xml_id` INT UNSIGNED NULL DEFAULT NULL,
+            `estado_respaldo` ENUM('sin_respaldo','respaldada','con_diferencia') NOT NULL DEFAULT 'sin_respaldo',
+            `diferencia` DECIMAL(18,2) NULL DEFAULT NULL,
+            `score_numero` DECIMAL(5,1) NULL DEFAULT NULL,
+            `score_proveedor` DECIMAL(5,1) NULL DEFAULT NULL,
+            `match_manual` TINYINT(1) NOT NULL DEFAULT 0,
             `creado_en` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (`id`),
             UNIQUE KEY `uk_clave` (`clave`),
@@ -147,7 +153,9 @@ class FacturaErp extends Model
             KEY `idx_sucursal` (`sucursal`),
             KEY `idx_estado` (`estado`),
             KEY `idx_semana` (`semana_id`),
-            KEY `idx_porpagar_listado` (`porpagar_listado_id`)
+            KEY `idx_porpagar_listado` (`porpagar_listado_id`),
+            KEY `idx_factura_xml` (`factura_xml_id`),
+            KEY `idx_estado_respaldo` (`porpagar_listado_id`, `estado_respaldo`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
         $this->agregarColumnasFaltantes();
@@ -175,6 +183,21 @@ class FacturaErp extends Model
                 'semana_id' => "ADD COLUMN `semana_id` INT UNSIGNED NULL DEFAULT NULL AFTER `estado`, ADD KEY `idx_semana` (`semana_id`)",
                 'porpagar_listado_id' => "ADD COLUMN `porpagar_listado_id` INT UNSIGNED NULL DEFAULT NULL AFTER `semana_id`, ADD KEY `idx_porpagar_listado` (`porpagar_listado_id`)",
                 'asignada_semana_en' => "ADD COLUMN `asignada_semana_en` DATETIME NULL DEFAULT NULL AFTER `porpagar_listado_id`",
+                // Foto del saldo al entrar al pago. El saldo del ERP baja a
+                // cero cuando la factura se paga, y volver a cargar el reporte
+                // después de pagar dejaría la semana entera en ₡0 sin que
+                // nadie la hubiera tocado. Esto no es copiar el archivo: es el
+                // saldo del propio ERP en el momento en que se decidió pagarlo.
+                'saldo_pago' => "ADD COLUMN `saldo_pago` DECIMAL(18,2) NULL DEFAULT NULL AFTER `asignada_semana_en`",
+                // El respaldo electrónico vive acá desde que el pago semanal
+                // dejó de copiar las facturas a una tabla propia: la factura
+                // del ERP es la fila, y el XML que la respalda es un dato suyo.
+                'factura_xml_id' => "ADD COLUMN `factura_xml_id` INT UNSIGNED NULL DEFAULT NULL AFTER `asignada_semana_en`, ADD KEY `idx_factura_xml` (`factura_xml_id`)",
+                'estado_respaldo' => "ADD COLUMN `estado_respaldo` ENUM('sin_respaldo','respaldada','con_diferencia') NOT NULL DEFAULT 'sin_respaldo' AFTER `factura_xml_id`, ADD KEY `idx_estado_respaldo` (`porpagar_listado_id`, `estado_respaldo`)",
+                'diferencia' => "ADD COLUMN `diferencia` DECIMAL(18,2) NULL DEFAULT NULL AFTER `estado_respaldo`",
+                'score_numero' => "ADD COLUMN `score_numero` DECIMAL(5,1) NULL DEFAULT NULL AFTER `diferencia`",
+                'score_proveedor' => "ADD COLUMN `score_proveedor` DECIMAL(5,1) NULL DEFAULT NULL AFTER `score_numero`",
+                'match_manual' => "ADD COLUMN `match_manual` TINYINT(1) NOT NULL DEFAULT 0 AFTER `score_proveedor`",
             ],
         ];
 
@@ -472,251 +495,505 @@ class FacturaErp extends Model
     // ------------------------------------------------------------------
 
     /**
-     * Cierra un pago semanal y asigna sus facturas emparejadas al registro
-     * correspondiente del ERP.
+     * Cerrar un pago semanal ya no asigna nada.
      *
-     * La identidad es el CONSECUTIVO ELECTRÓNICO DE 20 DÍGITOS: el ERP lo
-     * imprime tal cual en `documento` y en el XML son los dígitos 22..41 de
-     * la clave de 50 (idéntico a `consecutivo_completo`). No se compara la
-     * fecha: `facturas_erp.fecha_emision` es la fecha en que el ERP registró
-     * el documento, no la de emisión del comprobante, y difiere de la del XML
-     * en días o semanas. Tampoco se compara el proveedor: `proveedor_codigo`
-     * es un código interno del ERP (140000003), nunca la cédula.
-     *
-     * El consecutivo es único por emisor, no globalmente, así que cuando dos
-     * proveedores coinciden se desempata por monto y, si aun así empatan
-     * (documento registrado dos veces en el ERP), por saldo pendiente.
-     *
-     * El cierre es atómico: si falta un XML, una factura ERP o aparece una
-     * asignación previa a otra semana, no se guarda ningún cambio.
+     * Asignaba: hasta que el pago dejó de tener facturas propias, cerrar era
+     * el momento en que cada línea del archivo se cruzaba —por el consecutivo
+     * de su XML— con una factura del ERP y se marcaba. Ahora ese cruce ocurre
+     * al cargar el archivo, que es cuando se decide qué se paga, así que
+     * cerrar solo congela el pago (PorPagar::cerrar).
      */
-    public function cerrarPagoSemanal($listadoId, $usuarioId = null)
-    {
-        require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 
-        $listadoId = (int) $listadoId;
-        if ($listadoId <= 0) {
-            throw new Exception('El pago semanal no es válido.');
+
+    // ------------------------------------------------------------------
+    // Pago semanal: la factura del ERP ES la línea del pago
+    // ------------------------------------------------------------------
+
+    /**
+     * Columnas mínimas para armar el índice con el que se resuelve un archivo
+     * de pago. Se trae la tabla entera de la sociedad porque el archivo llega
+     * con cientos de números y preguntar de a uno son cientos de viajes.
+     */
+    public function getIndicePago()
+    {
+        $params = [];
+        $sql = "SELECT id, documento, numero_corto, proveedor_nombre, fecha_emision,
+                       monto, saldo, semana_id, porpagar_listado_id
+                  FROM facturas_erp
+                 WHERE tipo IN ('F','FE','FACT')"
+             . $this->condicionSociedad('', $params);
+        return $this->fetchAll($sql, $params) ?: [];
+    }
+
+    /**
+     * Marca facturas del ERP como el pago de una semana.
+     *
+     * Es lo único que hace "cargar un listado" desde que el pago dejó de tener
+     * facturas propias: el archivo dice cuáles, y acá quedan marcadas. No se
+     * copia ni un dato del archivo — si el saldo del archivo no coincide con
+     * el del ERP, manda el ERP y la carga lo reporta.
+     */
+    public function asignarAPago(array $ids, $semanaId, $listadoId)
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+        if (!$ids) {
+            return 0;
+        }
+        $asignadas = 0;
+        foreach (array_chunk($ids, self::LOTE_INSERT) as $tanda) {
+            $asignadas += (int) $this->execute(
+                "UPDATE facturas_erp
+                    SET estado = 'asignada_semana', semana_id = ?, porpagar_listado_id = ?,
+                        asignada_semana_en = NOW(),
+                        saldo_pago = COALESCE(saldo_pago, saldo)
+                  WHERE id IN (" . implode(',', array_fill(0, count($tanda), '?')) . ')',
+                array_merge([(int) $semanaId, (int) $listadoId], $tanda)
+            );
+        }
+        return $asignadas;
+    }
+
+    /**
+     * Saca facturas de un pago y las devuelve a "pendiente".
+     *
+     * El vínculo con el XML se borra a la vez: ese emparejamiento se hizo
+     * dentro del pago y fuera de él no significa nada. El XML no se toca —
+     * sigue existiendo y vuelve a estar disponible—.
+     */
+    public function quitarDePago(array $ids, $listadoId)
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+        if (!$ids) {
+            return 0;
+        }
+        $quitadas = 0;
+        foreach (array_chunk($ids, self::LOTE_INSERT) as $tanda) {
+            $quitadas += (int) $this->execute(
+                "UPDATE facturas_erp
+                    SET estado = 'pendiente', semana_id = NULL, porpagar_listado_id = NULL,
+                        asignada_semana_en = NULL, saldo_pago = NULL, factura_xml_id = NULL,
+                        estado_respaldo = 'sin_respaldo', diferencia = NULL,
+                        score_numero = NULL, score_proveedor = NULL, match_manual = 0
+                  WHERE porpagar_listado_id = ?
+                    AND id IN (" . implode(',', array_fill(0, count($tanda), '?')) . ')',
+                array_merge([(int) $listadoId], $tanda)
+            );
+        }
+        return $quitadas;
+    }
+
+    /** Las facturas del pago con el XML que las respalda: el checklist. */
+    public function getFacturasPago($listadoId, array $filtros = [])
+    {
+        $where = ['e.porpagar_listado_id = ?'];
+        $params = [(int) $listadoId];
+
+        $q = trim((string) ($filtros['q'] ?? ''));
+        if ($q !== '') {
+            $like = '%' . $q . '%';
+            $where[] = '(e.documento LIKE ? OR e.numero_corto LIKE ? OR x.numero_factura_asistente LIKE ?'
+                     . ' OR x.consecutivo_completo LIKE ?)';
+            array_push($params, $like, $like, $like, $like);
         }
 
-        $this->begin();
-        try {
-            $listado = $this->fetchOne(
-                "SELECT * FROM porpagar_listados WHERE id = ? LIMIT 1 FOR UPDATE",
-                [$listadoId]
-            );
-            if (!$listado) {
-                throw new Exception('El pago semanal no existe.');
+        $proveedor = trim((string) ($filtros['proveedor'] ?? ''));
+        if ($proveedor !== '') {
+            $like = '%' . $proveedor . '%';
+            $where[] = '(e.proveedor_nombre LIKE ? OR p.razon_social LIKE ?)';
+            array_push($params, $like, $like);
+        }
+
+        $estado = (string) ($filtros['estado'] ?? '');
+        if (in_array($estado, ['respaldada', 'con_diferencia', 'sin_respaldo'], true)) {
+            $where[] = 'e.estado_respaldo = ?';
+            $params[] = $estado;
+        }
+
+        $vinculo = (string) ($filtros['vinculo'] ?? '');
+        if ($vinculo === 'manual') {
+            $where[] = 'e.factura_xml_id IS NOT NULL AND e.match_manual = 1';
+        } elseif ($vinculo === 'automatico') {
+            $where[] = 'e.factura_xml_id IS NOT NULL AND e.match_manual = 0';
+        } elseif ($vinculo === 'sin_vinculo') {
+            $where[] = 'e.factura_xml_id IS NULL';
+        }
+
+        foreach ([['fecha_desde', '>='], ['fecha_hasta', '<=']] as $rango) {
+            $valor = trim((string) ($filtros[$rango[0]] ?? ''));
+            if ($valor !== '') {
+                $where[] = 'e.fecha_emision ' . $rango[1] . ' ?';
+                $params[] = $valor;
             }
-
-            $semanaId = (int) ($listado['semana_id'] ?? 0);
-            if ($semanaId <= 0) {
-                throw new Exception('Asigna una semana antes de cerrar el pago semanal.');
+        }
+        foreach ([['monto_desde', '>='], ['monto_hasta', '<=']] as $rango) {
+            $valor = $filtros[$rango[0]] ?? '';
+            if ($valor !== '' && $valor !== null && is_numeric($valor)) {
+                $where[] = 'COALESCE(e.saldo_pago, e.saldo) ' . $rango[1] . ' ?';
+                $params[] = (float) $valor;
             }
+        }
 
-            if (($listado['estado'] ?? 'abierto') === 'cerrado') {
-                $asignadas = (int) $this->fetchColumn(
-                    "SELECT COUNT(*) FROM porpagar_facturas
-                      WHERE listado_id = ? AND factura_erp_id IS NOT NULL",
-                    [$listadoId]
-                );
-                $this->commit();
-                return ['asignadas' => $asignadas, 'ya_cerrado' => true, 'semana_id' => $semanaId];
-            }
+        $sql = "SELECT e.id, e.documento, e.numero_corto, e.proveedor_codigo, e.proveedor_nombre,
+                       e.sucursal, e.fecha_emision, e.fecha_vence, e.moneda, e.monto, e.saldo,
+                       COALESCE(e.saldo_pago, e.saldo) AS saldo_pago,
+                       e.factura_xml_id, e.estado_respaldo AS estado, e.diferencia,
+                       e.score_numero, e.score_proveedor, e.match_manual,
+                       x.numero_factura_asistente AS xml_numero,
+                       x.consecutivo_completo AS xml_consecutivo,
+                       x.total AS xml_total, x.fecha_emision AS xml_fecha,
+                       x.ruta_xml, x.ruta_pdf, x.estado_pdf,
+                       p.razon_social AS xml_proveedor
+                  FROM facturas_erp e
+                  LEFT JOIN facturas_xml x ON x.id = e.factura_xml_id
+                  LEFT JOIN proveedores p ON p.id = x.proveedor_id
+                 WHERE " . implode(' AND ', $where) . "
+                 ORDER BY FIELD(e.estado_respaldo, 'con_diferencia', 'sin_respaldo', 'respaldada'),
+                          e.proveedor_nombre ASC, e.id ASC";
+        return $this->fetchAll($sql, $params) ?: [];
+    }
 
-            $conteo = $this->fetchOne(
-                "SELECT COUNT(*) AS total,
-                        SUM(CASE WHEN factura_xml_id IS NULL THEN 1 ELSE 0 END) AS sin_xml
-                   FROM porpagar_facturas WHERE listado_id = ?",
-                [$listadoId]
-            );
-            $total = (int) ($conteo['total'] ?? 0);
-            $sinXml = (int) ($conteo['sin_xml'] ?? 0);
-            if ($total <= 0) {
-                throw new Exception('El pago semanal está vacío.');
-            }
-            if ($sinXml > 0) {
-                throw new Exception("No se puede cerrar: {$sinXml} factura(s) todavía no tienen XML emparejado.");
-            }
+    /** Lo mínimo para emparejar: sin las columnas pesadas ni los JOIN. */
+    public function getFacturasPagoParaMatching($listadoId)
+    {
+        return $this->fetchAll(
+            "SELECT id, documento, numero_corto, proveedor_nombre, monto, saldo,
+                    COALESCE(saldo_pago, saldo) AS saldo_pago,
+                    factura_xml_id, estado_respaldo AS estado, diferencia, match_manual
+               FROM facturas_erp
+              WHERE porpagar_listado_id = ?
+              ORDER BY id ASC",
+            [(int) $listadoId]
+        ) ?: [];
+    }
 
-            $lineas = $this->fetchAll(
-                "SELECT pf.id AS linea_id, pf.numero, pf.factura_xml_id, fx.total AS xml_total,
-                        COALESCE(NULLIF(fx.consecutivo_completo, ''), SUBSTRING(fx.clave, 22, 20)) AS consecutivo
-                   FROM porpagar_facturas pf
-                   JOIN facturas_xml fx ON fx.id = pf.factura_xml_id
-                  WHERE pf.listado_id = ?
-                  ORDER BY pf.id ASC",
-                [$listadoId]
-            );
-            if (count($lineas) !== $total) {
-                throw new Exception('No se puede cerrar: hay facturas cuyo XML vinculado ya no existe.');
-            }
+    public function getFacturaPago($id)
+    {
+        $fila = $this->fetchOne(
+            "SELECT e.*, e.estado_respaldo AS estado_respaldo,
+                    l.estado AS listado_estado, l.semana_id AS listado_semana_id
+               FROM facturas_erp e
+               LEFT JOIN porpagar_listados l ON l.id = e.porpagar_listado_id
+              WHERE e.id = ? LIMIT 1",
+            [(int) $id]
+        );
+        return $fila ?: null;
+    }
 
-            $consecutivos = array_values(array_unique(array_filter(array_map(function ($linea) {
-                return self::consecutivoValido($linea['consecutivo'] ?? '');
-            }, $lineas))));
-            $porConsecutivo = [];
-            foreach ($this->facturasErpPorConsecutivos($consecutivos, true) as $factura) {
-                $porConsecutivo[(string) $factura['documento']][] = $factura;
-            }
-
-            $asignaciones = [];
-            $usadas = [];
-            $faltantes = [];
-            $ambiguas = [];
-            $conflictos = [];
-
-            foreach ($lineas as $linea) {
-                $consecutivo = self::consecutivoValido($linea['consecutivo'] ?? '');
-                $etiqueta = trim((string) ($linea['numero'] ?? $consecutivo));
-
-                $exactas = $consecutivo === '' ? [] : ($porConsecutivo[$consecutivo] ?? []);
-
-                // El consecutivo solo es único por emisor: dos proveedores
-                // distintos pueden repetirlo. El monto los separa.
-                if (count($exactas) > 1) {
-                    $totalXml = (float) ($linea['xml_total'] ?? 0);
-                    $porMonto = array_values(array_filter($exactas, function ($erp) use ($totalXml) {
-                        return abs((float) $erp['monto'] - $totalXml) <= FacturaMatcher::TOLERANCIA_CRC;
-                    }));
-                    if ($porMonto) {
-                        $exactas = $porMonto;
-                    }
-                }
-
-                // Mismo documento y mismo monto = el ERP lo registró dos
-                // veces; la que sigue debiéndose es la que se está pagando.
-                if (count($exactas) > 1) {
-                    $pendientes = array_values(array_filter($exactas, function ($erp) {
-                        return (float) $erp['saldo'] > 0;
-                    }));
-                    if ($pendientes) {
-                        $exactas = $pendientes;
-                    }
-                }
-
-                if (count($exactas) === 0) {
-                    $faltantes[] = $etiqueta;
-                    continue;
-                }
-                if (count($exactas) > 1) {
-                    $ambiguas[] = $etiqueta;
-                    continue;
-                }
-
-                $erp = $exactas[0];
-                $erpId = (int) $erp['id'];
-                $otroListado = (int) ($erp['porpagar_listado_id'] ?? 0);
-                $otraSemana = (int) ($erp['semana_id'] ?? 0);
-                if (($otroListado > 0 && $otroListado !== $listadoId)
-                    || ($otraSemana > 0 && $otraSemana !== $semanaId)
-                    || isset($usadas[$erpId])) {
-                    $conflictos[] = $etiqueta;
-                    continue;
-                }
-
-                $usadas[$erpId] = true;
-                $asignaciones[] = ['linea_id' => (int) $linea['linea_id'], 'erp_id' => $erpId];
-            }
-
-            if ($faltantes || $ambiguas || $conflictos) {
-                $partes = [];
-                if ($faltantes) {
-                    $partes[] = count($faltantes) . ' no están en Facturas ERP (' . self::muestraNumeros($faltantes) . ')';
-                }
-                if ($ambiguas) {
-                    $partes[] = count($ambiguas) . ' tienen más de una coincidencia ERP (' . self::muestraNumeros($ambiguas) . ')';
-                }
-                if ($conflictos) {
-                    $partes[] = count($conflictos) . ' ya están asignadas a otro pago (' . self::muestraNumeros($conflictos) . ')';
-                }
-                throw new Exception('No se puede cerrar: ' . implode('; ', $partes) . '.');
-            }
-
-            // Por tandas y no de a una: un listado de 568 líneas eran 1,136
-            // consultas, y con la base en el servidor eso son 100 segundos —
-            // más de lo que dura la petición.
-            foreach (array_chunk($asignaciones, self::LOTE_INSERT) as $tanda) {
-                $caso = 'factura_erp_id = CASE id';
-                $params = [];
-                $ids = [];
-                $erpIds = [];
-                foreach ($tanda as $asignacion) {
+    /** Escribe los emparejamientos de una verificación de una sola vez. */
+    public function actualizarRespaldoLote(array $filas, $tam = 100)
+    {
+        $columnas = ['factura_xml_id', 'estado_respaldo', 'diferencia', 'score_numero', 'score_proveedor'];
+        $afectadas = 0;
+        foreach (array_chunk(array_values($filas), max(1, (int) $tam)) as $tanda) {
+            $sets = [];
+            $params = [];
+            foreach ($columnas as $columna) {
+                $caso = "{$columna} = CASE id";
+                foreach ($tanda as $fila) {
                     $caso .= ' WHEN ? THEN ?';
-                    $params[] = (int) $asignacion['linea_id'];
-                    $params[] = (int) $asignacion['erp_id'];
-                    $ids[] = (int) $asignacion['linea_id'];
-                    $erpIds[] = (int) $asignacion['erp_id'];
+                    $params[] = (int) $fila['id'];
+                    $params[] = $fila[$columna];
                 }
-                $this->execute(
-                    "UPDATE porpagar_facturas SET {$caso} ELSE factura_erp_id END
-                      WHERE listado_id = ?
-                        AND id IN (" . implode(',', array_fill(0, count($ids), '?')) . ')',
-                    array_merge($params, [$listadoId], $ids)
-                );
-
-                // Aquí todas las filas reciben lo mismo, así que basta el IN.
-                $this->execute(
-                    "UPDATE facturas_erp
-                        SET estado = 'asignada_semana', semana_id = ?, porpagar_listado_id = ?,
-                            asignada_semana_en = NOW()
-                      WHERE id IN (" . implode(',', array_fill(0, count($erpIds), '?')) . ')',
-                    array_merge([$semanaId, $listadoId], $erpIds)
-                );
+                $sets[] = $caso . " ELSE {$columna} END";
             }
-
-            $cerradas = $this->execute(
-                "UPDATE porpagar_listados
-                    SET estado = 'cerrado', cerrado_en = NOW(), cerrado_por = ?
-                  WHERE id = ? AND estado = 'abierto'",
-                [$usuarioId !== null ? (int) $usuarioId : null, $listadoId]
+            $ids = array_map(function ($fila) { return (int) $fila['id']; }, $tanda);
+            $afectadas += (int) $this->execute(
+                'UPDATE facturas_erp SET ' . implode(', ', $sets) . ', match_manual = 0'
+                . ' WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')',
+                array_merge($params, $ids)
             );
-            if ($cerradas !== 1) {
-                throw new Exception('El pago semanal cambió mientras se intentaba cerrar.');
-            }
-
-            $this->commit();
-            return [
-                'asignadas' => count($asignaciones),
-                'ya_cerrado' => false,
-                'semana_id' => $semanaId,
-            ];
-        } catch (Throwable $e) {
-            $this->rollback();
-            throw $e;
         }
+        return $afectadas;
     }
 
-    /** Trae candidatas en lotes para no exceder el límite de parámetros SQL. */
-    private function facturasErpPorConsecutivos(array $consecutivos, $bloquear = false)
+    /** Vínculo hecho a mano: la verificación ya no lo deshace. */
+    public function actualizarRespaldoManual($erpId, $facturaXmlId, $estado, $diferencia)
     {
-        $salida = [];
-        foreach (array_chunk($consecutivos, 500) as $lote) {
-            if (!$lote) {
-                continue;
-            }
-            $marcas = implode(',', array_fill(0, count($lote), '?'));
-            $params = $lote;
-            $sql = "SELECT id, documento, numero_corto, fecha_emision, monto, saldo,
-                           proveedor_codigo, proveedor_nombre,
-                           estado, semana_id, porpagar_listado_id
-                      FROM facturas_erp
-                     WHERE tipo IN ('F','FE','FACT') AND documento IN ({$marcas})"
-                 . $this->condicionSociedad('', $params);
-            if ($bloquear) {
-                $sql .= ' FOR UPDATE';
-            }
-            $salida = array_merge($salida, $this->fetchAll($sql, $params));
+        return $this->execute(
+            "UPDATE facturas_erp
+                SET factura_xml_id = ?, estado_respaldo = ?, diferencia = ?,
+                    score_numero = NULL, score_proveedor = NULL, match_manual = 1
+              WHERE id = ?",
+            [$facturaXmlId ?: null, (string) $estado, $diferencia, (int) $erpId]
+        );
+    }
+
+    public function resumenRespaldoPago($listadoId)
+    {
+        $resumen = [];
+        $filas = $this->fetchAll(
+            "SELECT estado_respaldo AS estado, COUNT(*) AS n,
+                    COALESCE(SUM(COALESCE(saldo_pago, saldo)), 0) AS monto
+               FROM facturas_erp WHERE porpagar_listado_id = ? GROUP BY estado_respaldo",
+            [(int) $listadoId]
+        ) ?: [];
+        foreach ($filas as $fila) {
+            $resumen[$fila['estado']] = (int) $fila['n'];
+            $resumen[$fila['estado'] . '_monto'] = (float) $fila['monto'];
         }
-        return $salida;
+        return $resumen;
     }
 
-    /** El consecutivo electrónico son exactamente 20 dígitos; nada más cruza. */
-    private static function consecutivoValido($valor)
+    /**
+     * Engancha un comprobante recién importado con su factura del ERP.
+     *
+     * Es la pieza por la que el correo dejó de pedir semana. Antes, quien
+     * importaba un XML tenía que saber a qué semana pertenecía y decirlo; si se
+     * equivocaba o lo dejaba en blanco, la factura quedaba fuera del pago y
+     * alguien tenía que ir a buscarla. Ahora el XML busca su fila en el ERP por
+     * el consecutivo —una igualdad, no un parecido—, y si esa fila ya está en
+     * un pago semanal, el comprobante hereda la semana y el pago se pone al día
+     * solo. No hay nada que elegir porque no hay nada que decidir.
+     *
+     * Devuelve qué pasó, para que quien importe lo pueda contar.
+     */
+    public function engancharXml($xmlId, $consecutivo, $numeroCorto, $total)
     {
-        $valor = trim((string) $valor);
-        return preg_match('/^\d{20}$/', $valor) ? $valor : '';
+        $xmlId = (int) $xmlId;
+        if ($xmlId <= 0) {
+            return ['estado' => 'sin_erp'];
+        }
+
+        $candidatas = $this->candidatasParaXml($consecutivo, $numeroCorto);
+        if (!$candidatas) {
+            return ['estado' => 'sin_erp'];
+        }
+
+        // Las que ya tienen otro XML no se tocan: ese vínculo lo hizo la
+        // verificación o una persona, y este documento no lo discute.
+        $libres = array_values(array_filter($candidatas, function ($erp) use ($xmlId) {
+            $actual = (int) ($erp['factura_xml_id'] ?? 0);
+            return $actual === 0 || $actual === $xmlId;
+        }));
+        if (!$libres) {
+            return ['estado' => 'ya_tomada'];
+        }
+
+        // El consecutivo es único por emisor, no globalmente: si hay varias,
+        // el monto es lo único que las separa.
+        if (count($libres) > 1) {
+            $porMonto = array_values(array_filter($libres, function ($erp) use ($total) {
+                return abs((float) $erp['monto'] - (float) $total) <= 1.0;
+            }));
+            if (count($porMonto) !== 1) {
+                return ['estado' => 'ambigua', 'candidatas' => count($libres)];
+            }
+            $libres = $porMonto;
+        }
+
+        $erp = $libres[0];
+        $diferencia = round((float) $erp['monto'] - (float) $total, 2);
+        $estado = abs($diferencia) <= 1.0 ? 'respaldada' : 'con_diferencia';
+
+        $this->execute(
+            "UPDATE facturas_erp
+                SET factura_xml_id = ?, estado_respaldo = ?, diferencia = ?,
+                    score_numero = 100.0, score_proveedor = 100.0
+              WHERE id = ? AND match_manual = 0",
+            [$xmlId, $estado, $estado === 'con_diferencia' ? $diferencia : null, (int) $erp['id']]
+        );
+
+        // Si la factura ya estaba en un pago, el comprobante hereda su semana:
+        // de ahí la lee el organizador para llevarlo a la carpeta del pago.
+        $semanaId = (int) ($erp['semana_id'] ?? 0);
+        if ($semanaId > 0) {
+            $this->execute(
+                'UPDATE facturas_xml SET semana_id = ? WHERE id = ? AND (semana_id IS NULL OR semana_id <> ?)',
+                [$semanaId, $xmlId, $semanaId]
+            );
+        }
+
+        return [
+            'estado' => 'enganchada',
+            'factura_erp_id' => (int) $erp['id'],
+            'estado_respaldo' => $estado,
+            'diferencia' => $diferencia,
+            'semana_id' => $semanaId ?: null,
+            'listado_id' => (int) ($erp['porpagar_listado_id'] ?? 0) ?: null,
+            'en_pago' => !empty($erp['porpagar_listado_id']),
+        ];
     }
+
+    /**
+     * XML de la semana del pago que no respaldan ninguna de sus facturas.
+     *
+     * Alimenta el botón "Sin coincidencia": son comprobantes que se importaron
+     * y quedaron sueltos, casi siempre porque el número del ERP y el del XML no
+     * se cruzaron. Se ofrecen para vincular a mano.
+     */
+    public function getXmlSinCoincidencia($listadoId)
+    {
+        $params = [(int) $listadoId, (int) $listadoId];
+        $sql = "SELECT x.id, x.numero_factura_asistente, x.consecutivo_completo, x.total,
+                       x.fecha_emision, p.razon_social AS proveedor_nombre
+                  FROM facturas_xml x
+                  LEFT JOIN proveedores p ON p.id = x.proveedor_id
+                  JOIN porpagar_listados l ON l.id = ?
+                 WHERE (x.tipo_documento IS NULL OR x.tipo_documento = 'FE')
+                   AND x.semana_id = l.semana_id
+                   AND NOT EXISTS (SELECT 1 FROM facturas_erp e
+                                    WHERE e.porpagar_listado_id = ?
+                                      AND e.factura_xml_id = x.id)"
+             . $this->condicionSociedad('x.', $params) . "
+                 ORDER BY p.razon_social ASC, x.id ASC";
+        return $this->fetchAll($sql, $params) ?: [];
+    }
+
+    /** Pagos abiertos con facturas todavía sin respaldo, los más recientes. */
+    public function idsPagosAbiertosConFaltantes($limite = 3)
+    {
+        $filas = $this->fetchAll(
+            "SELECT l.id
+               FROM porpagar_listados l
+              WHERE l.estado = 'abierto'
+                AND EXISTS (SELECT 1 FROM facturas_erp e
+                             WHERE e.porpagar_listado_id = l.id
+                               AND e.estado_respaldo = 'sin_respaldo')
+              ORDER BY l.id DESC
+              LIMIT " . max(1, (int) $limite)
+        ) ?: [];
+        return array_values(array_map('intval', array_column($filas, 'id')));
+    }
+
+    public function idsPagosAbiertosDeSemana($semanaId)
+    {
+        $filas = $this->fetchAll(
+            "SELECT id FROM porpagar_listados WHERE semana_id = ? AND estado = 'abierto' ORDER BY id DESC",
+            [(int) $semanaId]
+        ) ?: [];
+        return array_values(array_map('intval', array_column($filas, 'id')));
+    }
+
+    /** El pago abierto al que pertenece una factura del ERP, si lo hay. */
+    public function pagoAbiertoDeFactura($erpId)
+    {
+        $fila = $this->fetchOne(
+            "SELECT l.id, l.semana_id, l.estado
+               FROM facturas_erp e
+               JOIN porpagar_listados l ON l.id = e.porpagar_listado_id
+              WHERE e.id = ? LIMIT 1",
+            [(int) $erpId]
+        );
+        return $fila ?: null;
+    }
+
+    public function contarPago($listadoId)
+    {
+        return (int) $this->fetchColumn(
+            'SELECT COUNT(*) FROM facturas_erp WHERE porpagar_listado_id = ?',
+            [(int) $listadoId]
+        );
+    }
+
+    /**
+     * Pasa la semana del pago a los XML que lo respaldan.
+     *
+     * La semana del comprobante dejó de ser algo que alguien elige al
+     * importarlo: se deduce del pago al que pertenece la factura del ERP que
+     * respalda. Sigue viviendo en facturas_xml porque de ahí la lee el
+     * organizador para saber a qué carpeta de pago va el par XML/PDF.
+     */
+    public function sincronizarSemanaXml($listadoId)
+    {
+        return $this->execute(
+            "UPDATE facturas_xml x
+               JOIN facturas_erp e ON e.factura_xml_id = x.id
+               JOIN porpagar_listados l ON l.id = e.porpagar_listado_id
+                SET x.semana_id = l.semana_id
+              WHERE e.porpagar_listado_id = ?
+                AND l.semana_id IS NOT NULL
+                AND (x.semana_id IS NULL OR x.semana_id <> l.semana_id)",
+            [(int) $listadoId]
+        );
+    }
+
+    /**
+     * Suelta la semana de los XML que ya no respaldan nada de este pago.
+     * Es la mitad que falta de sincronizarSemanaXml: sin ella, una factura
+     * quitada del pago se quedaría en la carpeta semanal para siempre.
+     */
+    public function soltarSemanaXml(array $xmlIds)
+    {
+        $xmlIds = array_values(array_unique(array_filter(array_map('intval', $xmlIds))));
+        if (!$xmlIds) {
+            return 0;
+        }
+        $sueltas = 0;
+        foreach (array_chunk($xmlIds, self::LOTE_INSERT) as $tanda) {
+            $marcas = implode(',', array_fill(0, count($tanda), '?'));
+            $sueltas += (int) $this->execute(
+                "UPDATE facturas_xml x
+                    SET x.semana_id = NULL
+                  WHERE x.id IN ({$marcas})
+                    AND NOT EXISTS (SELECT 1 FROM facturas_erp e
+                                     WHERE e.factura_xml_id = x.id
+                                       AND e.porpagar_listado_id IS NOT NULL)",
+                $tanda
+            );
+        }
+        return $sueltas;
+    }
+
+    /** IDs de los XML que respaldan este pago, para reordenar sus archivos. */
+    public function idsXmlDePago($listadoId)
+    {
+        $filas = $this->fetchAll(
+            'SELECT DISTINCT factura_xml_id AS id FROM facturas_erp
+              WHERE porpagar_listado_id = ? AND factura_xml_id IS NOT NULL',
+            [(int) $listadoId]
+        ) ?: [];
+        return array_values(array_map('intval', array_column($filas, 'id')));
+    }
+
+    /**
+     * ¿Qué factura del ERP corresponde a un XML recién importado?
+     *
+     * Es la vía por la que el correo dejó de pedir semana: se busca la factura
+     * del ERP por el consecutivo del XML —o por su número corto— y, si esa
+     * factura ya está en un pago semanal, el XML hereda la semana y el pago se
+     * actualiza solo. Se devuelven las candidatas; quien llama decide con el
+     * monto, que es lo único que puede separar dos facturas con el mismo
+     * número de emisores distintos.
+     */
+    public function candidatasParaXml($consecutivo, $numeroCorto)
+    {
+        $llaves = [];
+        $consecutivo = preg_replace('/\D+/', '', (string) $consecutivo);
+        if (preg_match('/^\d{20}$/', $consecutivo) && ltrim($consecutivo, '0') !== '') {
+            $llaves['consecutivo'] = $consecutivo;
+        }
+        $corto = (string) NumeroFactura::xmlOchoDigitos((string) $numeroCorto);
+        if ($corto !== '' && ltrim($corto, '0') !== '') {
+            $llaves['corto'] = $corto;
+        }
+        if (!$llaves) {
+            return [];
+        }
+
+        $params = [];
+        $condiciones = [];
+        if (isset($llaves['consecutivo'])) {
+            $condiciones[] = 'e.documento = ?';
+            $params[] = $llaves['consecutivo'];
+        }
+        if (isset($llaves['corto'])) {
+            // numero_corto viene NULL en uno de cada cuatro renglones; ahí la
+            // llave corta se deriva del documento, igual que en el índice.
+            $condiciones[] = "LPAD(RIGHT(REGEXP_REPLACE(COALESCE(NULLIF(e.numero_corto,''), e.documento), '[^0-9]', ''), 8), 8, '0') = ?";
+            $params[] = str_pad($corto, 8, '0', STR_PAD_LEFT);
+        }
+
+        $sql = "SELECT e.id, e.documento, e.numero_corto, e.proveedor_nombre, e.monto, e.saldo,
+                       e.semana_id, e.porpagar_listado_id, e.factura_xml_id,
+                       l.estado AS listado_estado
+                  FROM facturas_erp e
+                  LEFT JOIN porpagar_listados l ON l.id = e.porpagar_listado_id
+                 WHERE e.tipo IN ('F','FE','FACT') AND (" . implode(' OR ', $condiciones) . ')'
+             . $this->condicionSociedad('e.', $params) . '
+                 ORDER BY e.id ASC';
+        return $this->fetchAll($sql, $params) ?: [];
+    }
+
 
     /**
      * De las dos llaves que puede traer un número del pago semanal, cuál es.

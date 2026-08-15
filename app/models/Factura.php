@@ -421,15 +421,15 @@ class Factura extends Model
                        f.semana_id, sem.nombre AS semana_nombre,
                        sem.carpeta_pago AS carpeta_pago,
                        CASE WHEN EXISTS (
-                           SELECT 1 FROM porpagar_facturas pf
-                           WHERE pf.factura_xml_id = f.id AND pf.estado = 'con_diferencia'
+                           SELECT 1 FROM facturas_erp pe
+                           WHERE pe.factura_xml_id = f.id AND pe.estado_respaldo = 'con_diferencia'
                        ) OR EXISTS (
                            SELECT 1 FROM notas_credito_lineas nl
                            WHERE nl.factura_xml_id = f.id AND nl.estado = 'con_diferencia'
                        ) THEN 1 ELSE 0 END AS con_diferencia,
                        CASE WHEN EXISTS (
-                           SELECT 1 FROM porpagar_facturas pf
-                           WHERE pf.factura_xml_id = f.id AND pf.estado = 'respaldada'
+                           SELECT 1 FROM facturas_erp pe
+                           WHERE pe.factura_xml_id = f.id AND pe.estado_respaldo = 'respaldada'
                        ) OR EXISTS (
                            SELECT 1 FROM notas_credito_lineas nl
                            WHERE nl.factura_xml_id = f.id AND nl.estado = 'coincide'
@@ -445,10 +445,10 @@ class Factura extends Model
                        -- el listado, que es donde hay que resolverla.
                        CASE WHEN EXISTS (
                            SELECT 1
-                           FROM porpagar_facturas psp
-                            JOIN porpagar_listados lsp ON lsp.id = psp.listado_id
+                           FROM facturas_erp psp
+                            JOIN porpagar_listados lsp ON lsp.id = psp.porpagar_listado_id
                             WHERE psp.factura_xml_id = f.id
-                              AND psp.estado IN ('respaldada', 'con_diferencia')
+                              AND psp.estado_respaldo IN ('respaldada', 'con_diferencia')
                               AND lsp.semana_id = f.semana_id
                         ) THEN 1 ELSE 0 END AS pago_semanal
                 FROM {$this->table} f
@@ -456,6 +456,30 @@ class Factura extends Model
                 LEFT JOIN proveedores p ON p.id = f.proveedor_id
                 {$where}
                 ORDER BY f.id ASC";
+        return $this->fetchAll($sql, $params) ?: [];
+    }
+
+    /**
+     * Comprobantes electrónicos con los que se puede respaldar un pago.
+     *
+     * Son todas las facturas de la sociedad, sin filtrar por semana: desde que
+     * el pago semanal es una selección de facturas del ERP, la semana del XML
+     * dejó de ser un dato que alguien asigne a mano y pasó a deducirse del
+     * pago. Filtrar por ella acá dejaría fuera justamente lo que se busca.
+     *
+     * El cruce contra el ERP es por consecutivo —una igualdad—, así que traer
+     * de más no afloja nada: solo agranda el índice en memoria.
+     */
+    public function getCandidatasParaPago()
+    {
+        $params = [];
+        $sql = "SELECT f.id, f.consecutivo_completo, f.numero_factura_asistente, f.total,
+                       f.fecha_emision, f.semana_id, p.razon_social AS proveedor_nombre
+                  FROM {$this->table} f
+                  LEFT JOIN proveedores p ON p.id = f.proveedor_id
+                 WHERE (f.tipo_documento IS NULL OR f.tipo_documento = 'FE')"
+             . $this->condicionSociedad('f.', $params) . "
+                 ORDER BY f.id ASC";
         return $this->fetchAll($sql, $params) ?: [];
     }
 
