@@ -127,7 +127,7 @@ $horaIni   = ($autoIni['hora'] ?? '') !== '' ? $autoIni['hora'] : '22:00';
         <div style="padding:10px 12px;background:var(--miss-bg);color:var(--miss);border-radius:6px;
                     font-size:13px;margin-bottom:12px;">
             No se encontró <code>mysqldump.exe</code> en esta computadora
-            (se buscó en <code>C:\xampp\mysql\bin</code> y en el PATH). Sin él no se puede respaldar.
+            (se buscó en la instalación de MariaDB y en el PATH). Sin él no se puede respaldar.
         </div>
         <?php endif; ?>
 

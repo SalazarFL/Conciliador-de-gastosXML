@@ -33,8 +33,8 @@ $perfiles = [ordered]@{
 function Get-PhpExe {
     $cmd = Get-Command php -ErrorAction SilentlyContinue
     if ($null -ne $cmd) { return $cmd.Source }
-    if (Test-Path 'C:\xampp\php\php.exe') { return 'C:\xampp\php\php.exe' }
-    throw 'No se encontró php.exe. Agregá C:\xampp\php al PATH.'
+    if (Test-Path 'C:\WebServer\PHP84\php.exe') { return 'C:\WebServer\PHP84\php.exe' }
+    throw 'No se encontró php.exe en el PATH ni en C:\WebServer\PHP84.'
 }
 
 # El host que la aplicación va a usar de verdad, leído como lo lee ella.

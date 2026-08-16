@@ -10,8 +10,21 @@
  * ejecutaba y solo confundía.
  */
 
-$local = is_file(__DIR__ . DIRECTORY_SEPARATOR . 'local.php')
-    ? require __DIR__ . DIRECTORY_SEPARATOR . 'local.php'
+$archivoLocalPredeterminado = __DIR__ . DIRECTORY_SEPARATOR . 'local.php';
+$archivoLocalAlternativo = trim((string) getenv('XMLCONCILIA_CONFIG_FILE'));
+$archivoLocal = $archivoLocalAlternativo !== ''
+    ? $archivoLocalAlternativo
+    : $archivoLocalPredeterminado;
+
+if ($archivoLocalAlternativo !== '' && !is_file($archivoLocal)) {
+    throw new RuntimeException(
+        'XMLCONCILIA_CONFIG_FILE apunta a un archivo de configuración inexistente: '
+        . $archivoLocal
+    );
+}
+
+$local = is_file($archivoLocal)
+    ? require $archivoLocal
     : [];
 $local = is_array($local) ? $local : [];
 

@@ -28,17 +28,29 @@ De ahí salen las dos reglas que gobiernan todo el código:
 
 ### 1. XAMPP
 
-Instalar XAMPP (Apache + PHP 8.2). En `php.ini` deben estar activas —sin el
-`;` al principio— estas líneas:
+Instalar XAMPP para Apache y MariaDB. La versión certificada de la aplicación
+es PHP 8.4.x; en Windows se recomienda ejecutarla como FastCGI NTS para aislar
+las DLL de PHP de las que carga Apache. Consulta
+[`COMPATIBILIDAD_PHP84.md`](COMPATIBILIDAD_PHP84.md) antes de cambiar una
+instalación existente.
+
+En el `php.ini` de PHP 8.4 deben estar activas —sin el `;` al principio— estas
+líneas:
 
 ```ini
 extension=pdo_mysql
 extension=imap
 extension=zip
 extension=mbstring
+extension=curl
+extension=fileinfo
+extension=openssl
 ```
 
-Reiniciar Apache.
+IMAP se instala por separado desde PECL en PHP 8.4 y su DLL debe coincidir con
+la versión, arquitectura y tipo de compilación de PHP (8.4, x64, TS o NTS).
+
+Reiniciar Apache y el proceso FastCGI.
 
 ### 2. Git
 

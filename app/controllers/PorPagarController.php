@@ -334,7 +334,6 @@ class PorPagarController extends Controller
                 'token' => $datos['token'],
                 'carpeta_pago' => DocumentoArchivo::normalizarCarpetaPago((string) $this->post('carpeta_pago', '')),
                 'listado_existente' => $listadoPrevio ? (string) $listadoPrevio['nombre'] : null,
-                'listado_cerrado' => $listadoPrevio && ($listadoPrevio['estado'] ?? 'abierto') === 'cerrado',
                 'resumen' => $resumen,
                 'monto_resuelto' => round($montoResuelto, 2),
                 'lineas' => array_slice($datos['resolucion']['filas'], 0, 1000),
@@ -364,9 +363,6 @@ class PorPagarController extends Controller
             $semana = $this->prepararSemana($semanaId);
 
             $listadoPrevio = $this->listadoDeSemana($semanaId);
-            if ($listadoPrevio && ($listadoPrevio['estado'] ?? 'abierto') === 'cerrado') {
-                throw new Exception('El pago de esta semana ya está cerrado. Creá otra semana para cargar más facturas.');
-            }
             $listadoId = $listadoPrevio ? (int) $listadoPrevio['id'] : 0;
 
             $datos = $this->leerYResolver($erp, $listadoId);
@@ -545,7 +541,6 @@ class PorPagarController extends Controller
                 'archivo' => $datos['archivo'],
                 'semana' => (string) ($semana['nombre'] ?? ('Semana #' . $semanaId)),
                 'listado_existente' => $listado ? (string) $listado['nombre'] : null,
-                'listado_cerrado' => $listado && ($listado['estado'] ?? 'abierto') === 'cerrado',
                 'resumen' => $comparacion['resumen'],
                 'lineas' => $comparacion['lineas'],
                 'total_resultados' => count($comparacion['lineas']),
@@ -581,9 +576,6 @@ class PorPagarController extends Controller
             $listado = $this->listadoDeSemana($semanaId);
             if ($listado === null) {
                 throw new Exception('Esta semana todavía no tiene pago que actualizar. Usá "Vista previa" para cargarlo por primera vez.');
-            }
-            if (($listado['estado'] ?? 'abierto') === 'cerrado') {
-                throw new Exception('El pago de esta semana ya está cerrado: no se puede actualizar.');
             }
             $listadoId = (int) $listado['id'];
 
@@ -725,8 +717,22 @@ class PorPagarController extends Controller
         return $resultado;
     }
 
-    // ── Verificar, cerrar, eliminar ────────────────────────────────
+    // ── Verificar, eliminar ────────────────────────────────────────
 
+    /**
+     * El pago semanal no se cierra.
+     *
+     * Existió un botón "Cerrar pago semanal" que congelaba la semana: una vez
+     * cerrada nadie añadía, quitaba ni reemparejaba nada. Con la base de datos
+     * compartida esa foto fija se volvió mentira — dos personas trabajan la
+     * misma semana desde máquinas distintas, y el XML que una consigue el
+     * viernes tiene que aparecerle a la otra—. Congelar solo lograba que el
+     * respaldo quedara desactualizado sin forma de arreglarlo.
+     *
+     * Ahora no hay estado: cada XML que entra —por subida, por correo o por
+     * vínculo manual— vuelve a cruzar el pago, y lo que ve una persona es lo
+     * que ven todas.
+     */
     public function verificar($id)
     {
         if (!$this->isPost()) {
@@ -742,11 +748,6 @@ class PorPagarController extends Controller
             }
 
             $destino = '/por-pagar?listado_id=' . (int) $id . '&semana_id=' . (int) ($registro['semana_id'] ?? 0);
-            if (($registro['estado'] ?? 'abierto') === 'cerrado') {
-                $this->redirectWithMessage($this->url($destino),
-                    'El pago semanal ya está cerrado; sus coincidencias quedaron congeladas.', 'warning');
-            }
-
             $stats = $this->ejecutarMatching((int) $id, $erp);
             $this->redirectWithMessage(
                 $this->url($destino),
@@ -759,57 +760,18 @@ class PorPagarController extends Controller
     }
 
     /**
-     * Cierra el pago semanal.
+     * Borra el pago de una semana entera.
      *
-     * Cerrar dejó de ser el momento en que las facturas del ERP se asignan —eso
-     * ya pasó al cargar—. Ahora solo congela: nadie añade, quita ni reempareja
-     * nada más en esta semana.
+     * Lo único que se borra es la selección —qué facturas se pagaban esa
+     * semana—. Las facturas del ERP vuelven a "pendiente" y sus comprobantes
+     * salen de la carpeta del pago hacia el árbol por fecha de emisión. Ni las
+     * facturas ni los XML/PDF se eliminan: son el registro de la empresa.
+     *
+     * La semana en sí tampoco desaparece; sigue existiendo para el correo, los
+     * comprobantes y el seguimiento. Lo que queda es una semana sin pago
+     * cargado, lista para cargarle otro archivo.
      */
-    public function cerrar($id)
-    {
-        if (!$this->isPost()) {
-            $this->redirect($this->url('/por-pagar'));
-        }
-
-        $modelo = $this->loadModel('PorPagar');
-        $erp = $this->loadModel('FacturaErp');
-        $listado = $modelo->getListado((int) $id);
-        if ($listado === null) {
-            $this->redirectWithMessage($this->url('/por-pagar'), 'El pago semanal no existe.', 'error');
-        }
-
-        $destino = $this->url('/por-pagar?listado_id=' . (int) $id . '&semana_id=' . (int) ($listado['semana_id'] ?? 0));
-
-        try {
-            if (($listado['estado'] ?? 'abierto') === 'cerrado') {
-                $this->redirectWithMessage($destino, 'El pago semanal ya estaba cerrado.', 'warning');
-            }
-
-            $resumen = $erp->resumenRespaldoPago((int) $id);
-            $sinRespaldo = (int) ($resumen['sin_respaldo'] ?? 0);
-            if ($sinRespaldo > 0 && (string) $this->post('aceptar_sin_respaldo', '') !== '1') {
-                $this->redirectWithMessage($destino,
-                    "No se cerró: {$sinRespaldo} factura(s) todavía no tienen XML. Conseguilas o confirmá el cierre aceptándolo.",
-                    'warning');
-            }
-
-            // Foto final antes de congelar.
-            $this->ejecutarMatching((int) $id, $erp);
-            if ($modelo->cerrar((int) $id, $_SESSION['usuario_id'] ?? null) !== 1) {
-                throw new Exception('El pago semanal cambió mientras se intentaba cerrar.');
-            }
-
-            $total = $erp->contarPago((int) $id);
-            $this->redirectWithMessage($destino, sprintf(
-                'Pago semanal cerrado: %s factura(s) del ERP quedaron asignadas a la semana.',
-                number_format($total, 0, ',', '.')
-            ), 'success');
-        } catch (Throwable $e) {
-            $this->redirectWithMessage($destino, 'No se pudo cerrar el pago semanal: ' . $e->getMessage(), 'error');
-        }
-    }
-
-    public function eliminar($id)
+    public function borrarSemana($id)
     {
         if (!$this->isPost()) {
             $this->redirect($this->url('/por-pagar'));
@@ -818,21 +780,41 @@ class PorPagarController extends Controller
         try {
             $erp = $this->loadModel('FacturaErp');
             $xmlIds = $erp->idsXmlDePago((int) $id);
+            $total = $erp->contarPago((int) $id);
             $this->loadModel('PorPagar')->eliminarListado((int) $id);
             $erp->soltarSemanaXml($xmlIds);
-            $this->reubicarArchivos($xmlIds);
-            $this->redirectWithMessage($this->url('/por-pagar'),
-                'Pago semanal eliminado. Sus facturas del ERP volvieron a quedar disponibles.', 'success');
+            $archivos = $this->reubicarArchivos($xmlIds);
+
+            $msg = sprintf(
+                'Pago de la semana borrado: %d factura(s) del ERP volvieron a quedar disponibles.',
+                $total
+            );
+            if ($archivos['por_fecha'] > 0) {
+                $msg .= sprintf(
+                    ' %d documento(s) regresaron a la carpeta por fecha de emisión.',
+                    $archivos['por_fecha']
+                );
+            }
+            if ($archivos['aviso'] !== '') {
+                $msg .= ' ' . $archivos['aviso'];
+            }
+            $this->redirectWithMessage($this->url('/por-pagar'), $msg,
+                $archivos['aviso'] !== '' ? 'warning' : 'success');
         } catch (Throwable $e) {
-            $this->redirectWithMessage($this->url('/por-pagar'), 'No se pudo eliminar: ' . $e->getMessage(), 'error');
+            $this->redirectWithMessage($this->url('/por-pagar'),
+                'No se pudo borrar la semana: ' . $e->getMessage(), 'error');
         }
     }
 
     /**
-     * Saca una factura del pago. Ni la factura del ERP ni el XML se eliminan:
-     * la primera vuelve a "pendiente" y el segundo queda libre otra vez.
+     * Quita una factura de la semana. No borra nada.
+     *
+     * La factura del ERP vuelve a "pendiente" —sigue existiendo, disponible
+     * para otra semana— y su XML/PDF sale de la carpeta del pago y regresa al
+     * árbol por fecha de emisión, que es donde vive un comprobante que no se
+     * está entregando con ningún pago.
      */
-    public function eliminarFactura($id)
+    public function quitarFactura($id)
     {
         if (!$this->isPost()) {
             $this->redirect($this->url('/por-pagar'));
@@ -845,18 +827,19 @@ class PorPagarController extends Controller
                 $this->redirectWithMessage($this->url('/por-pagar'),
                     'Esa factura no está en ningún pago semanal.', 'error');
             }
-            if (($factura['listado_estado'] ?? 'abierto') === 'cerrado') {
-                throw new Exception('El pago semanal está cerrado y sus facturas ya no se pueden quitar.');
-            }
-
             $listadoId = (int) $factura['porpagar_listado_id'];
             $xmlId = (int) ($factura['factura_xml_id'] ?? 0);
 
+            // El orden importa: soltar la semana del XML antes de mover el
+            // archivo. El organizador decide la carpeta leyendo la base, y
+            // mientras el comprobante siga marcado con la semana del pago
+            // creería que todavía hay que entregarlo y lo dejaría donde está.
             $erp->quitarDePago([(int) $id], $listadoId);
             $this->loadModel('PorPagar')->actualizarTotalLineas($listadoId);
+            $archivos = ['por_fecha' => 0, 'aviso' => ''];
             if ($xmlId > 0) {
                 $erp->soltarSemanaXml([$xmlId]);
-                $this->reubicarArchivos([$xmlId]);
+                $archivos = $this->reubicarArchivos([$xmlId]);
             }
 
             $destino = '/por-pagar?listado_id=' . $listadoId . '&semana_id=' . (int) ($factura['listado_semana_id'] ?? 0);
@@ -867,12 +850,19 @@ class PorPagarController extends Controller
                 $destino .= '&' . http_build_query($filtrosRetorno);
             }
 
-            $this->redirectWithMessage($this->url($destino),
-                'La factura ' . trim((string) $factura['documento']) . ' salió del pago. '
-                . 'Ni la factura del ERP ni su XML fueron eliminados.', 'success');
+            $msg = 'La factura ' . trim((string) $factura['documento'])
+                . ' ya no es de esta semana. No se eliminó nada: sigue en Facturas ERP, disponible para otra semana.';
+            if ($archivos['por_fecha'] > 0) {
+                $msg .= ' Su XML y PDF regresaron a la carpeta de documentos por fecha de emisión.';
+            }
+            if ($archivos['aviso'] !== '') {
+                $msg .= ' ' . $archivos['aviso'];
+            }
+            $this->redirectWithMessage($this->url($destino), $msg,
+                $archivos['aviso'] !== '' ? 'warning' : 'success');
         } catch (Throwable $e) {
             $this->redirectWithMessage($this->url('/por-pagar'),
-                'No se pudo quitar la factura del pago: ' . $e->getMessage(), 'error');
+                'No se pudo quitar la factura de la semana: ' . $e->getMessage(), 'error');
         }
     }
 
@@ -951,10 +941,6 @@ class PorPagarController extends Controller
             if ($lineaErp === null || !$xml) {
                 $this->json(['ok' => false, 'message' => 'La factura del pago o el XML no existen.'], 404);
             }
-            if (($lineaErp['listado_estado'] ?? 'abierto') === 'cerrado') {
-                $this->json(['ok' => false, 'message' => 'El pago semanal está cerrado y ya no se puede modificar.'], 409);
-            }
-
             $listadoId = (int) $lineaErp['porpagar_listado_id'];
             foreach ($erp->getFacturasPagoParaMatching($listadoId) as $otra) {
                 if ((int) ($otra['factura_xml_id'] ?? 0) === (int) $xml['id']
@@ -975,6 +961,7 @@ class PorPagarController extends Controller
 
             $aliasTexto = $this->aprenderAliasProveedor($lineaErp, $xml);
             $aprendido = $aliasTexto !== '';
+            $codigoAprendido = $this->aprenderCodigoProveedor($lineaErp, $xml);
 
             $this->ejecutarMatching($listadoId, $erp);
             $ncResueltas = $aprendido ? $this->reprocesarNotasCredito($aliasTexto) : 0;
@@ -984,6 +971,7 @@ class PorPagarController extends Controller
                 'estado' => $estado,
                 'diferencia' => $diferencia,
                 'alias_aprendido' => $aprendido,
+                'codigo_aprendido' => $codigoAprendido,
                 'notas_resueltas' => $ncResueltas,
             ]);
         } catch (Throwable $e) {
@@ -1094,6 +1082,54 @@ class PorPagarController extends Controller
             return $aprendido ? $textoErp : '';
         } catch (Throwable $e) {
             return '';
+        }
+    }
+
+    /**
+     * Aprende la equivalencia código del ERP ↔ cédula que revela un vínculo
+     * manual.
+     *
+     * Es la llave firme, y por eso vale más que el alias de nombre: un código
+     * atado a una cédula deja de depender de cómo esté escrito el proveedor.
+     *
+     * Ahora bien, esto NO es lo mismo que una persona declarando de quién es un
+     * código. Quien vincula está resolviendo UNA factura, y de ahí no se sigue
+     * que quiera reescribir un mapa respaldado por decenas de emparejamientos.
+     * Así que solo se guarda cuando no hay nada que contradecir —el mapa no
+     * conocía el código, o estaba en disputa, o ya decía lo mismo—. Si
+     * contradice algo firme, se anota como conflicto y sube a la campana, que
+     * es donde sí existe el botón para declararlo a propósito.
+     *
+     * @return bool Si el mapa quedó escrito.
+     */
+    private function aprenderCodigoProveedor(array $lineaErp, array $xml)
+    {
+        $codigo = trim((string) ($lineaErp['proveedor_codigo'] ?? ''));
+        $proveedorId = (int) ($xml['proveedor_id'] ?? 0);
+        if ($codigo === '' || $proveedorId <= 0) {
+            return false;
+        }
+
+        try {
+            require_once __DIR__ . '/../models/ProveedorCodigoErp.php';
+            $mapa = $this->loadModel('ProveedorCodigoErp');
+
+            if (ProveedorCodigoErp::veredicto($codigo, $proveedorId) === 'ajeno') {
+                $mapa->registrarVeto([
+                    'codigo'                 => $codigo,
+                    'proveedor_id_propuesto' => $proveedorId,
+                    'factura_erp_id'         => (int) ($lineaErp['id'] ?? 0),
+                    'factura_xml_id'         => (int) ($xml['id'] ?? 0),
+                    // Que una persona lo haya vinculado a mano es señal fuerte:
+                    // pide revisión aunque los montos no cuadren.
+                    'monto_cuadraba'         => true,
+                ]);
+                return false;
+            }
+
+            return $mapa->confirmarManual($codigo, $proveedorId, (int) ($_SESSION['user_id'] ?? 0));
+        } catch (Throwable $e) {
+            return false; // el vínculo ya quedó guardado; esto es un extra
         }
     }
 

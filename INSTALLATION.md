@@ -3,14 +3,20 @@
 ## ✅ Requisitos del Sistema
 
 - **Servidor Web**: Apache 2.4+ con XAMPP
-- **PHP**: 7.4 o superior
+- **PHP**: 8.4.x (FastCGI NTS recomendado en Windows)
 - **MySQL**: 5.7 o superior
 - **Extensiones PHP requeridas**:
   - PDO y PDO_MySQL
   - XML
-  - JSON
   - MBString
   - FileInfo
+  - ZIP
+  - cURL
+  - OpenSSL
+  - IMAP 1.0.3+ desde PECL (IMAP ya no viene integrado en PHP 8.4)
+
+La matriz validada, el motivo para usar FastCGI y los comandos automáticos de
+comprobación están en [`docs/COMPATIBILIDAD_PHP84.md`](docs/COMPATIBILIDAD_PHP84.md).
 
 ## 📋 Pasos de Instalación
 
@@ -49,6 +55,11 @@ Ejecutar los siguientes archivos SQL en phpMyAdmin en **este orden exacto**:
 ```
 
 ### 3. Verificar Configuración de PHP
+
+La aplicación se certifica con PHP 8.4. En esta instalación la consola de
+validación está en `C:\xampp\php84\php.exe` y el proceso web FastCGI en
+`C:\xampp\php84-nts\php-cgi.exe`. No reemplaces `C:\xampp\php` sin validar
+antes Apache y todas las extensiones.
 
 Copiar `app/config/local.ejemplo.php` como `app/config/local.php` y llenarlo
 con los datos del servidor de base de datos:

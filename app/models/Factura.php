@@ -473,8 +473,13 @@ class Factura extends Model
     public function getCandidatasParaPago()
     {
         $params = [];
+        // `proveedor_id` y la cédula viajan para la guarda del emparejador: el
+        // consecutivo de veinte dígitos lo arma cada emisor por su cuenta, así
+        // que dos proveedores pueden compartirlo y hay que poder preguntar de
+        // quién es este comprobante antes de darlo por bueno.
         $sql = "SELECT f.id, f.consecutivo_completo, f.numero_factura_asistente, f.total,
-                       f.fecha_emision, f.semana_id, p.razon_social AS proveedor_nombre
+                       f.fecha_emision, f.semana_id, f.proveedor_id,
+                       p.rfc AS proveedor_cedula, p.razon_social AS proveedor_nombre
                   FROM {$this->table} f
                   LEFT JOIN proveedores p ON p.id = f.proveedor_id
                  WHERE (f.tipo_documento IS NULL OR f.tipo_documento = 'FE')"

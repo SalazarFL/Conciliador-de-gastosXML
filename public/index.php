@@ -9,7 +9,9 @@
 (function () {
     $uri  = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
     $scriptName = str_replace('\\', '/', $_SERVER['SCRIPT_NAME'] ?? '');
-    $base = rtrim(dirname($scriptName), '/');
+    $base = str_replace('\\', '/', dirname($scriptName));
+    $base = rtrim($base, '/');
+    if ($base === '.') $base = '';
     $rel  = (strpos($uri, $base) === 0) ? substr($uri, strlen($base)) : $uri;
     $rel  = '/' . ltrim(rawurldecode($rel), '/');
 

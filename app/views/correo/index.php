@@ -613,7 +613,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             <div id="auto-msg" style="display:none;font-size:11.5px;margin-top:8px;border-radius:6px;padding:6px 10px;"></div>
         </div>
         <div style="font-size:11px;color:var(--text-muted);margin:4px 0 14px;">
-            Trabaja en segundo plano <strong>aunque cierres esta página</strong>. Requiere que el equipo y XAMPP (MySQL) estén encendidos.
+            Trabaja en segundo plano <strong>aunque cierres esta página</strong>. Requiere que el equipo y MariaDB estén encendidos.
         </div>
 
         <label style="display:block;font-size:12px;font-weight:700;color:var(--navy);margin-bottom:4px;">
@@ -2114,7 +2114,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     function autoPintar(info) {
         if (!autoEstado) return;
         if (!info || !info.soportado) {
-            autoEstado.innerHTML = '<span style="color:#b45309;">Solo disponible en Windows con XAMPP local (necesita PowerShell y exec()).</span>';
+            autoEstado.innerHTML = '<span style="color:#b45309;">Solo disponible en el servidor Windows (necesita PowerShell y exec()).</span>';
             if (autoControles) autoControles.style.display = 'none';
             return;
         }

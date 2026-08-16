@@ -1450,14 +1450,14 @@ class CorreoController extends Controller
      * de saber que hacía falta.
      *
      * No se acota a una semana porque las facturas que llegan por correo no
-     * traen ninguna asignada; cualquier listado abierto puede completarse con
-     * ellas. Nunca lanza: la importación ya terminó bien y esto es un extra.
+     * traen ninguna asignada; cualquier listado puede completarse con ellas.
+     * Nunca lanza: la importación ya terminó bien y esto es un extra.
      */
     private function revalidarPorPagarGeneral()
     {
         try {
             require_once __DIR__ . '/../helpers/PorPagarVerificador.php';
-            PorPagarVerificador::verificarAbiertos(
+            PorPagarVerificador::verificarPendientes(
                 $this->loadModel('FacturaErp'),
                 $this->loadModel('Factura')
             );
@@ -2376,7 +2376,7 @@ class CorreoController extends Controller
 
         $php = $this->rutaPhpCli();
         if ($php === null) {
-            $this->json(['ok' => false, 'message' => 'No se encontró php.exe (busqué en C:\\xampp\\php\\). Verifica la instalación de XAMPP.'], 422);
+            $this->json(['ok' => false, 'message' => 'No se encontró php.exe en la instalación del servidor.'], 422);
         }
 
         $script = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'cli' . DIRECTORY_SEPARATOR . 'sync_correo.php';
@@ -2490,16 +2490,12 @@ class CorreoController extends Controller
         return $codigo === 0;
     }
 
-    /**
-     * Ubica php.exe de la CLI. XAMPP lo trae en <unidad>\xampp\php\php.exe;
-     * se prueban también rutas derivadas del binario actual y de PHPRC.
-     */
+    /** Ubica el PHP CLI asociado al servidor actual. */
     private function rutaPhpCli()
     {
-        $root = dirname(__DIR__, 2); // ...\xmlconcilia
         $candidatos = [
-            dirname($root, 2) . DIRECTORY_SEPARATOR . 'php' . DIRECTORY_SEPARATOR . 'php.exe', // ...\xampp\php\php.exe
-            'C:\\xampp\\php\\php.exe',
+            trim((string) getenv('XMLCONCILIA_PHP_CLI')),
+            'C:\\WebServer\\PHP84\\php.exe',
         ];
 
         if (defined('PHP_BINARY') && PHP_BINARY !== '') {
@@ -3192,7 +3188,7 @@ POWERSHELL;
 
     /**
      * Script que lanza el selector en la sesión del usuario. Si PHP ya corre
-     * en una sesión interactiva (Apache arrancado desde el panel de XAMPP)
+     * en una sesión interactiva del usuario de Windows
      * lo abre directo; si corre como servicio (sesión 0) registra una tarea
      * programada interactiva — la vía soportada para mostrar una ventana en
      * el escritorio del usuario desde un servicio de Windows.
@@ -3216,7 +3212,7 @@ function EscribirError([string] $texto) {
 
 try {
     if ((Get-Process -Id $PID).SessionId -gt 0) {
-        # Sesion interactiva (Apache del panel de XAMPP): el dialogo se
+        # Sesion interactiva: el dialogo se
         # muestra desde este mismo proceso, sin arrancar otro PowerShell
         & $picker
         exit 0

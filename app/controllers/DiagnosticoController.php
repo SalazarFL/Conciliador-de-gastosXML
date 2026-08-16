@@ -75,11 +75,11 @@ class DiagnosticoController extends Controller
             $this->json(['ok' => false, 'message' => 'exec() está deshabilitado en PHP; no se puede lanzar el respaldo.'], 422);
         }
         if (RespaldoBase::rutaMysqldump() === null) {
-            $this->json(['ok' => false, 'message' => 'No se encontró mysqldump.exe. Se buscó en C:\\xampp\\mysql\\bin y en el PATH.'], 422);
+            $this->json(['ok' => false, 'message' => 'No se encontró mariadb-dump.exe ni mysqldump.exe en la instalación del servidor o en el PATH.'], 422);
         }
         $php = $this->rutaPhpCli();
         if ($php === null) {
-            $this->json(['ok' => false, 'message' => 'No se encontró php.exe (busqué en C:\\xampp\\php\\). Verifica la instalación de XAMPP.'], 422);
+            $this->json(['ok' => false, 'message' => 'No se encontró php.exe en la instalación del servidor.'], 422);
         }
         try {
             $carpeta = RespaldoBase::carpetaDestino();
@@ -133,7 +133,7 @@ class DiagnosticoController extends Controller
 
         $php = $this->rutaPhpCli();
         if ($php === null) {
-            $this->json(['ok' => false, 'message' => 'No se encontró php.exe (busqué en C:\\xampp\\php\\).'], 422);
+            $this->json(['ok' => false, 'message' => 'No se encontró php.exe en la instalación del servidor.'], 422);
         }
         $script = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'cli' . DIRECTORY_SEPARATOR . 'respaldar_base.php';
         if (!is_file($script)) {
@@ -275,16 +275,12 @@ class DiagnosticoController extends Controller
         return $dir . DIRECTORY_SEPARATOR . $nombre;
     }
 
-    /**
-     * Ubica php.exe de la CLI. XAMPP lo trae en <unidad>\xampp\php\php.exe;
-     * se prueban también rutas derivadas del binario actual y de PHPRC.
-     */
+    /** Ubica el PHP CLI asociado al servidor actual. */
     private function rutaPhpCli()
     {
-        $root = dirname(__DIR__, 2); // ...\xmlconcilia
         $candidatos = [
-            dirname($root, 2) . DIRECTORY_SEPARATOR . 'php' . DIRECTORY_SEPARATOR . 'php.exe',
-            'C:\\xampp\\php\\php.exe',
+            trim((string) getenv('XMLCONCILIA_PHP_CLI')),
+            'C:\\WebServer\\PHP84\\php.exe',
         ];
         if (defined('PHP_BINARY') && PHP_BINARY !== '') {
             $candidatos[] = dirname(PHP_BINARY) . DIRECTORY_SEPARATOR . 'php.exe';

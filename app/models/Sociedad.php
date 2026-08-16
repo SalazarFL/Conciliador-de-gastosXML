@@ -105,7 +105,18 @@ class Sociedad extends Model
     public function seleccionadaId()
     {
         if (!empty($_SESSION['sociedad_id'])) {
-            return (int) $_SESSION['sociedad_id'];
+            $idSesion = (int) $_SESSION['sociedad_id'];
+            if ($idSesion > 0 && $this->fetchColumn(
+                "SELECT 1 FROM {$this->table} WHERE id = ? LIMIT 1",
+                [$idSesion]
+            )) {
+                return $idSesion;
+            }
+
+            // Puede ocurrir si un administrador elimina una sociedad mientras
+            // otro usuario mantiene una sesión abierta. La selección inválida
+            // no debe dejar todos los módulos filtrando por un id inexistente.
+            unset($_SESSION['sociedad_id']);
         }
 
         $usuarioId = (int) ($_SESSION['user_id'] ?? 0);

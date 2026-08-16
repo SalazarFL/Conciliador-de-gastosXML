@@ -207,7 +207,7 @@ class PagoSemanalResolutor
         return count($conSaldo) === 1 ? $conSaldo[0] : null;
     }
 
-    private static function conEstado(array $fila, $estado, $motivo, array $erp = null)
+    private static function conEstado(array $fila, $estado, $motivo, ?array $erp = null)
     {
         return [
             'estado' => $estado,

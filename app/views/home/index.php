@@ -138,7 +138,7 @@ $totalLineas   = $respaldadas + $conDiferencia + $sinRespaldo;
             <div style="flex:2;min-width:180px;">
                 <label style="font-size:11px;font-weight:700;color:var(--navy);display:block;margin-bottom:3px;">Nombre (informativo)</label>
                 <input type="text" name="nombre" id="soc-nombre" class="form-control" style="font-size:12.5px;" required
-                       placeholder="ARRENDADORA BM PZ S.A.">
+                       placeholder="EMPRESA EJEMPLO S.A.">
             </div>
             <div style="flex:1;min-width:130px;">
                 <label style="font-size:11px;font-weight:700;color:var(--navy);display:block;margin-bottom:3px;">Cédula</label>

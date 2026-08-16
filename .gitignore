@@ -51,3 +51,8 @@ storage/backups/
 # Local-only utilities and notes (never deploy/commit)
 public/create_admin.php
 MEMORY.md
+
+# Respaldos que se sacan antes de copiar código a la carpeta que se sirve.
+# Son copias de archivos que git ya versiona —el respaldo de verdad es el
+# repositorio— así que no tienen por qué entrar en un commit.
+storage/respaldo_predespliegue_*/

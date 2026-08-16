@@ -106,9 +106,9 @@ if ($respaldo) {
     $csv = $dir . '/rutas_perdidas_' . date('Ymd_His') . '.csv';
     $fp = fopen($csv, 'w');
     if ($fp !== false) {
-        fputcsv($fp, ['tabla', 'columna', 'id', 'ruta_perdida']);
+        fputcsv($fp, ['tabla', 'columna', 'id', 'ruta_perdida'], ',', '"', '\\');
         foreach ($respaldo as $linea) {
-            fputcsv($fp, $linea);
+            fputcsv($fp, $linea, ',', '"', '\\');
         }
         fclose($fp);
         echo "\n  Se anotó a dónde apuntaba cada una en:\n  {$csv}\n";

@@ -491,21 +491,6 @@ class FacturaErp extends Model
     }
 
     // ------------------------------------------------------------------
-    // Cierre del pago semanal
-    // ------------------------------------------------------------------
-
-    /**
-     * Cerrar un pago semanal ya no asigna nada.
-     *
-     * Asignaba: hasta que el pago dejó de tener facturas propias, cerrar era
-     * el momento en que cada línea del archivo se cruzaba —por el consecutivo
-     * de su XML— con una factura del ERP y se marcaba. Ahora ese cruce ocurre
-     * al cargar el archivo, que es cuando se decide qué se paga, así que
-     * cerrar solo congela el pago (PorPagar::cerrar).
-     */
-
-
-    // ------------------------------------------------------------------
     // Pago semanal: la factura del ERP ES la línea del pago
     // ------------------------------------------------------------------
 
@@ -655,8 +640,11 @@ class FacturaErp extends Model
     /** Lo mínimo para emparejar: sin las columnas pesadas ni los JOIN. */
     public function getFacturasPagoParaMatching($listadoId)
     {
+        // `proveedor_codigo` viaja porque es la llave de la guarda de cédula:
+        // con él, el emparejador puede preguntar si el emisor del comprobante
+        // es realmente el proveedor de esta línea antes de aceptarlo.
         return $this->fetchAll(
-            "SELECT id, documento, numero_corto, proveedor_nombre, monto, saldo,
+            "SELECT id, documento, numero_corto, proveedor_codigo, proveedor_nombre, monto, saldo,
                     COALESCE(saldo_pago, saldo) AS saldo_pago,
                     factura_xml_id, estado_respaldo AS estado, diferencia, match_manual
                FROM facturas_erp
@@ -670,7 +658,7 @@ class FacturaErp extends Model
     {
         $fila = $this->fetchOne(
             "SELECT e.*, e.estado_respaldo AS estado_respaldo,
-                    l.estado AS listado_estado, l.semana_id AS listado_semana_id
+                    l.semana_id AS listado_semana_id
                FROM facturas_erp e
                LEFT JOIN porpagar_listados l ON l.id = e.porpagar_listado_id
               WHERE e.id = ? LIMIT 1",
@@ -839,14 +827,13 @@ class FacturaErp extends Model
         return $this->fetchAll($sql, $params) ?: [];
     }
 
-    /** Pagos abiertos con facturas todavía sin respaldo, los más recientes. */
-    public function idsPagosAbiertosConFaltantes($limite = 3)
+    /** Pagos con facturas todavía sin respaldo, los más recientes. */
+    public function idsPagosConFaltantes($limite = 3)
     {
         $filas = $this->fetchAll(
             "SELECT l.id
                FROM porpagar_listados l
-              WHERE l.estado = 'abierto'
-                AND EXISTS (SELECT 1 FROM facturas_erp e
+              WHERE EXISTS (SELECT 1 FROM facturas_erp e
                              WHERE e.porpagar_listado_id = l.id
                                AND e.estado_respaldo = 'sin_respaldo')
               ORDER BY l.id DESC
@@ -855,20 +842,20 @@ class FacturaErp extends Model
         return array_values(array_map('intval', array_column($filas, 'id')));
     }
 
-    public function idsPagosAbiertosDeSemana($semanaId)
+    public function idsPagosDeSemana($semanaId)
     {
         $filas = $this->fetchAll(
-            "SELECT id FROM porpagar_listados WHERE semana_id = ? AND estado = 'abierto' ORDER BY id DESC",
+            "SELECT id FROM porpagar_listados WHERE semana_id = ? ORDER BY id DESC",
             [(int) $semanaId]
         ) ?: [];
         return array_values(array_map('intval', array_column($filas, 'id')));
     }
 
-    /** El pago abierto al que pertenece una factura del ERP, si lo hay. */
-    public function pagoAbiertoDeFactura($erpId)
+    /** El pago al que pertenece una factura del ERP, si lo hay. */
+    public function pagoDeFactura($erpId)
     {
         $fila = $this->fetchOne(
-            "SELECT l.id, l.semana_id, l.estado
+            "SELECT l.id, l.semana_id
                FROM facturas_erp e
                JOIN porpagar_listados l ON l.id = e.porpagar_listado_id
               WHERE e.id = ? LIMIT 1",
@@ -984,10 +971,8 @@ class FacturaErp extends Model
         }
 
         $sql = "SELECT e.id, e.documento, e.numero_corto, e.proveedor_nombre, e.monto, e.saldo,
-                       e.semana_id, e.porpagar_listado_id, e.factura_xml_id,
-                       l.estado AS listado_estado
+                       e.semana_id, e.porpagar_listado_id, e.factura_xml_id
                   FROM facturas_erp e
-                  LEFT JOIN porpagar_listados l ON l.id = e.porpagar_listado_id
                  WHERE e.tipo IN ('F','FE','FACT') AND (" . implode(' OR ', $condiciones) . ')'
              . $this->condicionSociedad('e.', $params) . '
                  ORDER BY e.id ASC';

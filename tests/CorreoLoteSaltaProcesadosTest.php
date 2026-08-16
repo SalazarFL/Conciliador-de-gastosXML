@@ -86,13 +86,13 @@ $crear = function ($incluirProcesados) use ($lotes, $cuentaId, $sociedadId, $des
 
 try {
     $insertIndice = $pdo->prepare(
-        "INSERT INTO correo_indice (cuenta_id, carpeta, carpeta_nombre, uidvalidity, uid,
+        "INSERT INTO correo_indice (cuenta_id, carpeta, carpeta_nombre, uidvalidity, uid, clave,
                                     asunto, remitente, fecha, timestamp, adjuntos)
-         VALUES (?, 'INBOX', 'Entrada', ?, ?, ?, 'proveedor@test.local', ?, ?, 'factura.xml')"
+         VALUES (?, 'INBOX', 'Entrada', ?, ?, ?, ?, 'proveedor@test.local', ?, ?, 'factura.xml')"
     );
     foreach ($uids as $i => $uid) {
         $insertIndice->execute([
-            $cuentaId, $uidValidity, $uid,
+            $cuentaId, $uidValidity, $uid, $uidValidity . ':' . $uid,
             '__test__ comprobante ' . $uid, date('Y-m-d H:i:s', $ts), $ts,
         ]);
     }

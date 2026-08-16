@@ -261,7 +261,7 @@
 
         <!-- Footer -->
         <div class="login-footer">
-            &copy; <?= date('Y') ?> Arrendadora BM PZ S.A. &mdash; Todos los derechos reservados
+            &copy; <?= date('Y') ?> Nexo Fiscal &mdash; Todos los derechos reservados
         </div>
 
     </div>

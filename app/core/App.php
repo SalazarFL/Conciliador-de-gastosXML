@@ -15,8 +15,12 @@ class App
     private function detectBaseUri(): string
     {
         $scriptName = str_replace('\\', '/', $_SERVER['SCRIPT_NAME'] ?? '');
-        $dir = rtrim(dirname($scriptName), '/');
-        return $dir === '' ? '/' : $dir;
+        // dirname() usa el separador nativo y en Windows convierte la raiz de
+        // "/index.php" en "\\". Normalizar tambien el resultado evita URLs
+        // como "\\/" en el encabezado Location cuando el sitio vive en /.
+        $dir = str_replace('\\', '/', dirname($scriptName));
+        $dir = rtrim($dir, '/');
+        return $dir === '' || $dir === '.' ? '/' : $dir;
     }
     
     public function __construct()

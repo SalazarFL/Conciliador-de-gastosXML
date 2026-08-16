@@ -40,6 +40,11 @@ function ncQuery(array $changes = []) {
 .nc-table .nc-search-row .nc-search-wide{min-width:145px}.nc-table td{vertical-align:top}
 .nc-doc{max-width:230px;overflow-wrap:anywhere;font-weight:650;color:var(--navy)}
 .nc-provider{max-width:245px;white-space:normal}.nc-reason{font-size:10.5px;color:#64748b;max-width:190px;white-space:normal;margin-top:4px}
+.nc-detail-btn{margin-top:6px;white-space:nowrap}
+.nc-detail-context{padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:#f8fafc;margin-bottom:10px}
+.nc-detail-context strong{display:block;color:var(--navy);font-size:13px;overflow-wrap:anywhere}
+.nc-detail-context span{display:block;color:var(--text-muted);font-size:11px;margin-top:3px;overflow-wrap:anywhere}
+.nc-detail-reason{font-size:13px;line-height:1.55;color:var(--text);white-space:pre-wrap;overflow-wrap:anywhere}
 .nc-actions{display:flex;gap:4px;align-items:center;flex-wrap:wrap;min-width:150px}
 .nc-history-grid{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:6px;margin:8px 0}
 .nc-history-stat{border:1px solid var(--border);border-radius:7px;padding:7px 9px;background:#f8fafc}.nc-history-stat strong{display:block;font-size:17px;color:var(--navy)}.nc-history-stat span{font-size:9.5px;text-transform:uppercase;color:var(--text-muted);font-weight:700}
@@ -227,12 +232,25 @@ function ncQuery(array $changes = []) {
                 <?php
                 $badge = $row['estado'] === 'coincide' ? 'badge-ok' : ($row['estado'] === 'con_diferencia' ? 'badge-diff' : 'badge-miss');
                 $label = $row['estado'] === 'coincide' ? 'Coincide' : ($row['estado'] === 'con_diferencia' ? 'Con diferencia' : 'Sin respaldo');
+                $motivoMatch = trim((string) ($row['motivo_match'] ?? ''));
+                $tieneDetalle = !empty($row['match_manual']) || $motivoMatch !== '';
                 ?>
                 <tr>
                     <td>
                         <span class="badge <?= $badge ?>"><?= $label ?></span>
-                        <?php if (!empty($row['match_manual'])): ?><div class="nc-reason"><i class="fas fa-hand-pointer"></i> Vínculo manual</div><?php endif; ?>
-                        <?php if (!empty($row['motivo_match'])): ?><div class="nc-reason"><?= htmlspecialchars($row['motivo_match']) ?></div><?php endif; ?>
+                        <?php if ($tieneDetalle): ?>
+                        <div>
+                            <button type="button" class="btn btn-outline btn-sm nc-detail-btn"
+                                    data-estado="<?= htmlspecialchars($label, ENT_QUOTES, 'UTF-8') ?>"
+                                    data-documento="<?= htmlspecialchars((string) $row['documento'], ENT_QUOTES, 'UTF-8') ?>"
+                                    data-proveedor="<?= htmlspecialchars((string) $row['proveedor_nombre'], ENT_QUOTES, 'UTF-8') ?>"
+                                    data-motivo="<?= htmlspecialchars($motivoMatch, ENT_QUOTES, 'UTF-8') ?>"
+                                    data-manual="<?= !empty($row['match_manual']) ? '1' : '0' ?>"
+                                    aria-haspopup="dialog" aria-controls="nc-detail-modal">
+                                <i class="fas fa-circle-info"></i> Ver detalles
+                            </button>
+                        </div>
+                        <?php endif; ?>
                     </td>
                     <td class="nc-provider"><?= htmlspecialchars($row['proveedor_nombre']) ?></td>
                     <td><?= htmlspecialchars($row['sucursal'] ?: '—') ?></td>
@@ -286,6 +304,28 @@ function ncQuery(array $changes = []) {
     <div style="font-size:12px;margin-top:5px;">Carga el primer CSV para iniciar el acumulado.</div>
 </div>
 <?php endif; ?>
+
+<!-- Detalle del resultado de verificación -->
+<div class="nc-modal" id="nc-detail-modal" role="dialog" aria-modal="true" aria-labelledby="nc-detail-title">
+    <div class="nc-modal-panel" style="max-width:620px;">
+        <div class="nc-modal-head">
+            <i class="fas fa-circle-info" style="color:var(--gold);"></i>
+            <strong id="nc-detail-title">Detalle de verificación</strong>
+            <button class="nc-close" type="button" data-close="nc-detail-modal" aria-label="Cerrar">&times;</button>
+        </div>
+        <div class="nc-modal-body">
+            <div class="nc-detail-context">
+                <strong id="nc-detail-document"></strong>
+                <span id="nc-detail-provider"></span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:9px;">
+                <span id="nc-detail-state" class="badge"></span>
+                <span id="nc-detail-manual" class="badge badge-navy" style="display:none;"><i class="fas fa-hand-pointer"></i> Vínculo manual</span>
+            </div>
+            <div class="nc-detail-reason" id="nc-detail-reason"></div>
+        </div>
+    </div>
+</div>
 
 <!-- Vinculación manual -->
 <div class="nc-modal" id="nc-link-modal">
@@ -342,6 +382,7 @@ function ncQuery(array $changes = []) {
 <script>
 (function () {
     var BASE = <?= json_encode($baseUrl) ?>;
+    var detailModal = document.getElementById('nc-detail-modal');
     var linkModal = document.getElementById('nc-link-modal');
     var historyModal = document.getElementById('nc-history-modal');
     var linesBody = document.getElementById('nc-lines-body');
@@ -377,11 +418,12 @@ function ncQuery(array $changes = []) {
         var badge = estado === 'coincide' ? 'badge-ok' : (estado === 'con_diferencia' ? 'badge-diff' : 'badge-miss');
         var label = estado === 'coincide' ? 'Coincide' : (estado === 'con_diferencia' ? 'Con diferencia' : 'Sin respaldo');
         var estadoHtml = '<span class="badge '+badge+'">'+label+'</span>';
-        if (Number(row.match_manual || 0) > 0) {
-            estadoHtml += '<div class="nc-reason"><i class="fas fa-hand-pointer"></i> Vínculo manual</div>';
-        }
-        if (row.motivo_match) {
-            estadoHtml += '<div class="nc-reason">'+esc(row.motivo_match)+'</div>';
+        if (Number(row.match_manual || 0) > 0 || row.motivo_match) {
+            estadoHtml += '<div><button type="button" class="btn btn-outline btn-sm nc-detail-btn"' +
+                ' data-estado="'+esc(label)+'" data-documento="'+esc(row.documento || '')+'"' +
+                ' data-proveedor="'+esc(row.proveedor_nombre || '')+'" data-motivo="'+esc(row.motivo_match || '')+'"' +
+                ' data-manual="'+(Number(row.match_manual || 0) > 0 ? '1' : '0')+'" aria-haspopup="dialog" aria-controls="nc-detail-modal">' +
+                '<i class="fas fa-circle-info"></i> Ver detalles</button></div>';
         }
 
         var tieneXml = Number(row.factura_xml_id || 0) > 0;
@@ -429,9 +471,21 @@ function ncQuery(array $changes = []) {
     document.querySelectorAll('[data-close]').forEach(function (button) {
         button.addEventListener('click', function () { closeModal(document.getElementById(button.dataset.close)); });
     });
-    [linkModal, historyModal].forEach(function (modal) {
+    [detailModal, linkModal, historyModal].forEach(function (modal) {
         if (modal) modal.addEventListener('click', function (event) { if (event.target === modal) closeModal(modal); });
     });
+
+    function showDetail(button) {
+        var estado = button.dataset.estado || 'Sin respaldo';
+        var state = document.getElementById('nc-detail-state');
+        state.textContent = estado;
+        state.className = 'badge ' + (estado === 'Coincide' ? 'badge-ok' : (estado === 'Con diferencia' ? 'badge-diff' : 'badge-miss'));
+        document.getElementById('nc-detail-document').textContent = button.dataset.documento || 'Documento sin identificar';
+        document.getElementById('nc-detail-provider').textContent = button.dataset.proveedor || 'Proveedor sin identificar';
+        document.getElementById('nc-detail-reason').textContent = button.dataset.motivo || 'Este vínculo se realizó manualmente.';
+        document.getElementById('nc-detail-manual').style.display = button.dataset.manual === '1' ? 'inline-block' : 'none';
+        openModal(detailModal);
+    }
 
     function renderHistory(data) {
         var select = document.getElementById('nc-history-select');
@@ -598,6 +652,11 @@ function ncQuery(array $changes = []) {
     }
 
     if (linesBody) linesBody.addEventListener('click', function (event) {
+        var detailButton = event.target.closest('.nc-detail-btn');
+        if (detailButton) {
+            showDetail(detailButton);
+            return;
+        }
         var button = event.target.closest('.nc-link-btn');
         if (button) {
             currentLine = Number(button.dataset.linea);

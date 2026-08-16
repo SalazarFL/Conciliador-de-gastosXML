@@ -121,6 +121,28 @@
 		};
 	}
 
+	function reconfirmOptions(element) {
+		return {
+			message: element.dataset.reconfirm || '',
+			title: element.dataset.reconfirmTitle || 'Confirmá una vez más',
+			type: element.dataset.reconfirmType || 'danger',
+			confirmText: element.dataset.reconfirmAccept || 'Sí, continuar',
+			cancelText: element.dataset.reconfirmCancel || 'Cancelar',
+			confirm: true
+		};
+	}
+
+	/* Segunda vuelta para lo que no se puede deshacer. El primer diálogo
+	 * explica qué va a pasar; el segundo obliga a decidirlo otra vez, ya
+	 * sabiéndolo. Solo aparece si el elemento trae data-reconfirm: sin ese
+	 * atributo nada cambia para el resto de las confirmaciones. */
+	function pedirConfirmacion(element) {
+		return show(dataOptions(element)).then(function (aceptado) {
+			if (!aceptado || !element.dataset.reconfirm) return aceptado;
+			return show(reconfirmOptions(element));
+		});
+	}
+
 	window.AppDialog = {
 		alert: function (message, options) {
 			options = options || {};
@@ -147,7 +169,7 @@
 		form.dataset.dialogPending = 'true';
 		var submitter = event.submitter || null;
 
-		show(dataOptions(form)).then(function (confirmed) {
+		pedirConfirmacion(form).then(function (confirmed) {
 			delete form.dataset.dialogPending;
 			if (!confirmed) return;
 			form.dataset.dialogConfirmed = 'true';
@@ -172,7 +194,7 @@
 		if (trigger.dataset.dialogPending === 'true') return;
 		trigger.dataset.dialogPending = 'true';
 
-		show(dataOptions(trigger)).then(function (confirmed) {
+		pedirConfirmacion(trigger).then(function (confirmed) {
 			delete trigger.dataset.dialogPending;
 			if (!confirmed) return;
 			trigger.dataset.dialogConfirmed = 'true';

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <title><?= htmlspecialchars($title ?? 'Nexo Fiscal — Arrendadora BM PZ S.A.') ?></title>
+    <title><?= htmlspecialchars($title ?? 'Nexo Fiscal') ?></title>
 
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -61,6 +61,7 @@ $pageLabels = [
     'usuarios'     => 'Gestión de Usuarios',
     'carga'        => 'Carga de documentos',
     'diagnostico'  => 'Diagnóstico de la instalación',
+    'avisos'       => 'Avisos',
 ];
 
 $currentLabel = 'Panel Principal';
@@ -244,6 +245,125 @@ if (!isset($sociedadActiva)) {
                 // modal ya abierto.
                 $enCorreo = strpos($uriClean, '/correo') !== false;
                 ?>
+
+                <!-- Campana de avisos. Va junto al engranaje porque son la
+                     misma clase de cosa: no pertenecen a la pantalla que se
+                     está mirando, sino al sistema.
+                     Se pide en una sola petición aparte, y no dentro del PHP
+                     de esta plantilla, para que una base lenta o caída no
+                     retrase el pintado de TODAS las pantallas por culpa de un
+                     contador. Si no contesta, la campana calla. -->
+                <div class="avisos-wrap">
+                    <button type="button" id="avisosBtn" class="avisos-btn"
+                            aria-haspopup="true" aria-expanded="false"
+                            title="Avisos que esperan una decisión">
+                        <i class="fas fa-bell"></i>
+                        <span class="avisos-badge" id="avisosBadge" style="display:none;">0</span>
+                    </button>
+
+                    <div class="avisos-panel" id="avisosPanel" role="dialog" aria-label="Avisos">
+                        <div class="avisos-panel-head">
+                            <span>Avisos</span>
+                            <a href="<?= $baseUrl ?>/avisos" style="font-size:11px;color:var(--navy-light,#2254BD);text-decoration:none;">Ver todos</a>
+                        </div>
+                        <div id="avisosLista">
+                            <div class="avisos-vacio">Cargando…</div>
+                        </div>
+                    </div>
+                </div>
+
+                <script>
+                (function () {
+                    var btn   = document.getElementById('avisosBtn');
+                    var panel = document.getElementById('avisosPanel');
+                    var lista = document.getElementById('avisosLista');
+                    var badge = document.getElementById('avisosBadge');
+                    if (!btn || !panel) return;
+
+                    var base = <?= json_encode($baseUrl) ?>;
+                    var cargado = false;
+
+                    function esc(t) {
+                        var d = document.createElement('div');
+                        d.textContent = t == null ? '' : String(t);
+                        return d.innerHTML;
+                    }
+
+                    function pintar(datos) {
+                        var n = parseInt(datos.pendientes, 10) || 0;
+                        // Una campana que siempre muestra un número deja de
+                        // significar algo: en cero no se pinta nada.
+                        badge.style.display = n > 0 ? 'block' : 'none';
+                        badge.textContent = n > 99 ? '99+' : n;
+                        btn.classList.toggle('tiene-pendientes', n > 0);
+
+                        var avisos = datos.avisos || [];
+                        if (!avisos.length) {
+                            lista.innerHTML = '<div class="avisos-vacio">'
+                                + '<i class="fas fa-check-circle" style="font-size:20px;display:block;margin-bottom:7px;color:#38a169;"></i>'
+                                + 'Nada pendiente.</div>';
+                            return;
+                        }
+
+                        var html = '';
+                        avisos.forEach(function (a) {
+                            var sev = a.severidad || 'media';
+                            var ico = sev === 'alta' ? 'fa-triangle-exclamation' : 'fa-circle-info';
+                            html += '<div class="aviso-item">'
+                                  +   '<i class="fas ' + ico + ' aviso-icono ' + esc(sev) + '"></i>'
+                                  +   '<div class="aviso-cuerpo">'
+                                  +     '<div class="aviso-titulo">' + esc(a.titulo) + '</div>'
+                                  +     (a.detalle ? '<div class="aviso-detalle">' + esc(a.detalle) + '</div>' : '')
+                                  +     (parseInt(a.veces, 10) > 1
+                                          ? '<div class="aviso-meta">Ocurrió ' + esc(a.veces) + ' veces</div>' : '')
+                                  +   '</div>'
+                                  + '</div>';
+                        });
+                        html += '<div class="avisos-panel-pie">'
+                              + '<a href="' + base + '/avisos" style="color:var(--navy-light,#2254BD);text-decoration:none;">Revisar y decidir</a>'
+                              + '</div>';
+                        lista.innerHTML = html;
+                    }
+
+                    function cargar() {
+                        fetch(base + '/avisos/resumen', { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+                            .then(function (r) { return r.json(); })
+                            .then(pintar)
+                            .catch(function () {
+                                // Si la base no contesta, la campana calla. No
+                                // es el trabajo de un aviso romper la pantalla.
+                                lista.innerHTML = '<div class="avisos-vacio">No se pudieron cargar los avisos.</div>';
+                            });
+                    }
+
+                    btn.addEventListener('click', function (e) {
+                        e.stopPropagation();
+                        var abierto = panel.classList.toggle('abierto');
+                        btn.setAttribute('aria-expanded', abierto ? 'true' : 'false');
+                        if (abierto && !cargado) { cargado = true; cargar(); }
+                    });
+
+                    document.addEventListener('click', function (e) {
+                        if (!panel.contains(e.target) && !btn.contains(e.target)) {
+                            panel.classList.remove('abierto');
+                            btn.setAttribute('aria-expanded', 'false');
+                        }
+                    });
+                    document.addEventListener('keydown', function (e) {
+                        if (e.key === 'Escape') {
+                            panel.classList.remove('abierto');
+                            btn.setAttribute('aria-expanded', 'false');
+                        }
+                    });
+
+                    // Una sola petición trae el número y los renglones: el
+                    // número hay que tenerlo siempre —es lo que dice si hay
+                    // que mirar— y traer los ocho de arriba con él no cuesta
+                    // otro viaje.
+                    cargar();
+                })();
+                </script>
+
                 <button type="button"
                         onclick="<?= $enCorreo
                             ? 'if (window.abrirConfigCorreo) window.abrirConfigCorreo()'

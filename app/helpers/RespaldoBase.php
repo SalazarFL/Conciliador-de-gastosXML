@@ -72,29 +72,29 @@ class RespaldoBase
         return RutaDocumento::carpetaTrabajo(self::CARPETA);
     }
 
-    /**
-     * mysqldump.exe. Se busca junto a la instalación de XAMPP de esta máquina
-     * antes que en el PATH: quien tiene varios MySQL instalados suele tener en
-     * el PATH el que no es.
-     */
+    /** Cliente de volcado del servidor de base de datos. */
     public static function rutaMysqldump()
     {
-        $root = dirname(__DIR__, 2);                       // ...\xmlconcilia
         $candidatos = [
-            dirname($root, 2) . '\\mysql\\bin\\mysqldump.exe',  // ...\xampp\mysql\bin
-            'C:\\xampp\\mysql\\bin\\mysqldump.exe',
+            trim((string) getenv('XMLCONCILIA_MARIADB_DUMP')),
+            'C:\\WebServer\\MariaDB114\\bin\\mariadb-dump.exe',
+            'C:\\WebServer\\MariaDB114\\bin\\mysqldump.exe',
         ];
         foreach ($candidatos as $c) {
             if (@is_file($c)) {
                 return $c;
             }
         }
-        // Último recurso: el PATH. `where` en Windows, `which` fuera.
-        $cmd = DIRECTORY_SEPARATOR === '\\' ? 'where mysqldump' : 'which mysqldump';
-        $salida = [];
-        @exec($cmd . ' 2>&1', $salida, $codigo);
-        if ($codigo === 0 && !empty($salida[0]) && @is_file(trim($salida[0]))) {
-            return trim($salida[0]);
+        // Último recurso: el PATH. MariaDB conserva también el alias mysqldump.
+        $nombres = DIRECTORY_SEPARATOR === '\\'
+            ? ['where mariadb-dump', 'where mysqldump']
+            : ['which mariadb-dump', 'which mysqldump'];
+        foreach ($nombres as $cmd) {
+            $salida = [];
+            @exec($cmd . ' 2>&1', $salida, $codigo);
+            if ($codigo === 0 && !empty($salida[0]) && @is_file(trim($salida[0]))) {
+                return trim($salida[0]);
+            }
         }
         return null;
     }
@@ -196,7 +196,7 @@ class RespaldoBase
             $mysqldump = self::rutaMysqldump();
             if ($mysqldump === null) {
                 throw new RuntimeException(
-                    'No se encontró mysqldump.exe. Se buscó en C:\\xampp\\mysql\\bin y en el PATH.'
+                    'No se encontró mariadb-dump.exe ni mysqldump.exe en la instalación del servidor o en el PATH.'
                 );
             }
             if (!function_exists('exec')) {

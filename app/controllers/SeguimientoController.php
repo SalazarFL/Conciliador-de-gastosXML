@@ -223,7 +223,7 @@ class SeguimientoController extends Controller
             'Origen', 'Documento', 'Clase', 'Proveedor', 'Fecha', 'Moneda', 'Monto',
             'Saldo', 'Diferencia', 'Tarea', 'XML', 'PDF', 'Estado seguimiento', 'Responsable',
             'Vence', 'Motivo', 'Listado', 'Consecutivo XML', 'Último movimiento',
-        ], ';');
+        ], ';', '"', '\\');
 
         foreach ($filas as $f) {
             fputcsv($salida, [
@@ -246,7 +246,7 @@ class SeguimientoController extends Controller
                 $f['contexto'],
                 $f['consecutivo'] ?: '',
                 $f['seguimiento_actualizado_en'] ?: '',
-            ], ';');
+            ], ';', '"', '\\');
         }
         fclose($salida);
         exit;

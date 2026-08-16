@@ -177,6 +177,26 @@ class FacturasController extends Controller
 	}
 
 	/**
+	 * Re-verifica los pagos que todavía tienen facturas sin respaldo.
+	 *
+	 * Es la red para el XML que entra sin semana: no se sabe a qué pago
+	 * pertenece, así que se revisan los que todavía esperan comprobantes.
+	 * Nunca lanza, por lo mismo que verificarSemanasPorPagar.
+	 */
+	private function verificarPagosPendientes()
+	{
+		try {
+			require_once __DIR__ . '/../helpers/PorPagarVerificador.php';
+			PorPagarVerificador::verificarPendientes(
+				$this->loadModel('FacturaErp'),
+				$this->loadModel('Factura')
+			);
+		} catch (Throwable $e) {
+			// Best effort: la próxima importación lo repite.
+		}
+	}
+
+	/**
 	 * Revalida los listados por período después de importar NC XML, tanto por
 	 * carga directa como por la cola usada desde Correo.
 	 */
@@ -303,9 +323,18 @@ class FacturasController extends Controller
 
 			$importacionModel->cerrar($importacionId, $recibidos, $exitosos, $fallidos + $duplicados, $errores);
 
-			// Facturas nuevas en la semana → re-verificar su listado por pagar
-			if ($exitosos > 0 && !empty($semanasAfectadas)) {
-				$this->verificarSemanasPorPagar($semanasAfectadas);
+			// Facturas nuevas en la semana → re-verificar su listado por pagar.
+			// Sin semana elegida no hay listado al que apuntar, pero el
+			// comprobante puede ser justo el que le falta a un pago: se revisan
+			// los que tienen facturas sin respaldo, igual que hace el correo.
+			// Si no se hiciera, el XML quedaría cruzado en Facturas y sin
+			// cruzar en Por pagar, que es la diferencia que nadie entiende.
+			if ($exitosos > 0) {
+				if (!empty($semanasAfectadas)) {
+					$this->verificarSemanasPorPagar($semanasAfectadas);
+				} else {
+					$this->verificarPagosPendientes();
+				}
 			}
 
 			$avisoLimite = '';

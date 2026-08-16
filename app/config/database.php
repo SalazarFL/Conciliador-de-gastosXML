@@ -11,7 +11,16 @@
  * y llenarlo. `php cli/diagnostico.php` dice si quedó bien.
  */
 
-$archivo = __DIR__ . DIRECTORY_SEPARATOR . 'local.php';
+$archivoPredeterminado = __DIR__ . DIRECTORY_SEPARATOR . 'local.php';
+$archivoAlternativo = trim((string) getenv('XMLCONCILIA_CONFIG_FILE'));
+$archivo = $archivoAlternativo !== '' ? $archivoAlternativo : $archivoPredeterminado;
+
+if ($archivoAlternativo !== '' && !is_file($archivo)) {
+    throw new RuntimeException(
+        'XMLCONCILIA_CONFIG_FILE apunta a un archivo de configuración inexistente: '
+        . $archivo
+    );
+}
 
 /**
  * Antes, sin configuración, esto devolvía silenciosamente localhost/root.

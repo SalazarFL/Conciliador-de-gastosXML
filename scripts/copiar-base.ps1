@@ -47,16 +47,23 @@ $destino = Join-Path $raiz 'storage\backups'
 function Get-PhpExe {
     $cmd = Get-Command php -ErrorAction SilentlyContinue
     if ($null -ne $cmd) { return $cmd.Source }
-    if (Test-Path 'C:\xampp\php\php.exe') { return 'C:\xampp\php\php.exe' }
-    throw 'No se encontró php.exe. Agregá C:\xampp\php al PATH.'
+    if (Test-Path 'C:\WebServer\PHP84\php.exe') { return 'C:\WebServer\PHP84\php.exe' }
+    throw 'No se encontró php.exe en el PATH ni en C:\WebServer\PHP84.'
 }
 
 function Get-MysqlBin([string]$exe) {
-    $ruta = Join-Path 'C:\xampp\mysql\bin' $exe
-    if (Test-Path $ruta) { return $ruta }
-    $cmd = Get-Command $exe -ErrorAction SilentlyContinue
-    if ($null -ne $cmd) { return $cmd.Source }
-    throw "No se encontró $exe. Se esperaba en C:\xampp\mysql\bin."
+    $equivalentes = switch ($exe.ToLowerInvariant()) {
+        'mysql.exe'     { @('mariadb.exe', 'mysql.exe') }
+        'mysqldump.exe' { @('mariadb-dump.exe', 'mysqldump.exe') }
+        default         { @($exe) }
+    }
+    foreach ($nombre in $equivalentes) {
+        $ruta = Join-Path 'C:\WebServer\MariaDB114\bin' $nombre
+        if (Test-Path $ruta) { return $ruta }
+        $cmd = Get-Command $nombre -ErrorAction SilentlyContinue
+        if ($null -ne $cmd) { return $cmd.Source }
+    }
+    throw "No se encontró $exe en el PATH ni en C:\WebServer\MariaDB114\bin."
 }
 
 # Los datos de conexión salen de los mismos archivos que usa la aplicación,

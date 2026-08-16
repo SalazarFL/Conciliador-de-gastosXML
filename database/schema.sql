@@ -1,7 +1,7 @@
 -- =========================================
 -- ESQUEMA DE BASE DE DATOS
 -- Sistema: Nexo Fiscal
--- Motor: MySQL 5.7+ / XAMPP
+-- Motor: MariaDB 11.4 LTS
 -- Charset: utf8mb4
 -- =========================================
 

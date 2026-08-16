@@ -45,12 +45,12 @@ function renderInicio(array $sociedades, $sociedadActiva)
     return (string) ob_get_clean();
 }
 
-$grupo       = ['id' => 4,  'nombre' => 'GRUPO BM SP S.A',       'cedula' => '3101639680', 'activa' => 1];
-$arrendadora = ['id' => 23, 'nombre' => 'ARRENDADORA BM PZ S.A', 'cedula' => '3101436580', 'activa' => 0];
-$sociedades  = [$grupo, $arrendadora];
+$grupo      = ['id' => 4,  'nombre' => 'GRUPO BM SP S.A',              'cedula' => '3101639680', 'activa' => 1];
+$alternativa = ['id' => 23, 'nombre' => 'EMPRESA DE SERVICIOS PZ S.A', 'cedula' => '3101123456', 'activa' => 0];
+$sociedades = [$grupo, $alternativa];
 
 // ── Caso del error: el usuario trabaja con la que NO es la de por omisión ──
-$html = renderInicio($sociedades, $arrendadora);
+$html = renderInicio($sociedades, $alternativa);
 
 verificaHome(
     strpos($html, 'action="/xmlconcilia/public/sociedades/activar/4"') !== false,
@@ -68,7 +68,7 @@ $posBotonGrupo = strpos($html, 'sociedades/activar/4');
 $posCheck      = strpos($html, 'fa-circle-check');
 verificaHome($posCheck !== false, 'hay una empresa marcada como en uso');
 verificaHome($posCheck > $posBotonGrupo,
-    'el check cae en ARRENDADORA (la elegida), no en GRUPO BM SP (la de por omisión)');
+    'el check cae en la empresa elegida, no en GRUPO BM SP (la de por omisión)');
 
 // ── Caso normal: el usuario trabaja con la de por omisión ─────────────
 $html = renderInicio($sociedades, $grupo);

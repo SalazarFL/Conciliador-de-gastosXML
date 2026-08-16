@@ -15,7 +15,7 @@ class DevolucionImporter
 {
     private $modelo;
 
-    public function __construct(Devolucion $modelo = null)
+    public function __construct(?Devolucion $modelo = null)
     {
         $this->modelo = $modelo ?: new Devolucion();
     }

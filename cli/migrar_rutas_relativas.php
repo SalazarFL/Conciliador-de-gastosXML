@@ -240,9 +240,9 @@ if ($aplicar && $respaldo) {
     $csv = $dir . '/rutas_antes_' . date('Ymd_His') . '.csv';
     $fp = fopen($csv, 'w');
     if ($fp !== false) {
-        fputcsv($fp, ['tabla', 'columna', 'id', 'ruta_anterior']);
+        fputcsv($fp, ['tabla', 'columna', 'id', 'ruta_anterior'], ',', '"', '\\');
         foreach ($respaldo as $linea) {
-            fputcsv($fp, $linea);
+            fputcsv($fp, $linea, ',', '"', '\\');
         }
         fclose($fp);
         $resumen['respaldo'] = $csv;

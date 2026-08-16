@@ -8,7 +8,6 @@ $semanas        = is_array($semanas ?? null) ? $semanas : [];
 $carpetasPago   = is_array($carpetasPago ?? null) ? $carpetasPago : [];
 $semanaFiltro   = (int) ($semanaFiltro ?? 0);
 $sinCoincidencia = (int) ($sinCoincidencia ?? 0);
-$pagoCerrado = $listado !== null && ($listado['estado'] ?? 'abierto') === 'cerrado';
 $filtros = array_replace([
     'q' => '', 'proveedor' => '', 'estado' => '', 'vinculo' => '',
     'fecha_desde' => '', 'fecha_hasta' => '', 'monto_desde' => '', 'monto_hasta' => '',
@@ -489,8 +488,7 @@ document.addEventListener('keydown', function (e) {
     }
 
     // El boton solo aparece cuando de verdad hay algo que aplicar: sin listado
-    // previo lo que corresponde es la vista previa, y un pago cerrado ya no
-    // se toca.
+    // previo lo que corresponde es la vista previa.
     function prepararActualizar(r) {
         ultima = r;
         var x = r.resumen || {};
@@ -502,11 +500,6 @@ document.addEventListener('keydown', function (e) {
         if (!r.listado_existente) {
             btnActualizar.style.display = 'none';
             nota.textContent = 'Esta semana todavía no tiene listado: cargalo con "Vista previa".';
-            return;
-        }
-        if (r.listado_cerrado) {
-            btnActualizar.style.display = 'none';
-            nota.textContent = 'El pago de esta semana está cerrado: su listado ya no se puede actualizar.';
             return;
         }
         if (cambios === 0) {
@@ -822,17 +815,10 @@ document.addEventListener('keydown', function (e) {
             </span>
             <?php endif; ?>
             <?php endif; ?>
-            <?php if ($pagoCerrado): ?>
-            <span class="badge badge-ok" style="font-size:10px;padding:2px 8px;margin-left:4px;"
-                  title="Las coincidencias y las asignaciones ERP de este pago ya no se modifican">
-                <i class="fas fa-lock"></i> Pago cerrado
-            </span>
-            <?php endif; ?>
             <span style="font-weight:400;font-size:11.5px;color:var(--text-muted);">
                 — subido el <?= ppFecha($listado['fecha_subida']) ?>
                 <?= !empty($listado['sociedad_nombre']) ? ' · ' . htmlspecialchars($listado['sociedad_nombre']) : '' ?>
                 <?= empty($listado['semana_nombre']) ? ' · verificado contra todas las facturas' : '' ?>
-                <?= $pagoCerrado && !empty($listado['cerrado_en']) ? ' · cerrado el ' . date('d/m/Y H:i', strtotime((string) $listado['cerrado_en'])) : '' ?>
             </span>
         </div>
 
@@ -845,7 +831,7 @@ document.addEventListener('keydown', function (e) {
             <select name="listado_id" class="form-control" style="font-size:12px;padding:5px 8px;" onchange="this.form.submit()">
                 <?php foreach ($listados as $l): ?>
                 <option value="<?= (int) $l['id'] ?>" <?= (int) $l['id'] === (int) $listado['id'] ? 'selected' : '' ?>>
-                    <?= htmlspecialchars($l['nombre']) ?><?= !empty($l['semana_nombre']) ? ' · ' . htmlspecialchars($l['semana_nombre']) : '' ?><?= ($l['estado'] ?? 'abierto') === 'cerrado' ? ' · Cerrado' : '' ?> (<?= (int) $l['total_lineas'] ?>)
+                    <?= htmlspecialchars($l['nombre']) ?><?= !empty($l['semana_nombre']) ? ' · ' . htmlspecialchars($l['semana_nombre']) : '' ?> (<?= (int) $l['total_lineas'] ?>)
                 </option>
                 <?php endforeach; ?>
             </select>
@@ -856,7 +842,13 @@ document.addEventListener('keydown', function (e) {
                  corre sola cada vez que una factura entra o sale de la
                  semana (asignación manual, subida de XML o importación
                  del correo). La ruta /por-pagar/verificar sigue viva. */ ?>
-        <?php if (!$pagoCerrado && !empty($listado['semana_id']) && !empty($sinCoincidencia)): ?>
+        <?php /* Un XML suelto solo es un problema si hay una línea esperándolo:
+                 lo único que ofrece el panel es vincularlo con una línea sin
+                 respaldo. Con todas respaldadas, esos XML son comprobantes de
+                 la semana que no se pagan en ella, y no hay nada que hacer con
+                 ellos. Esta condición la tapaba el pago cerrado, que escondía
+                 el botón por otra razón. */ ?>
+        <?php if (!empty($listado['semana_id']) && !empty($sinCoincidencia) && $sinRespaldo > 0): ?>
         <button type="button" class="btn btn-sm" onclick="ppsAbrir()"
                 style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;"
                 title="Facturas XML de esta semana que no coinciden con ninguna línea del listado">
@@ -867,28 +859,21 @@ document.addEventListener('keydown', function (e) {
            title="<?= $filtrosActivos ? 'Exportar a Excel solamente los resultados filtrados' : 'Exportar todo el listado a Excel' ?>">
             <i class="fas fa-file-excel"></i> Exportar Excel
         </a>
-        <?php if (!$pagoCerrado): ?>
-        <form method="POST" action="<?= $baseUrl ?>/por-pagar/cerrar/<?= (int) $listado['id'] ?>" style="display:inline;"
-              data-confirm="Las facturas emparejadas quedarán asignadas a esta semana en Facturas ERP y el listado ya no se podrá modificar."
-              data-confirm-title="Cerrar pago semanal"
-              data-confirm-type="warning"
-              data-confirm-accept="Cerrar pago">
-            <button type="submit" class="btn btn-primary btn-sm"
-                    <?= $sinRespaldo > 0 ? 'disabled' : '' ?>
-                    title="<?= $sinRespaldo > 0 ? 'Primero empareja todas las facturas con su XML' : 'Cerrar y asignar las facturas en el módulo ERP' ?>">
-                <i class="fas fa-lock"></i> Cerrar pago semanal
-            </button>
-        </form>
-        <form method="POST" action="<?= $baseUrl ?>/por-pagar/eliminar/<?= (int) $listado['id'] ?>" style="display:inline;"
-              data-confirm="Se eliminarán el listado y todos sus resultados. Esta acción no se puede deshacer."
-              data-confirm-title="Eliminar listado"
+        <?php $nombreSemana = trim((string) ($listado['semana_nombre'] ?? $listado['nombre'])); ?>
+        <form method="POST" action="<?= $baseUrl ?>/por-pagar/semana/borrar/<?= (int) $listado['id'] ?>" style="display:inline;"
+              data-confirm="Se borra el pago de <?= htmlspecialchars($nombreSemana) ?>. Sus <?= (int) $totalLineas ?> factura(s) del ERP vuelven a quedar disponibles y sus XML/PDF regresan a la carpeta de documentos por fecha de emisión. Ni las facturas ni los comprobantes se eliminan."
+              data-confirm-title="Borrar semana"
               data-confirm-type="danger"
-              data-confirm-accept="Eliminar">
-            <button type="submit" class="btn btn-outline btn-sm" title="Eliminar listado" style="color:#b91c1c;border-color:#fed7d7;">
-                <i class="fas fa-trash-can"></i>
+              data-confirm-accept="Continuar"
+              data-reconfirm="Esta acción no se puede deshacer: habría que volver a cargar el archivo del pago. ¿Borrar el pago de <?= htmlspecialchars($nombreSemana) ?> con sus <?= (int) $totalLineas ?> factura(s)?"
+              data-reconfirm-title="Confirmá otra vez"
+              data-reconfirm-accept="Sí, borrar la semana">
+            <button type="submit" class="btn btn-outline btn-sm"
+                    title="Borrar el pago de esta semana (las facturas y los comprobantes se conservan)"
+                    style="color:#b91c1c;border-color:#fed7d7;">
+                <i class="fas fa-trash-can"></i> Borrar semana
             </button>
         </form>
-        <?php endif; ?>
     </div>
 
     <form method="GET" action="<?= $baseUrl ?>/por-pagar" class="filter-bar">
@@ -1031,20 +1016,18 @@ document.addEventListener('keydown', function (e) {
                             <i class="fas fa-eye"></i>
                         </a>
                         <?php endif; ?>
-                        <?php if (!$pagoCerrado): ?>
-                        <form method="POST" action="<?= $baseUrl ?>/por-pagar/factura/eliminar/<?= (int) $linea['id'] ?>?<?= htmlspecialchars($queryRetornoFiltros) ?>"
+                        <form method="POST" action="<?= $baseUrl ?>/por-pagar/factura/quitar/<?= (int) $linea['id'] ?>?<?= htmlspecialchars($queryRetornoFiltros) ?>"
                               style="display:inline;margin-left:4px;"
-                              data-confirm="La factura saldrá de este listado, pero su XML asociado se conservará."
-                              data-confirm-title="Quitar factura del listado"
-                              data-confirm-type="danger"
-                              data-confirm-accept="Quitar">
+                              data-confirm="No se elimina nada: la factura deja de ser de esta semana y vuelve a quedar disponible en Facturas ERP. Su XML y PDF salen de la carpeta del pago y regresan a la carpeta de documentos por fecha de emisión."
+                              data-confirm-title="Quitar de la semana"
+                              data-confirm-type="warning"
+                              data-confirm-accept="Quitar de la semana">
                             <button type="submit" class="btn btn-outline btn-sm"
-                                    title="Eliminar factura del listado" aria-label="Eliminar factura del listado"
-                                    style="color:#b91c1c;border-color:#fed7d7;">
-                                <i class="fas fa-trash-can"></i>
+                                    title="Quitar la factura de esta semana (no se elimina: vuelve a quedar disponible)"
+                                    aria-label="Quitar la factura de esta semana">
+                                <i class="fas fa-calendar-xmark"></i>
                             </button>
                         </form>
-                        <?php endif; ?>
                     </td>
                 </tr>
                 <?php endforeach; ?>
@@ -1062,7 +1045,7 @@ document.addEventListener('keydown', function (e) {
     </div>
 </div>
 
-<?php if (!empty($listado['semana_id']) && !$pagoCerrado): ?>
+<?php if (!empty($listado['semana_id']) && !empty($sinCoincidencia) && $sinRespaldo > 0): ?>
 <!-- ── Facturas sin coincidencia (de la semana, fuera del listado) ── -->
 <div id="pps-overlay" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:1000;overflow:auto;">
     <div style="background:#fff;border-radius:12px;max-width:860px;width:94%;margin:5vh auto;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.25);">
@@ -1072,8 +1055,8 @@ document.addEventListener('keydown', function (e) {
                 <div style="font-size:15px;font-weight:800;color:var(--navy);">Facturas sin coincidencia</div>
                 <div style="font-size:12px;color:var(--text-muted);">
                     Facturas XML de <strong><?= htmlspecialchars((string) ($listado['semana_nombre'] ?? 'la semana')) ?></strong>
-                    que no coinciden con ninguna línea del listado. Muévelas de semana o vincúlalas a mano
-                    (al vincular solo se compara el monto).
+                    que no coinciden con ninguna línea del listado. Vinculá a mano la que le corresponda
+                    a una línea sin respaldo (al vincular solo se compara el monto).
                 </div>
             </div>
             <button type="button" onclick="ppsCerrar()" style="background:none;border:none;font-size:20px;color:#94a3b8;cursor:pointer;line-height:1;">&times;</button>

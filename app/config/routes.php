@@ -31,6 +31,15 @@ $router->post('/carga/listado-notas', 'NotasCreditoController@subir');
 $router->post('/carga/comprobantes-facturas', 'FacturasController@subir');
 $router->post('/carga/comprobantes-notas', 'NotasXmlController@subir');
 
+// --- AVISOS (la campana de la barra superior) ---
+// Lo que no puede vivir en un toast de siete segundos: las decisiones que
+// alguien tiene que tomar, esperando hasta que las tome.
+$router->get('/avisos', 'NotificacionesController@index');
+$router->get('/avisos/resumen', 'NotificacionesController@resumen');
+$router->post('/avisos/cerrar', 'NotificacionesController@cerrar');
+$router->post('/avisos/codigo/confirmar', 'NotificacionesController@confirmarCodigo');
+$router->post('/avisos/codigo/liberar', 'NotificacionesController@liberarCodigo');
+
 // --- DIAGNÓSTICO DE LA INSTALACIÓN ---
 // La aplicación corre en la computadora de cada persona: esta página dice qué
 // le falta a ESTA instalación, para no depender de acceso remoto.
@@ -113,9 +122,8 @@ $router->post('/por-pagar/previsualizar', 'PorPagarController@previsualizar');
 $router->post('/por-pagar/comparar-listado', 'PorPagarController@compararListado');
 $router->post('/por-pagar/actualizar-listado', 'PorPagarController@actualizarListado');
 $router->post('/por-pagar/verificar/{id}', 'PorPagarController@verificar');
-$router->post('/por-pagar/cerrar/{id}', 'PorPagarController@cerrar');
-$router->post('/por-pagar/eliminar/{id}', 'PorPagarController@eliminar');
-$router->post('/por-pagar/factura/eliminar/{id}', 'PorPagarController@eliminarFactura');
+$router->post('/por-pagar/semana/borrar/{id}', 'PorPagarController@borrarSemana');
+$router->post('/por-pagar/factura/quitar/{id}', 'PorPagarController@quitarFactura');
 $router->get('/por-pagar/exportar', 'PorPagarController@exportar');
 $router->get('/por-pagar/sin-coincidencia', 'PorPagarController@sinCoincidencia');
 $router->post('/por-pagar/forzar', 'PorPagarController@forzar');

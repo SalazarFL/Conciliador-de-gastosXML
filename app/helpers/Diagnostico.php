@@ -73,12 +73,19 @@ class Diagnostico
     private function php()
     {
         $version = PHP_VERSION;
-        $suficiente = version_compare($version, '7.4', '>=');
+        $suficiente = version_compare($version, '8.4', '>=')
+            && version_compare($version, '8.5', '<');
+        $accion = '';
+        if (version_compare($version, '8.4', '<')) {
+            $accion = 'Instala PHP 8.4.x; las versiones anteriores ya no forman parte de la matriz certificada.';
+        } elseif (version_compare($version, '8.5', '>=')) {
+            $accion = 'Esta rama solo está certificada con PHP 8.4.x; vuelve a ejecutar la certificación antes de usar PHP 8.5 o superior.';
+        }
         return $this->resultado(
             'PHP',
             $suficiente ? 'ok' : 'error',
             'Versión ' . $version,
-            $suficiente ? '' : 'Instala PHP 7.4 o superior (el XAMPP actual trae PHP 8).'
+            $accion
         );
     }
 
@@ -87,7 +94,11 @@ class Diagnostico
         $necesarias = ['pdo_mysql' => 'leer y escribir en la base',
                        'imap' => 'capturar facturas del correo',
                        'zip' => 'leer los XLSX que se cargan y generar los que se exportan',
-                       'mbstring' => 'nombres con tildes y ñ'];
+                       'mbstring' => 'nombres con tildes y ñ',
+                       'simplexml' => 'leer comprobantes XML',
+                       'fileinfo' => 'validar archivos cargados',
+                       'curl' => 'realizar conexiones HTTP seguras',
+                       'openssl' => 'cifrar conexiones y datos sensibles'];
         $faltan = [];
         foreach ($necesarias as $ext => $paraQue) {
             if (!extension_loaded($ext)) {

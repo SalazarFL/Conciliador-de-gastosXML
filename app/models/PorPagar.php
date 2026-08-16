@@ -14,9 +14,14 @@
  * Ahora la línea del pago ES la factura del ERP (`facturas_erp`, marcada con
  * `porpagar_listado_id` y `semana_id`). El archivo del pago dejó de aportar
  * datos y aporta una selección: qué facturas se pagan esta semana. Lo que
- * queda acá es la cabecera —cuál semana, de qué archivo salió, si sigue
- * abierta— y las consultas de las líneas viven en FacturaErp, que es donde
- * están las facturas.
+ * queda acá es la cabecera —cuál semana y de qué archivo salió— y las
+ * consultas de las líneas viven en FacturaErp, que es donde están las
+ * facturas.
+ *
+ * Un pago tuvo estado abierto/cerrado. Ya no: la base es compartida y varias
+ * personas trabajan la misma semana, así que congelarla solo servía para dejar
+ * el respaldo desactualizado. Las columnas `estado`, `cerrado_en` y
+ * `cerrado_por` pueden seguir existiendo en bases viejas; nadie las lee.
  */
 
 class PorPagar extends Model
@@ -42,29 +47,22 @@ class PorPagar extends Model
                 `semana_id` INT UNSIGNED NULL DEFAULT NULL,
                 `archivo_origen` VARCHAR(255) NULL DEFAULT NULL,
                 `total_lineas` INT UNSIGNED NOT NULL DEFAULT 0,
-                `estado` ENUM('abierto','cerrado') NOT NULL DEFAULT 'abierto',
-                `cerrado_en` DATETIME NULL DEFAULT NULL,
-                `cerrado_por` INT UNSIGNED NULL DEFAULT NULL,
                 `fecha_subida` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (`id`),
-                KEY `idx_estado_pago` (`estado`),
                 KEY `idx_semana` (`semana_id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
         } catch (Throwable $e) {
             // La migración manual la crea si aquí no hay permisos DDL.
         }
 
-        foreach ([
-            'estado' => "ADD COLUMN `estado` ENUM('abierto','cerrado') NOT NULL DEFAULT 'abierto' AFTER `total_lineas`, ADD KEY `idx_estado_pago` (`estado`)",
-            'cerrado_en' => "ADD COLUMN `cerrado_en` DATETIME NULL DEFAULT NULL AFTER `estado`",
-            'cerrado_por' => "ADD COLUMN `cerrado_por` INT UNSIGNED NULL DEFAULT NULL AFTER `cerrado_en`",
-        ] as $columna => $definicion) {
-            try {
-                if (!$this->fetchOne("SHOW COLUMNS FROM porpagar_listados LIKE '{$columna}'")) {
-                    $this->execute("ALTER TABLE porpagar_listados {$definicion}");
-                }
-            } catch (Throwable $e) {
+        // Una base que viene del tiempo del cierre puede tener pagos marcados
+        // como 'cerrado'. Nadie lee esa columna, pero mientras exista se deja
+        // en 'abierto' para que un reporte hecho a mano no se confunda.
+        try {
+            if ($this->fetchOne("SHOW COLUMNS FROM porpagar_listados LIKE 'estado'")) {
+                $this->execute("UPDATE porpagar_listados SET estado = 'abierto' WHERE estado <> 'abierto'");
             }
+        } catch (Throwable $e) {
         }
     }
 
@@ -136,10 +134,6 @@ class PorPagar extends Model
      */
     public function eliminarListado($id)
     {
-        $listado = $this->getListado((int) $id);
-        if ($listado !== null && ($listado['estado'] ?? 'abierto') === 'cerrado') {
-            throw new Exception('El pago semanal está cerrado y no se puede eliminar.');
-        }
         $this->execute(
             "UPDATE facturas_erp
                 SET estado = 'pendiente', semana_id = NULL, porpagar_listado_id = NULL,
@@ -150,16 +144,6 @@ class PorPagar extends Model
             [(int) $id]
         );
         return $this->execute("DELETE FROM porpagar_listados WHERE id = ?", [(int) $id]);
-    }
-
-    public function cerrar($id, $usuarioId = null)
-    {
-        return $this->execute(
-            "UPDATE porpagar_listados
-                SET estado = 'cerrado', cerrado_en = NOW(), cerrado_por = ?
-              WHERE id = ? AND estado = 'abierto'",
-            [$usuarioId !== null ? (int) $usuarioId : null, (int) $id]
-        );
     }
 
     public function begin() { return self::getDB()->beginTransaction(); }

@@ -495,7 +495,7 @@ class FacturasErpCsvParser
     private static function celdas($linea)
     {
         $out = [];
-        foreach (str_getcsv($linea) as $celda) {
+        foreach (str_getcsv($linea, ',', '"', '\\') as $celda) {
             $celda = trim((string) $celda);
             if ($celda === '' || preg_match('/^(Usuario:|P.gina:|Impreso:)/u', $celda)) {
                 continue;

@@ -279,7 +279,7 @@ class FacturasErpController extends Controller
         $out = fopen('php://output', 'w');
         fwrite($out, "\xEF\xBB\xBF"); // BOM para que Excel respete los acentos
         fputcsv($out, ['Proveedor', 'Nombre', 'Sucursal', 'Documento', 'Fecha',
-                       'Vence', 'Compra', 'Moneda', 'Monto', 'Saldo', 'Estado', 'Semana']);
+                       'Vence', 'Compra', 'Moneda', 'Monto', 'Saldo', 'Estado', 'Semana'], ',', '"', '\\');
         foreach ($filas as $f) {
             fputcsv($out, [
                 $f['proveedor_codigo'], $f['proveedor_nombre'], $f['sucursal'],
@@ -287,7 +287,7 @@ class FacturasErpController extends Controller
                 $f['origen'], $f['moneda'], $f['monto'], $f['saldo'],
                 ($f['estado'] ?? 'pendiente') === 'asignada_semana' ? 'Asignada a una semana' : 'Pendiente',
                 $f['semana_nombre'] ?? '',
-            ]);
+            ], ',', '"', '\\');
         }
         fclose($out);
         exit;

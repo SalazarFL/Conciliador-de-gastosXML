@@ -1,5 +1,5 @@
 /* =============================================
-   Nexo Fiscal — Arrendadora BM PZ S.A.
+   Nexo Fiscal
    Paleta: Navy #0C2461 · Dorado #F0A500
    Design System v3.0
 ============================================= */
@@ -347,6 +347,100 @@ html, body {
   border-radius: 999px;
   padding: 4px 10px;
 }
+
+/* ── Campana de avisos ─────────────────────────────────────────
+   Vive junto al engranaje porque son la misma clase de cosa: no son
+   parte de la pantalla que se está mirando, sino del sistema. */
+.avisos-wrap { position: relative; display: flex; align-items: center; }
+
+.avisos-btn {
+  position: relative;
+  font-size: 11.5px;
+  color: var(--navy);
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid #c3d0e8;
+  border-radius: 7px;
+  font-weight: 600;
+  transition: background .2s;
+}
+.avisos-btn:hover { background: #eef3fb; }
+.avisos-btn.tiene-pendientes { border-color: var(--gold-light, #F7C948); background: var(--gold-pale, #FFF8E6); }
+
+/* El número no se ve si es cero: una campana en 0 es ruido permanente. */
+.avisos-badge {
+  position: absolute;
+  top: -6px; right: -6px;
+  min-width: 16px; height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #e53e3e;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--white, #fff);
+}
+
+.avisos-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 360px;
+  max-width: calc(100vw - 24px);
+  max-height: 70vh;
+  overflow-y: auto;
+  background: var(--white, #fff);
+  border: 1px solid var(--border-light, #E4ECF7);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(12,36,97,.16);
+  z-index: 200;
+  display: none;
+}
+.avisos-panel.abierto { display: block; }
+
+.avisos-panel-head {
+  padding: 10px 13px;
+  border-bottom: 1px solid var(--border-light, #E4ECF7);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--navy);
+}
+
+.aviso-item {
+  padding: 10px 13px;
+  border-bottom: 1px solid var(--border-light, #E4ECF7);
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+}
+.aviso-item:last-child { border-bottom: 0; }
+
+.aviso-icono { flex: 0 0 auto; margin-top: 1px; font-size: 13px; }
+.aviso-icono.alta  { color: #e53e3e; }
+.aviso-icono.media { color: var(--gold-dark, #C88A00); }
+.aviso-icono.baja  { color: var(--text-muted, #718096); }
+
+.aviso-cuerpo { min-width: 0; }
+.aviso-titulo { font-size: 12px; font-weight: 700; color: var(--navy); line-height: 1.3; }
+.aviso-detalle { font-size: 11px; color: var(--text-muted, #718096); margin-top: 3px; line-height: 1.45; }
+.aviso-meta { font-size: 10.5px; color: var(--text-muted, #718096); margin-top: 4px; }
+
+.avisos-panel-pie {
+  padding: 9px 13px;
+  text-align: center;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.avisos-vacio { padding: 22px 13px; text-align: center; font-size: 11.5px; color: var(--text-muted, #718096); }
 
 .status-dot {
   width: 7px; height: 7px;

@@ -14,6 +14,7 @@
  * manual en cada factura de ese proveedor, cada semana.
  */
 require_once __DIR__ . '/../app/core/Model.php';
+require_once __DIR__ . '/../app/models/Proveedor.php';
 require_once __DIR__ . '/../app/models/ProveedorAlias.php';
 require_once __DIR__ . '/../app/helpers/FacturaMatcher.php';
 
@@ -60,11 +61,9 @@ $limpiar = function () use ($pdo, &$provId, &$otroId) {
 };
 
 try {
-    $ins = $pdo->prepare('INSERT INTO proveedores (rfc, razon_social) VALUES (?, ?)');
-    $ins->execute([$cedula, $NOMBRE_LARGO]);
-    $provId = (int) $pdo->lastInsertId();
-    $ins->execute([$cedulaOtro, $OTRO_NOMBRE]);
-    $otroId = (int) $pdo->lastInsertId();
+    $proveedores = new Proveedor();
+    $provId = (int) $proveedores->obtenerOCrear($cedula, $NOMBRE_LARGO);
+    $otroId = (int) $proveedores->obtenerOCrear($cedulaOtro, $OTRO_NOMBRE);
 
     $modelo = new ProveedorAlias();
 
