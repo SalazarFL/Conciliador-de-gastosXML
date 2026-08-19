@@ -1,0 +1,187 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1710" viewBox="0 0 1600 1710" role="img" aria-labelledby="title desc">
+  <title id="title">Flujo operativo de conciliación fiscal comparado con Nexo Fiscal</title>
+  <desc id="desc">Diagrama que distingue en verde lo presente en el proceso y el sistema, en azul lo que ya existe solamente en el sistema y en naranja lo propuesto pero aún no implementado.</desc>
+  <defs>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="140%">
+      <feDropShadow dx="0" dy="5" stdDeviation="7" flood-color="#0f172a" flood-opacity="0.10"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L12,6 L0,12 z" fill="#64748b"/>
+    </marker>
+    <marker id="arrowOrange" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L12,6 L0,12 z" fill="#ea580c"/>
+    </marker>
+    <style>
+      .title { font: 800 34px 'Segoe UI', Arial, sans-serif; fill: #0f172a; }
+      .subtitle { font: 400 17px 'Segoe UI', Arial, sans-serif; fill: #475569; }
+      .legend { font: 700 14px 'Segoe UI', Arial, sans-serif; fill: #1e293b; }
+      .lane { font: 800 18px 'Segoe UI', Arial, sans-serif; fill: #334155; letter-spacing: .4px; }
+      .tag { font: 800 11px 'Segoe UI', Arial, sans-serif; letter-spacing: .7px; }
+      .node-title { font: 750 20px 'Segoe UI', Arial, sans-serif; fill: #0f172a; }
+      .node-text { font: 400 15px 'Segoe UI', Arial, sans-serif; fill: #334155; }
+      .small { font: 400 13px 'Segoe UI', Arial, sans-serif; fill: #64748b; }
+      .connector { fill: none; stroke: #64748b; stroke-width: 3; marker-end: url(#arrow); }
+      .connector-dashed { fill: none; stroke: #ea580c; stroke-width: 3; stroke-dasharray: 10 8; marker-end: url(#arrowOrange); }
+      .both { fill: #ecfdf5; stroke: #16a34a; stroke-width: 2.5; }
+      .system { fill: #eff6ff; stroke: #2563eb; stroke-width: 2.5; }
+      .pending { fill: #fff7ed; stroke: #ea580c; stroke-width: 2.5; }
+      .both-tag { fill: #15803d; }
+      .system-tag { fill: #1d4ed8; }
+      .pending-tag { fill: #c2410c; }
+      .white { fill: #ffffff; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1710" fill="#f8fafc"/>
+  <rect x="32" y="28" width="1536" height="1640" rx="24" fill="#ffffff" stroke="#e2e8f0"/>
+
+  <text x="80" y="84" class="title">Flujo operativo de conciliación fiscal</text>
+  <text x="80" y="116" class="subtitle">Proceso propuesto contrastado con las funciones que ya existen en Nexo Fiscal</text>
+
+  <g transform="translate(80 144)">
+    <rect x="0" y="0" width="350" height="42" rx="21" fill="#ecfdf5" stroke="#16a34a"/>
+    <circle cx="24" cy="21" r="8" fill="#16a34a"/>
+    <text x="43" y="26" class="legend">En el diagrama y en el sistema</text>
+
+    <rect x="375" y="0" width="385" height="42" rx="21" fill="#eff6ff" stroke="#2563eb"/>
+    <circle cx="399" cy="21" r="8" fill="#2563eb"/>
+    <text x="418" y="26" class="legend">Ya existe, pero faltaba en el diagrama</text>
+
+    <rect x="785" y="0" width="440" height="42" rx="21" fill="#fff7ed" stroke="#ea580c"/>
+    <circle cx="809" cy="21" r="8" fill="#ea580c"/>
+    <text x="828" y="26" class="legend">Está propuesto, pero no existe en el sistema</text>
+  </g>
+
+  <text x="80" y="240" class="lane">1 · FUENTES DE INFORMACIÓN</text>
+  <line x1="80" y1="252" x2="1520" y2="252" stroke="#e2e8f0" stroke-width="2"/>
+
+  <g filter="url(#shadow)">
+    <rect x="80" y="280" width="430" height="130" rx="16" class="both"/>
+    <rect x="102" y="298" width="82" height="24" rx="12" class="both-tag"/>
+    <text x="143" y="315" text-anchor="middle" class="tag white">AMBOS</text>
+    <text x="104" y="352" class="node-title">Correo empresarial</text>
+    <text x="104" y="380" class="node-text">Facturas y notas de crédito con XML y PDF</text>
+
+    <rect x="585" y="280" width="430" height="130" rx="16" class="system"/>
+    <rect x="607" y="298" width="98" height="24" rx="12" class="system-tag"/>
+    <text x="656" y="315" text-anchor="middle" class="tag white">SISTEMA</text>
+    <text x="609" y="352" class="node-title">Reportes del ERP</text>
+    <text x="609" y="380" class="node-text">Facturas, notas de crédito y listado semanal</text>
+
+    <rect x="1090" y="280" width="430" height="130" rx="16" class="system"/>
+    <rect x="1112" y="298" width="98" height="24" rx="12" class="system-tag"/>
+    <text x="1161" y="315" text-anchor="middle" class="tag white">SISTEMA</text>
+    <text x="1114" y="352" class="node-title">Carga y recuperación manual</text>
+    <text x="1114" y="378" class="node-text">XML/PDF, reproceso e incidencias del correo</text>
+  </g>
+
+  <path d="M295 410 V448 H800 V470" class="connector"/>
+  <path d="M800 410 V470" class="connector"/>
+  <path d="M1305 410 V448 H800 V470" class="connector"/>
+
+  <text x="80" y="500" class="lane">2 · CAPTURA Y CONTROL</text>
+  <line x1="80" y1="512" x2="1520" y2="512" stroke="#e2e8f0" stroke-width="2"/>
+
+  <g filter="url(#shadow)">
+    <rect x="310" y="540" width="980" height="120" rx="16" class="system"/>
+    <rect x="334" y="558" width="98" height="24" rx="12" class="system-tag"/>
+    <text x="383" y="575" text-anchor="middle" class="tag white">SISTEMA</text>
+    <text x="334" y="614" class="node-title">Capturar, validar y organizar los documentos</text>
+    <text x="334" y="642" class="node-text">Identifica empresa, valida Hacienda, evita duplicados, empareja XML/PDF y conserva trazabilidad.</text>
+  </g>
+
+  <path d="M800 660 V700" class="connector"/>
+
+  <g filter="url(#shadow)">
+    <rect x="310" y="720" width="980" height="120" rx="16" class="both"/>
+    <rect x="334" y="738" width="82" height="24" rx="12" class="both-tag"/>
+    <text x="375" y="755" text-anchor="middle" class="tag white">AMBOS</text>
+    <text x="334" y="794" class="node-title">Revisar notas y facturas contra el ERP y los XML disponibles</text>
+    <text x="334" y="822" class="node-text">Cruza número/consecutivo, proveedor y monto; permite revisar o vincular casos manualmente.</text>
+  </g>
+
+  <path d="M800 840 V880" class="connector"/>
+
+  <g filter="url(#shadow)">
+    <rect x="310" y="900" width="750" height="116" rx="16" class="system"/>
+    <rect x="334" y="918" width="98" height="24" rx="12" class="system-tag"/>
+    <text x="383" y="935" text-anchor="middle" class="tag white">SISTEMA</text>
+    <text x="334" y="972" class="node-title">Resultado de la conciliación</text>
+    <text x="334" y="998" class="node-text">Coincide / respaldada · Con diferencia · Sin respaldo</text>
+
+    <rect x="1100" y="900" width="420" height="116" rx="16" class="system"/>
+    <rect x="1124" y="918" width="98" height="24" rx="12" class="system-tag"/>
+    <text x="1173" y="935" text-anchor="middle" class="tag white">SISTEMA</text>
+    <text x="1124" y="972" class="node-title">Seguimiento unificado</text>
+    <text x="1124" y="998" class="node-text">Responsable, vencimiento, comentarios e historial</text>
+  </g>
+
+  <path d="M1060 958 H1080" class="connector"/>
+  <path d="M685 1016 V1056 H370 V1084" class="connector"/>
+  <path d="M685 1016 V1056 H1230 V1084" class="connector"/>
+
+  <text x="80" y="1080" class="lane">3A · NOTAS DE CRÉDITO</text>
+  <text x="870" y="1080" class="lane">3B · FACTURAS Y PAGO SEMANAL</text>
+  <line x1="80" y1="1092" x2="730" y2="1092" stroke="#e2e8f0" stroke-width="2"/>
+  <line x1="870" y1="1092" x2="1520" y2="1092" stroke="#e2e8f0" stroke-width="2"/>
+
+  <g filter="url(#shadow)">
+    <rect x="80" y="1120" width="650" height="112" rx="16" class="system"/>
+    <rect x="104" y="1138" width="98" height="24" rx="12" class="system-tag"/>
+    <text x="153" y="1155" text-anchor="middle" class="tag white">SISTEMA</text>
+    <text x="104" y="1191" class="node-title">Clasificar y verificar la nota</text>
+    <text x="104" y="1217" class="node-text">Directa · Costo · Cambio · Ajuste · Por revisar</text>
+
+    <rect x="870" y="1120" width="650" height="112" rx="16" class="both"/>
+    <rect x="894" y="1138" width="82" height="24" rx="12" class="both-tag"/>
+    <text x="935" y="1155" text-anchor="middle" class="tag white">AMBOS</text>
+    <text x="894" y="1191" class="node-title">Facturas listas para el pago semanal</text>
+    <text x="894" y="1217" class="node-text">Las líneas del ERP quedan asociadas a su comprobante XML/PDF.</text>
+  </g>
+
+  <path d="M405 1232 V1266" class="connector"/>
+  <path d="M1195 1232 V1266" class="connector"/>
+
+  <g filter="url(#shadow)">
+    <rect x="80" y="1286" width="650" height="112" rx="16" class="system"/>
+    <rect x="104" y="1304" width="98" height="24" rx="12" class="system-tag"/>
+    <text x="153" y="1321" text-anchor="middle" class="tag white">SISTEMA</text>
+    <text x="104" y="1357" class="node-title">Notas con respaldo completo</text>
+    <text x="104" y="1383" class="node-text">El sistema confirma documento y monto; aún no autoriza una rebaja.</text>
+
+    <rect x="870" y="1286" width="650" height="112" rx="16" class="system"/>
+    <rect x="894" y="1304" width="98" height="24" rx="12" class="system-tag"/>
+    <text x="943" y="1321" text-anchor="middle" class="tag white">SISTEMA</text>
+    <text x="894" y="1357" class="node-title">Comparar y actualizar el listado semanal</text>
+    <text x="894" y="1383" class="node-text">Muestra entradas/salidas y reúne los pares XML/PDF en la carpeta del pago.</text>
+  </g>
+
+  <path d="M405 1398 V1432" class="connector-dashed"/>
+  <path d="M1195 1398 V1432" class="connector-dashed"/>
+
+  <g filter="url(#shadow)">
+    <rect x="80" y="1452" width="650" height="118" rx="16" class="pending"/>
+    <rect x="104" y="1470" width="108" height="24" rx="12" class="pending-tag"/>
+    <text x="158" y="1487" text-anchor="middle" class="tag white">PENDIENTE</text>
+    <text x="104" y="1523" class="node-title">Aprobar “lista para rebajar”</text>
+    <text x="104" y="1549" class="node-text">Crear estado de aprobación y registrar la aplicación de la rebaja en el ERP.</text>
+
+    <rect x="870" y="1452" width="650" height="118" rx="16" class="pending"/>
+    <rect x="894" y="1470" width="108" height="24" rx="12" class="pending-tag"/>
+    <text x="948" y="1487" text-anchor="middle" class="tag white">PENDIENTE</text>
+    <text x="894" y="1523" class="node-title">Cruzar directas y cambios con el pago semanal</text>
+    <text x="894" y="1549" class="node-text">Evitar pagar importes que deban rebajarse y dejar evidencia de la decisión.</text>
+  </g>
+
+  <path d="M730 1342 C810 1342 790 1511 850 1511" class="connector-dashed"/>
+
+  <path d="M405 1570 V1594" class="connector-dashed"/>
+  <path d="M1195 1570 V1594" class="connector-dashed"/>
+
+  <g>
+    <rect x="80" y="1612" width="650" height="42" rx="12" fill="#fff7ed" stroke="#fdba74"/>
+    <text x="405" y="1638" text-anchor="middle" class="small">Salida pendiente: rebaja aplicada y auditada en el ERP</text>
+    <rect x="870" y="1612" width="650" height="42" rx="12" fill="#fff7ed" stroke="#fdba74"/>
+    <text x="1195" y="1638" text-anchor="middle" class="small">Salida pendiente: autorización y ejecución real del pago</text>
+  </g>
+</svg>
