@@ -941,8 +941,11 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         }
     } catch (e) { /* sessionStorage bloqueado */ }
 
-    // Búsqueda prellenada (?buscar= — llega desde "Facturas por pagar")
+    // Búsqueda prellenada (?buscar= — llega desde "Facturas por pagar" y
+    // desde Seguimiento). ?fecha= acompaña a la búsqueda por proveedor de una
+    // nota de crédito sin número propio: acota a 15 días alrededor.
     var BUSCAR_INICIAL = <?= json_encode($buscarInicial) ?>;
+    var BUSCAR_FECHA = <?= json_encode($buscarFecha ?? '') ?>;
     var ABRIR_CORREO_UID = <?= (int) $abrirCorreoUid ?>;
     var ABRIR_CORREO_CARPETA = <?= json_encode($abrirCorreoCarpeta) ?>;
     var ABRIR_CORREO_PENDIENTE = ABRIR_CORREO_UID > 0;
@@ -951,8 +954,8 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         setTimeout(function () {
             // Un enlace procedente de por-pagar usa el mismo motor propio de
             // la lupa de la tarjeta (PP_NAV ya está asignado al ejecutarse).
-            var origenBusqueda = 'bandeja';
-            var fechaReferencia = '';
+            var origenBusqueda = BUSCAR_FECHA ? 'tarjeta' : 'bandeja';
+            var fechaReferencia = BUSCAR_FECHA;
             var numeroContexto = '';
             try {
                 if (PP_NAV && PP_NAV.lineas && PP_NAV.lineas.length) {

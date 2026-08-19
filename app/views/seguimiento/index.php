@@ -556,10 +556,16 @@ $moneda = function ($valor, $mon = 'CRC') {
                     </td>
 
                     <td style="white-space:nowrap;">
-                        <?php if (!$f['xml_ok']): ?>
+                        <?php // Sin término no hay búsqueda que ofrecer: pasa en una
+                              // nota sin consecutivo propio y sin nombre de proveedor.
+                              if (!$f['xml_ok'] && $f['busqueda'] !== ''): ?>
                         <a class="btn btn-outline btn-sm"
-                           href="<?= $baseUrl ?>/correo?buscar=<?= urlencode((string) $f['busqueda']) ?>"
-                           target="_blank" title="Buscar este documento en el correo">
+                           href="<?= $baseUrl ?>/correo?buscar=<?= urlencode((string) $f['busqueda']) ?><?=
+                               $f['busqueda_fecha'] !== '' ? '&amp;fecha=' . urlencode((string) $f['busqueda_fecha']) : '' ?>"
+                           target="_blank"
+                           title="<?= $f['busqueda_por'] === 'proveedor'
+                               ? 'La nota no trae número propio: se busca por proveedor alrededor de su fecha'
+                               : 'Buscar este documento en el correo' ?>">
                             <i class="fas fa-envelope-open-text"></i>
                         </a>
                         <?php endif; ?>
@@ -1085,11 +1091,22 @@ $moneda = function ($valor, $mon = 'CRC') {
             : (f.pdf_historico
                 ? '<span class="badge badge-default"><i class="fas fa-file-pdf"></i> PDF histórico</span>'
                 : '<span class="badge badge-miss"><i class="fas fa-file-pdf"></i> Sin PDF</span>');
-        if (!f.xml_ok) {
-            html += '<a class="btn btn-primary btn-sm" target="_blank" href="' + BASE + '/correo?buscar='
-                 + encodeURIComponent(f.busqueda) + '"><i class="fas fa-envelope-open-text"></i> Buscar en el correo</a>';
+        if (!f.xml_ok && f.busqueda) {
+            var urlCorreo = BASE + '/correo?buscar=' + encodeURIComponent(f.busqueda)
+                          + (f.busqueda_fecha ? '&fecha=' + encodeURIComponent(f.busqueda_fecha) : '');
+            html += '<a class="btn btn-primary btn-sm" target="_blank" href="' + urlCorreo + '">'
+                 + '<i class="fas fa-envelope-open-text"></i> Buscar en el correo'
+                 + (f.busqueda_por === 'proveedor' ? ' por proveedor' : '') + '</a>';
         }
         html += '</div>';
+
+        // Por qué la búsqueda no va por número: el del reporte es el de la
+        // factura que la nota corrige, no el de la nota.
+        if (!f.xml_ok && f.busqueda && f.busqueda_por === 'proveedor') {
+            html += '<div style="font-size:11.5px;color:var(--text-muted);margin:-4px 0 10px;">' +
+                    'El número de esta nota es el de la factura que corrige, no sirve para ' +
+                    'buscarla en el correo. Se busca por proveedor, 15 días antes y después de su fecha.</div>';
+        }
 
         if (f.motivo_match) {
             html += '<div class="seg-dato-et">Por qué no cuadró</div>' +

@@ -208,6 +208,14 @@ class CorreoController extends Controller
             'cuentaActivaId'  => $cuentaActivaId,
             'sociedadActiva'  => $sociedadActiva,
             'buscarInicial'   => trim((string) $this->get('buscar', '')),
+            // Fecha de referencia del documento que manda a buscar (d/m/Y).
+            // Con ella la búsqueda inicial usa el motor de la tarjeta: 15
+            // días antes y después, y todo el buzón si ahí no hay nada. Es lo
+            // que necesita una nota de crédito sin número propio, que solo se
+            // puede buscar por proveedor y hay que acotar por fecha.
+            'buscarFecha'     => preg_match('#^\d{2}/\d{2}/\d{4}$#', trim((string) $this->get('fecha', '')))
+                ? trim((string) $this->get('fecha', ''))
+                : '',
             'abrirCorreoUid'  => max(0, (int) $this->get('abrir_uid', 0)),
             'abrirCorreoCarpeta' => mb_substr(trim((string) $this->get('abrir_carpeta', '')), 0, 255, 'UTF-8'),
             'ppNav'           => $ppNav,

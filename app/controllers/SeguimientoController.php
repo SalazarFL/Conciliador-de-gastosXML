@@ -148,7 +148,7 @@ class SeguimientoController extends Controller
             $fila['xml_ok'] = $this->archivoPresente($fila['ruta_xml'] ?? '');
             $fila['pdf_ok'] = $this->archivoPresente($fila['ruta_pdf'] ?? '');
             $fila['pdf_historico'] = ($fila['estado_pdf'] ?? '') === 'no_disponible_historico';
-            $fila['busqueda'] = FacturaMatcher::terminoBusquedaCorreo((string) $fila['documento']);
+            $this->decorarBusqueda($fila);
             // El recordatorio solo tiene sentido mientras el renglón siga en
             // revisión: en las demás pestañas no hay nada que esperar.
             $fila['vencido'] = !empty($fila['recordar_en'])
@@ -161,6 +161,49 @@ class SeguimientoController extends Controller
         }
         unset($fila);
         return $filas;
+    }
+
+    /**
+     * Con qué se busca el documento en el correo.
+     *
+     * En una factura es su propio número. En una nota de crédito NO: el
+     * número largo del reporte es el consecutivo de la factura que la nota
+     * corrige, no el de la nota (ver ClaseNotaCredito), así que buscarlo
+     * traía siempre el correo equivocado —el de la factura—.
+     *
+     * Lo que sí identifica a la nota es el consecutivo del proveedor, cuando
+     * el reporte lo trae. Cuando no viene —lo corriente— no hay ningún número
+     * que buscar, y lo único honesto es abrir el correo por el nombre del
+     * proveedor alrededor de la fecha de la nota. Por eso viaja la fecha: el
+     * buscador del correo mira primero 15 días antes y después.
+     */
+    private function decorarBusqueda(array &$fila)
+    {
+        $fila['busqueda_por'] = 'numero';
+        $fila['busqueda_fecha'] = '';
+
+        if (($fila['origen'] ?? '') !== 'nota_credito') {
+            $fila['busqueda'] = FacturaMatcher::terminoBusquedaCorreo((string) $fila['documento']);
+            return;
+        }
+
+        $numeroNota = trim((string) ($fila['nc_proveedor'] ?? ''));
+        if ($numeroNota !== '') {
+            $fila['busqueda'] = FacturaMatcher::terminoBusquedaCorreo($numeroNota);
+            return;
+        }
+
+        // El nombre completo casi nunca aparece tal cual en el correo: los
+        // dos primeros tokens (ya sin "S.A." ni sufijos) son los que sí
+        // están en el remitente o en el asunto, y ambos deben aparecer.
+        $tokens = array_slice(FacturaMatcher::tokenizarProveedor($fila['proveedor'] ?? ''), 0, 2);
+        $fila['busqueda_por'] = 'proveedor';
+        $fila['busqueda'] = implode(' ', $tokens);
+
+        $fecha = strtotime((string) ($fila['fecha'] ?? ''));
+        if ($fecha !== false) {
+            $fila['busqueda_fecha'] = date('d/m/Y', $fecha);
+        }
     }
 
     private function archivoPresente($ruta)
