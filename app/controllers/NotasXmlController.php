@@ -8,6 +8,8 @@ class NotasXmlController extends Controller
 
     public function index()
     {
+        $this->recordarFiltros('notas_xml', ['desde', 'hasta', 'buscar', 'proveedor']);
+
         $desde = $this->fechaValida((string) $this->get('desde', ''));
         $hasta = $this->fechaValida((string) $this->get('hasta', ''));
         $buscar = mb_substr(trim((string) $this->get('buscar', '')), 0, 100, 'UTF-8');

@@ -188,7 +188,7 @@ function feMonto($v)
             <button type="submit" class="btn btn-primary btn-sm">
                 <i class="fas fa-filter" style="margin-right:4px;"></i>Filtrar
             </button>
-            <a href="<?= $baseUrl ?>/facturas-erp" class="btn btn-outline btn-sm">Limpiar</a>
+            <a href="<?= $baseUrl ?>/facturas-erp?limpiar=1" class="btn btn-outline btn-sm">Limpiar</a>
         </div>
     </form>
 

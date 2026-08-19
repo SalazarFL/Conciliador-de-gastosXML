@@ -98,7 +98,7 @@ $labelTipo = function ($tipo) {
         <input type="hidden" name="estado" value="<?= htmlspecialchars($filtros['estado']) ?>">
         <div class="filter-actions">
             <button class="btn btn-primary btn-sm" type="submit"><i class="fas fa-search"></i> Buscar</button>
-            <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/devoluciones"><i class="fas fa-broom"></i> Limpiar</a>
+            <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/devoluciones?limpiar=1"><i class="fas fa-broom"></i> Limpiar</a>
         </div>
     </form>
 

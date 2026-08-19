@@ -17,6 +17,11 @@ class FacturasErpController extends Controller
 
     public function index()
     {
+        $this->recordarFiltros('facturas_erp', [
+            'q', 'proveedor', 'sucursal', 'origen', 'estado',
+            'desde', 'hasta', 'solo_saldo',
+        ]);
+
         $modelo = $this->loadModel('FacturaErp');
         $filtros = $this->filtros();
         $pagina = max(1, (int) $this->get('pagina', 1));
@@ -46,6 +51,12 @@ class FacturasErpController extends Controller
     /** Historial de problemas detectados en cada carga. */
     public function incidencias()
     {
+        // Su propia memoria, aparte del listado: se filtra por otra cosa.
+        // 'carga' queda fuera porque elige de qué carga se está hablando.
+        $this->recordarFiltros('facturas_erp_incidencias', [
+            'ver', 'tipo', 'severidad', 'proveedor', 'q',
+        ]);
+
         $modelo = $this->loadModel('FacturaErp');
         $filtros = $this->filtrosIncidencia();
         $pagina = max(1, (int) $this->get('pagina', 1));

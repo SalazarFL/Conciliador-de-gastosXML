@@ -26,6 +26,16 @@ class SeguimientoController extends Controller
 
     public function index()
     {
+        // La pestaña abierta, la barra y los filtros de columna vuelven como
+        // se dejaron. 'contexto_id' no: no tiene control en pantalla, y
+        // recordarlo dejaría la cola recortada sin que nada lo explique.
+        $this->recordarFiltros('seguimiento', [
+            'vista', 'origen', 'tarea', 'marca', 'clase', 'responsable',
+            'proveedor', 'sucursal', 'desde', 'hasta', 'monto_min',
+            'condicion_saldo', 'q', 'col_documento', 'col_proveedor',
+            'col_monto', 'col_saldo', 'col_respaldo', 'col_tarea', 'orden',
+        ]);
+
         $modelo = $this->loadModel('Seguimiento');
         $sociedad = $this->loadModel('Sociedad')->getActiva();
 

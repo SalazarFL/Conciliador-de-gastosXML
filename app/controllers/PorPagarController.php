@@ -29,6 +29,13 @@ class PorPagarController extends Controller
 
     public function index()
     {
+        // El checklist se recuerda como se dejó; el listado y la semana no,
+        // que son el contexto y se eligen arriba.
+        $this->recordarFiltros('por_pagar', [
+            'q', 'proveedor', 'sucursal', 'estado', 'vinculo',
+            'fecha_desde', 'fecha_hasta', 'monto_desde', 'monto_hasta',
+        ]);
+
         $modelo = $this->loadModel('PorPagar');
         $erp = $this->loadModel('FacturaErp');
         $filtros = $this->filtrosListado();

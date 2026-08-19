@@ -6,6 +6,20 @@ require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 
 class NotasCreditoController extends Controller
 {
+    /**
+     * Los filtros de la tabla: la barra de arriba y los de cada columna.
+     * Los usa la consulta y también la memoria del módulo, para que agregar
+     * un filtro no obligue a acordarse de apuntarlo en dos listas.
+     * 'listado_id' no está: elige QUÉ listado se ve, no cómo se filtra.
+     */
+    private const CLAVES_FILTRO = [
+        'q', 'estado', 'condicion_saldo', 'condicion_nc_proveedor', 'proveedor', 'sucursal', 'clase',
+        'col_estado', 'proveedor_codigo', 'proveedor_nombre', 'sucursal_texto',
+        'documento', 'fecha', 'nc_proveedor', 'fecha_nc_proveedor',
+        'entrada_asociada', 'moneda', 'monto', 'saldo', 'monto_conversion',
+        'nc_xml', 'xml_total', 'diferencia',
+    ];
+
     public function __construct()
     {
         $this->requireAuth();
@@ -13,6 +27,8 @@ class NotasCreditoController extends Controller
 
     public function index()
     {
+        $this->recordarFiltros('notas_credito', self::CLAVES_FILTRO);
+
         $modelo = $this->loadModel('NotaCredito');
         $sociedad = $this->loadModel('Sociedad')->getActiva();
         $listados = $sociedad ? $modelo->getListados((int) $sociedad['id']) : [];
@@ -50,6 +66,12 @@ class NotasCreditoController extends Controller
 
     public function buscar()
     {
+        // El filtrado de esta pantalla es en vivo: la tabla se rearma con
+        // fetch y la barra de direcciones se reescribe sin recargar. Si la
+        // memoria del módulo solo mirara index(), volvería a poner lo que
+        // había en la última recarga y no lo que se está viendo.
+        $this->recordarFiltros('notas_credito', self::CLAVES_FILTRO);
+
         try {
             $listadoId = (int) $this->get('listado_id', 0);
             $modelo = $this->loadModel('NotaCredito');
@@ -74,15 +96,8 @@ class NotasCreditoController extends Controller
 
     private function filtrosLineas()
     {
-        $keys = [
-            'q', 'estado', 'condicion_saldo', 'condicion_nc_proveedor', 'proveedor', 'sucursal', 'clase',
-            'col_estado', 'proveedor_codigo', 'proveedor_nombre', 'sucursal_texto',
-            'documento', 'fecha', 'nc_proveedor', 'fecha_nc_proveedor',
-            'entrada_asociada', 'moneda', 'monto', 'saldo', 'monto_conversion',
-            'nc_xml', 'xml_total', 'diferencia',
-        ];
         $filters = [];
-        foreach ($keys as $key) {
+        foreach (self::CLAVES_FILTRO as $key) {
             $filters[$key] = trim((string) $this->get($key, ''));
         }
         // El proveedor no es texto libre: es la clave que eligió el filtro.

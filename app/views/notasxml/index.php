@@ -51,7 +51,7 @@ foreach ([$desde ?? '', $hasta ?? '', $buscar ?? '', $proveedor ?? ''] as $valor
         <div class="filter-actions">
             <button class="btn btn-primary btn-sm" type="submit"><i class="fas fa-search"></i> Buscar</button>
             <?php if ($filtrosActivos): ?>
-            <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/notas-xml"><i class="fas fa-broom"></i> Limpiar</a>
+            <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/notas-xml?limpiar=1"><i class="fas fa-broom"></i> Limpiar</a>
             <?php endif; ?>
         </div>
     </form>

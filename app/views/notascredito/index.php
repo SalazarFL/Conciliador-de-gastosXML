@@ -186,7 +186,7 @@ function ncQuery(array $changes = []) {
         <div class="filter-actions">
             <button type="submit" class="btn btn-primary btn-sm"><i class="fas fa-search"></i> Buscar</button>
             <?php if ($filtrosActivos): ?>
-            <a href="<?= $baseUrl ?>/notas-credito?listado_id=<?= (int) $listado['id'] ?>" class="btn btn-outline btn-sm"><i class="fas fa-broom"></i> Limpiar</a>
+            <a href="<?= $baseUrl ?>/notas-credito?listado_id=<?= (int) $listado['id'] ?>&amp;limpiar=1" class="btn btn-outline btn-sm"><i class="fas fa-broom"></i> Limpiar</a>
             <?php endif; ?>
         </div>
     </form>
@@ -211,26 +211,42 @@ function ncQuery(array $changes = []) {
                     <th class="right">Monto</th><th class="right">Saldo</th>
                     <th>NC XML</th><th class="right">Total XML</th><th class="right">Diferencia</th><th>Acciones</th>
                 </tr>
+                <?php
+                /*
+                 * Los filtros de columna se escriben con su valor puesto: la
+                 * tabla de abajo ya viene filtrada por ellos —del enlace o de
+                 * lo que el módulo recordó— y dejarlos en blanco haría creer
+                 * que no hay ningún filtro aplicado. El JS los vuelve a pisar
+                 * solo cuando la clave viene en la URL.
+                 */
+                $ncCol = static function ($clave) use ($filtros) {
+                    return htmlspecialchars((string) ($filtros[$clave] ?? ''));
+                };
+                ?>
                 <tr class="nc-search-row">
                     <th>
                         <select data-nc-filter="col_estado" aria-label="Buscar por estado">
-                            <option value="">Todos</option>
-                            <option value="coincide">Coincide</option>
-                            <option value="con_diferencia">Con diferencia</option>
-                            <option value="sin_respaldo">Sin respaldo</option>
+                            <?php foreach ([
+                                ''               => 'Todos',
+                                'coincide'       => 'Coincide',
+                                'con_diferencia' => 'Con diferencia',
+                                'sin_respaldo'   => 'Sin respaldo',
+                            ] as $ncEstadoValor => $ncEstadoTexto): ?>
+                            <option value="<?= $ncEstadoValor ?>"<?= ($filtros['col_estado'] ?? '') === $ncEstadoValor ? ' selected' : '' ?>><?= $ncEstadoTexto ?></option>
+                            <?php endforeach; ?>
                         </select>
                     </th>
-                    <th><input class="nc-search-wide" data-nc-filter="proveedor_nombre" placeholder="Buscar" aria-label="Buscar proveedor"></th>
-                    <th><input data-nc-filter="sucursal_texto" placeholder="Buscar" aria-label="Buscar sucursal"></th>
-                    <th><input class="nc-search-wide" data-nc-filter="documento" placeholder="Buscar" aria-label="Buscar documento"></th>
-                    <th><input type="date" data-nc-filter="fecha" aria-label="Buscar fecha"></th>
-                    <th><input data-nc-filter="nc_proveedor" placeholder="Buscar" aria-label="Buscar NC proveedor"></th>
-                    <th><input type="date" data-nc-filter="fecha_nc_proveedor" aria-label="Buscar fecha NC proveedor"></th>
-                    <th><input data-nc-filter="monto" placeholder="Buscar" inputmode="decimal" aria-label="Buscar monto"></th>
-                    <th><input data-nc-filter="saldo" placeholder="Buscar" inputmode="decimal" aria-label="Buscar saldo"></th>
-                    <th><input data-nc-filter="nc_xml" placeholder="Buscar" aria-label="Buscar NC XML"></th>
-                    <th><input data-nc-filter="xml_total" placeholder="Buscar" inputmode="decimal" aria-label="Buscar total XML"></th>
-                    <th><input data-nc-filter="diferencia" placeholder="Buscar" inputmode="decimal" aria-label="Buscar diferencia"></th>
+                    <th><input class="nc-search-wide" data-nc-filter="proveedor_nombre" value="<?= $ncCol('proveedor_nombre') ?>" placeholder="Buscar" aria-label="Buscar proveedor"></th>
+                    <th><input data-nc-filter="sucursal_texto" value="<?= $ncCol('sucursal_texto') ?>" placeholder="Buscar" aria-label="Buscar sucursal"></th>
+                    <th><input class="nc-search-wide" data-nc-filter="documento" value="<?= $ncCol('documento') ?>" placeholder="Buscar" aria-label="Buscar documento"></th>
+                    <th><input type="date" data-nc-filter="fecha" value="<?= $ncCol('fecha') ?>" aria-label="Buscar fecha"></th>
+                    <th><input data-nc-filter="nc_proveedor" value="<?= $ncCol('nc_proveedor') ?>" placeholder="Buscar" aria-label="Buscar NC proveedor"></th>
+                    <th><input type="date" data-nc-filter="fecha_nc_proveedor" value="<?= $ncCol('fecha_nc_proveedor') ?>" aria-label="Buscar fecha NC proveedor"></th>
+                    <th><input data-nc-filter="monto" value="<?= $ncCol('monto') ?>" placeholder="Buscar" inputmode="decimal" aria-label="Buscar monto"></th>
+                    <th><input data-nc-filter="saldo" value="<?= $ncCol('saldo') ?>" placeholder="Buscar" inputmode="decimal" aria-label="Buscar saldo"></th>
+                    <th><input data-nc-filter="nc_xml" value="<?= $ncCol('nc_xml') ?>" placeholder="Buscar" aria-label="Buscar NC XML"></th>
+                    <th><input data-nc-filter="xml_total" value="<?= $ncCol('xml_total') ?>" placeholder="Buscar" inputmode="decimal" aria-label="Buscar total XML"></th>
+                    <th><input data-nc-filter="diferencia" value="<?= $ncCol('diferencia') ?>" placeholder="Buscar" inputmode="decimal" aria-label="Buscar diferencia"></th>
                     <th></th>
                 </tr>
             </thead>

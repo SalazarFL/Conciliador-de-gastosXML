@@ -28,7 +28,10 @@ $contextoListado = [
     'semana_id' => $semanaFiltro,
     'listado_id' => (int) ($listado['id'] ?? 0),
 ];
-$urlLimpiarFiltros = $baseUrl . '/por-pagar?' . http_build_query($contextoListado);
+// 'limpiar' le dice al servidor que olvide los filtros guardados de esta
+// pantalla: sin él, entrar sin criterios los devuelve puestos.
+$urlLimpiarFiltros = $baseUrl . '/por-pagar?'
+    . http_build_query(array_merge($contextoListado, ['limpiar' => 1]));
 $urlExportar = $baseUrl . '/por-pagar/exportar?' . http_build_query(array_merge(
     ['listado_id' => (int) ($listado['id'] ?? 0)],
     $filtrosQuery

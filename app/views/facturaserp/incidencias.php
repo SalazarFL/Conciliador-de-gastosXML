@@ -145,7 +145,7 @@ foreach ($resumenTipos as $r) { if ($r['severidad'] === 'alerta') { $alertas += 
             <button type="submit" class="btn btn-primary btn-sm">
                 <i class="fas fa-filter" style="margin-right:4px;"></i>Filtrar
             </button>
-            <a href="<?= $baseUrl ?>/facturas-erp/incidencias" class="btn btn-outline btn-sm">Limpiar</a>
+            <a href="<?= $baseUrl ?>/facturas-erp/incidencias?limpiar=1" class="btn btn-outline btn-sm">Limpiar</a>
         </div>
     </form>
 

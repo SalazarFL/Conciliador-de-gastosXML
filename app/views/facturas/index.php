@@ -15,9 +15,12 @@ foreach ($filtros as $valorFiltro) {
     if ((string) $valorFiltro !== '') { $filtrosActivos++; }
 }
 $hayFiltros = $filtrosActivos > 0;
+// 'limpiar' es lo que le dice al servidor que olvide los filtros guardados
+// de esta pantalla: sin él, entrar sin criterios significa "devolvéme los
+// que tenía puestos".
 $parametrosLimpiar = $importacionActiva
-    ? ['importacion_id' => (int) $importacionActiva['id']]
-    : ['semana_id' => $semanaFiltro];
+    ? ['importacion_id' => (int) $importacionActiva['id'], 'limpiar' => 1]
+    : ['semana_id' => $semanaFiltro, 'limpiar' => 1];
 $urlLimpiarFiltros = $baseUrl . '/facturas?' . http_build_query($parametrosLimpiar);
 ?>
 

@@ -206,6 +206,81 @@ class Controller
     }
 
     /**
+     * Filtros recordados por módulo.
+     *
+     * Cada listado guarda en sesión lo último que se filtró y lo vuelve a
+     * aplicar al volver, para no reescribir los mismos criterios cada vez que
+     * se pasa por otra pantalla. Lo guardado es de ESE módulo: los filtros de
+     * Facturas XML no se meten en Seguimiento, porque "estado" o "qué falta"
+     * no significan lo mismo en cada uno. Lo único compartido sigue siendo la
+     * semana de trabajo, que sí es la misma pregunta en todos lados.
+     *
+     * Se llama al principio del index(), antes de leer nada: rellena $_GET con
+     * lo recordado y el resto del controlador sigue leyendo con get() sin
+     * enterarse.
+     *
+     * Cómo distingue "acabo de filtrar" de "acabo de entrar": las barras de
+     * filtro se envían por GET, así que al filtrar llegan TODAS sus claves,
+     * aunque vengan vacías. Que llegue alguna es la señal de que la persona
+     * está filtrando ahora —y entonces eso es lo nuevo que se guarda—; que no
+     * llegue ninguna significa que entró por el menú, y ahí se le devuelve lo
+     * que dejó puesto. Por eso se mira si la clave viene, no si trae valor:
+     * mirar el valor haría imposible vaciar un filtro.
+     *
+     * El botón "Limpiar" llega con ?limpiar=1 y sin criterios: es la única
+     * forma de olvidar, y por eso borra lo guardado en vez de resucitarlo.
+     *
+     * $claves lleva solo los filtros de la barra. Lo que elige QUÉ se está
+     * viendo —el listado, la importación, la carga, la semana— se queda fuera:
+     * son contextos a los que se llega por un enlace, y recordarlos dejaría a
+     * alguien mirando el listado de hace tres días sin ningún control en
+     * pantalla que le diga por qué.
+     */
+    protected function recordarFiltros(string $modulo, array $claves): void
+    {
+        if (session_status() === PHP_SESSION_NONE) {
+            // Los workers de cli/ instancian controladores solo para
+            // reutilizar su lógica: ahí no hay petición ni sesión de nadie
+            // que recordar, y abrir una sería inventarse un usuario.
+            if (PHP_SAPI === 'cli') { return; }
+            session_start();
+        }
+
+        if (isset($_GET['limpiar'])) {
+            unset($_SESSION['filtros_modulo'][$modulo]);
+            return;
+        }
+
+        $filtrando = false;
+        foreach ($claves as $clave) {
+            if (array_key_exists($clave, $_GET)) { $filtrando = true; break; }
+        }
+
+        if ($filtrando) {
+            $guardar = [];
+            foreach ($claves as $clave) {
+                $valor = $_GET[$clave] ?? '';
+                // Un filtro vacío es "sin filtro": no se guarda, para que la
+                // sesión no crezca con ruido y el vaciado sea el olvido.
+                if (is_array($valor) || (string) $valor === '') { continue; }
+                $guardar[$clave] = (string) $valor;
+            }
+            if ($guardar) {
+                $_SESSION['filtros_modulo'][$modulo] = $guardar;
+            } else {
+                unset($_SESSION['filtros_modulo'][$modulo]);
+            }
+            return;
+        }
+
+        foreach (($_SESSION['filtros_modulo'][$modulo] ?? []) as $clave => $valor) {
+            if (in_array($clave, $claves, true) && !isset($_GET[$clave])) {
+                $_GET[$clave] = $valor;
+            }
+        }
+    }
+
+    /**
      * Requerir sesión activa — redirige a /login si no hay sesión
      */
     protected function requireAuth(): void

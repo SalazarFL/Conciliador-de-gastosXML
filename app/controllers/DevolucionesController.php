@@ -12,6 +12,8 @@ class DevolucionesController extends Controller
 
     public function index()
     {
+        $this->recordarFiltros('devoluciones', ['tipo', 'estado', 'proveedor', 'q']);
+
         $modelo = $this->loadModel('Devolucion');
         $sociedad = $this->loadModel('Sociedad')->getActiva();
 

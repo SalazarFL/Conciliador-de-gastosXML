@@ -68,7 +68,9 @@ $moneda = function ($valor, $mon = 'CRC') {
         <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/seguimiento/exportar?<?= $qs() ?>">
             <i class="fas fa-file-csv"></i> Exportar
         </a>
-        <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/seguimiento">
+        <?php // 'limpiar' hace que el servidor olvide los filtros guardados
+              // de esta pantalla: entrar sin criterios los devuelve. ?>
+        <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/seguimiento?limpiar=1">
             <i class="fas fa-rotate"></i> Limpiar filtros
         </a>
     </div>

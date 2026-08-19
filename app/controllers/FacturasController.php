@@ -14,6 +14,13 @@ class FacturasController extends Controller
 
 	public function index()
 	{
+		// Los buscadores de la tabla se recuerdan mientras dure la sesión: al
+		// volver de otro módulo la lista sale como se dejó.
+		$this->recordarFiltros('facturas', [
+			'q', 'proveedor', 'fecha_desde', 'fecha_hasta',
+			'monto_desde', 'monto_hasta', 'respaldo', 'alcance',
+		]);
+
 		$facturas          = [];
 		$historial         = [];
 		$importacionActiva = null;
