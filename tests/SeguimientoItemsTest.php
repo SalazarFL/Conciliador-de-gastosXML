@@ -29,9 +29,17 @@ assertSameSeg(
 
 // El panel de detalle manda el arreglo.
 assertSameSeg(
-    [['origen' => 'pago_semanal', 'referencia_id' => 7]],
-    Seguimiento::normalizarItems([['origen' => 'pago_semanal', 'referencia_id' => 7]]),
+    [['origen' => 'factura', 'referencia_id' => 7]],
+    Seguimiento::normalizarItems([['origen' => 'factura', 'referencia_id' => 7]]),
     'acepta la forma de arreglo'
+);
+
+// El origen viejo del pago semanal ya no existe: aceptarlo escribiría filas
+// que la consulta de la cola nunca vuelve a encontrar.
+assertSameSeg(
+    [],
+    Seguimiento::normalizarItems(['pago_semanal|7']),
+    'descarta el origen retirado pago_semanal'
 );
 
 // Un renglón repetido escribiría dos anotaciones idénticas en la bitácora.
@@ -65,9 +73,9 @@ assertSameSeg(
 assertSameSeg(
     [
         ['origen' => 'nota_credito', 'referencia_id' => 1],
-        ['origen' => 'pago_semanal', 'referencia_id' => 2],
+        ['origen' => 'factura', 'referencia_id' => 2],
     ],
-    Seguimiento::normalizarItems(['nota_credito|1', 'basura', null, 42, 'pago_semanal|2']),
+    Seguimiento::normalizarItems(['nota_credito|1', 'basura', null, 42, 'factura|2']),
     'lo inválido se descarta sin arrastrar lo válido'
 );
 
@@ -79,12 +87,18 @@ foreach (array_keys(Seguimiento::ESTADOS) as $estado) {
         "el estado '{$estado}' tiene una clave usable en SQL"
     );
 }
-foreach (Seguimiento::ESTADOS_CERRADOS as $estado) {
-    assertSameSeg(
-        true,
-        isset(Seguimiento::ESTADOS[$estado]),
-        "el estado cerrado '{$estado}' está declarado en ESTADOS"
-    );
-}
+
+// El estado que se entra a mano y el que borra la marca tienen que existir tal
+// como los manda la pantalla: si no coincidieran, los botones no harían nada.
+assertSameSeg(
+    true,
+    isset(Seguimiento::ESTADOS[Seguimiento::ESTADO_A_MANO]),
+    'el estado que se pone a mano está declarado en ESTADOS'
+);
+assertSameSeg(
+    false,
+    isset(Seguimiento::ESTADOS[Seguimiento::SIN_MARCA]),
+    'quitar la marca no es un estado: no puede colarse en las pestañas'
+);
 
 echo "OK: SeguimientoItems\n";

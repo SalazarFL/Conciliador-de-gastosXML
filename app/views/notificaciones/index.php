@@ -110,6 +110,16 @@ $jsAttr = function ($valor) {
             </p>
             <?php endif; ?>
 
+            <?php // Un recordatorio sin forma de llegar al documento obliga a
+                  // buscarlo a mano en una lista de miles. ?>
+            <?php if (($aviso['tipo'] ?? '') === 'seguimiento_recordatorio' && !empty($datos['documento'])): ?>
+            <div style="margin-top:9px;">
+                <a class="btn btn-outline btn-sm"
+                   href="<?= $baseUrl ?>/seguimiento?vista=revision&q=<?= urlencode((string) $datos['documento']) ?>">
+                    <i class="fas fa-list-check"></i> Ver en Seguimiento
+                </a>
+            </div>
+            <?php endif; ?>
             <?php if ($esCodigo && $abierto): ?>
             <?php $candidatos = $aviso['candidatos'] ?? []; ?>
 

@@ -62,6 +62,12 @@ class NotificacionesController extends Controller
     public function resumen()
     {
         try {
+            // Único reloj disponible: no hay tarea programada, así que los
+            // recordatorios de seguimiento que ya vencieron se convierten en
+            // avisos aquí, cuando alguien abre cualquier pantalla. Va dentro
+            // del try de siempre: si falla, la campana se pinta igual.
+            $this->loadModel('Seguimiento')->generarRecordatorios();
+
             $modelo = $this->loadModel('Notificacion');
             $avisos = $modelo->recientes();
             foreach ($avisos as &$aviso) {

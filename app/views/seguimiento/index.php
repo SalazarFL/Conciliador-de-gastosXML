@@ -16,12 +16,10 @@ $badgeTarea = [
     'completo'   => ['ok',   'fa-circle-check'],
 ];
 $badgeEstado = [
-    'pendiente'     => ['pend',    'fa-inbox'],
-    'en_gestion'    => ['gold',    'fa-person-digging'],
-    'esperando'     => ['warn',    'fa-hourglass-half'],
-    'resuelto'      => ['ok',      'fa-circle-check'],
-    'no_disponible' => ['default', 'fa-ban'],
-    'descartado'    => ['default', 'fa-xmark'],
+    'pendiente' => ['pend',    'fa-inbox'],
+    'revision'  => ['gold',    'fa-magnifying-glass'],
+    'lista'     => ['ok',      'fa-circle-check'],
+    'cerrada'   => ['default', 'fa-box-archive'],
 ];
 
 /** Conserva los filtros al cambiar de página o de pestaña. */
@@ -30,7 +28,7 @@ $qs = function (array $cambios = []) use ($filtros) {
         'vista'       => $filtros['vista'],
         'origen'      => $filtros['origen'],
         'tarea'       => $filtros['tarea'],
-        'estado'      => $filtros['estado'],
+        'marca'       => $filtros['marca'],
         'clase'       => $filtros['clase'],
         'responsable' => $filtros['responsable'],
         'contexto_id' => $filtros['contexto_id'] ?: '',
@@ -45,7 +43,6 @@ $qs = function (array $cambios = []) use ($filtros) {
         'col_saldo'     => $filtros['col_saldo'],
         'col_respaldo'  => $filtros['col_respaldo'],
         'col_tarea'     => $filtros['col_tarea'],
-        'col_estado'    => $filtros['col_estado'],
         'orden'       => $filtros['orden'],
     ], function ($v) { return $v !== '' && $v !== null; });
     return http_build_query(array_merge($base, $cambios));
@@ -60,8 +57,9 @@ $moneda = function ($valor, $mon = 'CRC') {
     <div>
         <h1>Seguimiento de documentos</h1>
         <p>
-            Todo lo que le falta respaldo o no cuadra, en una sola lista. Un documento está
-            completo cuando tiene <strong>su XML y su PDF</strong> y el monto coincide con el reporte.
+            Facturas y notas de crédito en una sola lista. Cada una vive en un estado según su
+            <strong>saldo</strong> y su <strong>respaldo</strong> —XML y PDF, con el monto cuadrado—,
+            y cualquiera se puede mover a mano.
         </p>
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -75,34 +73,46 @@ $moneda = function ($valor, $mon = 'CRC') {
 </div>
 
 <!-- ══ Tarjetas de situación ══════════════════════════════════════════════ -->
+<?php // Cuentan sobre toda la cola, no sobre la pestaña abierta: si contaran
+      // solo lo visible, estando en Pendientes las demás dirían cero. ?>
 <div class="stats-grid">
     <div class="stat-card navy">
         <div class="stat-label">Pendientes</div>
-        <div class="stat-value"><?= number_format((int) $resumen['total']) ?></div>
-        <div class="stat-sub"><?= number_format((int) $resumen['sin_tocar']) ?> sin tocar ·
-            <?= number_format((int) $resumen['en_curso']) ?> en curso</div>
+        <div class="stat-value"><?= number_format((int) $resumen['pendiente']) ?></div>
+        <div class="stat-sub"><?= number_format((int) $resumen['falta_xml']) ?> sin XML ·
+            <?= number_format((int) $resumen['falta_pdf']) ?> sin PDF</div>
     </div>
     <div class="stat-card gold">
+        <div class="stat-label">En revisión</div>
+        <div class="stat-value"><?= number_format((int) $resumen['revision']) ?></div>
+        <div class="stat-sub" style="<?= $resumen['vencidos'] > 0 ? 'color:#8F1A1A;font-weight:700;' : '' ?>">
+            <?= number_format((int) $resumen['vencidos']) ?> con el recordatorio vencido
+        </div>
+    </div>
+    <div class="stat-card white">
         <div class="stat-label">Dinero en disputa</div>
         <div class="stat-value" style="font-size:21px;">₡<?= number_format((float) $resumen['monto_diferencia'], 0) ?></div>
-        <div class="stat-sub"><?= number_format((int) $resumen['casos_diferencia']) ?> facturas con diferencia</div>
+        <div class="stat-sub"><?= number_format((int) $resumen['casos_diferencia']) ?> con diferencia de monto</div>
     </div>
     <div class="stat-card white">
-        <div class="stat-label">Falta el XML</div>
-        <div class="stat-value"><?= number_format((int) $resumen['falta_xml']) ?></div>
-        <div class="stat-sub">Hay que bajarlo del correo</div>
+        <div class="stat-label">Listas</div>
+        <div class="stat-value"><?= number_format((int) $resumen['lista']) ?></div>
+        <div class="stat-sub">Con saldo y respaldo completo</div>
     </div>
     <div class="stat-card white">
-        <div class="stat-label">Falta el PDF</div>
-        <div class="stat-value"><?= number_format((int) $resumen['falta_pdf']) ?></div>
-        <div class="stat-sub">El XML ya está, falta la representación</div>
-    </div>
-    <div class="stat-card white">
-        <div class="stat-label">Vencidos</div>
-        <div class="stat-value" style="<?= $resumen['vencidos'] > 0 ? 'color:#8F1A1A;' : '' ?>">
-            <?= number_format((int) $resumen['vencidos']) ?>
+        <div class="stat-label">Puestas a mano</div>
+        <div class="stat-value" style="<?= $resumen['desajustadas'] > 0 ? 'color:#8F1A1A;' : '' ?>">
+            <?= number_format((int) $resumen['a_mano']) ?>
         </div>
-        <div class="stat-sub">Pospuestos cuya fecha ya pasó</div>
+        <div class="stat-sub">
+            <?php if ((int) $resumen['desajustadas'] > 0): ?>
+            <a href="?<?= $qs(['vista' => 'todo', 'marca' => 'desajuste', 'pagina' => 1]) ?>">
+                <?= number_format((int) $resumen['desajustadas']) ?> ya no concuerdan
+            </a>
+            <?php else: ?>
+            Todas concuerdan con sus datos
+            <?php endif; ?>
+        </div>
     </div>
 </div>
 
@@ -114,19 +124,27 @@ $moneda = function ($valor, $mon = 'CRC') {
                 Ordenada por dinero en juego. Seleccioná renglones para actuar sobre todos a la vez.
             </div>
         </div>
+        <?php // Cada pestaña es un estado y lleva su cuenta; 'Todo' es la única
+              // que no lo es, y por eso no muestra número. ?>
         <div style="display:flex;gap:6px;flex-wrap:wrap;">
             <?php foreach ([
-                'abierto'   => ['Abiertos', 'fa-list-check'],
-                'pospuesto' => ['Pospuestos', 'fa-clock'],
-                'cerrado'   => ['Cerrados', 'fa-box-archive'],
-                'completo'  => ['Respaldados', 'fa-circle-check'],
-                'todo'      => ['Todo', 'fa-layer-group'],
-            ] as $clave => [$etiqueta, $icono]):
-                $activa = $filtros['vista'] === $clave; ?>
+                'pendiente' => ['fa-inbox', 'Con saldo y algo que falta: XML, PDF o el monto no cuadra'],
+                'revision'  => ['fa-magnifying-glass', 'Puestas a mano por alguien, con el problema descrito'],
+                'lista'     => ['fa-circle-check', 'Con saldo y respaldo completo: listas para pagar o rebajar'],
+                'cerrada'   => ['fa-box-archive', 'Sin saldo: ya se pagaron o se aplicaron'],
+                'todo'      => ['fa-layer-group', 'Todas, en cualquier estado'],
+            ] as $clave => [$icono, $ayuda]):
+                $activa = $filtros['vista'] === $clave;
+                $etiqueta = $clave === 'todo' ? 'Todo' : $estados[$clave];
+                $cuenta = $clave === 'todo' ? null : (int) ($resumen[$clave] ?? 0); ?>
             <a href="?<?= $qs(['vista' => $clave, 'pagina' => 1]) ?>"
                class="btn <?= $activa ? 'btn-primary' : 'btn-outline' ?> btn-sm"
+               title="<?= htmlspecialchars($ayuda) ?>"
                <?= $activa ? 'aria-current="page"' : '' ?>>
-                <i class="fas <?= $icono ?>"></i> <?= $etiqueta ?>
+                <i class="fas <?= $icono ?>"></i> <?= htmlspecialchars($etiqueta) ?>
+                <?php if ($cuenta !== null): ?>
+                <span class="seg-cuenta"><?= number_format($cuenta) ?></span>
+                <?php endif; ?>
             </a>
             <?php endforeach; ?>
         </div>
@@ -148,7 +166,7 @@ $moneda = function ($valor, $mon = 'CRC') {
             <select id="f-origen" name="origen" class="form-control">
                 <option value="">Todos</option>
                 <option value="nota_credito" <?= $filtros['origen'] === 'nota_credito' ? 'selected' : '' ?>>Notas de crédito</option>
-                <option value="pago_semanal" <?= $filtros['origen'] === 'pago_semanal' ? 'selected' : '' ?>>Pago semanal</option>
+                <option value="factura" <?= $filtros['origen'] === 'factura' ? 'selected' : '' ?>>Facturas</option>
             </select>
         </div>
 
@@ -164,15 +182,15 @@ $moneda = function ($valor, $mon = 'CRC') {
             </select>
         </div>
 
+        <?php // El estado ya lo elige la pestaña; acá se filtra por CÓMO llegó
+              // a ese estado, que es lo único que la pestaña no dice. ?>
         <div>
-            <label class="filter-label" for="f-estado">Gestión</label>
-            <select id="f-estado" name="estado" class="form-control">
-                <option value="">Cualquiera</option>
-                <?php foreach ($estados as $clave => $etiqueta): ?>
-                <option value="<?= $clave ?>" <?= $filtros['estado'] === $clave ? 'selected' : '' ?>>
-                    <?= htmlspecialchars($etiqueta) ?>
-                </option>
-                <?php endforeach; ?>
+            <label class="filter-label" for="f-marca">Marca</label>
+            <select id="f-marca" name="marca" class="form-control">
+                <option value="">Todas</option>
+                <option value="mano" <?= $filtros['marca'] === 'mano' ? 'selected' : '' ?>>Puestas a mano</option>
+                <option value="auto" <?= $filtros['marca'] === 'auto' ? 'selected' : '' ?>>Sin marca (calculadas)</option>
+                <option value="desajuste" <?= $filtros['marca'] === 'desajuste' ? 'selected' : '' ?>>Con desajuste</option>
             </select>
         </div>
 
@@ -272,27 +290,39 @@ $moneda = function ($valor, $mon = 'CRC') {
             <i class="fas fa-check-double"></i>
             <strong id="acciones-n">0</strong> seleccionados
         </div>
+        <?php
+        // Mover algo al estado en el que ya está no hace nada, así que la
+        // pestaña abierta no se ofrece como destino. En 'Todo' conviven los
+        // cuatro estados, así que ahí se ofrecen todos.
+        //
+        // Revisión es la excepción y no desaparece: es el único diálogo que
+        // lleva el motivo y el recordatorio, y sin él no habría forma de
+        // cambiárselos a algo que ya está en revisión. Cambia de nombre para
+        // que se lea como lo que hace.
+        $acciones = [
+            'revision'  => ['btn-gold',    'fa-magnifying-glass', 'Mandar a revisión'],
+            'lista'     => ['btn-success', 'fa-circle-check',     'Marcar lista'],
+            'cerrada'   => ['btn-outline', 'fa-box-archive',      'Cerrar'],
+            'pendiente' => ['btn-outline', 'fa-inbox',            'A pendientes'],
+        ];
+        if ($filtros['vista'] === 'revision') {
+            $acciones['revision'][2] = 'Cambiar motivo o recordatorio';
+        }
+        ?>
         <div class="seg-acciones-btns">
-            <button type="button" class="btn btn-gold btn-sm" data-accion="en_gestion">
-                <i class="fas fa-person-digging"></i> Tomar
+            <?php foreach ($acciones as $clave => [$clase, $icono, $etiqueta]):
+                if ($clave === $filtros['vista'] && $clave !== 'revision') { continue; } ?>
+            <button type="button" class="btn <?= $clase ?> btn-sm" data-accion="<?= $clave ?>">
+                <i class="fas <?= $icono ?>"></i> <?= htmlspecialchars($etiqueta) ?>
             </button>
-            <button type="button" class="btn btn-outline btn-sm" data-accion="esperando">
-                <i class="fas fa-hourglass-half"></i> Pedido al proveedor
-            </button>
-            <button type="button" class="btn btn-outline btn-sm" data-accion="posponer">
-                <i class="fas fa-clock"></i> Posponer
-            </button>
-            <button type="button" class="btn btn-success btn-sm" data-accion="resuelto">
-                <i class="fas fa-circle-check"></i> Resolver
-            </button>
-            <button type="button" class="btn btn-outline btn-sm" data-accion="no_disponible">
-                <i class="fas fa-ban"></i> No va a existir
+            <?php endforeach; ?>
+            <?php // Sin esto, lo puesto a mano no tendría salida: se quedaría
+                  // fijo para siempre aunque los datos cambiaran. ?>
+            <button type="button" class="btn btn-outline btn-sm" data-accion="auto">
+                <i class="fas fa-rotate-left"></i> Quitar la marca
             </button>
             <button type="button" class="btn btn-outline btn-sm" data-accion="comentar">
                 <i class="fas fa-comment-dots"></i> Anotar
-            </button>
-            <button type="button" class="btn btn-outline btn-sm" data-accion="pendiente">
-                <i class="fas fa-rotate-left"></i> Reabrir
             </button>
         </div>
     </div>
@@ -300,8 +330,10 @@ $moneda = function ($valor, $mon = 'CRC') {
     <div class="filter-results">
         Mostrando <strong><?= number_format(count($filas)) ?></strong>
         de <strong><?= number_format((int) $paginacion['total']) ?></strong> renglones
-        <?php if ($filtros['vista'] === 'abierto'): ?>
-        · <span title="Los pospuestos a futuro y los cerrados no aparecen aquí">solo lo que hay que trabajar hoy</span>
+        <?php if ($filtros['vista'] !== 'todo'): ?>
+        · <span title="Las demás pestañas tienen lo suyo; 'Todo' las junta">
+            en <?= htmlspecialchars(mb_strtolower($estados[$filtros['vista']])) ?>
+        </span>
         <?php endif; ?>
     </div>
 
@@ -319,7 +351,7 @@ $moneda = function ($valor, $mon = 'CRC') {
                     <th class="right">Saldo</th>
                     <th class="center">Respaldo</th>
                     <th>Qué falta</th>
-                    <th>Gestión</th>
+                    <th>Estado</th>
                     <th style="width:1%;"></th>
                 </tr>
                 <tr class="seg-search-row">
@@ -354,16 +386,11 @@ $moneda = function ($valor, $mon = 'CRC') {
                             <?php endforeach; ?>
                         </select>
                     </th>
-                    <th>
-                        <select form="seg-filter-form" name="col_estado" aria-label="Filtrar gestión">
-                            <option value="">Todas</option>
-                            <?php foreach ($estados as $clave => $etiqueta): ?>
-                            <option value="<?= $clave ?>" <?= $filtros['col_estado'] === $clave ? 'selected' : '' ?>>
-                                <?= htmlspecialchars($etiqueta) ?>
-                            </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </th>
+                    <?php // El estado lo elige la pestaña y cómo llegó a él, el
+                          // filtro "Marca" de arriba: acá no queda nada que
+                          // buscar, y repetir el control con el mismo nombre
+                          // dentro del mismo formulario los desincronizaría. ?>
+                    <th></th>
                     <th></th>
                 </tr>
             </thead>
@@ -410,7 +437,10 @@ $moneda = function ($valor, $mon = 'CRC') {
                             <?php if ($esNc && !empty($f['clase'])): ?>
                             · <span title="Clase de nota deducida del formato del número"><?= htmlspecialchars($f['clase']) ?></span>
                             <?php endif; ?>
+                            <?php // Una factura que todavía no entró a ningún pago no tiene listado. ?>
+                            <?php if (!empty($f['contexto'])): ?>
                             · <?= htmlspecialchars(mb_strimwidth((string) $f['contexto'], 0, 26, '…')) ?>
+                            <?php endif; ?>
                         </div>
                     </td>
 
@@ -486,19 +516,54 @@ $moneda = function ($valor, $mon = 'CRC') {
                             <i class="fas <?= $eIcono ?>"></i>
                             <?= htmlspecialchars($estados[$f['seguimiento_estado']] ?? $f['seguimiento_estado']) ?>
                         </span>
+                        <?php if (!empty($f['estado_a_mano'])): ?>
+                        <span class="seg-mano" title="Alguien lo puso aquí a mano; no se mueve solo">
+                            <i class="fas fa-hand"></i>
+                        </span>
+                        <?php endif; ?>
+
+                        <?php // El aviso no cambia nada: dice qué pasó y deja que
+                              // una persona decida si mover el renglón o no. ?>
+                        <?php if (!empty($f['desajustada'])): ?>
+                        <div class="seg-desajuste"
+                             title="Los datos cambiaron después de que alguien lo puso aquí">
+                            <i class="fas fa-triangle-exclamation"></i>
+                            Le tocaría <strong><?= htmlspecialchars(mb_strtolower(
+                                $estados[$f['estado_calculado']] ?? $f['estado_calculado'])) ?></strong>
+                        </div>
+                        <?php endif; ?>
+
                         <div class="seg-sub">
                             <?php if (!empty($f['responsable'])): ?>
                                 <i class="fas fa-user" style="opacity:.5;"></i> <?= htmlspecialchars($f['responsable']) ?>
                             <?php endif; ?>
-                            <?php if (!empty($f['vence_el'])): ?>
-                                <span style="<?= $f['vencido'] ? 'color:var(--miss);font-weight:700;' : '' ?>">
-                                    <i class="fas fa-clock" style="opacity:.5;"></i> <?= htmlspecialchars($f['vence_el']) ?>
+                            <?php if (!empty($f['recordar_en'])):
+                                // Ya pasado el momento, la fecha sobra: lo que
+                                // importa es que está esperando desde hace rato.
+                                $cada = (int) $f['recordar_cada'];
+                                $insiste = $cada > 0 ? ' · insiste cada ' . $cada . ($cada === 1 ? ' día' : ' días') : '';
+                            ?>
+                                <span style="<?= $f['vencido'] ? 'color:var(--miss);font-weight:700;' : '' ?>"
+                                      title="Recordatorio<?= htmlspecialchars($insiste) ?>">
+                                    <i class="fas fa-clock" style="opacity:.5;"></i>
+                                    <?= htmlspecialchars(substr((string) $f['recordar_en'], 0, 16)) ?>
+                                    <?php if ($f['vencido']): ?>· avisando<?php endif; ?>
                                 </span>
                             <?php endif; ?>
                             <?php if ((int) $f['anotaciones'] > 0): ?>
                                 <i class="fas fa-comment-dots" style="opacity:.5;"></i> <?= (int) $f['anotaciones'] ?>
                             <?php endif; ?>
                         </div>
+
+                        <?php // El motivo es obligatorio al mandar a revisión, así
+                              // que es lo primero que hay que poder leer sin abrir nada.
+                              // Fuera de revisión no se muestra: describe un enredo que
+                              // ya no aplica, y sigue guardado en la bitácora. ?>
+                        <?php if (!empty($f['motivo']) && $f['seguimiento_estado'] === 'revision'): ?>
+                        <div class="seg-motivo" title="<?= htmlspecialchars((string) $f['motivo']) ?>">
+                            <?= htmlspecialchars(mb_strimwidth((string) $f['motivo'], 0, 52, '…')) ?>
+                        </div>
+                        <?php endif; ?>
                     </td>
 
                     <td style="white-space:nowrap;">
@@ -560,15 +625,27 @@ $moneda = function ($valor, $mon = 'CRC') {
         <div style="padding:11px 13px;">
             <p id="dlg-texto" style="font-size:12.5px;color:var(--text-muted);margin-bottom:9px;"></p>
 
-            <div class="form-group" id="dlg-campo-dias" hidden>
-                <label class="form-label" for="dlg-dias">Volver a mostrarlo en</label>
-                <select id="dlg-dias" class="form-control">
-                    <option value="3">3 días</option>
-                    <option value="7" selected>1 semana</option>
-                    <option value="15">15 días</option>
-                    <option value="30">1 mes</option>
-                    <option value="90">3 meses</option>
-                </select>
+            <?php // Frecuencia y hora: un recordatorio que insiste hasta que el
+                  // documento salga de revisión. Aparece la primera vez que
+                  // alguien abre la aplicación pasada esa hora. ?>
+            <div class="form-group" id="dlg-campo-recordatorio" hidden>
+                <label class="form-label" for="dlg-cada">Recordármelo</label>
+                <div style="display:flex;gap:8px;">
+                    <select id="dlg-cada" class="form-control" style="flex:2;">
+                        <option value="0">Sin recordatorio</option>
+                        <option value="1">Cada día</option>
+                        <option value="3">Cada 3 días</option>
+                        <option value="7" selected>Cada semana</option>
+                        <option value="15">Cada 15 días</option>
+                        <option value="30">Cada mes</option>
+                    </select>
+                    <input type="time" id="dlg-hora" class="form-control" style="flex:1;"
+                           value="08:00" aria-label="Hora del recordatorio">
+                </div>
+                <div id="dlg-recordatorio-nota" style="font-size:11px;color:var(--text-muted);margin-top:4px;">
+                    El primer aviso sale en una semana a las 08:00, y vuelve a salir
+                    cada semana mientras siga en revisión.
+                </div>
             </div>
 
             <div class="form-group" id="dlg-campo-responsable" hidden>
@@ -577,9 +654,9 @@ $moneda = function ($valor, $mon = 'CRC') {
             </div>
 
             <div class="form-group" id="dlg-campo-motivo" hidden>
-                <label class="form-label" for="dlg-motivo">Motivo</label>
-                <input type="text" id="dlg-motivo" class="form-control" maxlength="255"
-                       placeholder="Por qué se cierra">
+                <label class="form-label" for="dlg-motivo">Cuál es el problema</label>
+                <input type="text" id="dlg-motivo" class="form-control" maxlength="255" required
+                       placeholder="Ej.: el proveedor mandó el XML con otro monto y no contesta">
             </div>
 
             <div class="form-group">
@@ -621,6 +698,27 @@ $moneda = function ($valor, $mon = 'CRC') {
   border-color: var(--gold); box-shadow: 0 0 0 2px rgba(212,160,23,.14);
 }
 .seg-tabla .seg-search-row .fa-search { color: var(--text-muted); font-size: 11px; }
+
+/* Cuenta de cada pestaña, dentro del propio botón */
+.seg-cuenta {
+  display: inline-block; margin-left: 5px; padding: 0 5px;
+  border-radius: 8px; font-size: 10.5px; font-weight: 700;
+  background: rgba(12,36,97,.10); color: inherit;
+}
+.btn-primary .seg-cuenta { background: rgba(255,255,255,.22); }
+
+/* La manita: lo puso una persona, no el cálculo */
+.seg-mano { margin-left: 4px; font-size: 10.5px; color: var(--text-muted); }
+
+/* El aviso de que la marca a mano se quedó atrás */
+.seg-desajuste {
+  margin-top: 3px; font-size: 11px; font-weight: 600;
+  color: #8F1A1A; display: flex; gap: 5px; align-items: center;
+}
+.seg-motivo {
+  margin-top: 3px; font-size: 11px; color: var(--text); font-style: italic;
+  border-left: 2px solid var(--gold); padding-left: 6px;
+}
 
 .seg-respaldo { display: inline-flex; gap: 4px; }
 .seg-chip {
@@ -762,14 +860,36 @@ $moneda = function ($valor, $mon = 'CRC') {
     });
 
     // ── Acciones en tanda ────────────────────────────────────────────────
+    //
+    // Todas menos 'comentar' ponen una marca a mano, que manda sobre el
+    // cálculo y no se mueve sola. 'auto' es la que la quita.
     var ACCIONES = {
-        en_gestion:    { titulo: 'Tomar el trabajo',      texto: 'Quedan marcados como en gestión.', responsable: true },
-        esperando:     { titulo: 'Pedido al proveedor',   texto: 'Quedan a la espera de respuesta.', posponer: true },
-        posponer:      { titulo: 'Posponer',              texto: 'Salen de la cola hasta la fecha que elijas.', posponer: true, estado: null },
-        resuelto:      { titulo: 'Marcar como resuelto',  texto: 'Salen de la cola. Se puede reabrir después.', motivo: true },
-        no_disponible: { titulo: 'No va a existir',       texto: 'Para documentos anteriores al sistema o que el proveedor no va a emitir.', motivo: true },
-        pendiente:     { titulo: 'Reabrir',               texto: 'Vuelven a la cola como pendientes.' },
-        comentar:      { titulo: 'Anotar',                texto: 'Deja constancia sin cambiar el estado.', estado: null }
+        revision:  {
+            titulo: 'Mandar a revisión',
+            texto: 'Quedan apartados hasta que alguien los saque. Hay que decir cuál es el problema.',
+            motivo: true, responsable: true, recordatorio: true
+        },
+        lista:     {
+            titulo: 'Marcar como listas',
+            texto: 'Quedan como respaldadas y sin diferencias, aunque los datos digan otra cosa.'
+        },
+        cerrada:   {
+            titulo: 'Cerrar',
+            texto: 'Salen del trabajo del día. Para lo que ya no se debe o no va a existir nunca.'
+        },
+        pendiente: {
+            titulo: 'Devolver a pendientes',
+            texto: 'Vuelven a la cola de trabajo, tengan saldo o no.'
+        },
+        auto:      {
+            titulo: 'Quitar la marca',
+            texto: 'Dejan de estar puestos a mano: cada uno vuelve al estado que le toque por su saldo y su respaldo.'
+        },
+        comentar:  {
+            titulo: 'Anotar',
+            texto: 'Deja constancia en la bitácora sin cambiar el estado.',
+            estado: null
+        }
     };
     var accionActual = null;
     var itemsActuales = [];
@@ -788,14 +908,16 @@ $moneda = function ($valor, $mon = 'CRC') {
 
         document.getElementById('dlg-titulo').textContent = cfg.titulo + ' (' + items.length + ')';
         document.getElementById('dlg-texto').textContent = cfg.texto;
-        document.getElementById('dlg-campo-dias').hidden = !cfg.posponer;
+        document.getElementById('dlg-campo-recordatorio').hidden = !cfg.recordatorio;
         document.getElementById('dlg-campo-responsable').hidden = !cfg.responsable;
         document.getElementById('dlg-campo-motivo').hidden = !cfg.motivo;
         document.getElementById('dlg-comentario').value = '';
         document.getElementById('dlg-motivo').value = '';
+
         dialogo.hidden = false;
-        var foco = cfg.responsable ? 'dlg-responsable' : (cfg.motivo ? 'dlg-motivo' : 'dlg-comentario');
-        document.getElementById(foco).focus();
+        // Mandar a revisión es el único cambio de estado que pide explicar:
+        // los demás son decisiones que se ven solas en la propia fila.
+        document.getElementById(cfg.motivo ? 'dlg-motivo' : 'dlg-comentario').focus();
     }
 
     function cerrarDialogo() { dialogo.hidden = true; accionActual = null; }
@@ -807,13 +929,26 @@ $moneda = function ($valor, $mon = 'CRC') {
         var cfg = ACCIONES[accionActual];
         if (!cfg) { return; }
 
+        // Se comprueba acá además de en el servidor: avisar después de mandar
+        // cincuenta renglones es hacer perder el trabajo de escribirlos.
+        var motivo = document.getElementById('dlg-motivo');
+        if (cfg.motivo && motivo.value.trim() === '') {
+            AppDialog.alert('Escribí cuál es el problema antes de mandarlo a revisión.',
+                            { title: 'Falta la descripción', type: 'warning' });
+            motivo.focus();
+            return;
+        }
+
         var cuerpo = new URLSearchParams();
         itemsActuales.forEach(function (i) { cuerpo.append('items[]', i); });
 
         // `estado: null` en la configuración significa "no tocar el estado".
         var estado = Object.prototype.hasOwnProperty.call(cfg, 'estado') ? cfg.estado : accionActual;
         if (estado) { cuerpo.append('estado', estado); }
-        if (cfg.posponer) { cuerpo.append('posponer_dias', document.getElementById('dlg-dias').value); }
+        if (cfg.recordatorio) {
+            cuerpo.append('recordar_cada', document.getElementById('dlg-cada').value);
+            cuerpo.append('recordar_hora', document.getElementById('dlg-hora').value);
+        }
         if (cfg.responsable) { cuerpo.append('responsable', document.getElementById('dlg-responsable').value); }
         if (cfg.motivo) { cuerpo.append('motivo', document.getElementById('dlg-motivo').value); }
         cuerpo.append('comentario', document.getElementById('dlg-comentario').value);
@@ -838,6 +973,36 @@ $moneda = function ($valor, $mon = 'CRC') {
             boton.innerHTML = '<i class="fas fa-check"></i> Aplicar';
         });
     });
+
+    // El texto de abajo dice lo que va a pasar de verdad; si no se actualiza al
+    // cambiar los campos, miente en cuanto alguien toca el desplegable.
+    (function () {
+        var cada = document.getElementById('dlg-cada');
+        var hora = document.getElementById('dlg-hora');
+        var nota = document.getElementById('dlg-recordatorio-nota');
+        if (!cada || !hora || !nota) { return; }
+
+        var PLAZOS = {
+            '1':  ['mañana', 'todos los días'],
+            '3':  ['en 3 días', 'cada 3 días'],
+            '7':  ['en una semana', 'cada semana'],
+            '15': ['en 15 días', 'cada 15 días'],
+            '30': ['en un mes', 'cada mes']
+        };
+
+        function refrescar() {
+            var plazo = PLAZOS[cada.value];
+            if (!plazo) {
+                nota.textContent = 'No va a avisar nada: el renglón queda en revisión sin recordatorio.';
+                return;
+            }
+            nota.textContent = 'El primer aviso sale ' + plazo[0] + ' a las ' + (hora.value || '08:00')
+                + ', y vuelve a salir ' + plazo[1] + ' mientras siga en revisión.';
+        }
+        cada.addEventListener('change', refrescar);
+        hora.addEventListener('change', refrescar);
+        refrescar();
+    })();
 
     // ── Expediente ───────────────────────────────────────────────────────
     tabla.addEventListener('click', function (e) {
@@ -886,7 +1051,8 @@ $moneda = function ($valor, $mon = 'CRC') {
     function pintarPanel(f, bitacora) {
         document.getElementById('panel-titulo').textContent = f.documento;
         document.getElementById('panel-sub').textContent =
-            (f.origen === 'nota_credito' ? 'Nota de crédito' : 'Pago semanal') + ' · ' + f.contexto;
+            (f.origen === 'nota_credito' ? 'Nota de crédito' : 'Factura')
+            + (f.contexto ? ' · ' + f.contexto : '');
 
         var datos = [
             ['Proveedor', f.proveedor],
@@ -895,9 +1061,11 @@ $moneda = function ($valor, $mon = 'CRC') {
             ['Saldo', (f.moneda === 'USD' ? '$' : '₡') + Number(f.saldo).toLocaleString('es-CR', { minimumFractionDigits: 2 })],
             ['Diferencia', f.diferencia ? (f.moneda === 'USD' ? '$' : '₡') + Number(Math.abs(f.diferencia)).toLocaleString('es-CR', { minimumFractionDigits: 2 }) : '—'],
             ['Qué falta', TAREAS[f.tarea] || f.tarea],
-            ['Gestión', ESTADOS[f.seguimiento_estado] || f.seguimiento_estado],
+            ['Estado', (ESTADOS[f.seguimiento_estado] || f.seguimiento_estado)
+                       + (f.estado_a_mano ? ' (a mano)' : ' (calculado)')],
             ['Responsable', f.responsable || '—'],
-            ['Pospuesto hasta', f.vence_el || '—'],
+            ['Recordatorio', f.recordar_en ? f.recordar_en.substring(0, 16)
+                + (f.recordar_cada ? ' · cada ' + f.recordar_cada + ' d' : '') : '—'],
             ['Consecutivo XML', f.consecutivo || '—'],
             ['Clase', f.clase || '—']
         ];
@@ -908,6 +1076,15 @@ $moneda = function ($valor, $mon = 'CRC') {
                     '<div class="seg-dato-v">' + esc(d[1]) + '</div></div>';
         });
         html += '</div>';
+
+        // El desajuste va arriba del todo: es lo que hay que decidir.
+        if (f.desajustada) {
+            html += '<div class="seg-desajuste" style="margin-bottom:10px;">' +
+                    '<i class="fas fa-triangle-exclamation"></i> Los datos cambiaron: por su saldo y su ' +
+                    'respaldo le tocaría <strong>' +
+                    esc((ESTADOS[f.estado_calculado] || f.estado_calculado).toLowerCase()) +
+                    '</strong>. Sigue donde lo pusieron hasta que alguien lo mueva.</div>';
+        }
 
         // Los dos archivos que tiene que tener todo documento.
         html += '<div class="seg-dato-et" style="margin-bottom:5px;">Respaldo</div><div style="display:flex;gap:7px;margin-bottom:10px;flex-wrap:wrap;">';
@@ -930,8 +1107,10 @@ $moneda = function ($valor, $mon = 'CRC') {
                     '<div style="font-size:12.5px;color:var(--text);margin-bottom:10px;">' + esc(f.motivo_match) + '</div>';
         }
         if (f.motivo) {
-            html += '<div class="seg-dato-et">Motivo registrado</div>' +
-                    '<div style="font-size:12.5px;color:var(--text);margin-bottom:10px;">' + esc(f.motivo) + '</div>';
+            html += '<div class="seg-dato-et">' +
+                    (f.seguimiento_estado === 'revision' ? 'Cuál es el problema' : 'Motivo registrado') +
+                    '</div><div style="font-size:12.5px;color:var(--text);margin-bottom:10px;">' +
+                    esc(f.motivo) + '</div>';
         }
 
         html += '<div class="seg-dato-et" style="margin-bottom:4px;">Bitácora</div>';
@@ -939,11 +1118,14 @@ $moneda = function ($valor, $mon = 'CRC') {
             html += '<div style="font-size:12.5px;color:var(--text-muted);padding:10px 0;">' +
                     'Todavía nadie ha anotado nada sobre este documento.</div>';
         } else {
+            // 'auto' no es un estado: es haber quitado la marca a mano.
+            var nombreEstado = function (v) {
+                return v === 'auto' ? 'sin marca' : (ESTADOS[v] || v);
+            };
             bitacora.forEach(function (b) {
                 var cab = b.usuario_nombre || 'Sistema';
                 if (b.estado_nuevo) {
-                    cab += ' · ' + (ESTADOS[b.estado_anterior] || b.estado_anterior)
-                        + ' → ' + (ESTADOS[b.estado_nuevo] || b.estado_nuevo);
+                    cab += ' · ' + nombreEstado(b.estado_anterior) + ' → ' + nombreEstado(b.estado_nuevo);
                 }
                 html += '<div class="seg-linea"><div class="seg-linea-punto"></div><div class="seg-linea-cuerpo">' +
                         '<div class="seg-linea-cab">' + esc(cab) + '</div>' +

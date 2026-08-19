@@ -3,9 +3,14 @@
  * Seguimiento: la cola única de trabajo.
  *
  * Los demás módulos son para cargar y comparar; este es para trabajar. Junta
- * lo que le falta respaldo o no cuadra —venga de notas de crédito o del pago
- * semanal— y deja constancia de qué hizo cada quien con cada renglón.
+ * lo que le falta respaldo o no cuadra —venga de una nota de crédito o de una
+ * factura del ERP— y deja constancia de qué hizo cada quien con cada renglón.
  */
+// El modelo se carga aquí y no solo con loadModel(): no hay autoload, y
+// `actualizar()` usa Seguimiento::normalizarItems() para sanear la selección
+// antes de tocar la base. Sin esto, cambiar de estado moría con
+// 'Class "Seguimiento" not found' en vez de guardar.
+require_once __DIR__ . '/../models/Seguimiento.php';
 require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 require_once __DIR__ . '/../helpers/ClaseNotaCredito.php';
 
@@ -51,16 +56,19 @@ class SeguimientoController extends Controller
     /** Los filtros que entiende la pantalla, saneados. */
     private function filtros($sociedad)
     {
-        $vistas = ['abierto', 'pospuesto', 'cerrado', 'completo', 'todo'];
-        $vista = (string) $this->get('vista', 'abierto');
+        // Las pestañas son los estados; 'todo' es la única que no lo es.
+        $vistas = array_merge(array_keys(Seguimiento::ESTADOS), ['todo']);
+        $vista = (string) $this->get('vista', 'pendiente');
         $condicionesSaldo = ['activas', 'canceladas'];
         $condicionSaldo = (string) $this->get('condicion_saldo', '');
+        $marcas = ['mano', 'auto', 'desajuste'];
+        $marca = (string) $this->get('marca', '');
 
         return [
-            'vista'       => in_array($vista, $vistas, true) ? $vista : 'abierto',
+            'vista'       => in_array($vista, $vistas, true) ? $vista : 'pendiente',
             'origen'      => (string) $this->get('origen', ''),
             'tarea'       => (string) $this->get('tarea', ''),
-            'estado'      => (string) $this->get('estado', ''),
+            'marca'       => in_array($marca, $marcas, true) ? $marca : '',
             'clase'       => (string) $this->get('clase', ''),
             'responsable' => (string) $this->get('responsable', ''),
             'contexto_id' => (int) $this->get('contexto_id', 0),
@@ -75,7 +83,6 @@ class SeguimientoController extends Controller
             'col_saldo'     => trim((string) $this->get('col_saldo', '')),
             'col_respaldo'  => trim((string) $this->get('col_respaldo', '')),
             'col_tarea'     => trim((string) $this->get('col_tarea', '')),
-            'col_estado'    => trim((string) $this->get('col_estado', '')),
             'orden'       => (string) $this->get('orden', 'monto'),
             'sociedad_id' => $sociedad ? (int) $sociedad['id'] : 0,
         ];
@@ -85,6 +92,35 @@ class SeguimientoController extends Controller
     {
         $valor = trim((string) $valor);
         return preg_match('/^\d{4}-\d{2}-\d{2}$/', $valor) ? $valor : '';
+    }
+
+    /**
+     * Cada cuántos días insiste el recordatorio. 0 = sin recordatorio.
+     *
+     * Solo se admiten los plazos que ofrece la pantalla: un número libre desde
+     * fuera acabaría en la columna y nadie podría volver a elegirlo desde el
+     * desplegable.
+     */
+    private function frecuencia($valor)
+    {
+        $dias = (int) $valor;
+        return in_array($dias, [1, 3, 7, 15, 30], true) ? $dias : 0;
+    }
+
+    /**
+     * El primer aviso: dentro de tantos días, a la hora pedida.
+     *
+     * La hora es del reloj de quien lo pide, y la base guarda esa misma hora
+     * de pared. No hay husos de por medio: todas las máquinas y el servidor
+     * están en Costa Rica.
+     */
+    private function momentoRecordatorio($dias, $hora)
+    {
+        $hora = trim((string) $hora);
+        if (!preg_match('/^([01]\d|2[0-3]):([0-5]\d)$/', $hora)) {
+            $hora = '08:00';
+        }
+        return date('Y-m-d', strtotime('+' . (int) $dias . ' days')) . ' ' . $hora . ':00';
     }
 
     /** Los listados abiertos de ambos módulos, para acotar por origen concreto. */
@@ -116,9 +152,15 @@ class SeguimientoController extends Controller
             $fila['pdf_ok'] = $this->archivoPresente($fila['ruta_pdf'] ?? '');
             $fila['pdf_historico'] = ($fila['estado_pdf'] ?? '') === 'no_disponible_historico';
             $fila['busqueda'] = FacturaMatcher::terminoBusquedaCorreo((string) $fila['documento']);
-            $fila['vencido'] = !empty($fila['vence_el'])
-                && $fila['vence_el'] < date('Y-m-d')
-                && !in_array($fila['seguimiento_estado'], Seguimiento::ESTADOS_CERRADOS, true);
+            // El recordatorio solo tiene sentido mientras el renglón siga en
+            // revisión: en las demás pestañas no hay nada que esperar.
+            $fila['vencido'] = !empty($fila['recordar_en'])
+                && $fila['recordar_en'] <= date('Y-m-d H:i:s')
+                && $fila['seguimiento_estado'] === Seguimiento::ESTADO_A_MANO;
+            // La marca a mano dejó de concordar con los datos: ni se mueve
+            // sola ni se calla, para que alguien decida.
+            $fila['desajustada'] = !empty($fila['estado_a_mano'])
+                && $fila['estado_a_mano'] !== $fila['estado_calculado'];
         }
         unset($fila);
         return $filas;
@@ -146,18 +188,19 @@ class SeguimientoController extends Controller
             }
 
             $cambio = [];
+            // Vacío = no tocar la marca (una anotación suelta). El valor
+            // SIN_MARCA sí la toca: la borra y devuelve el renglón al cálculo.
             if (($estado = trim((string) $this->post('estado', ''))) !== '') {
                 $cambio['estado'] = $estado;
             }
             if ($this->post('responsable', null) !== null) {
                 $cambio['responsable'] = trim((string) $this->post('responsable'));
             }
-            if ($this->post('vence_el', null) !== null) {
-                $cambio['vence_el'] = $this->fecha($this->post('vence_el'));
-            }
-            if ($this->post('posponer_dias', null) !== null) {
-                $dias = max(1, min(365, (int) $this->post('posponer_dias')));
-                $cambio['vence_el'] = date('Y-m-d', strtotime("+{$dias} days"));
+            if ($this->post('recordar_cada', null) !== null) {
+                $cambio['recordar_cada'] = $this->frecuencia($this->post('recordar_cada'));
+                $cambio['recordar_en'] = $cambio['recordar_cada'] > 0
+                    ? $this->momentoRecordatorio($cambio['recordar_cada'], $this->post('recordar_hora', ''))
+                    : null;
             }
             if ($this->post('motivo', null) !== null) {
                 $cambio['motivo'] = trim((string) $this->post('motivo'));
@@ -166,7 +209,7 @@ class SeguimientoController extends Controller
 
             if (!isset($cambio['estado']) && $cambio['comentario'] === ''
                 && !array_key_exists('responsable', $cambio)
-                && !array_key_exists('vence_el', $cambio)
+                && !array_key_exists('recordar_en', $cambio)
                 && !array_key_exists('motivo', $cambio)) {
                 throw new Exception('No hay ningún cambio que guardar.');
             }
@@ -221,13 +264,14 @@ class SeguimientoController extends Controller
         fwrite($salida, "\xEF\xBB\xBF");
         fputcsv($salida, [
             'Origen', 'Documento', 'Clase', 'Proveedor', 'Fecha', 'Moneda', 'Monto',
-            'Saldo', 'Diferencia', 'Tarea', 'XML', 'PDF', 'Estado seguimiento', 'Responsable',
-            'Vence', 'Motivo', 'Listado', 'Consecutivo XML', 'Último movimiento',
+            'Saldo', 'Diferencia', 'Qué falta', 'XML', 'PDF', 'Estado', 'Puesto a mano',
+            'Le tocaría', 'Responsable', 'Recordatorio', 'Motivo', 'Listado',
+            'Consecutivo XML', 'Último movimiento',
         ], ';', '"', '\\');
 
         foreach ($filas as $f) {
             fputcsv($salida, [
-                $f['origen'] === 'nota_credito' ? 'Nota de crédito' : 'Pago semanal',
+                $f['origen'] === 'nota_credito' ? 'Nota de crédito' : 'Factura',
                 $f['documento'],
                 $f['clase'] ?: '',
                 $f['proveedor'],
@@ -240,8 +284,12 @@ class SeguimientoController extends Controller
                 $f['xml_ok'] ? 'Sí' : 'No',
                 $f['pdf_ok'] ? 'Sí' : ($f['pdf_historico'] ? 'Histórico' : 'No'),
                 Seguimiento::ESTADOS[$f['seguimiento_estado']] ?? $f['seguimiento_estado'],
+                $f['estado_a_mano'] ? 'Sí' : '',
+                // Solo cuando la marca a mano y el cálculo no coinciden: en el
+                // resto de las filas repetir el estado no dice nada.
+                $f['desajustada'] ? (Seguimiento::ESTADOS[$f['estado_calculado']] ?? $f['estado_calculado']) : '',
                 $f['responsable'] ?: '',
-                $f['vence_el'] ?: '',
+                $f['recordar_en'] ?: '',
                 $f['motivo'] ?: '',
                 $f['contexto'],
                 $f['consecutivo'] ?: '',
