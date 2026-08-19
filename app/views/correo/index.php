@@ -289,6 +289,13 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                         <?= $pendientes === 0 ? 'disabled' : '' ?>>
                     <i class="fas fa-file-import"></i>
                 </button>
+                <?php // Guardado masivo: se lleva los archivos y no toca la bandeja.
+                      // Con filas marcadas guarda esas; sin ninguna, todas. ?>
+                <button type="button" class="btn btn-outline btn-sm" id="btn-guardar-zip"
+                        title="Guardar XML y PDF con su nombrado: las marcadas, o todas si no marcas ninguna"
+                        <?= empty($bandeja) ? 'disabled' : '' ?>>
+                    <i class="fas fa-file-zipper"></i>
+                </button>
                 <button type="button" class="btn btn-outline btn-sm" id="btn-descartar" title="Descartar seleccionadas"
                         style="color:#b91c1c;border-color:#fed7d7;" <?= empty($bandeja) ? 'disabled' : '' ?>>
                     <i class="fas fa-trash-can"></i>
@@ -545,6 +552,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
     var btnImportar  = document.getElementById('btn-importar');
     var btnDescartar = document.getElementById('btn-descartar');
+    var btnGuardarZip = document.getElementById('btn-guardar-zip');
     var cbTodas      = document.getElementById('cb-todas');
     var panel        = document.getElementById('correo-progress');
     var elStatus     = document.getElementById('cor-status');
@@ -1903,6 +1911,85 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                     AppDialog.alert(err.message, { title: 'No fue posible descartar', type: 'danger' });
                     btnDescartar.disabled = false;
                 });
+        });
+    }
+
+    // ── Guardado masivo (ZIP) ──
+    // Aparte del flujo de importación: baja los archivos con su nombrado y
+    // deja la bandeja exactamente como estaba.
+    //
+    // El destino se pregunta ANTES de pedir el paquete: el diálogo "guardar
+    // como" del navegador solo abre mientras el clic sigue vivo, y esperar la
+    // respuesta del servidor lo mata. Donde ese diálogo no existe —Firefox, o
+    // el sistema abierto por http desde otra máquina— cae en la descarga
+    // normal, que guarda en la carpeta de descargas del navegador.
+    if (btnGuardarZip) {
+        btnGuardarZip.addEventListener('click', async function () {
+            var ids = idsSeleccionados(null);
+            var ahora = new Date();
+            var dos = function (n) { return (n < 10 ? '0' : '') + n; };
+            var nombre = 'documentos_' + ahora.getFullYear() + dos(ahora.getMonth() + 1)
+                       + dos(ahora.getDate()) + '_' + dos(ahora.getHours()) + dos(ahora.getMinutes()) + '.zip';
+
+            var destino = null;
+            if (window.showSaveFilePicker) {
+                try {
+                    destino = await window.showSaveFilePicker({
+                        suggestedName: nombre,
+                        types: [{ description: 'Archivo ZIP', accept: { 'application/zip': ['.zip'] } }]
+                    });
+                } catch (e) {
+                    return; // canceló el diálogo: no hay nada que guardar
+                }
+            }
+
+            btnGuardarZip.disabled = true;
+            try {
+                var fd = new FormData();
+                fd.append('ids', ids.join(','));
+                fd.append('cuenta_id', CUENTA_ID);
+                var res = await fetch(BASE + '/correo/guardar-lote', {
+                    method: 'POST', body: fd, credentials: 'same-origin'
+                });
+                var tipo = res.headers.get('content-type') || '';
+                if (!res.ok || tipo.indexOf('application/json') !== -1) {
+                    var cuerpo = await res.json().catch(function () { return null; });
+                    throw new Error((cuerpo && cuerpo.message) || ('Error HTTP ' + res.status));
+                }
+
+                var blob = await res.blob();
+                if (destino) {
+                    var escritor = await destino.createWritable();
+                    await escritor.write(blob);
+                    await escritor.close();
+                } else {
+                    var url = URL.createObjectURL(blob);
+                    var a = document.createElement('a');
+                    a.href = url;
+                    a.download = nombre;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
+                }
+
+                var num = function (cab) { return parseInt(res.headers.get(cab) || '0', 10) || 0; };
+                var guardados = num('X-Guardados');
+                var faltantes = [];
+                if (num('X-Sin-Pdf') > 0) { faltantes.push(num('X-Sin-Pdf') + ' sin PDF'); }
+                if (num('X-Sin-Xml') > 0) { faltantes.push(num('X-Sin-Xml') + ' sin XML'); }
+                AppDialog.alert(
+                    'Se guardaron ' + guardados + ' documento' + (guardados !== 1 ? 's' : '')
+                    + ' (' + num('X-Guardados-Xml') + ' XML y ' + num('X-Guardados-Pdf') + ' PDF)'
+                    + (faltantes.length ? '. Sin archivo en disco: ' + faltantes.join(' · ') : '')
+                    + '. La bandeja no cambió.',
+                    { title: 'Documentos guardados', type: 'success' }
+                );
+            } catch (err) {
+                AppDialog.alert(err.message, { title: 'No fue posible guardar', type: 'danger' });
+            } finally {
+                btnGuardarZip.disabled = false;
+            }
         });
     }
 })();

@@ -106,6 +106,9 @@ $router->post('/correo/adjunto', 'CorreoController@adjunto');
 $router->post('/correo/procesar', 'CorreoController@procesar');
 $router->post('/correo/importar', 'CorreoController@importar');
 $router->post('/correo/descartar', 'CorreoController@descartar');
+// Guardado masivo: se lleva los XML y PDF de la bandeja en un ZIP y no
+// toca nada de la bandeja; es aparte del flujo de importación.
+$router->post('/correo/guardar-lote', 'CorreoController@guardarLote');
 $router->post('/correo/general/estimar', 'CorreoController@generalEstimar');
 $router->post('/correo/general/crear', 'CorreoController@generalCrear');
 $router->post('/correo/general/estado', 'CorreoController@generalEstado');

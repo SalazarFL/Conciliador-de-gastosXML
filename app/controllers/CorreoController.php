@@ -14,6 +14,7 @@ require_once __DIR__ . '/../helpers/DocumentoArchivo.php';
 require_once __DIR__ . '/../helpers/RutaDocumento.php';
 require_once __DIR__ . '/../helpers/XmlDocumentImporter.php';
 require_once __DIR__ . '/../helpers/OrganizadorDocumentos.php';
+require_once __DIR__ . '/../helpers/PaqueteDocumentos.php';
 
 class CorreoController extends Controller
 {
@@ -1718,6 +1719,95 @@ class CorreoController extends Controller
             $this->json(['ok' => true, 'descartadas' => (int) $descartadas]);
         } catch (Throwable $e) {
             $this->json(['ok' => false, 'message' => 'No fue posible descartar: ' . $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Guardado masivo: los XML y PDF de la bandeja en un ZIP, con su nombrado.
+     *
+     * Aparte del flujo de importación a propósito. No marca, no mueve y no
+     * borra: la bandeja queda exactamente igual después de guardar. Es para
+     * llevarse los archivos, no para procesarlos.
+     *
+     * Sin ids se guarda toda la bandeja de revisión. Con ids, solo esas
+     * filas, y siempre cruzadas contra lo que la bandeja muestra: así el
+     * guardado no puede alcanzar documentos de otra empresa ni filas ya
+     * importadas o descartadas, aunque alguien mande sus números a mano.
+     *
+     * Responde con el ZIP, no con JSON. El recuento viaja en cabeceras
+     * propias (X-Guardados…) porque el cuerpo ya es el archivo.
+     */
+    public function guardarLote()
+    {
+        if (!$this->isPost()) {
+            $this->json(['ok' => false, 'message' => 'Metodo no permitido.'], 405);
+        }
+
+        $zipTemporal = '';
+        try {
+            $bandejaModel = $this->loadModel('CorreoBandeja');
+            $activas = $bandejaModel->getActivas();
+            if (empty($activas)) {
+                $this->json(['ok' => false, 'message' => 'La bandeja de revisión está vacía.'], 422);
+            }
+
+            $ids = $this->parseIds($this->post('ids', ''));
+            if (!empty($ids)) {
+                $pedidos = array_flip($ids);
+                $activas = array_values(array_filter($activas, function ($fila) use ($pedidos) {
+                    return isset($pedidos[(int) $fila['id']]);
+                }));
+            }
+            if (empty($activas)) {
+                $this->json(['ok' => false, 'message' => 'Las filas seleccionadas ya no están en la bandeja.'], 422);
+            }
+
+            $carpetaTmp = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'storage'
+                . DIRECTORY_SEPARATOR . 'correo' . DIRECTORY_SEPARATOR . 'tmp';
+            if (!is_dir($carpetaTmp) && !@mkdir($carpetaTmp, 0777, true) && !is_dir($carpetaTmp)) {
+                throw new RuntimeException('No se pudo preparar la carpeta temporal del guardado.');
+            }
+            // Un ZIP cuya descarga se cortó a la mitad no llega a borrarse:
+            // el proceso muere dentro de readfile(). Se barren aquí los de
+            // corridas anteriores para que la carpeta no crezca sola.
+            foreach ((array) glob($carpetaTmp . DIRECTORY_SEPARATOR . 'bandeja_*.zip') as $viejo) {
+                if (is_file($viejo) && filemtime($viejo) < time() - 3600) {
+                    @unlink($viejo);
+                }
+            }
+
+            $zipTemporal = $carpetaTmp . DIRECTORY_SEPARATOR
+                . 'bandeja_' . date('Ymd_His') . '_' . bin2hex(random_bytes(4)) . '.zip';
+
+            $resumen = PaqueteDocumentos::crear($activas, $zipTemporal);
+
+            $nombre = 'documentos_' . date('Ymd_Hi') . '.zip';
+            $tamano = filesize($zipTemporal);
+
+            // El ZIP se manda tal cual: cualquier byte que hubiera quedado en
+            // un búfer de salida lo corrompería.
+            while (ob_get_level() > 0) {
+                ob_end_clean();
+            }
+            header('Content-Type: application/zip');
+            header('Content-Disposition: attachment; filename="' . $nombre . '"');
+            if ($tamano !== false) {
+                header('Content-Length: ' . $tamano);
+            }
+            header('Cache-Control: no-store');
+            header('X-Guardados: ' . (int) $resumen['documentos']);
+            header('X-Guardados-Xml: ' . (int) $resumen['xml']);
+            header('X-Guardados-Pdf: ' . (int) $resumen['pdf']);
+            header('X-Sin-Xml: ' . (int) $resumen['sin_xml']);
+            header('X-Sin-Pdf: ' . (int) $resumen['sin_pdf']);
+            readfile($zipTemporal);
+            @unlink($zipTemporal);
+            exit;
+        } catch (Throwable $e) {
+            if ($zipTemporal !== '' && is_file($zipTemporal)) {
+                @unlink($zipTemporal);
+            }
+            $this->json(['ok' => false, 'message' => 'No fue posible guardar: ' . $e->getMessage()], 500);
         }
     }
 
