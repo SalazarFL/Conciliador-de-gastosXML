@@ -13,7 +13,7 @@ $error   = $error ?? null;
             Crea una nueva cuenta de acceso al sistema
         </p>
     </div>
-    <a href="<?= $baseUrl ?>/usuarios" class="btn btn-outline">
+    <a href="<?= $baseUrl ?>/configuracion?ir=usuarios" class="btn btn-outline">
         <i class="fas fa-arrow-left"></i> Volver
     </a>
 </div>
@@ -85,7 +85,7 @@ $error   = $error ?? null;
         </div>
 
         <div style="display:flex;justify-content:flex-end;gap:7px;margin-top:16px;">
-            <a href="<?= $baseUrl ?>/usuarios" class="btn btn-outline">Cancelar</a>
+            <a href="<?= $baseUrl ?>/configuracion?ir=usuarios" class="btn btn-outline">Cancelar</a>
             <button type="submit" class="btn btn-primary">
                 <i class="fas fa-save"></i> Crear Usuario
             </button>

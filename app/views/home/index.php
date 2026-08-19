@@ -58,99 +58,61 @@ $totalLineas   = $respaldadas + $conDiferencia + $sinRespaldo;
 
 <div class="grid-2 mb-20" style="align-items:start;">
 
-    <!-- ── Sociedades ── -->
+    <?php // Elegir con qué empresa se trabaja es cosa de todos los días y por
+          // eso sigue acá. Registrarlas, editarlas y borrarlas —que se hace una
+          // vez— se mudó a Configuración, junto al resto de los ajustes. ?>
     <div class="card">
         <div class="card-header mb-12">
             <div class="card-title">
                 <i class="fas fa-building" style="margin-right:6px;color:var(--navy-light);"></i>
-                Sociedades
+                Empresa con la que trabajas
             </div>
+            <a href="<?= $baseUrl ?>/configuracion?ir=empresas" class="btn btn-outline btn-sm"
+               title="Registrar, editar o eliminar empresas">
+                <i class="fas fa-gear"></i> Administrar
+            </a>
         </div>
 
         <?php if (empty($sociedades)): ?>
-        <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:12px;">
-            Registra las sociedades del grupo. La que <strong>elijas</strong> es con la que trabajas:
+        <div style="font-size:12.5px;color:var(--text-muted);">
+            Todavía no hay ninguna empresa registrada. La que elijas es con la que trabajas:
             su cédula se compara contra el receptor de cada factura del correo.
+            <a href="<?= $baseUrl ?>/configuracion?ir=empresas" style="color:var(--navy-light);font-weight:700;">
+                Registra la primera
+            </a>.
         </div>
         <?php else: ?>
-        <table class="data-table" style="font-size:12.5px;margin-bottom:12px;">
-            <thead>
-                <tr>
-                    <th style="width:34px;" title="Sociedad con la que estás trabajando"></th>
-                    <th>Nombre</th>
-                    <th>Cédula</th>
-                    <th class="center" style="width:90px;"></th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($sociedades as $soc):
-                    $enUso = (int) $soc['id'] === $sociedadEnUsoId; ?>
-                <tr id="soc-fila-<?= (int) $soc['id'] ?>">
-                    <td class="center">
-                        <?php if ($enUso): ?>
-                        <i class="fas fa-circle-check" style="color:var(--ok);" title="Trabajando con esta sociedad"></i>
-                        <?php else: ?>
-                        <form method="POST" action="<?= $baseUrl ?>/sociedades/activar/<?= (int) $soc['id'] ?>" style="display:inline;">
-                            <button type="submit" title="Trabajar con esta sociedad"
-                                    style="background:none;border:none;cursor:pointer;color:#cbd5e1;font-size:14px;padding:0;">
-                                <i class="far fa-circle"></i>
-                            </button>
-                        </form>
-                        <?php endif; ?>
-                    </td>
-                    <td style="font-weight:<?= $enUso ? '700' : '400' ?>;color:var(--navy);">
-                        <span class="soc-ver"><?= htmlspecialchars($soc['nombre']) ?></span>
-                        <?php if (!empty($soc['activa'])): ?>
-                        <span style="margin-left:6px;font-size:10.5px;font-weight:600;color:var(--text-light);
-                                     text-transform:uppercase;letter-spacing:.04em;"
-                              title="Con esta empresa arranca quien nunca ha elegido, y con ella trabajan las tareas automáticas">
-                            por omisión
+        <div style="display:flex;flex-direction:column;gap:5px;">
+            <?php foreach ($sociedades as $soc):
+                $enUso = (int) $soc['id'] === $sociedadEnUsoId; ?>
+            <form method="POST" action="<?= $baseUrl ?>/sociedades/activar/<?= (int) $soc['id'] ?>">
+                <button type="submit" <?= $enUso ? 'disabled' : '' ?>
+                        title="<?= $enUso ? 'Estás trabajando con esta empresa' : 'Trabajar con esta empresa' ?>"
+                        style="width:100%;display:flex;align-items:center;gap:9px;text-align:left;
+                               padding:8px 11px;border-radius:8px;cursor:<?= $enUso ? 'default' : 'pointer' ?>;
+                               background:<?= $enUso ? 'var(--gold-pale)' : 'transparent' ?>;
+                               border:1.5px solid <?= $enUso ? 'var(--gold-light)' : 'var(--border)' ?>;">
+                    <i class="<?= $enUso ? 'fas fa-circle-check' : 'far fa-circle' ?>"
+                       style="color:<?= $enUso ? 'var(--ok)' : 'var(--text-light)' ?>;font-size:14px;"></i>
+                    <span style="flex:1;min-width:0;">
+                        <span style="display:block;font-size:12.5px;font-weight:<?= $enUso ? '800' : '600' ?>;color:var(--navy);">
+                            <?= htmlspecialchars($soc['nombre']) ?>
                         </span>
-                        <?php endif; ?>
-                    </td>
-                    <td><span class="soc-ver"><?= htmlspecialchars($soc['cedula']) ?></span></td>
-                    <td class="center" style="white-space:nowrap;">
-                        <button type="button" class="btn btn-outline btn-sm" title="Editar"
-                                onclick="socEditar(<?= (int) $soc['id'] ?>, this)"
-                                data-nombre="<?= htmlspecialchars($soc['nombre']) ?>"
-                                data-cedula="<?= htmlspecialchars($soc['cedula']) ?>">
-                            <i class="fas fa-pen"></i>
-                        </button>
-                        <form method="POST" action="<?= $baseUrl ?>/sociedades/eliminar/<?= (int) $soc['id'] ?>" style="display:inline;"
-                              data-confirm="¿Quieres eliminar la sociedad <?= htmlspecialchars($soc['nombre'], ENT_QUOTES) ?>?"
-                              data-confirm-title="Eliminar sociedad"
-                              data-confirm-type="danger"
-                              data-confirm-accept="Eliminar">
-                            <button type="submit" class="btn btn-outline btn-sm" title="Eliminar" style="color:#b91c1c;border-color:#fed7d7;">
-                                <i class="fas fa-trash-can"></i>
-                            </button>
-                        </form>
-                    </td>
-                </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
+                        <span style="display:block;font-size:11px;color:var(--text-muted);">
+                            Cédula <?= htmlspecialchars($soc['cedula']) ?>
+                            <?php if (!empty($soc['activa'])): ?>
+                            · <span title="Con esta empresa arranca quien nunca ha elegido, y con ella trabajan las tareas automáticas">por omisión</span>
+                            <?php endif; ?>
+                        </span>
+                    </span>
+                    <?php if ($enUso): ?>
+                    <span class="badge badge-green">En uso</span>
+                    <?php endif; ?>
+                </button>
+            </form>
+            <?php endforeach; ?>
+        </div>
         <?php endif; ?>
-
-        <!-- Agregar / editar (el mismo form cambia de destino al editar) -->
-        <form method="POST" action="<?= $baseUrl ?>/sociedades/crear" id="form-sociedad"
-              style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
-            <div style="flex:2;min-width:180px;">
-                <label style="font-size:11px;font-weight:700;color:var(--navy);display:block;margin-bottom:3px;">Nombre (informativo)</label>
-                <input type="text" name="nombre" id="soc-nombre" class="form-control" style="font-size:12.5px;" required
-                       placeholder="EMPRESA EJEMPLO S.A.">
-            </div>
-            <div style="flex:1;min-width:130px;">
-                <label style="font-size:11px;font-weight:700;color:var(--navy);display:block;margin-bottom:3px;">Cédula</label>
-                <input type="text" name="cedula" id="soc-cedula" class="form-control" style="font-size:12.5px;" required
-                       placeholder="3101123456">
-            </div>
-            <button type="submit" class="btn btn-primary btn-sm" id="soc-submit" style="margin-bottom:1px;">
-                <i class="fas fa-plus"></i> Agregar
-            </button>
-            <button type="button" class="btn btn-outline btn-sm" id="soc-cancelar" style="display:none;margin-bottom:1px;"
-                    onclick="socCancelarEdicion()">Cancelar</button>
-        </form>
     </div>
 
     <!-- ── Accesos rápidos ── -->
@@ -182,25 +144,3 @@ $totalLineas   = $respaldadas + $conDiferencia + $sinRespaldo;
     </div>
 
 </div>
-
-<script>
-var SOC_BASE = '<?= $baseUrl ?>';
-
-function socEditar(id, btn) {
-    var form = document.getElementById('form-sociedad');
-    form.action = SOC_BASE + '/sociedades/editar/' + id;
-    document.getElementById('soc-nombre').value = btn.dataset.nombre;
-    document.getElementById('soc-cedula').value = btn.dataset.cedula;
-    document.getElementById('soc-submit').innerHTML = '<i class="fas fa-check"></i> Guardar cambios';
-    document.getElementById('soc-cancelar').style.display = 'inline-flex';
-    document.getElementById('soc-nombre').focus();
-}
-
-function socCancelarEdicion() {
-    var form = document.getElementById('form-sociedad');
-    form.action = SOC_BASE + '/sociedades/crear';
-    form.reset();
-    document.getElementById('soc-submit').innerHTML = '<i class="fas fa-plus"></i> Agregar';
-    document.getElementById('soc-cancelar').style.display = 'none';
-}
-</script>

@@ -9,13 +9,13 @@
  *
  *   1. El check verde aparecía en la fila equivocada, contradiciendo el nombre
  *      que la barra superior mostraba como empresa en uso.
- *   2. Peor: la fila marcada se dibuja SIN botón (ya está elegida), así que la
+ *   2. Peor: la fila marcada no se puede pulsar (ya está elegida), así que la
  *      empresa por omisión quedaba imposible de seleccionar. El usuario veía
  *      una empresa que no podía elegir y otra que decía estar activa sin
  *      estarlo.
  *
  * La prueba renderiza la vista de verdad y comprueba las dos cosas: dónde cae
- * el check y que exista botón para TODA empresa que no sea la que se está
+ * el check y que se pueda pulsar TODA empresa que no sea la que se está
  * usando.
  */
 
@@ -49,16 +49,34 @@ $grupo      = ['id' => 4,  'nombre' => 'GRUPO BM SP S.A',              'cedula' 
 $alternativa = ['id' => 23, 'nombre' => 'EMPRESA DE SERVICIOS PZ S.A', 'cedula' => '3101123456', 'activa' => 0];
 $sociedades = [$grupo, $alternativa];
 
+/**
+ * ¿Se puede pulsar el botón de esa empresa?
+ *
+ * No basta con buscar el formulario: la vista lo dibuja para TODAS y desactiva
+ * el de la empresa en uso. Se mira el trozo que va de la acción al cierre de
+ * su botón, que es donde cae el atributo.
+ */
+function botonSociedad($html, $id)
+{
+    $pos = strpos($html, 'action="/xmlconcilia/public/sociedades/activar/' . $id . '"');
+    if ($pos === false) {
+        return 'ausente';
+    }
+    $fin = strpos($html, '</button>', $pos);
+    $trozo = substr($html, $pos, $fin === false ? 500 : $fin - $pos);
+    return strpos($trozo, 'disabled') !== false ? 'desactivado' : 'activo';
+}
+
 // ── Caso del error: el usuario trabaja con la que NO es la de por omisión ──
 $html = renderInicio($sociedades, $alternativa);
 
 verificaHome(
-    strpos($html, 'action="/xmlconcilia/public/sociedades/activar/4"') !== false,
+    botonSociedad($html, 4) === 'activo',
     'la empresa por omisión se puede seleccionar cuando no es la que se está usando'
 );
 verificaHome(
-    strpos($html, 'action="/xmlconcilia/public/sociedades/activar/23"') === false,
-    'la empresa en uso no ofrece botón para volver a elegirla'
+    botonSociedad($html, 23) === 'desactivado',
+    'la empresa en uso no se puede volver a elegir'
 );
 
 // El check verde tiene que caer en la fila de la empresa en uso (23), no en la
@@ -73,12 +91,12 @@ verificaHome($posCheck > $posBotonGrupo,
 // ── Caso normal: el usuario trabaja con la de por omisión ─────────────
 $html = renderInicio($sociedades, $grupo);
 verificaHome(
-    strpos($html, 'action="/xmlconcilia/public/sociedades/activar/23"') !== false,
+    botonSociedad($html, 23) === 'activo',
     'la otra empresa se puede seleccionar'
 );
 verificaHome(
-    strpos($html, 'action="/xmlconcilia/public/sociedades/activar/4"') === false,
-    'la empresa en uso sigue sin botón, también cuando coincide con la de por omisión'
+    botonSociedad($html, 4) === 'desactivado',
+    'la empresa en uso sigue sin poder pulsarse, también cuando coincide con la de por omisión'
 );
 
 // ── Sin empresa resuelta: nada marcado, pero todo elegible ────────────
@@ -86,7 +104,7 @@ $html = renderInicio($sociedades, null);
 verificaHome(strpos($html, 'fa-circle-check') === false,
     'sin empresa en uso no se marca ninguna al azar');
 foreach ([4, 23] as $id) {
-    verificaHome(strpos($html, "sociedades/activar/{$id}") !== false,
+    verificaHome(botonSociedad($html, $id) === 'activo',
         "sin empresa en uso, la {$id} se puede elegir (si no, no habría forma de salir del estado)");
 }
 

@@ -6,11 +6,11 @@
  * un problema puede abrir esto y mandar una captura, sin que nadie tenga que
  * conectarse a su equipo.
  *
- * Aquí vive también el respaldo de la base a la carpeta compartida, porque es
- * la pantalla a la que ya se manda a alguien cuando algo no anda — y sacar el
- * respaldo es justamente lo primero que hay que pedirle a quien sí alcanza el
- * servidor. El botón está reservado a administradores: escribe en la carpeta
- * que todos sincronizan.
+ * Los endpoints del respaldo de la base siguen viviendo aquí —son los que
+ * saben lanzar el CLI en segundo plano y registrar la tarea de Windows—, pero
+ * su tarjeta se mudó a Configuración: respaldar no es diagnosticar, y quien
+ * busca dónde se administra algo va al engranaje. El botón está reservado a
+ * administradores: escribe en la carpeta que todos sincronizan.
  */
 
 require_once __DIR__ . '/../helpers/Diagnostico.php';
@@ -22,14 +22,9 @@ class DiagnosticoController extends Controller
 
     public function index()
     {
-        $esAdmin = !empty($_SESSION['user_is_admin']);
-
         $this->render('diagnostico/index', [
             'informe' => (new Diagnostico())->ejecutar(),
-            'esAdmin' => $esAdmin,
-            // La tarjeta de respaldo se dibuja ya con datos: si el JS falla o
-            // la carpeta compartida no responde, igual se ve el último estado.
-            'respaldo' => $esAdmin ? $this->datosRespaldo() : null,
+            'esAdmin' => !empty($_SESSION['user_is_admin']),
         ]);
     }
 
@@ -43,7 +38,7 @@ class DiagnosticoController extends Controller
     public function respaldoEstado()
     {
         $this->soloAdminJson();
-        $this->json(['ok' => true] + $this->datosRespaldo());
+        $this->json(['ok' => true] + RespaldoBase::panel());
     }
 
     /**
@@ -186,60 +181,6 @@ class DiagnosticoController extends Controller
     }
 
     // ── Piezas ─────────────────────────────────────────────────────
-
-    /**
-     * Todo lo que la tarjeta necesita para dibujarse. Se arma igual para el
-     * render inicial y para el sondeo, para que no haya dos verdades.
-     */
-    private function datosRespaldo()
-    {
-        $carpeta = '';
-        $error = '';
-        try {
-            $carpeta = RespaldoBase::carpetaDestino();
-        } catch (Throwable $e) {
-            $error = $e->getMessage();
-        }
-
-        $archivos = RespaldoBase::listar();
-        foreach ($archivos as $i => $a) {
-            $archivos[$i]['tamano'] = RespaldoBase::humano($a['bytes']);
-        }
-
-        return [
-            'estado'     => RespaldoBase::leerEstado(),
-            'archivos'   => array_slice($archivos, 0, 10),
-            'carpeta'    => $carpeta,
-            'carpetaError' => $error,
-            'conserva'   => RespaldoBase::CONSERVAR,
-            'automatico' => $this->tareaProgramada(),
-            'mysqldump'  => RespaldoBase::rutaMysqldump(),
-        ];
-    }
-
-    /** ¿Existe la tarea nocturna en este Windows? Devuelve la hora si la hay. */
-    private function tareaProgramada()
-    {
-        if (DIRECTORY_SEPARATOR !== '\\' || !function_exists('exec')) {
-            return ['activo' => false, 'hora' => ''];
-        }
-        $salida = [];
-        $codigo = 1;
-        @exec('schtasks /query /TN "' . RespaldoBase::TAREA . '" /FO LIST 2>&1', $salida, $codigo);
-        if ($codigo !== 0) {
-            return ['activo' => false, 'hora' => ''];
-        }
-        // La hora se saca del "Next Run Time"/"Hora próxima ejecución", que
-        // schtasks localiza: se busca el patrón de hora, no la etiqueta.
-        $hora = '';
-        foreach ($salida as $linea) {
-            if (preg_match('/(\d{1,2}:\d{2}):\d{2}/', $linea, $m)) {
-                $hora = $m[1];
-                break;
-            }
-        }
-        return ['activo' => true, 'hora' => $hora];
-    }
 
     /** Lanza el CLI oculto y sin esperar, igual que la sincronización. */
     private function lanzarEnSegundoPlano($php, $motivo)

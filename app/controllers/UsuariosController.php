@@ -1,11 +1,18 @@
 <?php
 /**
- * Controlador de gestión de usuarios — solo administrador
+ * Controlador de gestión de usuarios — solo administrador.
+ *
+ * El listado vive en Configuración → Usuarios, junto al resto de lo que se
+ * administra una vez y no todos los días. Aquí quedan los formularios de alta
+ * y edición, que sí son pantallas propias, y todos vuelven allá al terminar.
  */
 
 class UsuariosController extends Controller
 {
     private Usuario $model;
+
+    /** Listado y destino de todas las acciones. */
+    private const DESTINO = '/configuracion?ir=usuarios';
 
     public function __construct()
     {
@@ -16,13 +23,10 @@ class UsuariosController extends Controller
 
     // ── Listado ───────────────────────────────────────────────────────────────
 
+    /** Los enlaces viejos a /usuarios siguen llevando a donde está la lista. */
     public function index()
     {
-        $usuarios = $this->model->getAll();
-        $this->render('usuarios/index', [
-            'title'    => 'Usuarios — Nexo Fiscal',
-            'usuarios' => $usuarios,
-        ]);
+        $this->redirect($this->url(self::DESTINO));
     }
 
     // ── Crear ─────────────────────────────────────────────────────────────────
@@ -32,7 +36,7 @@ class UsuariosController extends Controller
         if ($this->isPost()) {
             $error = $this->procesarCrear();
             if ($error === null) {
-                $this->redirectWithMessage($this->url('/usuarios'), 'Usuario creado correctamente.', 'success');
+                $this->redirectWithMessage($this->url(self::DESTINO), 'Usuario creado correctamente.', 'success');
             }
             // Volver al formulario con error
             $this->render('usuarios/crear', [
@@ -57,13 +61,13 @@ class UsuariosController extends Controller
         $id = (int) $id;
         $usuario = $this->model->findById($id);
         if (!$usuario) {
-            $this->redirectWithMessage($this->url('/usuarios'), 'Usuario no encontrado.', 'error');
+            $this->redirectWithMessage($this->url(self::DESTINO), 'Usuario no encontrado.', 'error');
         }
 
         if ($this->isPost()) {
             $error = $this->procesarEditar($id, $usuario);
             if ($error === null) {
-                $this->redirectWithMessage($this->url('/usuarios'), 'Usuario actualizado correctamente.', 'success');
+                $this->redirectWithMessage($this->url(self::DESTINO), 'Usuario actualizado correctamente.', 'success');
             }
             $this->render('usuarios/editar', [
                 'title'   => 'Editar Usuario — Nexo Fiscal',
@@ -87,17 +91,17 @@ class UsuariosController extends Controller
     public function eliminar($id)
     {
         if (!$this->isPost()) {
-            $this->redirect($this->url('/usuarios'));
+            $this->redirect($this->url(self::DESTINO));
         }
 
         $id = (int) $id;
 
         if ($id === (int) ($_SESSION['user_id'] ?? 0)) {
-            $this->redirectWithMessage($this->url('/usuarios'), 'No puedes eliminar tu propia cuenta.', 'error');
+            $this->redirectWithMessage($this->url(self::DESTINO), 'No puedes eliminar tu propia cuenta.', 'error');
         }
 
         $this->model->deleteById($id);
-        $this->redirectWithMessage($this->url('/usuarios'), 'Usuario eliminado.', 'success');
+        $this->redirectWithMessage($this->url(self::DESTINO), 'Usuario eliminado.', 'success');
     }
 
     // ── Lógica privada ────────────────────────────────────────────────────────

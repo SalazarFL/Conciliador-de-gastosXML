@@ -116,12 +116,6 @@ class CorreoController extends Controller
         } catch (Throwable $e) {
         }
 
-        $semanas = [];
-        try {
-            $semanas = $this->loadModel('Semana')->getAll();
-        } catch (Throwable $e) {
-        }
-
         // Tarjeta de navegación de "Facturas por pagar": si se llegó con el
         // botón "Buscar en correo" (?pp_listado & pp_linea), se muestran los
         // datos de la factura seleccionada con flechas para recorrer el
@@ -170,48 +164,26 @@ class CorreoController extends Controller
             }
         }
 
-        // El ⚙ administra TODOS los buzones (si solo mostrara los de la
-        // sociedad en curso, uno mal asignado quedaría invisible y sin forma
-        // de corregirlo); el resto del módulo trabaja con los visibles.
-        $sociedadesTodas = [];
-        $cuentasAdmin = $cuentas;
+        // Cuántos buzones hay en TODO el sistema, no solo en esta empresa: es
+        // lo que distingue "no hay ninguno" de "los que hay atienden a otra".
+        // Administrarlos es cosa de Configuración.
+        $cuentasEnSistema = 0;
         try {
-            $sociedadesTodas = $this->loadModel('Sociedad')->getAll();
-            $cuentasAdmin = $cuentasModel->getAll();
+            $cuentasEnSistema = $cuentasModel->contarTotal();
         } catch (Throwable $e) {
         }
 
         // Al front solo van datos no sensibles de las cuentas
-        $nombrePorSociedad = [];
-        foreach ($sociedadesTodas as $s) {
-            $nombrePorSociedad[(int) $s['id']] = (string) $s['nombre'];
-        }
-        $cuentasVista = array_map(function ($c) use ($cuentasModel, $nombrePorSociedad) {
-            $sociedades = [];
-            try {
-                $sociedades = $cuentasModel->sociedadesDe((int) $c['id']);
-            } catch (Throwable $e) {
-            }
-            // Los nombres se muestran en la lista del ⚙: sin ellos, un buzón
-            // que no aparece en el módulo se ve idéntico a uno que sí, y no
-            // hay forma de adivinar por qué falta.
-            $nombres = [];
-            foreach ($sociedades as $sid) {
-                if (isset($nombrePorSociedad[(int) $sid])) {
-                    $nombres[] = $nombrePorSociedad[(int) $sid];
-                }
-            }
+        $cuentasVista = array_map(function ($c) {
             return [
-                'sociedades_nombres' => $nombres,
                 'id' => (int) $c['id'],
                 'nombre' => (string) $c['nombre'],
                 'usuario' => (string) $c['usuario'],
                 'host' => (string) $c['host'],
                 'puerto' => (int) $c['puerto'],
                 'carpeta' => (string) $c['carpeta'],
-                'sociedades' => $sociedades,
             ];
-        }, $cuentasAdmin);
+        }, $cuentas);
 
         $loteGeneral = null;
         try {
@@ -227,23 +199,14 @@ class CorreoController extends Controller
             // empresa. La segunda decía "agrega la primera cuenta", que
             // invitaba a registrar por segunda vez un buzón que ya existía.
             'configExiste'    => !empty($cuentas),
-            'hayCuentasEnSistema' => !empty($cuentasAdmin),
+            'hayCuentasEnSistema' => $cuentasEnSistema > 0,
             'configurado'     => MailFetcher::configurado($config),
             'configResumen'   => $this->resumenConfig($config),
-            'configLocal'     => $this->configLocal(),
-            // Dos listas a propósito: con las que se TRABAJA (las de esta
-            // empresa) y las que ADMINISTRA el ⚙ (todas, para poder reasignar
-            // una mal puesta). Mezclarlas ofrecía en el selector buzones de
-            // otras empresas.
-            'cuentas'         => array_values(array_filter($cuentasVista, function ($c) use ($cuentasModel) {
-                return $cuentasModel->perteneceASociedad((int) $c['id']);
-            })),
-            'cuentasAdmin'    => $cuentasVista,
+            // Solo los buzones de esta empresa: son con los que se trabaja.
+            // Los demás se ven y se reasignan en Configuración.
+            'cuentas'         => $cuentasVista,
             'cuentaActivaId'  => $cuentaActivaId,
             'sociedadActiva'  => $sociedadActiva,
-            'sociedadesTodas' => $sociedadesTodas,
-            'semanas'         => $semanas,
-            'semanaActiva'    => $this->semanaActiva(),
             'buscarInicial'   => trim((string) $this->get('buscar', '')),
             'abrirCorreoUid'  => max(0, (int) $this->get('abrir_uid', 0)),
             'abrirCorreoCarpeta' => mb_substr(trim((string) $this->get('abrir_carpeta', '')), 0, 255, 'UTF-8'),

@@ -31,6 +31,18 @@ $router->post('/carga/listado-notas', 'NotasCreditoController@subir');
 $router->post('/carga/comprobantes-facturas', 'FacturasController@subir');
 $router->post('/carga/comprobantes-notas', 'NotasXmlController@subir');
 
+// --- CONFIGURACIÓN (el engranaje de la barra superior) ---
+// Una sola pantalla para lo que vale en todo el sistema: la carpeta raíz de
+// XML y PDF, las cuentas de correo, la automatización, las empresas, los
+// usuarios y el respaldo. Antes era un modal dentro de Correo y había que
+// saber que se guardaba ahí.
+//
+// Los POST de cada sección NO se mudaron: igual que en /carga, los sigue
+// atendiendo el controlador dueño de lo que escribe —CorreoController,
+// DiagnosticoController, SociedadesController, UsuariosController—, porque
+// comparten helpers con el resto de su módulo.
+$router->get('/configuracion', 'ConfiguracionController@index');
+
 // --- AVISOS (la campana de la barra superior) ---
 // Lo que no puede vivir en un toast de siete segundos: las decisiones que
 // alguien tiene que tomar, esperando hasta que las tome.

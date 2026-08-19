@@ -62,6 +62,7 @@ $pageLabels = [
     'carga'        => 'Carga de documentos',
     'diagnostico'  => 'Diagnóstico de la instalación',
     'avisos'       => 'Avisos',
+    'configuracion'=> 'Configuración',
 ];
 
 $currentLabel = 'Panel Principal';
@@ -161,12 +162,15 @@ if (!isset($sociedadActiva)) {
                 <span class="nav-label">Facturas ERP</span>
             </a>
 
-            <?php if (!empty($_SESSION['user_is_admin'])): ?>
             <div class="sidebar-section-label" style="margin-top:16px;">Administración</div>
-            <a href="<?= $baseUrl ?>/usuarios" class="<?= navActive('usuarios', $uriClean) ?>" title="Usuarios">
-                <span class="nav-icon"><i class="fas fa-users-cog"></i></span>
-                <span class="nav-label">Usuarios</span>
+            <?php // Todo lo que se ajusta vive en una sola pantalla; el
+                  // engranaje de la barra superior lleva a la misma. ?>
+            <a href="<?= $baseUrl ?>/configuracion" class="<?= navActive('configuracion', $uriClean) ?>"
+               title="Carpeta de XML y PDF, cuentas de correo, empresas y respaldo">
+                <span class="nav-icon"><i class="fas fa-gear"></i></span>
+                <span class="nav-label">Configuración</span>
             </a>
+            <?php if (!empty($_SESSION['user_is_admin'])): ?>
             <a href="<?= $baseUrl ?>/diagnostico" class="<?= navActive('diagnostico', $uriClean) ?>"
                title="Revisar la instalación de esta computadora">
                 <span class="nav-icon"><i class="fas fa-stethoscope"></i></span>
@@ -234,17 +238,17 @@ if (!isset($sociedadActiva)) {
                 <?php endif; ?>
             </div>
             <div class="topbar-right">
-                <?php if (!empty($_SESSION['user_id'])): ?>
                 <?php
-                // La configuración estaba solo en Correo, que es donde vive el
+                // La configuración estaba solo en Correo, que es donde vivía el
                 // modal, y quien necesitaba cambiar la carpeta raíz desde
                 // cualquier otra pantalla tenía que saber que se guardaba ahí.
-                // No es una opción del correo: la carpeta de XML y PDF la usan
-                // todos los módulos. Ahora el botón está siempre; dentro de
-                // Correo abre el modal, y desde fuera lleva a Correo con el
-                // modal ya abierto.
-                $enCorreo = strpos($uriClean, '/correo') !== false;
+                // No es una opción del correo: la carpeta de XML y PDF, las
+                // empresas o el respaldo los usan todos los módulos. Ahora es
+                // una pantalla propia, /configuracion, y este botón lleva a
+                // ella desde donde sea.
+                $enConfiguracion = navCoincide('configuracion', $uriClean);
                 ?>
+                <?php if (!empty($_SESSION['user_id'])): ?>
 
                 <!-- Campana de avisos. Va junto al engranaje porque son la
                      misma clase de cosa: no pertenecen a la pantalla que se
@@ -364,16 +368,15 @@ if (!isset($sociedadActiva)) {
                 })();
                 </script>
 
-                <button type="button"
-                        onclick="<?= $enCorreo
-                            ? 'if (window.abrirConfigCorreo) window.abrirConfigCorreo()'
-                            : 'window.location.href=' . json_encode($baseUrl . '/correo?config=1') ?>"
-                        class="topbar-action"
-                        style="font-size:11.5px;color:#0C2461;background:transparent;cursor:pointer;display:flex;align-items:center;gap:4px;padding:3px 8px;border:1px solid #c3d0e8;border-radius:7px;font-weight:600;transition:background .2s;"
-                        onmouseover="this.style.background='#eef3fb'" onmouseout="this.style.background='transparent'"
-                        title="Configuración: carpeta raíz de XML y PDF, cuentas de correo y respaldo">
+                <a href="<?= $baseUrl ?>/configuracion"
+                   class="topbar-action"
+                   style="font-size:11.5px;color:#0C2461;text-decoration:none;background:<?= $enConfiguracion ? '#eef3fb' : 'transparent' ?>;display:flex;align-items:center;gap:4px;padding:3px 8px;border:1px solid #c3d0e8;border-radius:7px;font-weight:600;transition:background .2s;"
+                   onmouseover="this.style.background='#eef3fb'"
+                   onmouseout="this.style.background='<?= $enConfiguracion ? '#eef3fb' : 'transparent' ?>'"
+                   <?= $enConfiguracion ? 'aria-current="page"' : '' ?>
+                   title="Configuración: carpeta de XML y PDF, cuentas de correo, empresas y respaldo">
                     <i class="fas fa-gear"></i>
-                </button>
+                </a>
                 <?php if ($sociedadActiva): ?>
                 <span class="topbar-society" style="font-size:11.5px;color:var(--navy);background:var(--gold-pale);border:1px solid var(--gold-light);border-radius:999px;padding:3px 8px;display:flex;align-items:center;gap:5px;font-weight:600;"
                       title="Sociedad activa">

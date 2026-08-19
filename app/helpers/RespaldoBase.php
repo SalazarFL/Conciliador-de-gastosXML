@@ -149,6 +149,65 @@ class RespaldoBase
         return $filas;
     }
 
+    /**
+     * Todo lo que la tarjeta de respaldo necesita para dibujarse.
+     *
+     * Vive aquí y no en un controlador porque la piden dos: la pantalla de
+     * Configuración, que es donde se administra, y el sondeo de
+     * /diagnostico/respaldo/estado, que la refresca mientras corre. Armarla en
+     * un solo lugar evita que el render inicial y el sondeo digan cosas
+     * distintas.
+     */
+    public static function panel()
+    {
+        $carpeta = '';
+        $error = '';
+        try {
+            $carpeta = self::carpetaDestino();
+        } catch (Throwable $e) {
+            $error = $e->getMessage();
+        }
+
+        $archivos = self::listar();
+        foreach ($archivos as $i => $a) {
+            $archivos[$i]['tamano'] = self::humano($a['bytes']);
+        }
+
+        return [
+            'estado'       => self::leerEstado(),
+            'archivos'     => array_slice($archivos, 0, 10),
+            'carpeta'      => $carpeta,
+            'carpetaError' => $error,
+            'conserva'     => self::CONSERVAR,
+            'automatico'   => self::tareaProgramada(),
+            'mysqldump'    => self::rutaMysqldump(),
+        ];
+    }
+
+    /** ¿Existe la tarea nocturna en este Windows? Devuelve la hora si la hay. */
+    public static function tareaProgramada()
+    {
+        if (DIRECTORY_SEPARATOR !== '\\' || !function_exists('exec')) {
+            return ['activo' => false, 'hora' => ''];
+        }
+        $salida = [];
+        $codigo = 1;
+        @exec('schtasks /query /TN "' . self::TAREA . '" /FO LIST 2>&1', $salida, $codigo);
+        if ($codigo !== 0) {
+            return ['activo' => false, 'hora' => ''];
+        }
+        // La hora se saca del "Next Run Time"/"Hora próxima ejecución", que
+        // schtasks localiza: se busca el patrón de hora, no la etiqueta.
+        $hora = '';
+        foreach ($salida as $linea) {
+            if (preg_match('/(\d{1,2}:\d{2}):\d{2}/', $linea, $m)) {
+                $hora = $m[1];
+                break;
+            }
+        }
+        return ['activo' => true, 'hora' => $hora];
+    }
+
     // ── El trabajo ─────────────────────────────────────────────────
 
     /**
