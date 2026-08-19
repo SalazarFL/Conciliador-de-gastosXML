@@ -35,10 +35,10 @@ class RespaldoBase
     public const TAREA = 'XMLConcilia_RespaldoBase';
 
     /**
-     * Las vistas y `sp_marcar_revisado` NO van en el volcado: el usuario
-     * `xmlconcilia` no puede hacer SHOW CREATE PROCEDURE y mysqldump aborta
-     * entero si se le pide --routines. Se recrean al restaurar, desde
-     * database/vistas_y_procedimientos.sql.
+     * Sin --routines: el usuario `xmlconcilia` no puede hacer
+     * SHOW CREATE PROCEDURE y mysqldump aborta entero si se le pide. No se
+     * pierde nada — el único procedimiento que quedaba, `sp_marcar_revisado`,
+     * era del módulo de conciliaciones, retirado junto con sus tablas.
      */
     public const SIN_RUTINAS = true;
 

@@ -23,9 +23,9 @@
 
     Detalles que parecen caprichos y no lo son:
       - Sin --routines. El usuario `xmlconcilia` del servidor no puede hacer
-        SHOW CREATE PROCEDURE y mysqldump aborta. Por eso se exportan solo las
-        tablas y las vistas y el procedimiento se recrean después desde
-        database/vistas_y_procedimientos.sql.
+        SHOW CREATE PROCEDURE y mysqldump aborta. Por eso se exportan solo
+        tablas. No hay nada más que recrear: las vistas y `sp_marcar_revisado`
+        eran del módulo de conciliaciones, retirado junto con sus tablas.
       - Con --result-file en vez de `>`. La redirección de PowerShell escribe
         UTF-16 con BOM y mysql no puede leer el archivo.
       - La contraseña va en un archivo temporal, no en la línea de comandos,
@@ -162,11 +162,6 @@ function Restore-Base($cnf, $cx, [string]$archivoSql) {
     # tubería reinterpreta la codificación y corrompe los acentos.
     & cmd.exe /c "`"$mysql`" --defaults-extra-file=`"$cnf`" --default-character-set=utf8mb4 $($cx.Base) < `"$archivoSql`""
     if ($LASTEXITCODE -ne 0) { throw "La restauración falló con código $LASTEXITCODE." }
-
-    # El volcado nunca trae vistas ni el procedimiento (ver cabecera).
-    $vistas = Join-Path $raiz 'database\vistas_y_procedimientos.sql'
-    & cmd.exe /c "`"$mysql`" --defaults-extra-file=`"$cnf`" --default-character-set=utf8mb4 $($cx.Base) < `"$vistas`""
-    if ($LASTEXITCODE -ne 0) { throw "No se pudieron recrear las vistas y el procedimiento (código $LASTEXITCODE)." }
 }
 
 function Get-Resumen($cnf, $cx) {

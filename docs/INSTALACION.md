@@ -262,9 +262,7 @@ quedarse sin conexión, no después. Lo que hace:
 1. Lista las tablas del servidor y cuenta sus filas.
 2. Exporta con `mysqldump` a `storage/backups/bd_xmlconcilia_<fecha>.sql`.
 3. Borra la base local, la vuelve a crear y carga el respaldo.
-4. Recrea las vistas y `sp_marcar_revisado` desde
-   `database/vistas_y_procedimientos.sql`.
-5. Vuelve a contar y compara tabla por tabla contra el servidor.
+4. Vuelve a contar y compara tabla por tabla contra el servidor.
 
 Tres decisiones del script que parecen caprichos y no lo son:
 
