@@ -2,7 +2,11 @@
 $baseUrl = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 $devoluciones = $devoluciones ?? [];
 $resumen = $resumen ?? ['pendiente' => 0, 'sin_nc' => 0, 'parcial' => 0, 'verificada' => 0, 'total' => 0];
-$filtros = $filtros ?? ['tipo' => '', 'estado' => '', 'q' => ''];
+$filtros = array_replace(
+    ['tipo' => '', 'estado' => '', 'proveedor' => '', 'q' => ''],
+    is_array($filtros ?? null) ? $filtros : []
+);
+$proveedoresFiltro = is_array($proveedoresFiltro ?? null) ? $proveedoresFiltro : [];
 
 $badgeEstado = function ($estado) {
     switch ($estado) {
@@ -37,36 +41,61 @@ $labelTipo = function ($tipo) {
         </form>
     </div>
 
+    <?php
+    /*
+     * Las insignias son el filtro de estado, y conservan lo demás: elegir un
+     * proveedor y luego pulsar "Sin NC" tiene que dejar las dos cosas puestas,
+     * no empezar de cero.
+     */
+    $urlEstado = function ($estado) use ($baseUrl, $filtros) {
+        $q = array_filter([
+            'q' => $filtros['q'], 'tipo' => $filtros['tipo'],
+            'proveedor' => $filtros['proveedor'], 'estado' => $estado,
+        ], 'strlen');
+        return $baseUrl . '/devoluciones' . ($q ? '?' . http_build_query($q) : '');
+    };
+    $insignias = [
+        ''           => ['Todas',       'badge badge-navy',  '', (int) $resumen['total']],
+        'verificada' => ['Verificadas', 'badge badge-green', '', (int) $resumen['verificada']],
+        'parcial'    => ['Parciales',   'badge', 'background:#fef3c7;color:#92400e;', (int) $resumen['parcial']],
+        'sin_nc'     => ['Sin NC',      'badge', 'background:#fee2e2;color:#991b1b;', (int) $resumen['sin_nc']],
+        'pendiente'  => ['Pendientes',  'badge', 'background:#e2e8f0;color:#334155;', (int) $resumen['pendiente']],
+    ];
+    ?>
     <div style="display:flex;gap:6px;flex-wrap:wrap;padding:7px 0 0;">
-        <a href="<?= $baseUrl ?>/devoluciones" style="text-decoration:none;"><span class="badge badge-navy">Todas: <?= (int) $resumen['total'] ?></span></a>
-        <a href="<?= $baseUrl ?>/devoluciones?estado=verificada" style="text-decoration:none;"><span class="badge badge-green">Verificadas: <?= (int) $resumen['verificada'] ?></span></a>
-        <a href="<?= $baseUrl ?>/devoluciones?estado=parcial" style="text-decoration:none;"><span class="badge" style="background:#fef3c7;color:#92400e;">Parciales: <?= (int) $resumen['parcial'] ?></span></a>
-        <a href="<?= $baseUrl ?>/devoluciones?estado=sin_nc" style="text-decoration:none;"><span class="badge" style="background:#fee2e2;color:#991b1b;">Sin NC: <?= (int) $resumen['sin_nc'] ?></span></a>
-        <a href="<?= $baseUrl ?>/devoluciones?estado=pendiente" style="text-decoration:none;"><span class="badge" style="background:#e2e8f0;color:#334155;">Pendientes: <?= (int) $resumen['pendiente'] ?></span></a>
+        <?php foreach ($insignias as $valor => [$etiqueta, $clase, $estilo, $cuantas]): ?>
+        <a href="<?= htmlspecialchars($urlEstado($valor)) ?>" style="text-decoration:none;">
+            <span class="<?= $clase ?>" style="<?= $estilo ?><?= $filtros['estado'] === $valor ? 'outline:2px solid var(--navy);outline-offset:1px;' : '' ?>">
+                <?= $etiqueta ?>: <?= number_format($cuantas) ?>
+            </span>
+        </a>
+        <?php endforeach; ?>
     </div>
 
     <form method="get" action="<?= $baseUrl ?>/devoluciones" class="filter-bar">
+        <?php
+        // Proveedor, número y tipo de documento. El desplegable "Estado" salió:
+        // las insignias de arriba filtran lo mismo con un clic y ya dicen
+        // cuántas hay en cada estado. El estado elegido viaja en la URL, así
+        // que las insignias y este formulario no se pisan.
+        $provFiltro = [
+            'valor'    => $filtros['proveedor'] ?? '',
+            'opciones' => $proveedoresFiltro ?? [],
+        ]; include __DIR__ . '/../partials/filtro-proveedor.php';
+        ?>
         <div class="filter-span-2">
             <label class="filter-label">Buscar</label>
             <input type="search" class="form-control" name="q" value="<?= htmlspecialchars($filtros['q']) ?>" placeholder="Número, factura o proveedor">
         </div>
         <div>
-            <label class="filter-label">Tipo</label>
+            <label class="filter-label">Tipo de documento</label>
             <select class="form-control" name="tipo">
                 <option value="">Todos</option>
                 <option value="boleta_local" <?= $filtros['tipo'] === 'boleta_local' ? 'selected' : '' ?>>Boleta (Ventas)</option>
                 <option value="devolucion_proveedor" <?= $filtros['tipo'] === 'devolucion_proveedor' ? 'selected' : '' ?>>Devolución (Cambios)</option>
             </select>
         </div>
-        <div>
-            <label class="filter-label">Estado</label>
-            <select class="form-control" name="estado">
-                <option value="">Todos</option>
-                <?php foreach (['verificada' => 'Verificada', 'parcial' => 'Parcial', 'sin_nc' => 'Sin NC', 'pendiente' => 'Pendiente'] as $v => $l): ?>
-                <option value="<?= $v ?>" <?= $filtros['estado'] === $v ? 'selected' : '' ?>><?= $l ?></option>
-                <?php endforeach; ?>
-            </select>
-        </div>
+        <input type="hidden" name="estado" value="<?= htmlspecialchars($filtros['estado']) ?>">
         <div class="filter-actions">
             <button class="btn btn-primary btn-sm" type="submit"><i class="fas fa-search"></i> Buscar</button>
             <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/devoluciones"><i class="fas fa-broom"></i> Limpiar</a>

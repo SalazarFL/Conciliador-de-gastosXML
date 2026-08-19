@@ -1,9 +1,13 @@
 <?php
 $baseUrl = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 $notas = $notas ?? [];
-$queryBase = http_build_query(array_filter(['desde' => $desde ?? '', 'hasta' => $hasta ?? '', 'buscar' => $buscar ?? ''], 'strlen'));
+$proveedoresFiltro = is_array($proveedoresFiltro ?? null) ? $proveedoresFiltro : [];
+$queryBase = http_build_query(array_filter([
+    'desde' => $desde ?? '', 'hasta' => $hasta ?? '',
+    'buscar' => $buscar ?? '', 'proveedor' => $proveedor ?? '',
+], 'strlen'));
 $filtrosActivos = 0;
-foreach ([$desde ?? '', $hasta ?? '', $buscar ?? ''] as $valorFiltro) {
+foreach ([$desde ?? '', $hasta ?? '', $buscar ?? '', $proveedor ?? ''] as $valorFiltro) {
     if ((string) $valorFiltro !== '') { $filtrosActivos++; }
 }
 ?>
@@ -28,6 +32,10 @@ foreach ([$desde ?? '', $hasta ?? '', $buscar ?? ''] as $valorFiltro) {
 <div class="card">
     <div class="card-header"><div class="card-title">Documentos <span class="badge badge-navy"><?= (int) ($total ?? 0) ?></span></div></div>
     <form method="get" action="<?= $baseUrl ?>/notas-xml" class="filter-bar">
+        <?php $provFiltro = [
+            'valor'    => $proveedor ?? '',
+            'opciones' => $proveedoresFiltro,
+        ]; include __DIR__ . '/../partials/filtro-proveedor.php'; ?>
         <div class="filter-span-2">
             <label class="filter-label">Buscar</label>
             <input type="search" class="form-control" name="buscar" value="<?= htmlspecialchars($buscar ?? '') ?>" placeholder="Consecutivo, número o proveedor">

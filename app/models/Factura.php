@@ -5,6 +5,7 @@
  */
 
 require_once __DIR__ . '/../helpers/NumeroFactura.php';
+require_once __DIR__ . '/ProveedorCatalogo.php';
 
 class Factura extends Model
 {
@@ -71,11 +72,15 @@ class Factura extends Model
             array_push($params, $like, $like, $like, $like, $like, $like, $like);
         }
 
-        $proveedor = trim((string) ($filtros['proveedor'] ?? ''));
+        // Por el emisor del comprobante: la cédula del XML es la identidad,
+        // no el nombre con el que cada quien lo escribió.
+        $proveedor = ProveedorCatalogo::condicion(
+            $filtros['proveedor'] ?? '',
+            ['proveedor_id' => 'f.proveedor_id', 'cedula' => 'p.rfc'],
+            $params
+        );
         if ($proveedor !== '') {
-            $like = '%' . $proveedor . '%';
-            $where[] = '(p.razon_social LIKE ? OR p.rfc LIKE ?)';
-            array_push($params, $like, $like);
+            $where[] = $proveedor;
         }
 
         if (!empty($filtros['fecha_desde'])) {
@@ -356,7 +361,31 @@ class Factura extends Model
         return $this->fetchAll($sql, $params) ?: [];
     }
 
-    public function getNotasXml($desde = '', $hasta = '', $buscar = '', $page = 1, $perPage = 100)
+    public function getNotasXml($desde = '', $hasta = '', $buscar = '', $proveedor = '', $page = 1, $perPage = 100)
+    {
+        [$where, $params] = $this->condicionesNotasXml($desde, $hasta, $buscar, $proveedor);
+        $limit = max(1, min(500, (int) $perPage));
+        $offset = (max(1, (int) $page) - 1) * $limit;
+        $sql = "SELECT f.*, p.razon_social AS proveedor_nombre, i.archivo_origen AS archivo_importacion
+                FROM {$this->table} f
+                LEFT JOIN proveedores p ON p.id = f.proveedor_id
+                LEFT JOIN importaciones i ON i.id = f.importacion_id
+                WHERE " . implode(' AND ', $where) . "
+                ORDER BY f.fecha_emision DESC, f.id DESC LIMIT {$limit} OFFSET {$offset}";
+        return $this->fetchAll($sql, $params) ?: [];
+    }
+
+    public function countNotasXml($desde = '', $hasta = '', $buscar = '', $proveedor = '')
+    {
+        [$where, $params] = $this->condicionesNotasXml($desde, $hasta, $buscar, $proveedor);
+        $sql = "SELECT COUNT(*) FROM {$this->table} f
+                LEFT JOIN proveedores p ON p.id = f.proveedor_id
+                WHERE " . implode(' AND ', $where);
+        return (int) $this->fetchColumn($sql, $params);
+    }
+
+    /** Las condiciones de la lista de notas XML, una sola vez para listar y contar. */
+    private function condicionesNotasXml($desde, $hasta, $buscar, $proveedor)
     {
         $where = ["f.tipo_documento = 'NC'"];
         $params = [];
@@ -374,33 +403,40 @@ class Factura extends Model
             $like = '%' . $buscar . '%';
             array_push($params, $like, $like, $like);
         }
-        $limit = max(1, min(500, (int) $perPage));
-        $offset = (max(1, (int) $page) - 1) * $limit;
-        $sql = "SELECT f.*, p.razon_social AS proveedor_nombre, i.archivo_origen AS archivo_importacion
-                FROM {$this->table} f
-                LEFT JOIN proveedores p ON p.id = f.proveedor_id
-                LEFT JOIN importaciones i ON i.id = f.importacion_id
-                WHERE " . implode(' AND ', $where) . "
-                ORDER BY f.fecha_emision DESC, f.id DESC LIMIT {$limit} OFFSET {$offset}";
-        return $this->fetchAll($sql, $params) ?: [];
+        $condicionProveedor = ProveedorCatalogo::condicion(
+            $proveedor,
+            ['proveedor_id' => 'f.proveedor_id', 'cedula' => 'p.rfc'],
+            $params
+        );
+        if ($condicionProveedor !== '') {
+            $where[] = $condicionProveedor;
+        }
+
+        return [$where, $params];
     }
 
-    public function countNotasXml($desde = '', $hasta = '', $buscar = '')
+    /**
+     * Los proveedores que emitieron documentos XML, para el filtro.
+     *
+     * @param string $tipo 'FE' facturas · 'NC' notas de crédito
+     */
+    public function proveedoresParaFiltro($tipo = 'FE')
     {
-        $where = ["f.tipo_documento = 'NC'"];
+        $where = $tipo === 'NC'
+            ? ["f.tipo_documento = 'NC'"]
+            : ["(f.tipo_documento IS NULL OR f.tipo_documento = 'FE')"];
         $params = [];
         $this->filtrarPorSociedad($where, $params, 'f.');
-        if ($desde !== '') { $where[] = 'f.fecha_emision >= ?'; $params[] = $desde; }
-        if ($hasta !== '') { $where[] = 'f.fecha_emision <= ?'; $params[] = $hasta; }
-        if ($buscar !== '') {
-            $where[] = '(f.consecutivo_completo LIKE ? OR f.numero_factura_asistente LIKE ? OR p.razon_social LIKE ?)';
-            $like = '%' . $buscar . '%';
-            array_push($params, $like, $like, $like);
-        }
-        $sql = "SELECT COUNT(*) FROM {$this->table} f
-                LEFT JOIN proveedores p ON p.id = f.proveedor_id
-                WHERE " . implode(' AND ', $where);
-        return (int) $this->fetchColumn($sql, $params);
+
+        return $this->fetchAll(
+            "SELECT f.proveedor_id AS proveedor_id, MAX(p.rfc) AS cedula,
+                    MAX(p.razon_social) AS nombre, COUNT(*) AS n
+               FROM {$this->table} f
+               LEFT JOIN proveedores p ON p.id = f.proveedor_id
+              WHERE " . implode(' AND ', $where) . "
+              GROUP BY f.proveedor_id",
+            $params
+        ) ?: [];
     }
 
     /** Documentos y estado de conciliación necesarios para ordenar el archivo local. */

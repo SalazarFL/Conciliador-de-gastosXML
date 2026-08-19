@@ -4,6 +4,7 @@
  */
 
 require_once __DIR__ . '/../helpers/FacturaMatcher.php';
+require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 
 class FacturasController extends Controller
 {
@@ -68,9 +69,19 @@ class FacturasController extends Controller
 			$this->redirectWithMessage($this->url('/facturas'), 'No fue posible cargar facturas: ' . $e->getMessage(), 'warning');
 		}
 
+		$proveedoresFiltro = [];
+		try {
+			$proveedoresFiltro = ProveedorCatalogo::opciones(
+				$this->loadModel('Factura')->proveedoresParaFiltro('FE')
+			);
+		} catch (Throwable $e) {
+			// Sin catálogo el filtro queda vacío; la lista se sigue viendo.
+		}
+
 		$this->render('facturas/index', [
 			'title'             => 'Facturas - Nexo Fiscal',
 			'facturas'          => $facturas,
+			'proveedoresFiltro' => $proveedoresFiltro,
 			'historial'         => $historial,
 			'importacionActiva' => $importacionActiva,
 			'semanas'           => $semanas,
@@ -83,7 +94,7 @@ class FacturasController extends Controller
 	private function filtrosListado()
 	{
 		$q = mb_substr(trim((string) $this->get('q', '')), 0, 150, 'UTF-8');
-		$proveedor = mb_substr(trim((string) $this->get('proveedor', '')), 0, 120, 'UTF-8');
+		$proveedor = ProveedorCatalogo::normalizarClave($this->get('proveedor', ''));
 		$desde = $this->fechaFiltro((string) $this->get('fecha_desde', ''));
 		$hasta = $this->fechaFiltro((string) $this->get('fecha_hasta', ''));
 		if ($desde !== '' && $hasta !== '' && $desde > $hasta) {

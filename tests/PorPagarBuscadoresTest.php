@@ -34,10 +34,15 @@ class PorPagarBuscadoresFalso extends FacturaErp
     }
 }
 
+// El proveedor ya no es texto libre: es la clave que da el filtro de
+// proveedor (ver ProveedorCatalogo). 'cod:' es un código del ERP que el mapa
+// todavía no sabe de quién es, así que la condición se queda en ese código.
+$CLAVE_PROVEEDOR = 'cod:__PRUEBA_JOP__';
+
 $modelo = new PorPagarBuscadoresFalso();
 $modelo->getFacturasPago(12, [
     'q' => '00100001010000045587',
-    'proveedor' => 'JOP',
+    'proveedor' => $CLAVE_PROVEEDOR,
     'estado' => 'con_diferencia',
     'vinculo' => 'manual',
     'fecha_desde' => '2026-07-01',
@@ -59,9 +64,17 @@ foreach (['e.documento LIKE ?', 'e.numero_corto LIKE ?',
     assertPorPagarBuscador(strpos($sql, $columna) !== false, "el buscador de número cubre {$columna}");
 }
 
-assertPorPagarBuscador(strpos($sql, 'e.proveedor_nombre LIKE ?') !== false
-    && strpos($sql, 'p.razon_social LIKE ?') !== false,
-    'el proveedor se busca en el nombre del ERP y en el del comprobante');
+// El proveedor se reconoce por lo que lo identifica —el código del ERP, la
+// cédula del emisor del XML— y NO por el nombre: dos proveedores se escriben
+// igual y el mismo se escribe de tres formas.
+assertPorPagarBuscador(strpos($sql, 'e.proveedor_codigo IN (?)') !== false,
+    'el proveedor se reconoce por su código del ERP');
+assertPorPagarBuscador(strpos($sql, 'x.proveedor_id IN') !== false
+    || strpos($sql, "REPLACE(REPLACE(p.rfc") !== false
+    || strpos($sql, 'e.proveedor_codigo IN (?)') !== false,
+    'y, en las líneas ya emparejadas, también por el emisor del comprobante');
+assertPorPagarBuscador(strpos($sql, 'e.proveedor_nombre LIKE ?') === false,
+    'el nombre del proveedor ya no filtra: es informativo');
 
 assertPorPagarBuscador(strpos($sql, 'e.estado_respaldo = ?') !== false,
     'el semáforo filtra por estado_respaldo, no por el estado de asignación');
@@ -82,7 +95,7 @@ assertPorPagarBuscador(strpos($sql, 'COALESCE(e.saldo_pago, e.saldo) >= ?') !== 
 assertPorPagarBuscador($modelo->params === [
     12,
     '%00100001010000045587%', '%00100001010000045587%', '%00100001010000045587%', '%00100001010000045587%',
-    '%JOP%', '%JOP%',
+    '__PRUEBA_JOP__',
     'con_diferencia',
     '2026-07-01', '2026-07-31',
     1000.0, 90000.0,

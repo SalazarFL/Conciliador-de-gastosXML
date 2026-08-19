@@ -4,6 +4,7 @@ $facturas          = $facturas ?? [];
 $historial         = $historial ?? [];
 $importacionActiva = $importacionActiva ?? null;
 $semanas           = is_array($semanas ?? null) ? $semanas : [];
+$proveedoresFiltro = is_array($proveedoresFiltro ?? null) ? $proveedoresFiltro : [];
 $semanaFiltro      = (int) ($semanaFiltro ?? 0);
 $filtros           = array_merge([
     'q' => '', 'proveedor' => '', 'fecha_desde' => '', 'fecha_hasta' => '',
@@ -107,17 +108,20 @@ function semanaCambio(sel) {
         <?php else: ?>
         <input type="hidden" name="semana_id" value="<?= $semanaFiltro ?>">
         <?php endif; ?>
+        <?php
+        // Proveedor primero; después el número y qué archivos tiene, que es
+        // lo que se viene a mirar aquí. Los rangos de monto salieron de la
+        // barra: se busca un comprobante, no un tramo de importes.
+        $provFiltro = [
+            'valor'    => $filtros['proveedor'],
+            'opciones' => $proveedoresFiltro,
+        ]; include __DIR__ . '/../partials/filtro-proveedor.php';
+        ?>
         <div class="filter-span-2">
             <label class="filter-label">Buscar</label>
             <input type="search" class="form-control" name="q"
                    value="<?= htmlspecialchars((string) $filtros['q']) ?>"
                    placeholder="Número, clave, proveedor o archivo">
-        </div>
-        <div>
-            <label class="filter-label">Proveedor</label>
-            <input type="search" class="form-control" name="proveedor"
-                   value="<?= htmlspecialchars((string) $filtros['proveedor']) ?>"
-                   placeholder="Nombre o cédula">
         </div>
         <div>
             <label class="filter-label">Fecha desde</label>
@@ -128,16 +132,6 @@ function semanaCambio(sel) {
             <label class="filter-label">Fecha hasta</label>
             <input type="date" class="form-control" name="fecha_hasta"
                    value="<?= htmlspecialchars((string) $filtros['fecha_hasta']) ?>">
-        </div>
-        <div>
-            <label class="filter-label">Monto desde</label>
-            <input type="number" min="0" step="0.01" class="form-control" name="monto_desde"
-                   value="<?= htmlspecialchars((string) $filtros['monto_desde']) ?>" placeholder="0.00">
-        </div>
-        <div>
-            <label class="filter-label">Monto hasta</label>
-            <input type="number" min="0" step="0.01" class="form-control" name="monto_hasta"
-                   value="<?= htmlspecialchars((string) $filtros['monto_hasta']) ?>" placeholder="Sin límite">
         </div>
         <div>
             <label class="filter-label">Respaldo</label>

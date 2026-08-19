@@ -13,6 +13,7 @@
 require_once __DIR__ . '/../models/Seguimiento.php';
 require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 require_once __DIR__ . '/../helpers/ClaseNotaCredito.php';
+require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 
 class SeguimientoController extends Controller
 {
@@ -33,6 +34,7 @@ class SeguimientoController extends Controller
 
         $cola = $modelo->cola($filtros, $pagina, self::POR_PAGINA);
         $resumen = $modelo->resumen($filtros);
+        $dimensiones = $modelo->dimensionesParaFiltro($sociedad ? (int) $sociedad['id'] : 0);
 
         $this->render('seguimiento/index', [
             'title' => 'Seguimiento - Nexo Fiscal',
@@ -47,7 +49,8 @@ class SeguimientoController extends Controller
             'resumen' => $resumen,
             'filtros' => $filtros,
             'responsables' => $modelo->responsables(),
-            'contextos' => $this->contextos($sociedad),
+            'proveedoresFiltro' => ProveedorCatalogo::opciones($dimensiones['proveedores']),
+            'sucursales' => $dimensiones['sucursales'],
             'estados' => Seguimiento::ESTADOS,
             'tareas' => Seguimiento::TAREAS,
         ]);
@@ -71,6 +74,8 @@ class SeguimientoController extends Controller
             'marca'       => in_array($marca, $marcas, true) ? $marca : '',
             'clase'       => (string) $this->get('clase', ''),
             'responsable' => (string) $this->get('responsable', ''),
+            'proveedor'   => ProveedorCatalogo::normalizarClave($this->get('proveedor', '')),
+            'sucursal'    => trim((string) $this->get('sucursal', '')),
             'contexto_id' => (int) $this->get('contexto_id', 0),
             'desde'       => $this->fecha($this->get('desde', '')),
             'hasta'       => $this->fecha($this->get('hasta', '')),
@@ -123,19 +128,11 @@ class SeguimientoController extends Controller
         return date('Y-m-d', strtotime('+' . (int) $dias . ' days')) . ' ' . $hora . ':00';
     }
 
-    /** Los listados abiertos de ambos módulos, para acotar por origen concreto. */
-    private function contextos($sociedad)
-    {
-        if (!$sociedad) {
-            return [];
-        }
-        $modelo = $this->loadModel('Seguimiento');
-        try {
-            return $modelo->contextosDisponibles((int) $sociedad['id']);
-        } catch (Throwable $e) {
-            return [];
-        }
-    }
+    // Aquí se armaba la lista de listados para el desplegable "Listado".
+    // Salió con el desplegable: recorrer la unión entera es lo caro de esta
+    // pantalla, y era una pasada más por una pregunta que el pago semanal ya
+    // contesta en su propia pantalla. `Seguimiento::contextosDisponibles()`
+    // sigue ahí para cuando haga falta.
 
     /**
      * Lo que la vista necesita y no sale de la base: el término con el que

@@ -2,6 +2,7 @@
 require_once __DIR__ . '/../helpers/NotasCreditoCsvParser.php';
 require_once __DIR__ . '/../helpers/NotasCreditoVerificador.php';
 require_once __DIR__ . '/../helpers/FacturaMatcher.php';
+require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 
 class NotasCreditoController extends Controller
 {
@@ -40,7 +41,10 @@ class NotasCreditoController extends Controller
             ],
             'resumen' => $listado ? $modelo->resumen($listadoId) : [],
             'filtros' => $filters,
-            'opciones' => $listado ? $modelo->opcionesFiltros($listadoId) : ['proveedores' => [], 'sucursales' => []],
+            'opciones' => $listado ? $modelo->opcionesFiltros($listadoId) : ['sucursales' => []],
+            'proveedoresFiltro' => $listado
+                ? ProveedorCatalogo::opciones($modelo->proveedoresParaFiltro($listadoId))
+                : [],
         ]);
     }
 
@@ -71,7 +75,7 @@ class NotasCreditoController extends Controller
     private function filtrosLineas()
     {
         $keys = [
-            'q', 'estado', 'condicion_saldo', 'condicion_nc_proveedor', 'proveedor', 'sucursal',
+            'q', 'estado', 'condicion_saldo', 'condicion_nc_proveedor', 'proveedor', 'sucursal', 'clase',
             'col_estado', 'proveedor_codigo', 'proveedor_nombre', 'sucursal_texto',
             'documento', 'fecha', 'nc_proveedor', 'fecha_nc_proveedor',
             'entrada_asociada', 'moneda', 'monto', 'saldo', 'monto_conversion',
@@ -81,6 +85,8 @@ class NotasCreditoController extends Controller
         foreach ($keys as $key) {
             $filters[$key] = trim((string) $this->get($key, ''));
         }
+        // El proveedor no es texto libre: es la clave que eligió el filtro.
+        $filters['proveedor'] = ProveedorCatalogo::normalizarClave($filters['proveedor']);
         return $filters;
     }
 

@@ -5,6 +5,8 @@
  * devolucion_lineas y devolucion_matches.
  */
 
+require_once __DIR__ . '/ProveedorCatalogo.php';
+
 class Devolucion extends Model
 {
     // Las devoluciones ya guardaban su sociedad, pero las NC contra las que
@@ -170,6 +172,23 @@ class Devolucion extends Model
             $where[] = '(d.numero LIKE ? OR d.numero_factura LIKE ?
                          OR d.proveedor_nombre_erp LIKE ? OR p.razon_social LIKE ?)';
             array_push($params, $like, $like, $like, $like);
+        }
+
+        // El reporte trae el código del ERP y, cuando se pudo resolver, el
+        // proveedor local. El nombre queda de respaldo para los reportes
+        // viejos que solo tienen eso.
+        $proveedor = ProveedorCatalogo::condicion(
+            $filtros['proveedor'] ?? '',
+            [
+                'codigo' => 'd.proveedor_codigo_erp',
+                'proveedor_id' => 'd.proveedor_id',
+                'cedula' => 'p.rfc',
+                'nombre' => 'd.proveedor_nombre_erp',
+            ],
+            $params
+        );
+        if ($proveedor !== '') {
+            $where[] = $proveedor;
         }
 
         return $this->fetchAll(
@@ -460,6 +479,31 @@ class Devolucion extends Model
             $ids[(int) $f['factura_xml_id']] = true;
         }
         return $ids;
+    }
+
+    /** Los proveedores que aparecen en los reportes importados, para el filtro. */
+    public function proveedoresParaFiltro($sociedadId = null)
+    {
+        $where = '';
+        $params = [];
+        $sociedadFiltro = (int) $sociedadId ?: $this->sociedadId();
+        if ($sociedadFiltro > 0) {
+            $where = 'WHERE d.sociedad_id = ?';
+            $params[] = $sociedadFiltro;
+        }
+
+        return $this->fetchAll(
+            "SELECT COALESCE(d.proveedor_codigo_erp, '') AS codigo,
+                    d.proveedor_id AS proveedor_id,
+                    MAX(p.rfc) AS cedula,
+                    MAX(COALESCE(p.razon_social, d.proveedor_nombre_erp)) AS nombre,
+                    COUNT(*) AS n
+               FROM devoluciones d
+               LEFT JOIN proveedores p ON p.id = d.proveedor_id
+               {$where}
+              GROUP BY COALESCE(d.proveedor_codigo_erp, ''), d.proveedor_id",
+            $params
+        ) ?: [];
     }
 
     public function proveedoresActivos()

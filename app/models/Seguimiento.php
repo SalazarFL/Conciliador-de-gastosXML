@@ -28,6 +28,7 @@
  */
 require_once __DIR__ . '/../helpers/ClaseNotaCredito.php';
 require_once __DIR__ . '/Notificacion.php';
+require_once __DIR__ . '/ProveedorCatalogo.php';
 
 class Seguimiento extends Model
 {
@@ -246,6 +247,8 @@ class Seguimiento extends Model
                 l.documento AS documento,
                 l.clase AS clase,
                 l.proveedor_nombre AS proveedor,
+                l.proveedor_codigo AS proveedor_codigo,
+                x.proveedor_id AS proveedor_id,
                 l.sucursal AS sucursal,
                 l.fecha AS fecha,
                 l.moneda AS moneda,
@@ -288,6 +291,8 @@ class Seguimiento extends Model
                 pe.documento AS documento,
                 NULL AS clase,
                 pe.proveedor_nombre AS proveedor,
+                pe.proveedor_codigo AS proveedor_codigo,
+                x.proveedor_id AS proveedor_id,
                 pe.sucursal AS sucursal,
                 pe.fecha_emision AS fecha,
                 'CRC' AS moneda,
@@ -412,6 +417,28 @@ class Seguimiento extends Model
         if (!empty($f['contexto_id'])) {
             $where[] = 'c.contexto_id = ?';
             $params[] = (int) $f['contexto_id'];
+        }
+        /*
+         * Por el código del ERP y por el nombre escrito, que es lo único que
+         * tienen las notas que llegan sin código.
+         *
+         * Por el emisor del comprobante NO, aunque la columna esté ahí: hay
+         * facturas enlazadas a un XML de otro proveedor —un emparejamiento
+         * cruzado, que es un error, no un dato— y reconocerlas por el emisor
+         * metía el documento de un proveedor dentro de la lista de otro. Esos
+         * cruces se avisan por su lado, en la campana.
+         */
+        $proveedor = ProveedorCatalogo::condicion(
+            $f['proveedor'] ?? '',
+            ['codigo' => 'c.proveedor_codigo', 'nombre' => 'c.proveedor'],
+            $params
+        );
+        if ($proveedor !== '') {
+            $where[] = $proveedor;
+        }
+        if (isset($f['sucursal']) && $f['sucursal'] !== '') {
+            $where[] = 'c.sucursal = ?';
+            $params[] = (string) $f['sucursal'];
         }
         if (isset($f['desde']) && $f['desde'] !== '') {
             $where[] = 'c.fecha >= ?';
@@ -601,6 +628,49 @@ class Seguimiento extends Model
             [(int) $sociedadId]
         );
         return $filas ?: [];
+    }
+
+    /**
+     * Proveedores y sucursales de la cola, para los dos desplegables.
+     *
+     * Salen de la misma unión que la cola —así ofrecen lo que realmente hay
+     * que perseguir, y su cuenta es la de esta pantalla y no la del listado
+     * del que vino cada renglón— y en UNA sola pasada: recorrer la unión es
+     * lo caro de esta consulta, y la pantalla ya la recorre para la lista,
+     * el total y el resumen.
+     */
+    public function dimensionesParaFiltro($sociedadId)
+    {
+        $where = '';
+        $params = [];
+        if ((int) $sociedadId > 0) {
+            $where = 'WHERE c.sociedad_id = ?';
+            $params[] = (int) $sociedadId;
+        }
+
+        $filas = $this->fetchAll(
+            "SELECT COALESCE(c.proveedor_codigo, '') AS codigo,
+                    c.proveedor_id AS proveedor_id,
+                    COALESCE(c.sucursal, '') AS sucursal,
+                    MAX(c.proveedor) AS nombre,
+                    COUNT(*) AS n
+               FROM (" . $this->sqlUnion() . ") c
+               {$where}
+              GROUP BY COALESCE(c.proveedor_codigo, ''), c.proveedor_id, COALESCE(c.sucursal, '')",
+            $params
+        ) ?: [];
+
+        $sucursales = [];
+        foreach ($filas as $fila) {
+            $sucursal = trim((string) $fila['sucursal']);
+            if ($sucursal === '') {
+                continue;
+            }
+            $sucursales[$sucursal] = ($sucursales[$sucursal] ?? 0) + (int) $fila['n'];
+        }
+        ksort($sucursales, SORT_NATURAL | SORT_FLAG_CASE);
+
+        return ['proveedores' => $filas, 'sucursales' => $sucursales];
     }
 
     /** Quiénes tienen algo asignado, para el desplegable de responsable. */

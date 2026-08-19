@@ -6,10 +6,12 @@ $lineas         = $lineas ?? [];
 $resumen        = $resumen ?? [];
 $semanas        = is_array($semanas ?? null) ? $semanas : [];
 $carpetasPago   = is_array($carpetasPago ?? null) ? $carpetasPago : [];
+$proveedoresFiltro = is_array($proveedoresFiltro ?? null) ? $proveedoresFiltro : [];
+$sucursales     = is_array($sucursales ?? null) ? $sucursales : [];
 $semanaFiltro   = (int) ($semanaFiltro ?? 0);
 $sinCoincidencia = (int) ($sinCoincidencia ?? 0);
 $filtros = array_replace([
-    'q' => '', 'proveedor' => '', 'estado' => '', 'vinculo' => '',
+    'q' => '', 'proveedor' => '', 'sucursal' => '', 'estado' => '', 'vinculo' => '',
     'fecha_desde' => '', 'fecha_hasta' => '', 'monto_desde' => '', 'monto_hasta' => '',
 ], is_array($filtros ?? null) ? $filtros : []);
 $filtrosQuery = array_filter($filtros, function ($valor) { return $valor !== '' && $valor !== null; });
@@ -879,17 +881,41 @@ document.addEventListener('keydown', function (e) {
     <form method="GET" action="<?= $baseUrl ?>/por-pagar" class="filter-bar">
         <input type="hidden" name="semana_id" value="<?= (int) $semanaFiltro ?>">
         <input type="hidden" name="listado_id" value="<?= (int) $listado['id'] ?>">
+        <?php
+        /*
+         * El checklist del pago se recorre persiguiendo respaldos: de quién,
+         * cuál documento, de qué sucursal y en qué estado está. Eso es todo.
+         *
+         * Salieron de la barra:
+         *   Vínculo XML (automático/manual)  Sirve para auditar cómo se
+         *                                    emparejó, no para completar el pago.
+         *   Monto desde / hasta              Cuatro campos de rango para una
+         *   Fecha desde / hasta              pantalla que ya es de una semana
+         *                                    y de un listado.
+         * Siguen funcionando si llegan por la URL.
+         */
+        $provFiltro = [
+            'valor'    => $filtros['proveedor'],
+            'opciones' => $proveedoresFiltro ?? [],
+        ]; include __DIR__ . '/../partials/filtro-proveedor.php';
+        ?>
         <div class="filter-span-2">
             <label class="filter-label">Número de factura</label>
             <input type="search" name="q" class="form-control"
                    value="<?= htmlspecialchars((string) $filtros['q']) ?>"
                    placeholder="Número del listado o del XML">
         </div>
-        <div class="filter-span-2">
-            <label class="filter-label">Proveedor</label>
-            <input type="search" name="proveedor" class="form-control"
-                   value="<?= htmlspecialchars((string) $filtros['proveedor']) ?>"
-                   placeholder="Proveedor del listado o del XML">
+        <div>
+            <label class="filter-label">Sucursal</label>
+            <select name="sucursal" class="form-control" onchange="this.form.submit()">
+                <option value="">Todas</option>
+                <?php foreach (($sucursales ?? []) as $nombreSucursal => $cuantas): ?>
+                <option value="<?= htmlspecialchars((string) $nombreSucursal) ?>"
+                    <?= ($filtros['sucursal'] ?? '') === (string) $nombreSucursal ? 'selected' : '' ?>>
+                    <?= htmlspecialchars((string) $nombreSucursal) ?> (<?= number_format((int) $cuantas) ?>)
+                </option>
+                <?php endforeach; ?>
+            </select>
         </div>
         <div>
             <label class="filter-label">Estado</label>
@@ -899,33 +925,6 @@ document.addEventListener('keydown', function (e) {
                 <option value="con_diferencia" <?= $filtros['estado'] === 'con_diferencia' ? 'selected' : '' ?>>Con diferencia</option>
                 <option value="sin_respaldo" <?= $filtros['estado'] === 'sin_respaldo' ? 'selected' : '' ?>>Sin respaldo</option>
             </select>
-        </div>
-        <div>
-            <label class="filter-label">Vínculo XML</label>
-            <select name="vinculo" class="form-control" onchange="this.form.submit()">
-                <option value="">Todos</option>
-                <option value="automatico" <?= $filtros['vinculo'] === 'automatico' ? 'selected' : '' ?>>Automático</option>
-                <option value="manual" <?= $filtros['vinculo'] === 'manual' ? 'selected' : '' ?>>Manual</option>
-                <option value="sin_vinculo" <?= $filtros['vinculo'] === 'sin_vinculo' ? 'selected' : '' ?>>Sin vínculo</option>
-            </select>
-        </div>
-        <div>
-            <label class="filter-label">Fecha desde</label>
-            <input type="date" name="fecha_desde" class="form-control" value="<?= htmlspecialchars((string) $filtros['fecha_desde']) ?>">
-        </div>
-        <div>
-            <label class="filter-label">Fecha hasta</label>
-            <input type="date" name="fecha_hasta" class="form-control" value="<?= htmlspecialchars((string) $filtros['fecha_hasta']) ?>">
-        </div>
-        <div>
-            <label class="filter-label">Monto desde</label>
-            <input type="number" min="0" step="0.01" name="monto_desde" class="form-control"
-                   value="<?= htmlspecialchars((string) $filtros['monto_desde']) ?>" placeholder="0.00">
-        </div>
-        <div>
-            <label class="filter-label">Monto hasta</label>
-            <input type="number" min="0" step="0.01" name="monto_hasta" class="form-control"
-                   value="<?= htmlspecialchars((string) $filtros['monto_hasta']) ?>" placeholder="Sin límite">
         </div>
         <div class="filter-actions">
             <button type="submit" class="btn btn-primary btn-sm"><i class="fas fa-search"></i> Buscar</button>

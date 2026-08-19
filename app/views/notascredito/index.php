@@ -9,7 +9,8 @@ $filtrosActivos = 0;
 foreach ($filtros as $valorFiltro) {
     if ((string) $valorFiltro !== '') { $filtrosActivos++; }
 }
-$opciones = is_array($opciones ?? null) ? $opciones : ['proveedores' => [], 'sucursales' => []];
+$opciones = is_array($opciones ?? null) ? $opciones : ['sucursales' => []];
+$proveedoresFiltro = is_array($proveedoresFiltro ?? null) ? $proveedoresFiltro : [];
 $paginacion = is_array($paginacion ?? null) ? $paginacion : ['page' => 1, 'pages' => 1, 'total' => 0];
 
 function ncFecha($value) {
@@ -121,10 +122,49 @@ function ncQuery(array $changes = []) {
 <div class="card">
     <form method="GET" action="<?= $baseUrl ?>/notas-credito" class="filter-bar" id="nc-filter-form">
         <input type="hidden" name="listado_id" value="<?= (int) $listado['id'] ?>">
+        <?php
+        /*
+         * Proveedor, documento, clase, sucursal y estado. "NC proveedor
+         * (con/sin)" salió de la barra: la fila de buscadores de la tabla
+         * tiene su propia columna, y ahí se ve además cuál es.
+         */
+        $provFiltro = [
+            'valor'    => $filtros['proveedor'] ?? '',
+            'opciones' => $proveedoresFiltro ?? [],
+        ]; include __DIR__ . '/../partials/filtro-proveedor.php';
+        ?>
         <div class="filter-span-2">
             <label class="filter-label">Buscar</label>
             <input type="search" class="form-control" name="q" value="<?= htmlspecialchars($filtros['q'] ?? '') ?>"
                    placeholder="Documento, NC proveedor, entrada o proveedor">
+        </div>
+        <div>
+            <label class="filter-label">Clase de nota</label>
+            <select class="form-control" name="clase">
+                <option value="">Todas</option>
+                <?php foreach ([
+                    'directa' => 'Directa (corrige factura)',
+                    'costo'   => 'Diferencia de costo',
+                    'cambio'  => 'Cambio de mercadería',
+                    'ajuste'  => 'Ajuste',
+                    'revisar' => 'Por revisar',
+                ] as $claveClase => $etiquetaClase): ?>
+                <option value="<?= $claveClase ?>" <?= ($filtros['clase'] ?? '') === $claveClase ? 'selected' : '' ?>>
+                    <?= htmlspecialchars($etiquetaClase) ?>
+                </option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+        <div>
+            <label class="filter-label">Sucursal</label>
+            <select class="form-control" name="sucursal">
+                <option value="">Todas</option>
+                <?php foreach ($opciones['sucursales'] as $option): ?>
+                <option value="<?= htmlspecialchars($option['valor']) ?>" <?= ($filtros['sucursal'] ?? '') === $option['valor'] ? 'selected' : '' ?>>
+                    <?= htmlspecialchars($option['valor']) ?>
+                </option>
+                <?php endforeach; ?>
+            </select>
         </div>
         <div>
             <label class="filter-label">Estado</label>
@@ -141,36 +181,6 @@ function ncQuery(array $changes = []) {
                 <option value="">Todos</option>
                 <option value="con_saldo" <?= ($filtros['condicion_saldo'] ?? '') === 'con_saldo' ? 'selected' : '' ?>>Con saldo</option>
                 <option value="sin_saldo" <?= ($filtros['condicion_saldo'] ?? '') === 'sin_saldo' ? 'selected' : '' ?>>Sin saldo</option>
-            </select>
-        </div>
-        <div>
-            <label class="filter-label">NC proveedor</label>
-            <select class="form-control" name="condicion_nc_proveedor">
-                <option value="">Todos</option>
-                <option value="con_nc_proveedor" <?= ($filtros['condicion_nc_proveedor'] ?? '') === 'con_nc_proveedor' ? 'selected' : '' ?>>Con NC proveedor</option>
-                <option value="sin_nc_proveedor" <?= ($filtros['condicion_nc_proveedor'] ?? '') === 'sin_nc_proveedor' ? 'selected' : '' ?>>Sin NC proveedor</option>
-            </select>
-        </div>
-        <div>
-            <label class="filter-label">Sucursal</label>
-            <select class="form-control" name="sucursal">
-                <option value="">Todas</option>
-                <?php foreach ($opciones['sucursales'] as $option): ?>
-                <option value="<?= htmlspecialchars($option['valor']) ?>" <?= ($filtros['sucursal'] ?? '') === $option['valor'] ? 'selected' : '' ?>>
-                    <?= htmlspecialchars($option['valor']) ?>
-                </option>
-                <?php endforeach; ?>
-            </select>
-        </div>
-        <div>
-            <label class="filter-label">Proveedor</label>
-            <select class="form-control" name="proveedor">
-                <option value="">Todos</option>
-                <?php foreach ($opciones['proveedores'] as $option): ?>
-                <option value="<?= htmlspecialchars($option['valor']) ?>" <?= ($filtros['proveedor'] ?? '') === $option['valor'] ? 'selected' : '' ?>>
-                    <?= htmlspecialchars($option['valor']) ?>
-                </option>
-                <?php endforeach; ?>
             </select>
         </div>
         <div class="filter-actions">

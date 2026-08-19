@@ -958,6 +958,160 @@ table.data-table {
   .filter-actions .btn { flex: 1; justify-content: center; }
 }
 
+/* ══════════════════════════════
+   FILTRO DE PROVEEDOR (compartido por todos los listados)
+   Desplegable con buscador propio: se elige por código o cédula —lo que
+   identifica— y el nombre acompaña como referencia.
+   Marcado en app/views/partials/filtro-proveedor.php
+══════════════════════════════ */
+.prov-picker { position: relative; }
+
+.prov-picker-boton {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 5px 8px;
+  background: #fff;
+  overflow: hidden;
+}
+.prov-picker.is-elegido .prov-picker-boton {
+  border-color: var(--navy-light);
+  background: #F5F8FE;
+}
+.prov-picker-elegido {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.prov-picker-flecha { font-size: 9px; color: var(--text-muted); flex-shrink: 0; }
+.prov-picker.is-abierto .prov-picker-flecha { transform: rotate(180deg); }
+
+/* El código y la cédula mandan: tipografía de dato, no de texto. */
+.prov-cod {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-weight: 700;
+  font-size: 11px;
+  color: var(--navy);
+  background: #E8EFFB;
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+.prov-ced {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.prov-nom {
+  font-size: 11.5px;
+  color: #475569;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Fijo respecto de la ventana, no de la tarjeta, y colocado por JS.
+ *
+ * Las barras de filtro viven dentro de .card, que recorta lo que se sale
+ * (overflow: hidden) para que los encabezados a sangre no desborden sus
+ * esquinas. Un desplegable dentro de una tarjeta corta —la de un listado que
+ * quedó en una fila, o en ninguna— salía cortado a la mitad y sin forma de
+ * llegar al resto de la lista. Fijo, ninguna tarjeta puede recortarlo. */
+.prov-picker-panel {
+  position: fixed;
+  z-index: 900;
+  top: 0;
+  left: 0;
+  background: #fff;
+  border: 1px solid var(--border-light, #E4ECF7);
+  border-radius: 8px;
+  box-shadow: 0 10px 26px rgba(15, 30, 60, .16);
+  overflow: hidden;
+}
+.prov-picker-panel[hidden] { display: none; }
+
+.prov-picker-buscador {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--border-light, #E4ECF7);
+  background: #FBFCFE;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.prov-picker-campo {
+  flex: 1;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font-size: 12px;
+  color: var(--navy);
+  min-width: 0;
+}
+.prov-picker-campo::-webkit-search-cancel-button { cursor: pointer; }
+
+/* La altura la ajusta el JS al espacio que haya; esta es la de partida. */
+.prov-picker-lista {
+  list-style: none;
+  margin: 0;
+  padding: 3px;
+  max-height: 290px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.prov-opcion {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 7px;
+  border-radius: 6px;
+  cursor: pointer;
+  min-width: 0;
+}
+.prov-opcion[hidden] { display: none; }
+.prov-opcion:hover,
+.prov-opcion.is-activa { background: #EEF3FC; }
+.prov-opcion.is-elegida { background: #E8EFFB; }
+.prov-opcion-claves {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex-shrink: 0;
+  max-width: 46%;
+}
+.prov-opcion .prov-nom { flex: 1; }
+.prov-opcion-todos { font-size: 12px; color: var(--navy); font-weight: 600; }
+.prov-n {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: #F1F5F9;
+  border-radius: 9px;
+  padding: 1px 6px;
+  flex-shrink: 0;
+}
+.prov-picker-vacio {
+  padding: 12px 10px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  text-align: center;
+}
+.prov-picker-vacio[hidden] { display: none; }
+
+@media (max-width: 640px) {
+  .prov-picker-panel { max-width: 92vw; }
+}
+
 /* Upload button style */
 .upload-btn-wrapper {
   display: flex;

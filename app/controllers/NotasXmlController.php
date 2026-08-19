@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/../helpers/XmlDocumentImporter.php';
+require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 
 class NotasXmlController extends Controller
 {
@@ -10,17 +11,20 @@ class NotasXmlController extends Controller
         $desde = $this->fechaValida((string) $this->get('desde', ''));
         $hasta = $this->fechaValida((string) $this->get('hasta', ''));
         $buscar = mb_substr(trim((string) $this->get('buscar', '')), 0, 100, 'UTF-8');
+        $proveedor = ProveedorCatalogo::normalizarClave($this->get('proveedor', ''));
         $page = max(1, (int) $this->get('pagina', 1));
         $perPage = 100;
         $modelo = $this->loadModel('Factura');
-        $total = $modelo->countNotasXml($desde, $hasta, $buscar);
+        $total = $modelo->countNotasXml($desde, $hasta, $buscar, $proveedor);
         $paginas = max(1, (int) ceil($total / $perPage));
         $page = min($page, $paginas);
 
         $this->render('notasxml/index', [
             'title' => 'Notas de crédito · Carga XML - Nexo Fiscal',
-            'notas' => $modelo->getNotasXml($desde, $hasta, $buscar, $page, $perPage),
+            'notas' => $modelo->getNotasXml($desde, $hasta, $buscar, $proveedor, $page, $perPage),
             'desde' => $desde, 'hasta' => $hasta, 'buscar' => $buscar,
+            'proveedor' => $proveedor,
+            'proveedoresFiltro' => ProveedorCatalogo::opciones($modelo->proveedoresParaFiltro('NC')),
             'pagina' => $page, 'paginas' => $paginas, 'total' => $total,
             'carpetaRaiz' => DocumentoArchivo::raizConfigurada(),
         ]);

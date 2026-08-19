@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/../helpers/DevolucionImporter.php';
 require_once __DIR__ . '/../helpers/DevolucionVerificador.php';
+require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 
 class DevolucionesController extends Controller
 {
@@ -18,6 +19,7 @@ class DevolucionesController extends Controller
             'sociedad_id' => $sociedad ? (int) $sociedad['id'] : null,
             'tipo' => trim((string) $this->get('tipo', '')),
             'estado' => trim((string) $this->get('estado', '')),
+            'proveedor' => ProveedorCatalogo::normalizarClave($this->get('proveedor', '')),
             'q' => trim((string) $this->get('q', '')),
         ];
 
@@ -27,6 +29,9 @@ class DevolucionesController extends Controller
             'devoluciones' => $modelo->listar($filtros),
             'resumen' => $modelo->resumen($sociedad ? (int) $sociedad['id'] : null),
             'filtros' => $filtros,
+            'proveedoresFiltro' => ProveedorCatalogo::opciones(
+                $modelo->proveedoresParaFiltro($sociedad ? (int) $sociedad['id'] : null)
+            ),
         ]);
     }
 

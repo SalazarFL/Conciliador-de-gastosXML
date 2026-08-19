@@ -21,6 +21,7 @@ require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 require_once __DIR__ . '/../helpers/DocumentoArchivo.php';
 require_once __DIR__ . '/../helpers/NumeroFactura.php';
 require_once __DIR__ . '/../helpers/PagoSemanalResolutor.php';
+require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 
 class PorPagarController extends Controller
 {
@@ -52,6 +53,9 @@ class PorPagarController extends Controller
         $listado = $listadoId > 0 ? $modelo->getListado($listadoId) : null;
         $lineas = $listado ? $erp->getFacturasPago($listadoId, $filtros) : [];
         $resumen = $listado ? $erp->resumenRespaldoPago($listadoId) : [];
+        $dimensiones = $listado
+            ? $erp->dimensionesPago($listadoId)
+            : ['proveedores' => [], 'sucursales' => []];
 
         // Término de búsqueda para el botón "Buscar en correo" de cada línea.
         foreach ($lineas as &$linea) {
@@ -99,6 +103,8 @@ class PorPagarController extends Controller
             'carpetasPago'    => $carpetasPago,
             'sinCoincidencia' => $sinCoincidencia,
             'filtros'         => $filtros,
+            'proveedoresFiltro' => ProveedorCatalogo::opciones($dimensiones['proveedores']),
+            'sucursales'        => $dimensiones['sucursales'],
         ]);
     }
 
@@ -106,7 +112,8 @@ class PorPagarController extends Controller
     private function filtrosListado()
     {
         $q = mb_substr(trim((string) $this->get('q', '')), 0, 150, 'UTF-8');
-        $proveedor = mb_substr(trim((string) $this->get('proveedor', '')), 0, 120, 'UTF-8');
+        $proveedor = ProveedorCatalogo::normalizarClave($this->get('proveedor', ''));
+        $sucursal = mb_substr(trim((string) $this->get('sucursal', '')), 0, 60, 'UTF-8');
 
         $estado = strtolower(trim((string) $this->get('estado', '')));
         if (!in_array($estado, ['', 'respaldada', 'con_diferencia', 'sin_respaldo'], true)) {
@@ -135,6 +142,7 @@ class PorPagarController extends Controller
         return [
             'q' => $q,
             'proveedor' => $proveedor,
+            'sucursal' => $sucursal,
             'estado' => $estado,
             'vinculo' => $vinculo,
             'fecha_desde' => $desde,

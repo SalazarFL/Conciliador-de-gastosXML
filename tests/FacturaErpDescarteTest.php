@@ -32,6 +32,10 @@ try {
 }
 
 $PROV = '990000002';
+// Las consultas ya no filtran por el código pelado sino por la clave del
+// catálogo de proveedores: 'cod:' es un código del ERP del que todavía no se
+// sabe a qué proveedor pertenece.
+$PROV_FILTRO = 'cod:' . $PROV;
 $modelo = new FacturaErp();
 
 $limpiar = function () use ($pdo, $PROV) {
@@ -59,8 +63,8 @@ $facturas = [
      'clave' => $PROV . '|00100001010000990001|2026-05-10'],
 ];
 
-$contar = function (array $filtros) use ($modelo, $PROV) {
-    return $modelo->contarIncidencias(array_merge(['proveedor' => $PROV], $filtros));
+$contar = function (array $filtros) use ($modelo, $PROV_FILTRO) {
+    return $modelo->contarIncidencias(array_merge(['proveedor' => $PROV_FILTRO], $filtros));
 };
 
 try {
@@ -73,7 +77,7 @@ try {
     assertDescarte($contar(['ver' => 'descartadas']) === 0, '1ª carga: ninguna nace descartada');
 
     // ── Descartar la de "sin número" de forma permanente ──
-    $ids = $modelo->idsIncidencias(['proveedor' => $PROV, 'tipo' => 'sin_numero']);
+    $ids = $modelo->idsIncidencias(['proveedor' => $PROV_FILTRO, 'tipo' => 'sin_numero']);
     assertDescarte(count($ids) === 1, 'hay una incidencia de factura sin número');
 
     $r = $modelo->descartarIncidencias($ids, 'Captura manual ya revisada', 7, true);
@@ -100,7 +104,7 @@ try {
         'la nueva aparición de la descartada entra ya marcada: queda el registro, pero no molesta');
 
     // ── Restaurar: vuelve a verse en todas sus apariciones ──
-    $descartadas = $modelo->idsIncidencias(['proveedor' => $PROV, 'tipo' => 'sin_numero', 'ver' => 'descartadas']);
+    $descartadas = $modelo->idsIncidencias(['proveedor' => $PROV_FILTRO, 'tipo' => 'sin_numero', 'ver' => 'descartadas']);
     $modelo->restaurarIncidencias([$descartadas[0]]);
     assertDescarte($contar(['tipo' => 'sin_numero']) === 2,
         'restaurar devuelve la incidencia en todas las cargas donde apareció');
@@ -111,7 +115,7 @@ try {
     assertDescarte((int) $q2->fetchColumn() === 0, 'restaurar levanta también el descarte permanente');
 
     // ── Descarte temporal: no recuerda la firma ──
-    $ids2 = $modelo->idsIncidencias(['proveedor' => $PROV, 'tipo' => 'sin_numero']);
+    $ids2 = $modelo->idsIncidencias(['proveedor' => $PROV_FILTRO, 'tipo' => 'sin_numero']);
     $r2 = $modelo->descartarIncidencias([$ids2[0]], '', null, false);
     assertDescarte($r2['descartadas'] === 1, 'el descarte temporal oculta la fila');
     assertDescarte($r2['firmas'] === 0, 'el descarte temporal NO recuerda la firma');

@@ -3,6 +3,7 @@
  * Persistencia del módulo "Notas de crédito".
  */
 require_once __DIR__ . '/../helpers/ClaseNotaCredito.php';
+require_once __DIR__ . '/ProveedorCatalogo.php';
 
 class NotaCredito extends Model
 {
@@ -1041,9 +1042,13 @@ class NotaCredito extends Model
             $where[] = 'nl.estado = ?';
             $params[] = $filters['estado'];
         }
-        if (!empty($filters['proveedor'])) {
-            $where[] = 'nl.proveedor_nombre = ?';
-            $params[] = $filters['proveedor'];
+        $proveedor = ProveedorCatalogo::condicion(
+            $filters['proveedor'] ?? '',
+            ['codigo' => 'nl.proveedor_codigo', 'nombre' => 'nl.proveedor_nombre'],
+            $params
+        );
+        if ($proveedor !== '') {
+            $where[] = $proveedor;
         }
         if (!empty($filters['sucursal'])) {
             $where[] = 'nl.sucursal = ?';
@@ -1130,9 +1135,25 @@ class NotaCredito extends Model
             $where[] = "(nl.nc_proveedor IS NULL OR TRIM(nl.nc_proveedor) = '')";
         }
 
-        if (trim((string) ($filters['proveedor'] ?? '')) !== '') {
-            $where[] = 'nl.proveedor_nombre = ?';
-            $params[] = trim((string) $filters['proveedor']);
+        // El listado del ERP no siempre trae el código en la línea, así que
+        // aquí el nombre sigue contando: es lo único que tienen las que no lo
+        // traen.
+        $proveedor = ProveedorCatalogo::condicion(
+            $filters['proveedor'] ?? '',
+            ['codigo' => 'nl.proveedor_codigo', 'nombre' => 'nl.proveedor_nombre'],
+            $params
+        );
+        if ($proveedor !== '') {
+            $where[] = $proveedor;
+        }
+
+        // La clase dice QUÉ es la nota —si corrige una factura, si es una
+        // diferencia de costo, si es un cambio de mercadería— y es lo que
+        // decide si lleva respaldo XML. Es la misma que usa Seguimiento.
+        $clase = trim((string) ($filters['clase'] ?? ''));
+        if (in_array($clase, ['directa', 'costo', 'cambio', 'ajuste', 'revisar'], true)) {
+            $where[] = 'nl.clase = ?';
+            $params[] = $clase;
         }
         if (trim((string) ($filters['sucursal'] ?? '')) !== '') {
             $where[] = 'nl.sucursal = ?';
@@ -1220,15 +1241,28 @@ class NotaCredito extends Model
         return $this->fetchAll($sql, $params) ?: [];
     }
 
+    /**
+     * Los proveedores del listado, como los espera ProveedorCatalogo.
+     *
+     * Se agrupa por código Y por nombre porque las líneas sin código solo se
+     * pueden distinguir por lo escrito; el catálogo junta después lo que
+     * resulte ser el mismo proveedor.
+     */
+    public function proveedoresParaFiltro($listadoId)
+    {
+        return $this->fetchAll(
+            "SELECT COALESCE(proveedor_codigo, '') AS codigo, proveedor_nombre AS nombre,
+                    COUNT(*) AS n
+               FROM notas_credito_lineas
+              WHERE listado_id = ?
+              GROUP BY COALESCE(proveedor_codigo, ''), proveedor_nombre",
+            [(int) $listadoId]
+        ) ?: [];
+    }
+
     public function opcionesFiltros($listadoId)
     {
         return [
-            'proveedores' => $this->fetchAll(
-                "SELECT DISTINCT proveedor_nombre AS valor
-                 FROM notas_credito_lineas WHERE listado_id = ?
-                 ORDER BY proveedor_nombre",
-                [(int) $listadoId]
-            ) ?: [],
             'sucursales' => $this->fetchAll(
                 "SELECT DISTINCT sucursal AS valor
                  FROM notas_credito_lineas

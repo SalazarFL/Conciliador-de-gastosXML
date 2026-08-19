@@ -31,6 +31,8 @@ $qs = function (array $cambios = []) use ($filtros) {
         'marca'       => $filtros['marca'],
         'clase'       => $filtros['clase'],
         'responsable' => $filtros['responsable'],
+        'proveedor'   => $filtros['proveedor'] ?? '',
+        'sucursal'    => $filtros['sucursal'] ?? '',
         'contexto_id' => $filtros['contexto_id'] ?: '',
         'desde'       => $filtros['desde'],
         'hasta'       => $filtros['hasta'],
@@ -154,6 +156,35 @@ $moneda = function ($valor, $mon = 'CRC') {
     <form class="filter-bar" id="seg-filter-form" method="get" action="<?= $baseUrl ?>/seguimiento">
         <input type="hidden" name="vista" value="<?= htmlspecialchars($filtros['vista']) ?>">
 
+        <?php
+        /*
+         * La barra contesta cinco preguntas y nada más: de quién, cuál, de
+         * qué clase, de dónde y qué le falta. El proveedor va primero porque
+         * es por donde empieza casi todo el trabajo —se persigue a un
+         * proveedor, no a un rango de montos—.
+         *
+         * Salieron de aquí, y por qué:
+         *
+         *   Saldo (activas/canceladas)  Es la misma pregunta que la pestaña:
+         *                               "cerrada" ES no tener saldo.
+         *   Monto desde                 Lo contesta mejor "Ordenar por dinero
+         *                               en juego", que además no esconde nada.
+         *   Desde / Hasta               Lo mismo con "Más antiguo": lo que se
+         *                               busca es lo viejo, no un rango exacto.
+         *   Marca                       Sirve para auditar decisiones, no para
+         *                               trabajar la cola.
+         *   Listado                     El pago semanal tiene su propia
+         *                               pantalla, con su propio checklist.
+         *
+         * Todas siguen funcionando si llegan por la URL: lo que se retiró es
+         * el control, no el filtro.
+         */
+        $provFiltro = [
+            'valor'    => $filtros['proveedor'] ?? '',
+            'opciones' => $proveedoresFiltro ?? [],
+        ]; include __DIR__ . '/../partials/filtro-proveedor.php';
+        ?>
+
         <div class="filter-span-2">
             <label class="filter-label" for="f-q">Buscar</label>
             <input type="search" id="f-q" name="q" class="form-control"
@@ -162,35 +193,11 @@ $moneda = function ($valor, $mon = 'CRC') {
         </div>
 
         <div>
-            <label class="filter-label" for="f-origen">Origen</label>
+            <label class="filter-label" for="f-origen">Tipo de documento</label>
             <select id="f-origen" name="origen" class="form-control">
                 <option value="">Todos</option>
                 <option value="nota_credito" <?= $filtros['origen'] === 'nota_credito' ? 'selected' : '' ?>>Notas de crédito</option>
                 <option value="factura" <?= $filtros['origen'] === 'factura' ? 'selected' : '' ?>>Facturas</option>
-            </select>
-        </div>
-
-        <div>
-            <label class="filter-label" for="f-tarea">Qué falta</label>
-            <select id="f-tarea" name="tarea" class="form-control">
-                <option value="">Cualquier cosa</option>
-                <?php foreach ($tareas as $clave => $etiqueta): if ($clave === 'completo') continue; ?>
-                <option value="<?= $clave ?>" <?= $filtros['tarea'] === $clave ? 'selected' : '' ?>>
-                    <?= htmlspecialchars($etiqueta) ?>
-                </option>
-                <?php endforeach; ?>
-            </select>
-        </div>
-
-        <?php // El estado ya lo elige la pestaña; acá se filtra por CÓMO llegó
-              // a ese estado, que es lo único que la pestaña no dice. ?>
-        <div>
-            <label class="filter-label" for="f-marca">Marca</label>
-            <select id="f-marca" name="marca" class="form-control">
-                <option value="">Todas</option>
-                <option value="mano" <?= $filtros['marca'] === 'mano' ? 'selected' : '' ?>>Puestas a mano</option>
-                <option value="auto" <?= $filtros['marca'] === 'auto' ? 'selected' : '' ?>>Sin marca (calculadas)</option>
-                <option value="desajuste" <?= $filtros['marca'] === 'desajuste' ? 'selected' : '' ?>>Con desajuste</option>
             </select>
         </div>
 
@@ -212,6 +219,31 @@ $moneda = function ($valor, $mon = 'CRC') {
         </div>
 
         <div>
+            <label class="filter-label" for="f-sucursal">Sucursal</label>
+            <select id="f-sucursal" name="sucursal" class="form-control">
+                <option value="">Todas</option>
+                <?php foreach (($sucursales ?? []) as $nombreSucursal => $cuantas): ?>
+                <option value="<?= htmlspecialchars((string) $nombreSucursal) ?>"
+                    <?= ($filtros['sucursal'] ?? '') === (string) $nombreSucursal ? 'selected' : '' ?>>
+                    <?= htmlspecialchars((string) $nombreSucursal) ?> (<?= number_format((int) $cuantas) ?>)
+                </option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+
+        <div>
+            <label class="filter-label" for="f-tarea">Qué falta</label>
+            <select id="f-tarea" name="tarea" class="form-control">
+                <option value="">Cualquier cosa</option>
+                <?php foreach ($tareas as $clave => $etiqueta): if ($clave === 'completo') continue; ?>
+                <option value="<?= $clave ?>" <?= $filtros['tarea'] === $clave ? 'selected' : '' ?>>
+                    <?= htmlspecialchars($etiqueta) ?>
+                </option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+
+        <div>
             <label class="filter-label" for="f-responsable">Responsable</label>
             <select id="f-responsable" name="responsable" class="form-control">
                 <option value="">Cualquiera</option>
@@ -221,45 +253,6 @@ $moneda = function ($valor, $mon = 'CRC') {
                 </option>
                 <?php endforeach; ?>
             </select>
-        </div>
-
-        <div>
-            <label class="filter-label" for="f-contexto">Listado</label>
-            <select id="f-contexto" name="contexto_id" class="form-control">
-                <option value="">Todos</option>
-                <?php foreach ($contextos as $c): ?>
-                <option value="<?= (int) $c['contexto_id'] ?>"
-                    <?= (int) $filtros['contexto_id'] === (int) $c['contexto_id'] ? 'selected' : '' ?>>
-                    <?= htmlspecialchars(mb_strimwidth((string) $c['contexto'], 0, 34, '…')) ?>
-                    (<?= number_format((int) $c['pendientes']) ?>)
-                </option>
-                <?php endforeach; ?>
-            </select>
-        </div>
-
-        <div>
-            <label class="filter-label" for="f-monto">Monto desde</label>
-            <input type="number" id="f-monto" name="monto_min" class="form-control" step="1" min="0"
-                   value="<?= htmlspecialchars($filtros['monto_min']) ?>" placeholder="100000">
-        </div>
-
-        <div>
-            <label class="filter-label" for="f-condicion-saldo">Saldo</label>
-            <select id="f-condicion-saldo" name="condicion_saldo" class="form-control">
-                <option value="">Todas</option>
-                <option value="activas" <?= $filtros['condicion_saldo'] === 'activas' ? 'selected' : '' ?>>Activas (con saldo)</option>
-                <option value="canceladas" <?= $filtros['condicion_saldo'] === 'canceladas' ? 'selected' : '' ?>>Canceladas (sin saldo)</option>
-            </select>
-        </div>
-
-        <div>
-            <label class="filter-label" for="f-desde">Desde</label>
-            <input type="date" id="f-desde" name="desde" class="form-control" value="<?= htmlspecialchars($filtros['desde']) ?>">
-        </div>
-
-        <div>
-            <label class="filter-label" for="f-hasta">Hasta</label>
-            <input type="date" id="f-hasta" name="hasta" class="form-control" value="<?= htmlspecialchars($filtros['hasta']) ?>">
         </div>
 
         <div>
@@ -359,9 +352,11 @@ $moneda = function ($valor, $mon = 'CRC') {
                     <th><input form="seg-filter-form" name="col_documento"
                                value="<?= htmlspecialchars($filtros['col_documento']) ?>"
                                placeholder="Buscar" aria-label="Buscar en documento"></th>
-                    <th><input form="seg-filter-form" name="col_proveedor"
-                               value="<?= htmlspecialchars($filtros['col_proveedor']) ?>"
-                               placeholder="Buscar" aria-label="Buscar en proveedor"></th>
+                    <?php // El proveedor y la sucursal se eligen arriba, en la
+                          // barra, con su buscador propio: repetir aquí un
+                          // campo de texto para lo mismo solo permite pedir
+                          // dos cosas distintas a la vez. ?>
+                    <th></th>
                     <th><input form="seg-filter-form" name="col_monto" inputmode="decimal"
                                value="<?= htmlspecialchars($filtros['col_monto']) ?>"
                                placeholder="Buscar" aria-label="Buscar monto"></th>
@@ -376,16 +371,10 @@ $moneda = function ($valor, $mon = 'CRC') {
                             <option value="sin_pdf" <?= $filtros['col_respaldo'] === 'sin_pdf' ? 'selected' : '' ?>>Sin PDF</option>
                         </select>
                     </th>
-                    <th>
-                        <select form="seg-filter-form" name="col_tarea" aria-label="Filtrar qué falta">
-                            <option value="">Todas</option>
-                            <?php foreach ($tareas as $clave => $etiqueta): ?>
-                            <option value="<?= $clave ?>" <?= $filtros['col_tarea'] === $clave ? 'selected' : '' ?>>
-                                <?= htmlspecialchars($etiqueta) ?>
-                            </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </th>
+                    <?php // "Qué falta" ya está en la barra, con las mismas
+                          // opciones: dos controles para lo mismo en la misma
+                          // pantalla solo sirven para contradecirse. ?>
+                    <th></th>
                     <?php // El estado lo elige la pestaña y cómo llegó a él, el
                           // filtro "Marca" de arriba: acá no queda nada que
                           // buscar, y repetir el control con el mismo nombre

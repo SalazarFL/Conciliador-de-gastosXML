@@ -18,6 +18,7 @@
  */
 
 require_once __DIR__ . '/../helpers/NumeroFactura.php';
+require_once __DIR__ . '/ProveedorCatalogo.php';
 
 class FacturaErp extends Model
 {
@@ -581,11 +582,25 @@ class FacturaErp extends Model
             array_push($params, $like, $like, $like, $like);
         }
 
-        $proveedor = trim((string) ($filtros['proveedor'] ?? ''));
+        // Por el código del ERP, que es de quién dice el listado que es la
+        // factura. Por el emisor del comprobante no: una factura enlazada por
+        // error a un XML de otro proveedor aparecería en la lista del otro, y
+        // el checklist es justamente para encontrar esos errores, no para
+        // repartirlos. La cédula llega igual: la clave la expande a los
+        // códigos de ese proveedor.
+        $proveedor = ProveedorCatalogo::condicion(
+            $filtros['proveedor'] ?? '',
+            ['codigo' => 'e.proveedor_codigo'],
+            $params
+        );
         if ($proveedor !== '') {
-            $like = '%' . $proveedor . '%';
-            $where[] = '(e.proveedor_nombre LIKE ? OR p.razon_social LIKE ?)';
-            array_push($params, $like, $like);
+            $where[] = $proveedor;
+        }
+
+        $sucursal = trim((string) ($filtros['sucursal'] ?? ''));
+        if ($sucursal !== '') {
+            $where[] = 'e.sucursal = ?';
+            $params[] = $sucursal;
         }
 
         $estado = (string) ($filtros['estado'] ?? '');
@@ -1162,9 +1177,15 @@ class FacturaErp extends Model
         $params = [];
         $this->filtrarPorSociedad($cond, $params);
 
-        if (!empty($f['proveedor'])) {
-            $cond[] = 'proveedor_codigo = ?';
-            $params[] = (string) $f['proveedor'];
+        // El proveedor elegido puede tener más de un código en el ERP: la
+        // condición los alcanza todos, que es lo que se espera al elegirlo.
+        $proveedor = ProveedorCatalogo::condicion(
+            $f['proveedor'] ?? '',
+            ['codigo' => 'proveedor_codigo'],
+            $params
+        );
+        if ($proveedor !== '') {
+            $cond[] = $proveedor;
         }
         if (isset($f['sucursal']) && $f['sucursal'] !== '') {
             $cond[] = 'sucursal = ?';
@@ -1198,20 +1219,69 @@ class FacturaErp extends Model
         return [$cond ? 'WHERE ' . implode(' AND ', $cond) : '', $params];
     }
 
-    /** Valores distintos para poblar los selectores de la vista. */
+    /**
+     * Valores distintos para poblar los selectores de la vista.
+     *
+     * El de proveedor ya no sale de aquí: lo arma `proveedoresParaFiltro()`
+     * y lo agrupa el catálogo, porque un proveedor puede tener más de un
+     * código y este listado no es el único que lo filtra.
+     */
     public function opcionesFiltro()
     {
         return [
-            'proveedores' => $this->fetchAll(
-                "SELECT proveedor_codigo, proveedor_nombre, COUNT(*) AS n
-                   FROM facturas_erp GROUP BY proveedor_codigo, proveedor_nombre
-                   ORDER BY proveedor_nombre ASC"
-            ),
             'sucursales' => $this->fetchAll(
                 "SELECT sucursal, COUNT(*) AS n FROM facturas_erp
                   GROUP BY sucursal ORDER BY sucursal ASC"
             ),
         ];
+    }
+
+    /**
+     * Los proveedores del listado, como los espera ProveedorCatalogo.
+     *
+     * Solo el código y el nombre: el ERP no guarda la cédula en la factura.
+     * La cédula la pone el catálogo desde el mapa código ↔ proveedor.
+     */
+    public function proveedoresParaFiltro()
+    {
+        $cond = [];
+        $params = [];
+        $this->filtrarPorSociedad($cond, $params);
+        $where = $cond ? 'WHERE ' . implode(' AND ', $cond) : '';
+
+        return $this->fetchAll(
+            "SELECT proveedor_codigo AS codigo, MAX(proveedor_nombre) AS nombre, COUNT(*) AS n
+               FROM facturas_erp {$where}
+              GROUP BY proveedor_codigo",
+            $params
+        ) ?: [];
+    }
+
+    /** Proveedores y sucursales de un pago semanal, para su checklist. */
+    public function dimensionesPago($listadoId)
+    {
+        $filas = $this->fetchAll(
+            "SELECT e.proveedor_codigo AS codigo, MAX(e.proveedor_nombre) AS nombre,
+                    MAX(p.rfc) AS cedula, COALESCE(e.sucursal, '') AS sucursal, COUNT(*) AS n
+               FROM facturas_erp e
+               LEFT JOIN facturas_xml x ON x.id = e.factura_xml_id
+               LEFT JOIN proveedores p ON p.id = x.proveedor_id
+              WHERE e.porpagar_listado_id = ?
+              GROUP BY e.proveedor_codigo, COALESCE(e.sucursal, '')",
+            [(int) $listadoId]
+        ) ?: [];
+
+        $sucursales = [];
+        foreach ($filas as $fila) {
+            $sucursal = trim((string) $fila['sucursal']);
+            if ($sucursal === '') {
+                continue;
+            }
+            $sucursales[$sucursal] = ($sucursales[$sucursal] ?? 0) + (int) $fila['n'];
+        }
+        ksort($sucursales, SORT_NATURAL | SORT_FLAG_CASE);
+
+        return ['proveedores' => $filas, 'sucursales' => $sucursales];
     }
 
     // ------------------------------------------------------------------
@@ -1289,9 +1359,13 @@ class FacturaErp extends Model
             $cond[] = 'i.severidad = ?';
             $params[] = (string) $f['severidad'];
         }
-        if (!empty($f['proveedor'])) {
-            $cond[] = 'i.proveedor_codigo = ?';
-            $params[] = (string) $f['proveedor'];
+        $proveedor = ProveedorCatalogo::condicion(
+            $f['proveedor'] ?? '',
+            ['codigo' => 'i.proveedor_codigo'],
+            $params
+        );
+        if ($proveedor !== '') {
+            $cond[] = $proveedor;
         }
         if (!empty($f['texto'])) {
             $cond[] = '(i.proveedor_nombre LIKE ? OR i.documento LIKE ? OR i.detalle LIKE ?)';
@@ -1418,15 +1492,28 @@ class FacturaErp extends Model
         ));
     }
 
-    /** Proveedores que aparecen en las incidencias, para el selector. */
-    public function proveedoresConIncidencia()
+    /**
+     * Proveedores que aparecen en las incidencias, para el selector.
+     *
+     * Con los mismos filtros que la pantalla —menos el de proveedor, que es
+     * el que se está eligiendo—: contando siempre todo, el desplegable ofrecía
+     * proveedores cuyas incidencias estaban descartadas y prometía cuarenta y
+     * dos donde después no aparecía ninguna.
+     */
+    public function proveedoresConIncidencia(array $filtros = [])
     {
+        $sinProveedor = $filtros;
+        unset($sinProveedor['proveedor']);
+        [$where, $params] = $this->condicionesIncidencia($sinProveedor);
+        $where = $where === '' ? "WHERE i.proveedor_codigo <> ''" : $where . " AND i.proveedor_codigo <> ''";
+
         return $this->fetchAll(
-            "SELECT proveedor_codigo, MAX(proveedor_nombre) AS proveedor_nombre, COUNT(*) AS n
-               FROM facturas_erp_incidencias
-              WHERE proveedor_codigo <> ''
-              GROUP BY proveedor_codigo ORDER BY proveedor_nombre ASC"
-        );
+            "SELECT i.proveedor_codigo AS codigo, MAX(i.proveedor_nombre) AS nombre, COUNT(*) AS n
+               FROM facturas_erp_incidencias i
+               {$where}
+              GROUP BY i.proveedor_codigo",
+            $params
+        ) ?: [];
     }
 
     public function cargas($limite = 20)

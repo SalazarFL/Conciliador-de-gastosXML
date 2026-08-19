@@ -7,7 +7,8 @@
 $baseUrl = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 $facturas = is_array($facturas ?? null) ? $facturas : [];
 $resumen = is_array($resumen ?? null) ? $resumen : [];
-$opciones = is_array($opciones ?? null) ? $opciones : ['proveedores' => [], 'sucursales' => []];
+$opciones = is_array($opciones ?? null) ? $opciones : ['sucursales' => []];
+$proveedoresFiltro = is_array($proveedoresFiltro ?? null) ? $proveedoresFiltro : [];
 $cargas = is_array($cargas ?? null) ? $cargas : [];
 $ultimaCarga = $ultimaCarga ?? null;
 $incidenciasTotal = (int) ($incidenciasTotal ?? 0);
@@ -130,22 +131,24 @@ function feMonto($v)
     </div>
 
     <form method="GET" action="<?= $baseUrl ?>/facturas-erp" class="filter-bar">
+        <?php
+        /*
+         * Primero el proveedor: es por donde se entra a este listado. Después
+         * el número, la sucursal y en qué va el pago.
+         *
+         * "Compra (Local/Exter)" salió de la barra: no es una pregunta que se
+         * haga al buscar una factura, y el listado ya trae la columna. Sigue
+         * funcionando por la URL.
+         */
+        $provFiltro = [
+            'valor'    => $filtros['proveedor'],
+            'opciones' => $proveedoresFiltro ?? [],
+        ]; include __DIR__ . '/../partials/filtro-proveedor.php';
+        ?>
         <div class="filter-span-2">
-            <label class="filter-label">Proveedor o documento</label>
-            <input type="text" name="q" class="form-control" placeholder="Nombre, código o número"
+            <label class="filter-label">Buscar</label>
+            <input type="text" name="q" class="form-control" placeholder="Documento, código o nombre"
                    value="<?= htmlspecialchars($filtros['texto']) ?>">
-        </div>
-        <div class="filter-span-2">
-            <label class="filter-label">Proveedor</label>
-            <select name="proveedor" class="form-control">
-                <option value="">Todos</option>
-                <?php foreach ($opciones['proveedores'] as $p): ?>
-                <option value="<?= htmlspecialchars($p['proveedor_codigo']) ?>"
-                    <?= $filtros['proveedor'] === $p['proveedor_codigo'] ? 'selected' : '' ?>>
-                    <?= htmlspecialchars(mb_substr($p['proveedor_nombre'], 0, 40)) ?> (<?= $p['n'] ?>)
-                </option>
-                <?php endforeach; ?>
-            </select>
         </div>
         <div>
             <label class="filter-label">Sucursal</label>
@@ -157,14 +160,6 @@ function feMonto($v)
                     <?= htmlspecialchars($s['sucursal'] !== '' ? $s['sucursal'] : '(sin sucursal)') ?>
                 </option>
                 <?php endforeach; ?>
-            </select>
-        </div>
-        <div>
-            <label class="filter-label">Compra</label>
-            <select name="origen" class="form-control">
-                <option value="">Todas</option>
-                <option value="Local" <?= $filtros['origen'] === 'Local' ? 'selected' : '' ?>>Local</option>
-                <option value="Exter" <?= $filtros['origen'] === 'Exter' ? 'selected' : '' ?>>Exter</option>
             </select>
         </div>
         <div>

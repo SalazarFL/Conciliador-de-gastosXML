@@ -9,6 +9,7 @@
  */
 
 require_once __DIR__ . '/../helpers/FacturasErpCsvParser.php';
+require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 
 class FacturasErpController extends Controller
 {
@@ -30,6 +31,7 @@ class FacturasErpController extends Controller
             'facturas' => $modelo->listar($filtros, $porPagina, ($pagina - 1) * $porPagina),
             'resumen' => $modelo->resumen($filtros),
             'opciones' => $modelo->opcionesFiltro(),
+            'proveedoresFiltro' => ProveedorCatalogo::opciones($modelo->proveedoresParaFiltro()),
             'cargas' => $modelo->cargas(10),
             'ultimaCarga' => $modelo->ultimaCarga(),
             'incidenciasAbiertas' => $modelo->contarIncidencias(['severidad' => 'alerta']),
@@ -57,7 +59,7 @@ class FacturasErpController extends Controller
             'titulo' => 'Incidencias · Facturas ERP',
             'incidencias' => $modelo->incidencias($filtros, $porPagina, ($pagina - 1) * $porPagina),
             'resumenTipos' => $modelo->resumenIncidencias($filtros),
-            'proveedores' => $modelo->proveedoresConIncidencia(),
+            'proveedoresFiltro' => ProveedorCatalogo::opciones($modelo->proveedoresConIncidencia($filtros)),
             'cargas' => $modelo->cargas(30),
             'catalogo' => FacturasErpCsvParser::TIPOS_INCIDENCIA,
             'filtros' => $filtros,
@@ -146,7 +148,7 @@ class FacturasErpController extends Controller
             'carga_id' => (int) $this->get('carga', 0),
             'tipo' => trim((string) $this->get('tipo', '')),
             'severidad' => trim((string) $this->get('severidad', '')),
-            'proveedor' => trim((string) $this->get('proveedor', '')),
+            'proveedor' => ProveedorCatalogo::normalizarClave($this->get('proveedor', '')),
             'texto' => trim((string) $this->get('q', '')),
         ];
     }
@@ -297,7 +299,7 @@ class FacturasErpController extends Controller
     {
         return [
             'texto' => trim((string) $this->get('q', '')),
-            'proveedor' => trim((string) $this->get('proveedor', '')),
+            'proveedor' => ProveedorCatalogo::normalizarClave($this->get('proveedor', '')),
             'sucursal' => trim((string) $this->get('sucursal', '')),
             'origen' => trim((string) $this->get('origen', '')),
             'estado' => trim((string) $this->get('estado', '')),

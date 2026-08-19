@@ -7,7 +7,7 @@
 $baseUrl = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 $incidencias = is_array($incidencias ?? null) ? $incidencias : [];
 $resumenTipos = is_array($resumenTipos ?? null) ? $resumenTipos : [];
-$proveedores = is_array($proveedores ?? null) ? $proveedores : [];
+$proveedoresFiltro = is_array($proveedoresFiltro ?? null) ? $proveedoresFiltro : [];
 $cargas = is_array($cargas ?? null) ? $cargas : [];
 $catalogo = is_array($catalogo ?? null) ? $catalogo : [];
 $pagina = (int) ($pagina ?? 1);
@@ -106,33 +106,19 @@ foreach ($resumenTipos as $r) { if ($r['severidad'] === 'alerta') { $alertas += 
     <?php endif; ?>
 
     <form method="GET" action="<?= $baseUrl ?>/facturas-erp/incidencias" class="filter-bar">
+        <?php
+        // El proveedor primero. El desplegable "Tipo" salió: las pastillas de
+        // arriba hacen lo mismo con un clic y además dicen cuántas hay de
+        // cada tipo, que es la mitad de la respuesta.
+        $provFiltro = [
+            'valor'    => $filtros['proveedor'],
+            'opciones' => $proveedoresFiltro ?? [],
+        ]; include __DIR__ . '/../partials/filtro-proveedor.php';
+        ?>
         <div class="filter-span-2">
             <label class="filter-label">Buscar</label>
             <input type="text" name="q" class="form-control" placeholder="Proveedor, documento o detalle"
                    value="<?= htmlspecialchars($filtros['texto']) ?>">
-        </div>
-        <div class="filter-span-2">
-            <label class="filter-label">Proveedor</label>
-            <select name="proveedor" class="form-control">
-                <option value="">Todos</option>
-                <?php foreach ($proveedores as $p): ?>
-                <option value="<?= htmlspecialchars($p['proveedor_codigo']) ?>"
-                    <?= $filtros['proveedor'] === $p['proveedor_codigo'] ? 'selected' : '' ?>>
-                    <?= htmlspecialchars(mb_substr((string) $p['proveedor_nombre'], 0, 38)) ?> (<?= $p['n'] ?>)
-                </option>
-                <?php endforeach; ?>
-            </select>
-        </div>
-        <div>
-            <label class="filter-label">Tipo</label>
-            <select name="tipo" class="form-control">
-                <option value="">Todos</option>
-                <?php foreach ($catalogo as $tipo => $info): ?>
-                <option value="<?= htmlspecialchars($tipo) ?>" <?= $filtros['tipo'] === $tipo ? 'selected' : '' ?>>
-                    <?= htmlspecialchars($info[1]) ?>
-                </option>
-                <?php endforeach; ?>
-            </select>
         </div>
         <div>
             <label class="filter-label">Severidad</label>

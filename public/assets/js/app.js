@@ -222,6 +222,314 @@
 	});
 })();
 
+/* Filtro de proveedor: desplegable con buscador, igual en todos los listados.
+ *
+ * Lo que se busca es el código y la cédula —lo que identifica al proveedor—,
+ * y también el nombre, que es lo que la gente recuerda. El índice de búsqueda
+ * se arma con el texto que la fila ya muestra, la primera vez que alguien
+ * escribe: mandarlo también en atributos duplicaría el listado entero dentro
+ * del HTML de cada pantalla. Los dígitos van aparte para que escribir "3-101"
+ * encuentre lo mismo que escribir la cédula corrida.
+ *
+ * Todo por delegación: la barra de filtros de algunas pantallas se dibuja
+ * después de cargar la página. */
+(function () {
+	'use strict';
+
+	function normalizar(texto) {
+		return String(texto || '')
+			.toLowerCase()
+			.normalize('NFD')
+			.replace(/[\u0300-\u036f]/g, '')
+			.replace(/\s+/g, ' ')
+			.trim();
+	}
+
+	function opciones(picker) {
+		return Array.prototype.slice.call(picker.querySelectorAll('.prov-opcion'));
+	}
+
+	/* El índice de una fila, calculado una sola vez. La cuenta de documentos
+	 * queda fuera a propósito: si entrara, buscar "7" traería todo lo que
+	 * tenga siete facturas. */
+	function indice(li) {
+		if (!li._provIndice) {
+			var claves = li.querySelector('.prov-opcion-claves');
+			var nombre = li.querySelector('.prov-nom');
+			var texto = claves || nombre
+				? normalizar((claves ? claves.textContent + ' ' : '') + (nombre ? nombre.textContent : ''))
+				: normalizar(li.textContent);
+			li._provIndice = { texto: texto, digitos: texto.replace(/\D+/g, '') };
+		}
+		return li._provIndice;
+	}
+
+	function visibles(picker) {
+		return opciones(picker).filter(function (li) { return !li.hidden; });
+	}
+
+	function marcarActiva(picker, li) {
+		opciones(picker).forEach(function (otra) { otra.classList.remove('is-activa'); });
+		if (!li) return;
+		li.classList.add('is-activa');
+		if (li.scrollIntoView) li.scrollIntoView({ block: 'nearest' });
+	}
+
+	/* Un término con dígitos también busca en los dígitos sueltos: la cédula
+	 * se escribe con guiones en un lado y sin ellos en el otro. */
+	function coincide(li, terminos) {
+		var datos = indice(li);
+		return terminos.every(function (termino) {
+			if (datos.texto.indexOf(termino) !== -1) return true;
+			var soloDigitos = termino.replace(/\D+/g, '');
+			return soloDigitos !== '' && datos.digitos.indexOf(soloDigitos) !== -1;
+		});
+	}
+
+	function filtrar(picker) {
+		var campo = picker.querySelector('[data-prov-buscar]');
+		var vacio = picker.querySelector('[data-prov-vacio]');
+		var terminos = normalizar(campo ? campo.value : '').split(' ').filter(Boolean);
+
+		opciones(picker).forEach(function (li) {
+			li.hidden = terminos.length > 0 && !coincide(li, terminos);
+		});
+
+		var quedan = visibles(picker);
+		if (vacio) vacio.hidden = quedan.length > 0;
+		marcarActiva(picker, quedan[0] || null);
+		// Al escribir la lista se acorta: si el panel abrió hacia arriba, su
+		// borde de abajo tiene que seguir pegado al botón.
+		colocar(picker);
+	}
+
+	/* Coloca el panel pegado al botón, contra la ventana.
+	 *
+	 * Va fijo y no dentro de la tarjeta porque las tarjetas recortan lo que
+	 * se sale de ellas: en un listado que quedó en una fila, el desplegable
+	 * salía cortado a media lista. Aquí se decide además si abre hacia abajo
+	 * o hacia arriba, y cuánta lista cabe, para que siempre se vea entero. */
+	function colocar(picker) {
+		var panel = picker.querySelector('[data-prov-panel]');
+		var boton = picker.querySelector('[data-prov-boton]');
+		var lista = picker.querySelector('[data-prov-lista]');
+		if (!panel || !boton || panel.hidden) return;
+
+		var caja = boton.getBoundingClientRect();
+		var alto = window.innerHeight;
+		var margen = 8;
+
+		panel.style.width = Math.min(Math.max(caja.width, 300), 460, window.innerWidth - margen * 2) + 'px';
+		panel.style.left = Math.round(Math.max(margen,
+			Math.min(caja.left, window.innerWidth - panel.offsetWidth - margen))) + 'px';
+
+		var debajo = alto - caja.bottom - margen;
+		var encima = caja.top - margen;
+		var haciaArriba = debajo < 200 && encima > debajo;
+		var espacio = haciaArriba ? encima : debajo;
+
+		// Lo que no es lista (el buscador, el aviso de "nadie coincide") ocupa
+		// su parte: la lista se queda con lo que sobre, nunca menos de tres
+		// renglones, que es cuando el desplegable deja de servir.
+		if (lista) {
+			lista.style.maxHeight = Math.max(120, Math.min(290, espacio - (panel.offsetHeight - lista.offsetHeight))) + 'px';
+		}
+
+		// Pegado al botón, pero siempre dentro de la ventana: sin este tope
+		// por los dos lados, bajar la página con el desplegable abierto lo
+		// mandaba fuera de la pantalla.
+		var arriba = haciaArriba ? caja.top - panel.offsetHeight - 3 : caja.bottom + 3;
+		panel.style.top = Math.round(Math.min(
+			Math.max(arriba, margen),
+			Math.max(margen, alto - panel.offsetHeight - margen)
+		)) + 'px';
+	}
+
+	/** ¿Sigue el botón a la vista? Si no, no hay a qué pegar el panel. */
+	function botonVisible(picker) {
+		var boton = picker.querySelector('[data-prov-boton]');
+		if (!boton) return false;
+		var caja = boton.getBoundingClientRect();
+		return caja.bottom > 0 && caja.top < window.innerHeight;
+	}
+
+	function abrir(picker) {
+		cerrarTodos(picker);
+		var panel = picker.querySelector('[data-prov-panel]');
+		var boton = picker.querySelector('[data-prov-boton]');
+		var campo = picker.querySelector('[data-prov-buscar]');
+		if (!panel) return;
+
+		picker.classList.add('is-abierto');
+		panel.hidden = false;
+		colocar(picker);
+		if (boton) boton.setAttribute('aria-expanded', 'true');
+		if (campo) {
+			campo.value = '';
+			campo.focus();
+		}
+		filtrar(picker);
+		marcarActiva(picker, picker.querySelector('.prov-opcion.is-elegida:not([hidden])'));
+		colocar(picker);
+	}
+
+	function cerrar(picker) {
+		var panel = picker.querySelector('[data-prov-panel]');
+		var boton = picker.querySelector('[data-prov-boton]');
+		picker.classList.remove('is-abierto');
+		if (panel) panel.hidden = true;
+		if (boton) boton.setAttribute('aria-expanded', 'false');
+	}
+
+	function cerrarTodos(excepto) {
+		Array.prototype.forEach.call(document.querySelectorAll('[data-prov-picker].is-abierto'), function (picker) {
+			if (picker !== excepto) cerrar(picker);
+		});
+	}
+
+	function etiquetaDe(li) {
+		if (!li.dataset.valor) {
+			return document.createTextNode(li.dataset.etiqueta || 'Todos los proveedores');
+		}
+		var trozo = document.createDocumentFragment();
+		var clave = li.querySelector('.prov-cod') || li.querySelector('.prov-ced');
+		if (clave) {
+			var cod = document.createElement('span');
+			cod.className = 'prov-cod';
+			cod.textContent = clave.textContent;
+			trozo.appendChild(cod);
+		}
+		var nombre = li.querySelector('.prov-nom');
+		if (nombre) {
+			var nom = document.createElement('span');
+			nom.className = 'prov-nom';
+			nom.textContent = nombre.textContent;
+			trozo.appendChild(nom);
+		}
+		return trozo;
+	}
+
+	function elegir(picker, li) {
+		var oculto = picker.querySelector('[data-prov-valor]');
+		var etiqueta = picker.querySelector('[data-prov-etiqueta]');
+		if (!oculto || !li) return;
+
+		var cambio = oculto.value !== li.dataset.valor;
+		oculto.value = li.dataset.valor;
+
+		opciones(picker).forEach(function (otra) {
+			var elegida = otra === li;
+			otra.classList.toggle('is-elegida', elegida);
+			otra.setAttribute('aria-selected', elegida ? 'true' : 'false');
+		});
+		picker.classList.toggle('is-elegido', li.dataset.valor !== '');
+
+		if (etiqueta) {
+			etiqueta.textContent = '';
+			etiqueta.appendChild(etiquetaDe(li));
+		}
+		cerrar(picker);
+
+		var boton = picker.querySelector('[data-prov-boton]');
+		if (boton) boton.focus();
+		if (!cambio) return;
+
+		/* Los listados que buscan sin recargar (Notas de crédito) escuchan el
+		 * change del campo; los demás recargan al enviar el formulario. */
+		oculto.dispatchEvent(new Event('change', { bubbles: true }));
+		var form = picker.closest('form');
+		if (form && picker.dataset.provAutosubmit === '1') {
+			if (typeof form.requestSubmit === 'function') form.requestSubmit();
+			else form.submit();
+		}
+	}
+
+	document.addEventListener('click', function (evento) {
+		var boton = evento.target.closest ? evento.target.closest('[data-prov-boton]') : null;
+		if (boton) {
+			var picker = boton.closest('[data-prov-picker]');
+			if (picker.classList.contains('is-abierto')) cerrar(picker);
+			else abrir(picker);
+			return;
+		}
+
+		var opcion = evento.target.closest ? evento.target.closest('.prov-opcion') : null;
+		if (opcion) {
+			elegir(opcion.closest('[data-prov-picker]'), opcion);
+			return;
+		}
+
+		if (!evento.target.closest || !evento.target.closest('[data-prov-picker]')) cerrarTodos(null);
+	});
+
+	document.addEventListener('input', function (evento) {
+		if (evento.target.matches && evento.target.matches('[data-prov-buscar]')) {
+			filtrar(evento.target.closest('[data-prov-picker]'));
+		}
+	});
+
+	/* El panel va fijo a la ventana, así que hay que reacomodarlo cuando la
+	 * página se mueve debajo. En captura, para enterarse también del scroll
+	 * de una tabla ancha; el de la propia lista no cuenta. */
+	function reacomodar(evento) {
+		var abiertos = document.querySelectorAll('[data-prov-picker].is-abierto');
+		if (!abiertos.length) return;
+		if (evento && evento.target && evento.target.closest
+			&& evento.target.closest('[data-prov-panel]')) return;
+
+		Array.prototype.forEach.call(abiertos, function (picker) {
+			// Si el filtro se fue de la pantalla, el desplegable se cierra en
+			// vez de quedar suelto en medio de la página.
+			if (botonVisible(picker)) colocar(picker);
+			else cerrar(picker);
+		});
+	}
+
+	document.addEventListener('scroll', reacomodar, true);
+	window.addEventListener('resize', reacomodar);
+
+	document.addEventListener('keydown', function (evento) {
+		var picker = evento.target.closest ? evento.target.closest('[data-prov-picker]') : null;
+		if (!picker) return;
+
+		if (evento.key === 'Escape' && picker.classList.contains('is-abierto')) {
+			evento.preventDefault();
+			cerrar(picker);
+			var boton = picker.querySelector('[data-prov-boton]');
+			if (boton) boton.focus();
+			return;
+		}
+		if ((evento.key === 'Enter' || evento.key === ' ') && !picker.classList.contains('is-abierto')) {
+			if (evento.target.matches('[data-prov-boton]')) {
+				evento.preventDefault();
+				abrir(picker);
+			}
+			return;
+		}
+		if (!picker.classList.contains('is-abierto')) return;
+
+		/* Con el desplegable abierto, Enter elige de la lista y nunca envía el
+		 * formulario: escribir algo que no encuentra a nadie y pulsar Enter
+		 * recargaría la pantalla sin haber elegido. */
+		if (evento.key === 'Enter' || evento.key === 'ArrowDown' || evento.key === 'ArrowUp') {
+			evento.preventDefault();
+		}
+
+		var lista = visibles(picker);
+		if (!lista.length) return;
+		var actual = picker.querySelector('.prov-opcion.is-activa');
+		var posicion = lista.indexOf(actual);
+
+		if (evento.key === 'ArrowDown') {
+			marcarActiva(picker, lista[Math.min(posicion + 1, lista.length - 1)] || lista[0]);
+		} else if (evento.key === 'ArrowUp') {
+			marcarActiva(picker, lista[Math.max(posicion - 1, 0)]);
+		} else if (evento.key === 'Enter') {
+			elegir(picker, actual || lista[0]);
+		}
+	});
+})();
+
 document.addEventListener('DOMContentLoaded', function () {
 	var openButtons = document.querySelectorAll('[data-modal-target]');
 	var closeButtons = document.querySelectorAll('[data-modal-close]');
