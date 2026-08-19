@@ -329,7 +329,7 @@ class PorPagarController extends Controller
 
         try {
             $erp = $this->loadModel('FacturaErp');
-            $semanaId = $this->semanaSolicitada();
+            $semanaId = $this->semanaDeLaVistaPrevia();
             $listadoPrevio = $this->listadoDeSemana($semanaId);
             $listadoId = $listadoPrevio ? (int) $listadoPrevio['id'] : 0;
 
@@ -463,6 +463,35 @@ class PorPagarController extends Controller
             throw new Exception('No se cargó nada: ' . implode('; ', $problemas)
                 . '. Corregí el archivo o cargá el reporte del ERP que falte.');
         }
+    }
+
+    /**
+     * La semana del archivo que se está previsualizando.
+     *
+     * "➕ Nueva semana…" tiene que valer acá. La vista previa es el único paso
+     * hacia la carga —el botón del formulario es ese—, así que exigir una
+     * semana que ya exista dejaba la opción de crear una sin ninguna salida:
+     * quien elegía "Nueva semana…" no podía importar nada.
+     *
+     * Devuelve 0 porque la semana todavía no existe y no se crea acá: esta
+     * pantalla no escribe, y de la semana solo necesita saber si ya tiene un
+     * listado cargado —una nueva no lo tiene—. La crea subir() al confirmar.
+     * Crearla antes dejaría una semana vacía cada vez que alguien mira un
+     * archivo y se arrepiente.
+     */
+    private function semanaDeLaVistaPrevia()
+    {
+        $seleccion = trim((string) $this->post('semana_id', ''));
+        if ($seleccion === 'nueva') {
+            return 0;
+        }
+        if ($seleccion === '') {
+            // El pago semanal se verifica contra las facturas de SU semana:
+            // sin semana no hay contra qué verificarlo.
+            throw new Exception('Elegí la semana de trabajo del pago: '
+                . 'una de la lista, o "Nueva semana…" y escribí su nombre.');
+        }
+        return $this->semanaSolicitada();
     }
 
     private function semanaSolicitada($permitirNueva = false)
