@@ -540,6 +540,37 @@ class FacturaErp extends Model
     }
 
     /**
+     * Suelta el saldo congelado de facturas que cambian de pago.
+     *
+     * `saldo_pago` es el saldo del momento en que la factura entró a un pago,
+     * y manda mientras ese pago exista —si no, pagarla la borraría de la cola
+     * aunque su respaldo siguiera faltando—. Cuando se mueve a otra semana el
+     * congelado que traía es el de la semana que la soltó, y puede tener
+     * semanas de viejo: se descongela para que asignarAPago() vuelva a
+     * congelar el saldo de hoy, que es contra el que se está pagando ahora.
+     *
+     * Va aparte de asignarAPago() a propósito: dentro habría que decidir a
+     * partir del `porpagar_listado_id` que ese mismo UPDATE está pisando, y
+     * eso depende del orden de las asignaciones del SET.
+     */
+    public function descongelarSaldoPago(array $ids)
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+        if (!$ids) {
+            return 0;
+        }
+        $sueltas = 0;
+        foreach (array_chunk($ids, self::LOTE_INSERT) as $tanda) {
+            $sueltas += (int) $this->execute(
+                'UPDATE facturas_erp SET saldo_pago = NULL
+                  WHERE id IN (' . implode(',', array_fill(0, count($tanda), '?')) . ')',
+                $tanda
+            );
+        }
+        return $sueltas;
+    }
+
+    /**
      * Saca facturas de un pago y las devuelve a "pendiente".
      *
      * El vínculo con el XML se borra a la vez: ese emparejamiento se hizo

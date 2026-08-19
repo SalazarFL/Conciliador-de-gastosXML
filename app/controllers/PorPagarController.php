@@ -349,6 +349,9 @@ class PorPagarController extends Controller
                 'token' => $datos['token'],
                 'carpeta_pago' => DocumentoArchivo::normalizarCarpetaPago((string) $this->post('carpeta_pago', '')),
                 'listado_existente' => $listadoPrevio ? (string) $listadoPrevio['nombre'] : null,
+                // Con nombre y no con "#7": el aviso es para decidir, y nadie
+                // reconoce un pago semanal por su número de fila.
+                'reasignadas' => $this->pagosQueSeVacian($datos['resolucion']['filas']),
                 'resumen' => $resumen,
                 'monto_resuelto' => round($montoResuelto, 2),
                 'lineas' => array_slice($datos['resolucion']['filas'], 0, 1000),
@@ -408,9 +411,28 @@ class PorPagarController extends Controller
             }
             $nombre = $listadoPrevio ? (string) $listadoPrevio['nombre'] : ('Pago ' . ($semana['nombre'] ?? ''));
 
+            // Las que vienen de otra semana: cuáles son —para soltarles el
+            // saldo que congeló el pago anterior— y de qué pagos salen, que
+            // quedan con menos facturas y hay que recontarlos.
+            $movidas = [];
+            $pagosVaciados = [];
+            foreach ($resolucion['filas'] as $filaResuelta) {
+                if (empty($filaResuelta['movida_desde'])) {
+                    continue;
+                }
+                $movidas[] = (int) $filaResuelta['factura_erp_id'];
+                $pagosVaciados[(int) $filaResuelta['movida_desde']] = true;
+            }
+
             $yaEstaban = $erp->contarPago($listadoId);
+            $erp->descongelarSaldoPago($movidas);
             $erp->asignarAPago($resolucion['ids'], $semanaId, $listadoId);
             $modelo->actualizarTotalLineas($listadoId);
+            // El pago del que salieron ya no las tiene: si no se recuenta,
+            // sigue diciendo en pantalla que tiene facturas que no tiene.
+            foreach (array_keys($pagosVaciados) as $listadoViejo) {
+                $modelo->actualizarTotalLineas($listadoViejo);
+            }
 
             $stats = $this->ejecutarMatching($listadoId, $erp);
             $total = $erp->contarPago($listadoId);
@@ -419,6 +441,9 @@ class PorPagarController extends Controller
             $msg = ($listadoPrevio
                     ? "Pago \"{$nombre}\": +{$nuevas} facturas nuevas (total {$total})"
                     : "Pago \"{$nombre}\": {$total} facturas del ERP")
+                . (count($movidas) > 0
+                    ? ' — ' . count($movidas) . ' movida(s) desde otro pago semanal'
+                    : '')
                 . " — {$stats['respaldada']} respaldadas, {$stats['con_diferencia']} con diferencia, {$stats['sin_respaldo']} sin respaldo.";
 
             $this->redirectWithMessage(
@@ -442,9 +467,11 @@ class PorPagarController extends Controller
     private function exigirResolucionCompleta(array $resumen, array $filas)
     {
         $problemas = [];
+        // 'en_otro_pago' salió de esta lista: una factura que ya estaba en el
+        // pago de otra semana dejó de cortar la carga. Se paga una sola vez,
+        // así que el archivo más reciente manda y la factura se mueve.
         foreach (['ausente' => 'no están en Facturas ERP',
                   'ambigua' => 'tienen más de una factura posible en el ERP',
-                  'en_otro_pago' => 'ya están asignadas a otro pago semanal',
                   'error' => 'no se pudieron leer'] as $estado => $texto) {
             if (empty($resumen[$estado])) {
                 continue;
@@ -463,6 +490,43 @@ class PorPagarController extends Controller
             throw new Exception('No se cargó nada: ' . implode('; ', $problemas)
                 . '. Corregí el archivo o cargá el reporte del ERP que falte.');
         }
+    }
+
+    /**
+     * De qué pagos semanales se llevaría facturas esta carga, y cuántas.
+     *
+     * Mover una factura la saca del pago de la otra semana. Eso está bien
+     * —se paga una sola vez—, pero es una consecuencia sobre algo que no se
+     * está mirando, así que la vista previa lo dice antes de confirmar.
+     */
+    private function pagosQueSeVacian(array $filas)
+    {
+        $cuenta = [];
+        foreach ($filas as $fila) {
+            if (!empty($fila['movida_desde'])) {
+                $listadoViejo = (int) $fila['movida_desde'];
+                $cuenta[$listadoViejo] = ($cuenta[$listadoViejo] ?? 0) + 1;
+            }
+        }
+        if (!$cuenta) {
+            return [];
+        }
+
+        $modelo = $this->loadModel('PorPagar');
+        $salida = [];
+        foreach ($cuenta as $listadoViejo => $cuantas) {
+            $nombre = '';
+            try {
+                $viejo = $modelo->getListado($listadoViejo);
+                $nombre = (string) ($viejo['nombre'] ?? '');
+            } catch (Throwable $e) {
+            }
+            $salida[] = [
+                'pago' => $nombre !== '' ? $nombre : ('Pago semanal #' . $listadoViejo),
+                'facturas' => $cuantas,
+            ];
+        }
+        return $salida;
     }
 
     /**

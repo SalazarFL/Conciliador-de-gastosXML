@@ -11,7 +11,9 @@
  * exportó el archivo.
  *
  * Esta clase no escribe: clasifica cada fila del archivo y dice qué factura
- * del ERP le corresponde, o por qué no hay ninguna.
+ * del ERP le corresponde, o por qué no hay ninguna. Una factura que ya está en
+ * el pago de otra semana se resuelve igual —se mueve a esta—, y la fila queda
+ * marcada con el pago del que viene.
  *
  * Medido sobre los nueve listados ya cargados, resuelve 2 286 de 2 359 filas
  * (96.9%); en los dos más recientes, el 100%. Lo que no resuelve son facturas
@@ -41,8 +43,8 @@ class PagoSemanalResolutor
      * @param array $erp      Facturas del ERP: id, documento, numero_corto,
      *                        proveedor_nombre, monto, saldo, porpagar_listado_id.
      * @param int   $listadoId Listado que se está cargando (0 si aún no existe):
-     *                        las ya asignadas a él no cuentan como conflicto.
-     * @return array ['filas' => [...], 'resumen' => [...]]
+     *                        las que ya son suyas no se marcan como movidas.
+     * @return array ['filas' => [...], 'resumen' => [...], 'ids' => [...]]
      */
     public static function resolver(array $filas, array $erp, $listadoId = 0)
     {
@@ -93,27 +95,39 @@ class PagoSemanalResolutor
             }
             $vistas[$erpId] = true;
 
-            // Ya la reclama el pago de otra semana: eso es un error de origen,
-            // no algo que esta carga deba resolver por su cuenta.
+            // Ya la tiene el pago de otra semana: esta carga se la lleva.
+            //
+            // Antes cortaba la carga entera y había que ir a soltarla a mano
+            // en la otra semana. Pero una factura se paga una sola vez, así
+            // que dos pagos que la reclaman no son dos verdades: es que se
+            // movió de semana, y el archivo que se está cargando es el más
+            // reciente. Se resuelve igual que cualquier otra y se deja dicho
+            // de dónde viene, porque mover una factura vacía el pago de la
+            // otra semana y eso hay que verlo antes de confirmar.
             $otroListado = (int) ($elegida['porpagar_listado_id'] ?? 0);
-            if ($otroListado > 0 && $otroListado !== $listadoId) {
-                $salida[] = self::conEstado($fila, 'en_otro_pago',
-                    'Ya está asignada al pago semanal #' . $otroListado . '.', $elegida);
-                continue;
-            }
+            $movidaDesde = ($otroListado > 0 && $otroListado !== $listadoId) ? $otroListado : 0;
 
             $resueltas[] = $erpId;
-            $salida[] = self::conEstado($fila, 'resuelta', '', $elegida);
+            $salida[] = self::conEstado($fila, 'resuelta',
+                $movidaDesde > 0 ? 'Viene del pago semanal #' . $movidaDesde . ': se mueve a este.' : '',
+                $elegida, $movidaDesde);
         }
 
         $resumen = array_fill_keys(
-            ['resuelta', 'ausente', 'ambigua', 'repetida', 'en_otro_pago', 'error'],
+            ['resuelta', 'ausente', 'ambigua', 'repetida', 'error'],
             0
         );
+        // 'reasignada' no es un estado: es cuántas de las resueltas llegan
+        // quitándoselas a otro pago. No decide si la carga puede hacerse
+        // —esas entran igual—, se cuenta para poder avisarlo.
+        $resumen['reasignada'] = 0;
         foreach ($salida as $linea) {
             $estado = (string) $linea['estado'];
             if (isset($resumen[$estado])) {
                 $resumen[$estado]++;
+            }
+            if (!empty($linea['movida_desde'])) {
+                $resumen['reasignada']++;
             }
         }
 
@@ -207,11 +221,13 @@ class PagoSemanalResolutor
         return count($conSaldo) === 1 ? $conSaldo[0] : null;
     }
 
-    private static function conEstado(array $fila, $estado, $motivo, ?array $erp = null)
+    private static function conEstado(array $fila, $estado, $motivo, ?array $erp = null, $movidaDesde = 0)
     {
         return [
             'estado' => $estado,
             'motivo' => $motivo,
+            // El pago del que se la quita esta carga, si se la quita a alguno.
+            'movida_desde' => (int) $movidaDesde > 0 ? (int) $movidaDesde : null,
             'numero' => trim((string) ($fila['numero'] ?? '')),
             'proveedor' => trim((string) ($fila['proveedor'] ?? '')),
             'saldo' => round((float) ($fila['saldo'] ?? ($fila['total'] ?? 0)), 2),

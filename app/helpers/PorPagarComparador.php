@@ -53,7 +53,9 @@ class PorPagarComparador
                     'Ya está en el pago de esta semana.');
             } else {
                 $lineas[] = self::linea('nueva', $fila, null,
-                    'Entraría al pago de esta semana.');
+                    empty($fila['movida_desde'])
+                        ? 'Entraría al pago de esta semana.'
+                        : 'Entraría a esta semana quitándosela al pago #' . (int) $fila['movida_desde'] . '.');
             }
         }
 
@@ -74,10 +76,14 @@ class PorPagarComparador
             ];
         }
 
+        // 'en_otro_pago' salió de la lista: una factura que ya está en el pago
+        // de otra semana dejó de ser un conflicto y entra como cualquier otra,
+        // moviéndose. Sigue contándose aparte, en 'reasignada'.
         $resumen = array_fill_keys(
-            ['nueva', 'igual', 'faltante', 'ausente', 'ambigua', 'repetida', 'en_otro_pago', 'error'],
+            ['nueva', 'igual', 'faltante', 'ausente', 'ambigua', 'repetida', 'error'],
             0
         );
+        $resumen['reasignada'] = (int) ($resolucion['resumen']['reasignada'] ?? 0);
         foreach ($lineas as $linea) {
             $estado = (string) $linea['estado'];
             if (isset($resumen[$estado])) {

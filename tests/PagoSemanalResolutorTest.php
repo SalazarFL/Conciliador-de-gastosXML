@@ -125,23 +125,42 @@ assertResolutor($r['resumen']['resuelta'] === 1 && $r['resumen']['repetida'] ===
     'la segunda vez que viene la misma factura no la duplica');
 assertResolutor($r['ids'] === [10], 'una factura entra al pago una sola vez');
 
-// ── Ya la reclama otro pago ──────────────────────────────────────
+// ── Ya la tiene el pago de otra semana ───────────────────────────
+// Antes esto cortaba la carga entera y había que ir a soltar la factura a
+// mano en la otra semana. Una factura se paga una sola vez: dos pagos que la
+// reclaman no son dos verdades, es que se movió, y el archivo que se está
+// cargando es el más reciente.
 $r = PagoSemanalResolutor::resolver(
     [filaArchivo('FACT-' . $CONS . '-1377', 'AGENCIAS JOP S.A.', 50000.00)],
     [erpFila(10, $CONS, 'AGENCIAS JOP S.A.', 50000.00, null, null, 7)],
     9
 );
-assertResolutor($r['resumen']['en_otro_pago'] === 1, 'no se le roba una factura al pago de otra semana');
-assertResolutor(strpos($r['filas'][0]['motivo'], '#7') !== false, 'dice de qué pago es');
+assertResolutor($r['resumen']['resuelta'] === 1, 'la que estaba en otro pago se resuelve igual');
+assertResolutor($r['ids'] === [10], 'y entra al pago que se está cargando');
+assertResolutor($r['resumen']['reasignada'] === 1, 'se cuenta aparte que viene de otro pago');
+assertResolutor($r['filas'][0]['movida_desde'] === 7, 'la fila dice de qué pago se la lleva');
+assertResolutor(strpos($r['filas'][0]['motivo'], '#7') !== false, 'y el motivo lo nombra');
 
-// Pero si el pago es el mismo que se está cargando, no hay conflicto: es
-// recargar el archivo de la semana en curso, que es lo normal.
+// Si el pago es el mismo que se está cargando, no se movió nada: es recargar
+// el archivo de la semana en curso, que es lo normal. Marcarla como movida
+// haría que la carga suelte su saldo congelado sin motivo.
 $r = PagoSemanalResolutor::resolver(
     [filaArchivo('FACT-' . $CONS . '-1377', 'AGENCIAS JOP S.A.', 50000.00)],
     [erpFila(10, $CONS, 'AGENCIAS JOP S.A.', 50000.00, null, null, 9)],
     9
 );
 assertResolutor($r['resumen']['resuelta'] === 1, 'recargar el archivo de la misma semana no da conflicto');
+assertResolutor($r['resumen']['reasignada'] === 0 && $r['filas'][0]['movida_desde'] === null,
+    'recargar la misma semana no cuenta como mover');
+
+// Una factura suelta —sin pago— tampoco viene de ningún lado.
+$r = PagoSemanalResolutor::resolver(
+    [filaArchivo('FACT-' . $CONS . '-1377', 'AGENCIAS JOP S.A.', 50000.00)],
+    [erpFila(10, $CONS, 'AGENCIAS JOP S.A.', 50000.00)],
+    9
+);
+assertResolutor($r['resumen']['reasignada'] === 0 && $r['filas'][0]['movida_desde'] === null,
+    'una factura que no estaba en ningún pago no se marca como movida');
 
 // ── Las filas ilegibles pasan de largo ───────────────────────────
 $r = PagoSemanalResolutor::resolver(

@@ -185,6 +185,12 @@ function ppUpdateFileDisplay(input) {
         <div id="ppv-sin-erp" style="display:none;margin:7px 13px 0;padding:7px 9px;background:#fef2f2;
              border:1px solid #fecaca;border-radius:7px;color:#991b1b;font-size:12px;line-height:1.5;
              flex-shrink:0;"></div>
+        <!-- Facturas que se le quitan al pago de otra semana. No bloquean: la
+             carga se hace igual. Se avisan porque el efecto cae sobre otra
+             pantalla, que es la que nadie está mirando en este momento. -->
+        <div id="ppv-reasignadas" style="display:none;margin:7px 13px 0;padding:7px 9px;background:#fffbeb;
+             border:1px solid #fde68a;border-radius:7px;color:#92400e;font-size:12px;line-height:1.5;
+             flex-shrink:0;"></div>
         <div style="overflow:auto;flex:1;">
             <table class="data-table" style="font-size:12.5px;">
                 <thead>
@@ -440,7 +446,6 @@ document.addEventListener('keydown', function (e) {
         ausente: ['No está en ERP', '#fee2e2', '#991b1b'],
         ambigua: ['Ambigua', '#fef3c7', '#92400e'],
         repetida: ['Repetida', '#fef3c7', '#92400e'],
-        en_otro_pago: ['En otro pago', '#ede9fe', '#5b21b6'],
         error: ['Error', '#fee2e2', '#991b1b']
     };
 
@@ -448,14 +453,14 @@ document.addEventListener('keydown', function (e) {
         var x = r.resumen || {};
         document.getElementById('ppc-destino').textContent = r.semana + ' · ' + r.archivo
             + (r.listado_existente ? ' · Contra "' + r.listado_existente + '"' : ' · La semana todavía no tiene pago');
-        var problemas = (x.ausente || 0) + (x.ambigua || 0) + (x.en_otro_pago || 0) + (x.error || 0);
+        var problemas = (x.ausente || 0) + (x.ambigua || 0) + (x.error || 0);
         document.getElementById('ppc-resumen').innerHTML =
             '<span style="color:#166534;font-weight:800;">' + (x.nueva || 0) + ' entran</span>'
             + '<span style="color:#475569;font-weight:700;">' + (x.igual || 0) + ' ya están</span>'
             + '<span style="color:#1e40af;font-weight:800;">' + (x.faltante || 0) + ' salen</span>'
             + ((x.ausente || 0) ? '<span style="color:#991b1b;font-weight:700;">' + x.ausente + ' no están en el ERP</span>' : '')
             + ((x.ambigua || 0) ? '<span style="color:#92400e;">' + x.ambigua + ' ambiguas</span>' : '')
-            + ((x.en_otro_pago || 0) ? '<span style="color:#5b21b6;">' + x.en_otro_pago + ' en otro pago</span>' : '')
+            + ((x.reasignada || 0) ? '<span style="color:#92400e;">' + x.reasignada + ' vienen de otro pago</span>' : '')
             + ((x.error || 0) ? '<span style="color:#991b1b;">' + x.error + ' ilegibles</span>' : '')
             + (problemas === 0 ? '' : '');
 
@@ -686,13 +691,16 @@ document.addEventListener('keydown', function (e) {
         ausente: ['no está en ERP', '#fee2e2', '#991b1b'],
         ambigua: ['ambigua', '#fef3c7', '#92400e'],
         repetida: ['repetida', '#fef3c7', '#92400e'],
-        en_otro_pago: ['en otro pago', '#ede9fe', '#5b21b6'],
         error: ['ilegible', '#fee2e2', '#991b1b']
     };
+    // No es un estado del resolutor: es una resuelta que además se le quita a
+    // otra semana. Se pinta distinto porque la fila entra igual, pero mueve
+    // algo fuera de esta pantalla.
+    var estiloMovida = ['cambia de semana', '#fef3c7', '#92400e'];
 
     function pintar(r) {
         var x = r.resumen || {};
-        var problemas = (x.ausente || 0) + (x.ambigua || 0) + (x.en_otro_pago || 0) + (x.error || 0);
+        var problemas = (x.ausente || 0) + (x.ambigua || 0) + (x.error || 0);
 
         document.getElementById('ppv-destino').textContent = (r.listado_existente
             ? 'Se añadirán al pago existente "' + r.listado_existente + '"'
@@ -702,10 +710,11 @@ document.addEventListener('keydown', function (e) {
         document.getElementById('ppv-resumen').innerHTML =
             '<span style="color:#16a34a;font-weight:800;">' + (x.resuelta || 0) + ' encontradas en el ERP</span>' +
             '<span style="color:var(--text-muted);">₡' + fmtMonto(r.monto_resuelto || 0) + '</span>' +
+            ((x.reasignada || 0) ? '<span style="color:#92400e;font-weight:700;">' + x.reasignada + ' cambian de semana</span>' : '') +
             (problemas ? '<span style="color:#b91c1c;font-weight:700;">' + problemas + ' sin resolver</span>' : '');
 
         document.getElementById('ppv-tbody').innerHTML = (r.lineas || []).map(function (l) {
-            var estilo = estilosPrev[l.estado] || estilosPrev.error;
+            var estilo = l.movida_desde ? estiloMovida : (estilosPrev[l.estado] || estilosPrev.error);
             var badge = '<span style="background:' + estilo[1] + ';color:' + estilo[2]
                 + ';border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700;white-space:nowrap;" title="'
                 + esc(l.motivo || '') + '">' + estilo[0] + '</span>';
@@ -737,6 +746,24 @@ document.addEventListener('keydown', function (e) {
         } else {
             avisoErp.style.display = 'none';
             avisoErp.innerHTML = '';
+        }
+
+        // Mover una factura la saca del pago de la otra semana. No impide
+        // cargar —se paga una sola vez, el archivo más reciente manda—, pero
+        // el efecto cae sobre una pantalla que nadie está mirando ahora.
+        var avisoMovidas = document.getElementById('ppv-reasignadas');
+        var origenes = r.reasignadas || [];
+        if (origenes.length) {
+            avisoMovidas.style.display = 'block';
+            avisoMovidas.innerHTML = '<strong>' + (x.reasignada || 0) + ' factura'
+                + ((x.reasignada || 0) !== 1 ? 's cambian' : ' cambia') + ' de semana:</strong> '
+                + origenes.map(function (o) {
+                    return o.facturas + ' de “' + esc(o.pago) + '”';
+                }).join(', ')
+                + '. Al cargar salen de ese pago y pasan a este.';
+        } else {
+            avisoMovidas.style.display = 'none';
+            avisoMovidas.innerHTML = '';
         }
 
         btnImportar.disabled = problemas > 0 || (x.resuelta || 0) === 0;
