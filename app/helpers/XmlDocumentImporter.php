@@ -135,8 +135,10 @@ class XmlDocumentImporter
         }
 
         // Aquí NO se reorganiza el árbol: el documento se queda donde lo dejó
-        // DocumentoArchivo al archivarlo. Mover lo ya archivado es una orden
-        // explícita de la persona (Correo → Ordenar el archivo).
+        // DocumentoArchivo al archivarlo —la carpeta de su mes—, y si le toca
+        // entrar a un pago semanal, la copia la deja el acomodo de la tarea
+        // programada. Importar no puede quedarse esperando a que se recorra el
+        // archivo entero.
         if ($tipo === 'NC') {
             $this->extraerDetalle((int) $id, (string) $archivado['ruta_xml']);
         }

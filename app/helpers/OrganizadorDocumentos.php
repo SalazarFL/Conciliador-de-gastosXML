@@ -90,6 +90,9 @@ class OrganizadorDocumentos
             }
             $estado = $this->estadoRutasFaltantes($this->facturas->getParaOrganizarArchivos());
             $this->anotarFaltantes($estado['sin_archivo'], [], (bool) $dryRun, $resumen);
+            if (!$dryRun) {
+                $this->anotarOrden();
+            }
         } finally {
             flock($fp, LOCK_UN);
             fclose($fp);
@@ -333,11 +336,45 @@ class OrganizadorDocumentos
             'ultima_revision_completa' => $completo
                 ? date('Y-m-d H:i:s')
                 : $ultimaCompleta,
+            // Se arrastra: reconciliar y ordenar escriben el mismo archivo, y
+            // sin esto cada reconciliación borraría la marca de la última
+            // ordenación y la tarea ordenaría en cada corrida.
+            'ultima_orden' => $anterior['ultima_orden'] ?? null,
         ];
+        $this->guardarEstado($estado);
+    }
+
+    private function guardarEstado(array $estado)
+    {
         $json = json_encode($estado, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         if (is_string($json)) {
             @file_put_contents($this->estadoCache, $json, LOCK_EX);
         }
+    }
+
+    /**
+     * Si toca ordenar el archivo en esta corrida de la tarea programada.
+     *
+     * Ordenar recorre la ficha de todos los documentos y pregunta al disco por
+     * cada archivo. Hacerlo cada cinco minutos tendría a la carpeta compartida
+     * en danza permanente para nada: la carpeta que le toca a un documento
+     * solo cambia cuando entra uno nuevo o cuando su semana de pago cambia, y
+     * ninguna de las dos cosas pasa cada cinco minutos.
+     */
+    public function requiereOrden($intervaloSegundos = 900)
+    {
+        $estado = $this->cargarEstadoReconciliacion();
+        $ultima = strtotime((string) ($estado['ultima_orden'] ?? ''));
+        return $ultima === false || (time() - $ultima) >= max(60, (int) $intervaloSegundos);
+    }
+
+    private function anotarOrden()
+    {
+        $estado = $this->cargarEstadoReconciliacion();
+        $estado['version'] = 1;
+        $estado['raiz'] = $this->raiz;
+        $estado['ultima_orden'] = date('Y-m-d H:i:s');
+        $this->guardarEstado($estado);
     }
 
     private function construirIndice($completo, array &$resumen)

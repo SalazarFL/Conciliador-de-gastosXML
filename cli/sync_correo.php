@@ -369,24 +369,59 @@ if ($capturaActiva && isset($cuentasModel, $cuentas)
     }
 }
 
-// La misma tarea programada reconcilia rutas movidas o renombradas. Este modo
-// nunca reorganiza archivos: respeta la ubicación elegida manualmente y solo
-// actualiza la referencia persistida. Un error no invalida el correo.
+// La misma tarea programada mantiene el archivo local, en dos pasos.
+//
+// 1. Reconciliar: busca los archivos que alguien movió a mano y corrige la
+//    base para seguirlos. No toca ningún archivo.
+// 2. Ordenar: lleva cada documento a la carpeta de su mes y deja una copia en
+//    la del pago semanal si le toca. Antes había que pedirlo desde
+//    Configuración, con una previsualización de por medio; se volvió
+//    automático porque la carpeta de un documento la deciden su fecha y su
+//    tipo —que no cambian nunca— y su semana de pago, así que no hay nada que
+//    decidir ni nada que previsualizar.
+//
+// Ordenar NO borra: solo mueve el par a su carpeta y copia a la del pago. Y
+// alcanza únicamente a los documentos registrados: lo que alguien haya dejado
+// en la carpeta por su cuenta se queda donde está.
+//
+// Un error de cualquiera de los dos pasos no invalida el correo.
 try {
     if (DocumentoArchivo::raizConfigurada() !== '') {
         $organizador = new OrganizadorDocumentos();
         $completo = $organizador->requiereReconciliacionCompleta(86400);
         $orden = $organizador->reconciliar(false, $completo);
         registrar($rutaLog, sprintf(
-            'Archivo local (%s): %d registrados; %d rutas actualizadas; %d archivos relocalizados; %d no encontrados; %d hashes calculados; %d errores.',
+            'Archivo local (%s): %d registrados; %d rutas actualizadas; %d archivos relocalizados; %d no encontrados; %d hashes calculados; %d sin archivo; %d errores.',
             $completo ? 'revisión completa' : 'revisión rápida',
             (int) ($orden['registrados_revisados'] ?? 0),
             (int) ($orden['rutas_actualizadas'] ?? 0),
             (int) ($orden['archivos_relocalizados'] ?? 0),
             (int) ($orden['archivos_no_encontrados'] ?? 0),
             (int) ($orden['hashes_calculados'] ?? 0),
+            (int) ($orden['marcados_sin_archivo'] ?? 0),
             (int) ($orden['errores'] ?? 0)
         ));
+
+        // No en cada corrida: la carpeta que le toca a un documento solo
+        // cambia cuando entra uno nuevo o cuando cambia su semana de pago, y
+        // recorrer el archivo entero cada cinco minutos sería tener la carpeta
+        // compartida en danza para nada.
+        if ($organizador->requiereOrden(900)) {
+            $acomodo = $organizador->ejecutar(false, false);
+            if (!empty($acomodo['omitido_por_bloqueo'])) {
+                registrar($rutaLog, 'Acomodo del archivo: omitido, hay otra corrida en curso.');
+            } else {
+                registrar($rutaLog, sprintf(
+                    'Acomodo del archivo: %d movidos a su mes; %d copias al pago semanal (%d ya estaban); %d ya ordenados; %d sin archivo en disco; %d errores.',
+                    (int) ($acomodo['movidos'] ?? 0),
+                    (int) ($acomodo['copias_pago'] ?? 0),
+                    (int) ($acomodo['copias_pago_vigentes'] ?? 0),
+                    (int) ($acomodo['ya_ordenados'] ?? 0),
+                    (int) ($acomodo['faltantes_en_disco'] ?? 0),
+                    (int) ($acomodo['errores'] ?? 0) + (int) ($acomodo['errores_copia_pago'] ?? 0)
+                ));
+            }
+        }
     }
 } catch (Throwable $e) {
     registrar($rutaLog, 'Archivo local: ERROR ' . $e->getMessage());

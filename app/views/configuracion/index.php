@@ -143,6 +143,8 @@ $secciones[] = ['sistema', 'fa-desktop', 'Esta computadora', 'Estado de la insta
                         <?php else: ?>
                         <i class="fas fa-circle-check" style="color:var(--ok);margin-right:4px;"></i>
                         Guardando en <span class="cfg-ruta"><?= htmlspecialchars($carpetaRaiz) ?></span>
+                        · el archivo se acomoda solo: cada documento a la carpeta de su mes y una
+                        <strong>copia</strong> a la del pago semanal. Nunca se borra nada.
                         <?php endif; ?>
                     </div>
                     <button type="button" class="btn btn-primary btn-sm" id="cfg-guardar">
@@ -151,52 +153,6 @@ $secciones[] = ['sistema', 'fa-desktop', 'Esta computadora', 'Estado de la insta
                 </div>
             </div>
 
-            <div class="cfg-card" style="margin-top:12px;">
-                <div class="cfg-card-head">
-                    <div class="cfg-card-icono"><i class="fas fa-boxes-packing"></i></div>
-                    <div class="cfg-card-titulo">
-                        <h2>Ordenar el archivo</h2>
-                        <p>Mueve lo ya archivado a la carpeta que le toca por fecha, tipo y estado.</p>
-                    </div>
-                </div>
-
-                <div class="cfg-row">
-                    <div>
-                        <div class="cfg-row-label">Qué se ordena</div>
-                        <div class="cfg-row-ayuda">
-                            <strong>Ningún archivo se mueve solo.</strong> Ni al importar del correo ni al
-                            verificar un listado: los XML y PDF viven en una carpeta que la gente también
-                            abre en el Explorador. Solo se mueven desde aquí, y después de ver qué haría.
-                        </div>
-                    </div>
-                    <div class="cfg-row-control">
-                        <select id="org-alcance" class="form-control" style="width:auto;min-width:180px;">
-                            <option value="todo">Todo lo procesado del correo</option>
-                            <option value="semana"<?= $semanas ? '' : ' disabled' ?>>Solo una semana de pago</option>
-                        </select>
-                        <select id="org-semana" class="form-control" style="display:none;width:auto;min-width:130px;">
-                            <?php foreach ($semanas as $sem): ?>
-                            <option value="<?= (int) $sem['id'] ?>"<?= $semanaActiva === (int) $sem['id'] ? ' selected' : '' ?>>
-                                <?= htmlspecialchars($sem['nombre']) ?>
-                            </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    <div class="cfg-row-ancha cfg-msg" id="org-resultado" style="display:none;"></div>
-                </div>
-
-                <div class="cfg-foot">
-                    <div class="cfg-foot-nota">
-                        «Ordenar» se habilita solo después de una previsualización, que no toca ningún archivo.
-                    </div>
-                    <button type="button" class="btn btn-outline btn-sm" id="org-previsualizar">
-                        <i class="fas fa-eye"></i> Ver qué haría
-                    </button>
-                    <button type="button" class="btn btn-primary btn-sm" id="org-ejecutar" disabled>
-                        <i class="fas fa-play"></i> Ordenar
-                    </button>
-                </div>
-            </div>
         </section>
 
         <!-- ── Cuentas de correo ───────────────────────────── -->
@@ -1117,88 +1073,12 @@ $secciones[] = ['sistema', 'fa-desktop', 'Esta computadora', 'Estado de la insta
         if (e.key === 'Enter') { e.preventDefault(); expCrear.click(); }
     });
 
-    // ══ Ordenar el archivo: nunca automático, siempre a pedido ══════
-    // El botón «Ordenar» nace deshabilitado y solo lo habilita una
-    // previsualización, que no toca ningún archivo. Cambiar el alcance lo
-    // vuelve a deshabilitar: nunca se confirma algo que no se acaba de ver.
-    var orgAlcance = document.getElementById('org-alcance');
-    var orgSemana  = document.getElementById('org-semana');
-    var orgPrev    = document.getElementById('org-previsualizar');
-    var orgEjec    = document.getElementById('org-ejecutar');
-    var orgRes     = document.getElementById('org-resultado');
-
-    function orgDesarmar() {
-        orgEjec.disabled = true;
-        callar(orgRes);
-    }
-
-    function orgDatos() {
-        var datos = { alcance: orgAlcance.value };
-        if (orgAlcance.value === 'semana') datos.semana_id = orgSemana.value || 0;
-        return datos;
-    }
-
-    // Un solo total esconde lo que importa: un documento puede entrar a la
-    // carpeta de pago o SALIR de ella hacia la de su mes, y ambas cosas
-    // cuentan como "movido".
-    function orgDesglose(s) {
-        var partes = [];
-        if (s.pago_semanal) partes.push(s.pago_semanal + ' a la carpeta de pago');
-        if (s.por_fecha) partes.push(s.por_fecha + ' a su carpeta del mes');
-        return partes.join(' y ');
-    }
-
-    orgAlcance.addEventListener('change', function () {
-        orgSemana.style.display = orgAlcance.value === 'semana' ? '' : 'none';
-        orgDesarmar();
-    });
-    orgSemana.addEventListener('change', orgDesarmar);
-
-    orgPrev.addEventListener('click', function () {
-        orgPrev.disabled = true;
-        orgDesarmar();
-        decir(orgRes, 'Revisando…', null);
-        postJson(BASE + '/correo/organizar/previsualizar', orgDatos())
-            .then(function (r) {
-                var s = r.resumen || {};
-                var n = s.movimientos_planificados || 0;
-                orgPrev.disabled = false;
-                if (n === 0) {
-                    decir(orgRes, 'Todo está ya en su carpeta: no hay nada que mover.', 'ok');
-                    return;
-                }
-                orgEjec.disabled = false;
-                var detalle = orgDesglose(s);
-                decir(orgRes, n + (n === 1 ? ' documento se movería' : ' documentos se moverían')
-                    + (detalle ? ': ' + detalle : ' a su carpeta')
-                    + '. Pulsa «Ordenar» para confirmarlo.', 'warn');
-            })
-            .catch(function (err) {
-                orgPrev.disabled = false;
-                decir(orgRes, err.message, 'error');
-            });
-    });
-
-    orgEjec.addEventListener('click', function () {
-        orgEjec.disabled = true;
-        orgPrev.disabled = true;
-        decir(orgRes, 'Moviendo…', null);
-        postJson(BASE + '/correo/organizar', orgDatos())
-            .then(function (r) {
-                var s = r.resumen || {};
-                var movidos = s.movidos || 0;
-                var errores = s.errores || 0;
-                orgPrev.disabled = false;
-                var detalle = orgDesglose(s);
-                decir(orgRes, 'Listo: '
-                    + (detalle || (movidos + (movidos === 1 ? ' documento movido' : ' documentos movidos')))
-                    + (errores ? ', ' + errores + ' con error.' : '.'), errores ? 'warn' : 'ok');
-            })
-            .catch(function (err) {
-                orgPrev.disabled = false;
-                decir(orgRes, err.message, 'error');
-            });
-    });
+    // Aquí vivía «Ordenar el archivo»: un desplegable de alcance, un botón de
+    // previsualización y otro de confirmación. Salió porque no había nada que
+    // decidir. La carpeta de un documento la deciden su fecha de emisión y su
+    // tipo —que no cambian nunca— y su semana de pago; no hay dos respuestas
+    // posibles que mereciesen una previsualización. Ahora lo acomoda la tarea
+    // programada, como mucho cada quince minutos, en cli/sync_correo.php.
 
     // ══ Automatización de correo (Tarea Programada de Windows) ══════
     var autoEstado      = document.getElementById('auto-estado');

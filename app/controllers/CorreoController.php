@@ -14,7 +14,6 @@ require_once __DIR__ . '/../helpers/DocumentoArchivo.php';
 require_once __DIR__ . '/../helpers/NavegacionDocumentos.php';
 require_once __DIR__ . '/../helpers/RutaDocumento.php';
 require_once __DIR__ . '/../helpers/XmlDocumentImporter.php';
-require_once __DIR__ . '/../helpers/OrganizadorDocumentos.php';
 require_once __DIR__ . '/../helpers/PaqueteDocumentos.php';
 
 class CorreoController extends Controller
@@ -2248,84 +2247,21 @@ class CorreoController extends Controller
         }
     }
 
-    // ── Ordenar el archivo local (únicamente por orden explícita) ──
-
-    /**
-     * Ordena los documentos ya archivados, moviéndolos a la carpeta que les
-     * toca por fecha, tipo y estado (POST, JSON).
-     *
-     * Por qué es una orden y no algo automático: los XML y PDF viven en una
-     * carpeta de SharePoint que la gente también abre en el Explorador. Que la
-     * aplicación moviera archivos por su cuenta —al importar del correo o al
-     * verificar un listado— hacía que carpetas ordenadas a mano se
-     * reacomodaran solas, sin que nadie lo hubiera pedido. Ahora nada se mueve
-     * salvo que alguien lo pida desde aquí; la tarea programada se limita a
-     * seguir los archivos que se movieron a mano, sin tocarlos.
-     *
-     * alcance=todo    → los documentos registrados (lo procesado del correo).
-     * alcance=semana  → solo las facturas de una semana, a su carpeta de pago.
-     *
-     * previsualizar() responde exactamente lo mismo pero sin mover nada, para
-     * que se pueda ver la lista antes de confirmar.
-     */
-    public function organizar()
-    {
-        $this->organizarCorrer(false);
-    }
-
-    public function organizarPrevisualizar()
-    {
-        $this->organizarCorrer(true);
-    }
-
-    private function organizarCorrer($dryRun)
-    {
-        if (!$this->isPost()) {
-            $this->json(['ok' => false, 'message' => 'Metodo no permitido.'], 405);
-        }
-        if (DocumentoArchivo::raizConfigurada() === '') {
-            $this->json(['ok' => false, 'message' => 'Configura primero la carpeta raíz de XML y PDF.'], 422);
-        }
-
-        $alcance  = (string) $this->post('alcance', 'todo');
-        $semanaId = (int) $this->post('semana_id', 0);
-
-        try {
-            $organizador = new OrganizadorDocumentos();
-
-            if ($alcance === 'semana') {
-                if ($semanaId <= 0) {
-                    $this->json(['ok' => false, 'message' => 'Elige la semana que quieres ordenar.'], 422);
-                }
-                $ids = $this->loadModel('Factura')->getIdsPorSemana($semanaId);
-                if (!$ids) {
-                    $this->json(['ok' => false, 'message' => 'Esa semana todavía no tiene facturas asignadas.'], 422);
-                }
-                $resumen = $organizador->organizarIds($ids, (bool) $dryRun);
-            } else {
-                // incluirNoRegistrados = false: la orden alcanza lo que la
-                // aplicación importó, nunca archivos ajenos que alguien haya
-                // dejado dentro de la carpeta por su cuenta.
-                $resumen = $organizador->ejecutar((bool) $dryRun, false);
-            }
-
-            if (!empty($resumen['omitido_por_bloqueo'])) {
-                $this->json([
-                    'ok' => false,
-                    'message' => 'Hay otra ordenación en curso en esta computadora. Espera a que termine.',
-                ], 409);
-            }
-
-            $this->json([
-                'ok'      => true,
-                'dry_run' => (bool) $dryRun,
-                'alcance' => $alcance === 'semana' ? 'semana' : 'todo',
-                'resumen' => $resumen,
-            ]);
-        } catch (Throwable $e) {
-            $this->json(['ok' => false, 'message' => 'No se pudo ordenar: ' . $e->getMessage()], 500);
-        }
-    }
+    // Aquí vivían organizar() y organizarPrevisualizar(), con su tarjeta en
+    // Configuración: elegir el alcance, ver qué haría y confirmar.
+    //
+    // Salieron porque no había nada que decidir. La carpeta de un documento la
+    // deciden su fecha de emisión y su tipo —que no cambian nunca— y su semana
+    // de pago; no hay dos respuestas posibles que justifiquen mirar una lista
+    // antes de aceptarla. Lo que sí había era una pantalla más que alguien
+    // tenía que acordarse de visitar para que el archivo quedara en su sitio, y
+    // mientras no la visitara, la carpeta del pago no se armaba.
+    //
+    // Ahora lo acomoda la tarea programada (cli/sync_correo.php), como mucho
+    // cada quince minutos y solo sobre documentos registrados. Nunca borra:
+    // mueve el par a la carpeta de su mes y COPIA a la del pago semanal. Para
+    // forzarlo a mano sigue estando `php cli/organizar_documentos.php
+    // --forzar-orden`.
 
     // ── Auto-sincronización en segundo plano (Tarea Programada Windows) ──
 

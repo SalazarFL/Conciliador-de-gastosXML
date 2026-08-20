@@ -20,6 +20,36 @@ function borrarOrganizador($dir)
     rmdir($dir);
 }
 
+function huellaArbolOrganizadorTemporales($dir)
+{
+    $sobras = [];
+    $it = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS));
+    foreach ($it as $entrada) {
+        if ($entrada->isFile() && strpos($entrada->getFilename(), '.partial_') !== false) {
+            $sobras[] = $entrada->getPathname();
+        }
+    }
+    return $sobras;
+}
+
+function huellaArbolOrganizador($dir)
+{
+    $archivos = [];
+    $it = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS));
+    foreach ($it as $entrada) {
+        if ($entrada->isFile()) {
+            // Por contenido, no por nombre ni por sitio: mover y renombrar
+            // son cosas que ordenar hace a propósito. Lo que no puede pasar
+            // es que un contenido deje de existir en el árbol.
+            $archivos[] = hash_file('sha256', $entrada->getPathname());
+        }
+    }
+    sort($archivos);
+    return $archivos;
+}
+
 class FacturaOrganizadorFalsa
 {
     public $filas;
@@ -258,6 +288,24 @@ try {
     assertOrganizador(($faltanteInicial['archivos_indexados'] ?? 0) > 0, 'busca un faltante nuevo en el árbol');
     assertOrganizador(($faltanteRepetido['archivos_indexados'] ?? -1) === 0, 'no repite el recorrido para un faltante conocido');
     assertOrganizador(!empty($faltanteRepetido['revision_omitida_sin_cambios']), 'marca la revisión omitida por firma sin cambios');
+    // ── Ordenar no borra ───────────────────────────────────────────
+    //
+    // Esto corre solo, cada pocos minutos, sobre la carpeta compartida de la
+    // empresa: lo único que no se puede permitir es que se lleve un archivo por
+    // delante. Se compara el árbol entero antes y después —por nombre y
+    // tamaño— y no puede faltar ninguno. Aparecer sí: las copias de entrega
+    // del pago semanal.
+    $antesDeOrdenar = huellaArbolOrganizador($root);
+    (new OrganizadorDocumentos($root, $modelo))->ejecutar(false, true);
+    $despuesDeOrdenar = huellaArbolOrganizador($root);
+
+    assertOrganizador(!array_diff($antesDeOrdenar, $despuesDeOrdenar),
+        'ordenar no hace desaparecer el contenido de ningún archivo');
+    assertOrganizador(count($despuesDeOrdenar) >= count($antesDeOrdenar),
+        'y si el número cambia es porque se agregaron copias, nunca porque falten');
+    assertOrganizador(!huellaArbolOrganizadorTemporales($root),
+        'no deja temporales de copia a medio hacer');
+
     echo "OK: OrganizadorDocumentos\n";
 } finally {
     $raizCache = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, (string) realpath($root));

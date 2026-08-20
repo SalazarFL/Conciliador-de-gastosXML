@@ -434,19 +434,30 @@ Esa es una zona de espera: **no los importa ni los archiva en las carpetas
 finales**. Una persona debe revisarlos, seleccionarlos y confirmar la
 importación desde Correo → Bandeja de revisión.
 
-Fuera de esa zona de espera, la aplicación nunca mueve un archivo por su cuenta:
-ni al importar del correo, ni al verificar un listado de Por Pagar, ni en la
-tarea programada.
+Fuera de esa zona de espera, la aplicación no mueve archivos al importar del
+correo ni al verificar un listado de Por Pagar.
 
-Mover lo ya archivado es siempre una orden explícita:
+El acomodo lo hace la tarea programada, como mucho **cada quince minutos**, y
+son dos cosas distintas:
 
-- **Correo → ⚙ → Ordenar el archivo**, que primero muestra qué haría.
-- `--forzar-orden` o `--semana=N` por línea de comandos.
+- **Seguir**: busca los archivos que alguien movió a mano y corrige la base de
+  datos para seguirlos, sin tocarlos.
+- **Acomodar**: lleva cada documento registrado a la carpeta de su mes y deja
+  una **copia** en la del pago semanal si le toca.
 
-Lo que sí ocurre solo es lo contrario: cada 5 minutos la tarea programada
-busca los archivos que alguien movió a mano y **corrige la base de datos para
-seguirlos**, sin tocarlos. Agregá `--dry-run` a cualquier comando para ver el
-resultado sin aplicarlo.
+Acomodar **nunca borra**: solo mueve el par a su carpeta y copia a la del pago.
+Y alcanza únicamente a los documentos que la aplicación registró; lo que
+alguien haya dejado dentro de la carpeta por su cuenta se queda donde está.
+
+Antes esto se pedía a mano desde una pantalla, con una previsualización de por
+medio. Salió porque no había nada que decidir —la carpeta de un documento la
+deciden su fecha de emisión, su tipo y su semana de pago, y ninguno de los tres
+admite dos respuestas—, y mientras nadie visitara esa pantalla, la carpeta del
+pago no se armaba.
+
+Para forzarlo a mano sigue estando `--forzar-orden` o `--semana=N` por línea de
+comandos. Agregá `--dry-run` a cualquier comando para ver el resultado sin
+aplicarlo.
 
 ### La carpeta del pago semanal es una copia
 
@@ -458,8 +469,8 @@ La diferencia importa: esa carpeta se manda y quien la recibe la borra cuando
 termina. Mientras el par se mudaba ahí dentro, borrarla se llevaba el respaldo
 de todos sus documentos —el sistema seguía diciendo "respaldada" y el XML ya no
 existía en ninguna parte—. Ahora borrarla no cuesta nada: el documento sigue en
-su mes y la copia se repone la próxima vez que se ordene el archivo
-(**Correo → ⚙ → Ordenar el archivo**, o `--forzar-orden`).
+su mes y la tarea programada repone la copia en el siguiente acomodo, como
+mucho un cuarto de hora después.
 
 ### Cuando un archivo se pierde de todos modos
 
