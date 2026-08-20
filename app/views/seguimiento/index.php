@@ -449,6 +449,11 @@ $moneda = function ($valor, $mon = 'CRC') {
                                title="Ver el XML">
                                 <i class="fas fa-code"></i> XML
                             </a>
+                            <?php elseif ($f['xml_perdido']): ?>
+                            <span class="seg-chip seg-chip-perdido"
+                                  title="El XML se archivó y ya no está en la carpeta compartida">
+                                <i class="fas fa-link-slash"></i> XML
+                            </span>
                             <?php else: ?>
                             <span class="seg-chip seg-chip-no" title="No hay XML para este documento">
                                 <i class="fas fa-code"></i> XML
@@ -461,6 +466,11 @@ $moneda = function ($valor, $mon = 'CRC') {
                                title="Ver el PDF">
                                 <i class="fas fa-file-pdf"></i> PDF
                             </a>
+                            <?php elseif ($f['pdf_perdido']): ?>
+                            <span class="seg-chip seg-chip-perdido"
+                                  title="El PDF se archivó y ya no está en la carpeta compartida">
+                                <i class="fas fa-link-slash"></i> PDF
+                            </span>
                             <?php elseif ($f['pdf_historico']): ?>
                             <span class="seg-chip seg-chip-hist" title="Marcado como histórico: no va a existir">
                                 <i class="fas fa-file-pdf"></i> PDF
@@ -469,6 +479,21 @@ $moneda = function ($valor, $mon = 'CRC') {
                             <span class="seg-chip seg-chip-no" title="Falta el PDF">
                                 <i class="fas fa-file-pdf"></i> PDF
                             </span>
+                            <?php endif; ?>
+
+                            <?php
+                            /*
+                             * El archivo estaba y ya no está, pero el correo
+                             * del que salió sí sigue: se vuelve a bajar y se
+                             * deja en la misma ruta. Solo se repone si el
+                             * contenido da la misma huella que se archivó.
+                             */
+                            if (!empty($f['recuperable'])): ?>
+                            <button type="button" class="seg-chip seg-chip-recuperar"
+                                    data-recuperar-doc="<?= (int) $f['factura_xml_id'] ?>"
+                                    title="Volver a bajarlo del correo y dejarlo en su carpeta">
+                                <i class="fas fa-cloud-arrow-down"></i>
+                            </button>
                             <?php endif; ?>
                         </div>
                     </td>
@@ -749,6 +774,15 @@ $moneda = function ($valor, $mon = 'CRC') {
 .seg-chip-no   { background: var(--miss-bg); color: var(--miss); border-color: #F5C2C2;
                  opacity: .75; text-decoration: line-through; }
 .seg-chip-hist { background: #EDEFF3; color: #6B7280; border-color: #DDE1E8; }
+/* Se archivó y ya no está: no es lo mismo que no haberlo tenido nunca, así
+   que no va tachado —hay algo que reponer, no algo que conseguir—. */
+.seg-chip-perdido { background: #FEF3C7; color: #92400E; border-color: #FDE68A; }
+.seg-chip-recuperar {
+  background: var(--navy); color: #fff; border-color: var(--navy);
+  cursor: pointer; font-family: inherit;
+}
+.seg-chip-recuperar:hover:not(:disabled) { background: var(--navy-light); border-color: var(--navy-light); }
+.seg-chip-recuperar:disabled { opacity: .6; cursor: progress; }
 
 .seg-acciones {
   display: flex; align-items: center; justify-content: space-between; gap: 9px;

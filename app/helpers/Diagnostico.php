@@ -31,6 +31,7 @@ class Diagnostico
         ['proveedor_alias', null, 'database/migration_proveedor_alias.sql'],
         ['correo_incidencias', 'descartada', 'database/migration_correo_incidencias_descarte.sql'],
         ['correo_incidencias_descartes', null, 'database/migration_correo_incidencias_descarte.sql'],
+        ['facturas_xml', 'archivo_faltante_en', 'database/migration_archivo_faltante.sql'],
     ];
 
     private $pdo;

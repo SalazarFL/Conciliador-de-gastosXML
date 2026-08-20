@@ -541,6 +541,94 @@ class Factura extends Model
         return array_map('intval', array_column($filas ?: [], 'id'));
     }
 
+    /**
+     * Anota qué documentos no tienen el archivo que su ruta promete.
+     *
+     * Lo llama el organizador después de mirar el disco. La marca se pone y se
+     * quita sola: si el archivo vuelve —restaurado de la papelera o rebajado
+     * del correo— la siguiente revisión la limpia.
+     *
+     * $ambito son los documentos que se revisaron. Lo que quede fuera no se
+     * toca, porque de esos no se sabe nada; vacío significa "se revisaron
+     * todos". La limpieza va por negación —los revisados que NO faltan— para
+     * no mandar diez mil identificadores en cada corrida.
+     */
+    public function marcarArchivosFaltantes(array $faltantes, array $ambito = [])
+    {
+        $faltantes = array_values(array_unique(array_filter(array_map('intval', $faltantes))));
+        $ambito = array_values(array_unique(array_filter(array_map('intval', $ambito))));
+
+        $tocadas = 0;
+        foreach (array_chunk($faltantes, 500) as $grupo) {
+            $tocadas += (int) $this->execute(
+                "UPDATE {$this->table} SET archivo_faltante_en = NOW()
+                  WHERE archivo_faltante_en IS NULL
+                    AND id IN (" . implode(',', array_fill(0, count($grupo), '?')) . ')',
+                $grupo
+            );
+        }
+
+        $sql = "UPDATE {$this->table} SET archivo_faltante_en = NULL
+                 WHERE archivo_faltante_en IS NOT NULL";
+        $params = [];
+        if ($ambito) {
+            $sql .= ' AND id IN (' . implode(',', array_fill(0, count($ambito), '?')) . ')';
+            $params = $ambito;
+        }
+        if ($faltantes) {
+            $sql .= ' AND id NOT IN (' . implode(',', array_fill(0, count($faltantes), '?')) . ')';
+            $params = array_merge($params, $faltantes);
+        }
+
+        return $tocadas + (int) $this->execute($sql, $params);
+    }
+
+    /**
+     * Documentos sin archivo que se pueden volver a bajar del correo.
+     *
+     * Se pide el mensaje del que salieron —cuenta, carpeta y UID— y el hash
+     * con el que se comprueba que lo que baje sea exactamente lo mismo que se
+     * archivó. Sin hash no hay con qué probarlo, así que esos no entran.
+     *
+     * Va acotado a la empresa en curso, como todo lo que se lee: el botón de
+     * la pantalla manda identificadores, y sin esto bastaría cambiar uno para
+     * hacer que el sistema baje y escriba el respaldo de otra sociedad. El
+     * mantenimiento por línea de comandos pide `setSociedad(0)` a propósito.
+     */
+    public function getRecuperablesDelCorreo(array $ids = [], $limite = 0)
+    {
+        $where = ["(f.archivo_faltante_en IS NOT NULL OR f.ruta_xml IS NULL OR f.ruta_xml = '')",
+                  'f.correo_cuenta_id IS NOT NULL', 'f.correo_uid > 0',
+                  "COALESCE(f.hash_xml, '') <> ''"];
+        $params = [];
+
+        $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+        if ($ids) {
+            // Cuando se piden documentos concretos manda quien los pide: la
+            // marca puede no estar puesta todavía —se pone al revisar—, y el
+            // botón de la pantalla nace justo de ver que el archivo no está.
+            $where = ['f.correo_cuenta_id IS NOT NULL', 'f.correo_uid > 0',
+                      "COALESCE(f.hash_xml, '') <> ''",
+                      'f.id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')'];
+            $params = $ids;
+        }
+        $this->filtrarPorSociedad($where, $params, 'f.');
+
+        $sql = "SELECT f.id, f.tipo_documento, f.consecutivo_completo, f.numero_factura_asistente,
+                       f.fecha_emision, f.ruta_xml, f.ruta_pdf, f.archivo_xml, f.archivo_pdf,
+                       f.hash_xml, f.hash_pdf, f.estado_pdf, f.archivo_faltante_en,
+                       f.correo_cuenta_id, f.correo_carpeta, f.correo_uid, f.correo_uidvalidity,
+                       p.razon_social AS proveedor_nombre
+                  FROM {$this->table} f
+                  LEFT JOIN proveedores p ON p.id = f.proveedor_id
+                 WHERE " . implode(' AND ', $where) . '
+                 ORDER BY f.correo_cuenta_id, f.correo_carpeta, f.correo_uid';
+        if ((int) $limite > 0) {
+            $sql .= ' LIMIT ' . (int) $limite;
+        }
+        return $this->fetchAll($sql, $params) ?: [];
+    }
+
     public function actualizarUbicacionArchivos($id, $rutaXml, $rutaPdf)
     {
         // Entran rutas del disco de esta máquina (quien organiza el archivo

@@ -80,6 +80,15 @@ class FacturasController extends Controller
 				$factura['_pdf_disponible'] = !empty($factura['ruta_pdf'])
 					&& is_file((string) $factura['ruta_pdf']);
 				$factura['_par_completo'] = $factura['_xml_disponible'] && $factura['_pdf_disponible'];
+				// Se archivó y ya no está, que no es lo mismo que no haberse
+				// archivado nunca: hay una ruta apuntando al vacío. Si además
+				// se guardó el correo del que salió y la huella del XML, se
+				// puede volver a bajar y dejar en esa misma ruta.
+				$factura['_perdido'] = (!empty($factura['ruta_xml']) && !$factura['_xml_disponible'])
+					|| (!empty($factura['ruta_pdf']) && !$factura['_pdf_disponible']);
+				$factura['_recuperable'] = $factura['_perdido']
+					&& (int) ($factura['correo_uid'] ?? 0) > 0
+					&& trim((string) ($factura['hash_xml'] ?? '')) !== '';
 				return $factura;
 			}, $facturas), static function ($factura) use ($respaldo) {
 				if ($respaldo === 'con_par') {
@@ -87,6 +96,9 @@ class FacturasController extends Controller
 				}
 				if ($respaldo === 'sin_par') {
 					return empty($factura['_par_completo']);
+				}
+				if ($respaldo === 'perdido') {
+					return !empty($factura['_perdido']);
 				}
 				return true;
 			}));
@@ -140,7 +152,7 @@ class FacturasController extends Controller
 		}
 
 		$respaldo = strtolower(trim((string) $this->get('respaldo', '')));
-		if (!in_array($respaldo, ['', 'con_par', 'sin_par'], true)) {
+		if (!in_array($respaldo, ['', 'con_par', 'sin_par', 'perdido'], true)) {
 			$respaldo = '';
 		}
 		$alcance = strtolower(trim((string) $this->get('alcance', ''))) === 'todas' ? 'todas' : '';

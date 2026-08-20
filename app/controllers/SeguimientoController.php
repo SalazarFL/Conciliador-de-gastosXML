@@ -129,6 +129,14 @@ class SeguimientoController extends Controller
             $fila['xml_ok'] = $this->archivoPresente($fila['ruta_xml'] ?? '');
             $fila['pdf_ok'] = $this->archivoPresente($fila['ruta_pdf'] ?? '');
             $fila['pdf_historico'] = ($fila['estado_pdf'] ?? '') === 'no_disponible_historico';
+            // No es lo mismo no haber tenido nunca el comprobante que haberlo
+            // tenido y haberlo perdido: lo primero se resuelve buscándolo, lo
+            // segundo volviéndolo a bajar del correo. La ruta guardada es la
+            // que separa un caso del otro.
+            $fila['xml_perdido'] = !$fila['xml_ok'] && trim((string) ($fila['ruta_xml'] ?? '')) !== '';
+            $fila['pdf_perdido'] = !$fila['pdf_ok'] && trim((string) ($fila['ruta_pdf'] ?? '')) !== '';
+            $fila['recuperable'] = !empty($fila['recuperable'])
+                && ($fila['xml_perdido'] || $fila['pdf_perdido']);
             $this->decorarBusqueda($fila);
             // El recordatorio solo tiene sentido mientras el renglón siga en
             // revisión: en las demás pestañas no hay nada que esperar.

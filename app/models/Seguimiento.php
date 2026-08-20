@@ -357,6 +357,8 @@ class Seguimiento extends Model
                 x.ruta_xml AS ruta_xml,
                 x.ruta_pdf AS ruta_pdf,
                 x.estado_pdf AS estado_pdf,
+                CASE WHEN x.correo_uid > 0 AND COALESCE(x.hash_xml, '') <> ''
+                     THEN 1 ELSE 0 END AS recuperable,
                 x.consecutivo_completo AS consecutivo,
                 " . sprintf($tarea, 'l.estado', 'l.estado') . " AS tarea,
                 COALESCE(ABS(l.diferencia), l.monto) AS en_juego
@@ -402,6 +404,8 @@ class Seguimiento extends Model
                 x.ruta_xml AS ruta_xml,
                 x.ruta_pdf AS ruta_pdf,
                 x.estado_pdf AS estado_pdf,
+                CASE WHEN x.correo_uid > 0 AND COALESCE(x.hash_xml, '') <> ''
+                     THEN 1 ELSE 0 END AS recuperable,
                 x.consecutivo_completo AS consecutivo,
                 " . sprintf($tarea, 'pe.estado_respaldo', 'pe.estado_respaldo') . " AS tarea,
                 COALESCE(ABS(pe.diferencia), COALESCE(pe.saldo_pago, pe.saldo)) AS en_juego
