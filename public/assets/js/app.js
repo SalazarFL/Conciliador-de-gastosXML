@@ -530,14 +530,10 @@
 	});
 })();
 
-/* Tarjeta del documento que se está buscando.
- *
- * La misma en el correo y en los listados de comprobantes: dice cuál se busca
- * y deja pasar al siguiente sin volver al módulo del que se vino. Acá está
- * solo lo que es igual en las tres pantallas —pintar, avanzar, cerrar—; qué
- * significa "buscar" lo decide cada una escuchando 'navdoc:buscar'.
- *
- * Marcado en app/views/partials/tarjeta-documento.php. */
+/* app.js se carga arriba del <body>, antes de que las vistas se pinten, para
+ * que sus acciones puedan usar AppDialog. Cuando esto corre, la tarjeta
+ * todavía no existe en el documento: por eso se busca al estar listo el DOM y
+ * no de una. Buscarla de una es lo que la dejaba dibujada pero en blanco. */
 (function () {
 	'use strict';
 
@@ -547,23 +543,50 @@
 		sin_respaldo:   { color: '#94a3b8', nombre: 'Sin respaldo' }
 	};
 
-	var tarjeta = document.querySelector('[data-navdoc]');
-	if (!tarjeta) return;
+	var tarjeta = null;
+	var items = [];
+	var idx = 0;
+	var listo = false;
 
-	var items;
-	try {
-		items = JSON.parse(tarjeta.dataset.navdocItems || '[]');
-	} catch (e) {
-		items = [];
+	/* Engancha la tarjeta si ya está en el documento. Devuelve si quedó lista,
+	 * para que quien pregunte por el documento visible sepa si hay alguno. */
+	function iniciar() {
+		if (listo) return true;
+
+		tarjeta = document.querySelector('[data-navdoc]');
+		if (!tarjeta) return false;
+
+		try {
+			items = JSON.parse(tarjeta.dataset.navdocItems || '[]');
+		} catch (e) {
+			items = [];
+		}
+		if (!items.length) { tarjeta = null; return false; }
+
+		idx = Math.max(0, Math.min(items.length - 1, parseInt(tarjeta.dataset.navdocIdx, 10) || 0));
+
+		tarjeta.querySelector('[data-navdoc-prev]').addEventListener('click', function () {
+			if (idx > 0) { idx--; pintar(true); }
+		});
+		tarjeta.querySelector('[data-navdoc-next]').addEventListener('click', function () {
+			if (idx < items.length - 1) { idx++; pintar(true); }
+		});
+		tarjeta.querySelector('[data-navdoc-buscar]').addEventListener('click', buscar);
+		tarjeta.querySelector('[data-navdoc-cerrar]').addEventListener('click', function () {
+			tarjeta.style.display = 'none';
+			tarjeta.dispatchEvent(new CustomEvent('navdoc:cerrada'));
+		});
+
+		listo = true;
+		pintar(false);
+		return true;
 	}
-	if (!items.length) return;
 
-	var idx = Math.max(0, Math.min(items.length - 1, parseInt(tarjeta.dataset.navdocIdx, 10) || 0));
-
-	function actual() { return items[idx]; }
+	function actual() { return items[idx] || null; }
 
 	function pintar(avisar) {
 		var it = actual();
+		if (!it) return;
 		var est = ESTADOS[it.estado] || ESTADOS.sin_respaldo;
 
 		var punto = tarjeta.querySelector('[data-navdoc-punto]');
@@ -603,27 +626,24 @@
 	}
 
 	function buscar() {
+		if (!iniciar()) return;
 		tarjeta.dispatchEvent(new CustomEvent('navdoc:buscar', { detail: actual() }));
 	}
 
-	tarjeta.querySelector('[data-navdoc-prev]').addEventListener('click', function () {
-		if (idx > 0) { idx--; pintar(true); }
-	});
-	tarjeta.querySelector('[data-navdoc-next]').addEventListener('click', function () {
-		if (idx < items.length - 1) { idx++; pintar(true); }
-	});
-	tarjeta.querySelector('[data-navdoc-buscar]').addEventListener('click', buscar);
-	tarjeta.querySelector('[data-navdoc-cerrar]').addEventListener('click', function () {
-		tarjeta.style.display = 'none';
-		tarjeta.dispatchEvent(new CustomEvent('navdoc:cerrada'));
-	});
-
 	/* Para que la pantalla pueda buscar el primero en cuanto termine de
-	 * prepararse, sin duplicar acá lo que significa buscar en cada una. */
+	 * prepararse, sin duplicar acá lo que significa buscar en cada una.
+	 *
+	 * Las dos enganchan primero: los guiones de cada vista corren en medio del
+	 * documento, antes de que esté listo, y preguntan por el documento visible
+	 * nada más cargar. */
 	window.navdocBuscar = buscar;
-	window.navdocActual = actual;
+	window.navdocActual = function () { return iniciar() ? actual() : null; };
 
-	pintar(false);
+	if (document.readyState === 'loading') {
+		document.addEventListener('DOMContentLoaded', iniciar);
+	} else {
+		iniciar();
+	}
 })();
 
 /* Filtro de clase de nota: casillas, varias a la vez.
