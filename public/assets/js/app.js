@@ -646,6 +646,56 @@
 	}
 })();
 
+/* Volver a bajar del correo el respaldo de un documento que se perdió.
+ *
+ * El botón sale donde se ve el faltante —el listado de comprobantes y la
+ * cola de seguimiento—, así que el comportamiento vive acá una sola vez y las
+ * dos pantallas solo ponen el data-recuperar-doc. Por delegación, para que
+ * valga también en los renglones que se pintan después de cargar la página.
+ *
+ * Quien decide si de verdad se puede reponer es el servidor: compara la huella
+ * de lo que baja con la que se guardó al archivar y, si no es la misma, no
+ * escribe nada. Acá no se adivina. */
+(function () {
+	'use strict';
+
+	var enCurso = false;
+
+	document.addEventListener('click', function (evento) {
+		var boton = evento.target.closest ? evento.target.closest('[data-recuperar-doc]') : null;
+		if (!boton || enCurso) { return; }
+		evento.preventDefault();
+
+		var id = boton.dataset.recuperarDoc;
+		var base = document.body.dataset.base || '';
+		var antes = boton.innerHTML;
+		enCurso = true;
+		boton.disabled = true;
+		boton.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i>';
+
+		fetch(base + '/documentos/recuperar', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+			body: 'ids=' + encodeURIComponent(id)
+		})
+		.then(function (r) { return r.json(); })
+		.then(function (d) {
+			if (!d.ok) { throw new Error(d.message || 'No se pudo reponer el respaldo.'); }
+			// Recargar y no repintar el renglón: lo que cambia con esto no es
+			// solo un icono —el documento pasa a tener respaldo— y de ahí
+			// cuelgan el estado, los contadores y los filtros de la pantalla.
+			return window.AppDialog.alert(d.message, { title: 'Respaldo repuesto' })
+				.then(function () { window.location.reload(); });
+		})
+		.catch(function (e) {
+			boton.disabled = false;
+			boton.innerHTML = antes;
+			window.AppDialog.alert(e.message, { title: 'No se pudo reponer' });
+		})
+		.finally(function () { enCurso = false; });
+	}, false);
+})();
+
 /* Filtro de clase de nota: casillas, varias a la vez.
  *
  * Ninguna marcada quiere decir "todas": es el estado en blanco, no un filtro

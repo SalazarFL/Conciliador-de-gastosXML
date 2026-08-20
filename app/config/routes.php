@@ -77,6 +77,7 @@ $router->post('/notas-xml/subir', 'NotasXmlController@subir');
 $router->get('/notas-xml/ver/{id}', 'NotasXmlController@ver');
 $router->get('/documentos/xml/{id}', 'DocumentosController@xml');
 $router->get('/documentos/pdf/{id}', 'DocumentosController@pdf');
+$router->post('/documentos/recuperar', 'DocumentosController@recuperar');
 
 // --- RUTAS DE CORREO (captura IMAP de facturas, solo local) ---
 $router->get('/correo', 'CorreoController@index');

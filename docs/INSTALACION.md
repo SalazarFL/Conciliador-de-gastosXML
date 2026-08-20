@@ -414,7 +414,10 @@ modelo, en orden de frecuencia:
 | `php cli/migrar_rutas_relativas.php --aplicar` | Convertirlas y sacar del proyecto los documentos que queden adentro |
 | `php cli/organizar_documentos.php` | Volver a ubicar documentos movidos a mano (no mueve nada) |
 | `php cli/organizar_documentos.php --forzar-orden` | **Mueve archivos**: ordena lo registrado por fecha, tipo y estado |
-| `php cli/organizar_documentos.php --semana=N` | **Mueve archivos**: solo los de esa semana, a su carpeta de pago |
+| `php cli/organizar_documentos.php --semana=N` | **Mueve archivos**: solo los de esa semana, y copia su par a la carpeta del pago |
+| `php cli/limpiar_rutas_perdidas.php` | Ver qué rutas apuntan a un archivo que ya no existe (no cambia nada) |
+| `php cli/recuperar_documentos.php` | Ver qué documentos sin archivo se pueden volver a bajar del correo |
+| `php cli/recuperar_documentos.php --aplicar` | **Escribe archivos**: los baja del correo y los deja en su misma ruta |
 | `php cli/procesar_lotes.php` | Avanzar los lotes de correo sin el navegador abierto |
 | `php cli/sync_correo.php` | Sincronizar el buzón y capturar correo nuevo si está habilitado |
 | `php cli/adelgazar_correo_indice.php` | Medir cuánto ocupa el índice del correo (no cambia nada) |
@@ -444,3 +447,42 @@ Lo que sí ocurre solo es lo contrario: cada 5 minutos la tarea programada
 busca los archivos que alguien movió a mano y **corrige la base de datos para
 seguirlos**, sin tocarlos. Agregá `--dry-run` a cualquier comando para ver el
 resultado sin aplicarlo.
+
+### La carpeta del pago semanal es una copia
+
+Un documento vive siempre en la carpeta de su mes: `2026/08 AGOSTO/Facturas`.
+Cuando entra a un pago semanal, su par XML/PDF **se copia** a
+`PAGOS SEMANALES/<nombre del pago>`, y esa copia es lo que se entrega.
+
+La diferencia importa: esa carpeta se manda y quien la recibe la borra cuando
+termina. Mientras el par se mudaba ahí dentro, borrarla se llevaba el respaldo
+de todos sus documentos —el sistema seguía diciendo "respaldada" y el XML ya no
+existía en ninguna parte—. Ahora borrarla no cuesta nada: el documento sigue en
+su mes y la copia se repone la próxima vez que se ordene el archivo
+(**Correo → ⚙ → Ordenar el archivo**, o `--forzar-orden`).
+
+### Cuando un archivo se pierde de todos modos
+
+El organizador anota qué documentos tienen una ruta que apunta al vacío, y esos
+salen marcados **"Archivo perdido"** en el listado de comprobantes y en la cola
+de seguimiento —antes había que hacer clic para enterarse—.
+
+De los que se guardó el correo del que salieron se pueden volver a bajar, con
+el botón de la nube del renglón o en masa:
+
+```
+php cli/organizar_documentos.php            # primero, para que la marca esté al día
+php cli/recuperar_documentos.php            # qué se puede reponer
+php cli/recuperar_documentos.php --aplicar  # reponerlo
+```
+
+Solo se acepta un adjunto cuyo contenido dé el mismo SHA-256 que se guardó al
+archivarlo: lo que vuelve es el mismo archivo, no uno parecido, y vuelve a su
+misma ruta. Lo que no se pueda probar idéntico se informa sin escribir nada.
+
+Para lo que no tenga correo de origen quedan la papelera de SharePoint —93 días—
+y pedírselo otra vez al proveedor. Si no aparece,
+`php cli/limpiar_rutas_perdidas.php --aplicar` deja la fila diciendo "sin
+archivo" en vez de mandar a una carpeta vacía; el `hash_xml` se conserva, así
+que si algún día el archivo vuelve a la carpeta compartida,
+`php cli/organizar_documentos.php --completo` lo reconoce y lo reengancha solo.

@@ -22,7 +22,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
 </head>
-<body>
+<body data-base="<?= htmlspecialchars($_ap) ?>">
 
 <!-- Se carga antes de las vistas para que sus acciones puedan usar AppDialog. -->
 <script src="<?= $_ap ?>/assets/js/app.js?v=<?= $_jsVer ?>"></script>
