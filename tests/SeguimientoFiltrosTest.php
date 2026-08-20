@@ -135,4 +135,85 @@ assertSeguimientoFiltro(strpos($modelo->sqlFilas, 's.estado IS NOT NULL') === fa
 assertSeguimientoFiltro($modelo->paramsFilas === [],
     'los valores no permitidos no llegan como parámetros');
 
+// ── Clase de nota: varias a la vez ──────────────────────────────────────────
+// El trabajo se reparte por clase, así que "directas y por revisar" es una
+// pregunta corriente. Llegan como texto separado por comas para que el filtro
+// siga siendo una cadena: así lo recuerda la sesión, viaja en los enlaces de
+// las pestañas y sale en el export sin que nada de eso maneje arreglos.
+
+assertSeguimientoFiltro(Seguimiento::clasesPedidas('directa,costo') === ['directa', 'costo'],
+    'se leen varias clases separadas por comas');
+assertSeguimientoFiltro(Seguimiento::clasesPedidas(' Costo , DIRECTA ') === ['costo', 'directa'],
+    'se aceptan con espacios y en cualquier caja');
+assertSeguimientoFiltro(Seguimiento::clasesPedidas('directa,directa') === ['directa'],
+    'la misma clase repetida no duplica la condición');
+assertSeguimientoFiltro(Seguimiento::clasesPedidas(['costo', 'cambio']) === ['costo', 'cambio'],
+    'también se admite la lista, por si algún día el formulario manda clase[]');
+foreach (['', 'todas', 'ajuste', 'x, ,y', 'directa; DROP TABLE'] as $basura) {
+    assertSeguimientoFiltro(Seguimiento::clasesPedidas($basura) === [],
+        "lo que no es una clase se descarta: '{$basura}'");
+}
+
+$modelo->cola(['vista' => 'todo', 'clase' => 'directa,revisar', 'orden' => 'monto'], 1, 50);
+assertSeguimientoFiltro(strpos($modelo->sqlFilas, 'c.clase IN (?,?)') !== false,
+    'dos clases producen dos marcadores, no una igualdad');
+assertSeguimientoFiltro($modelo->paramsFilas === ['directa', 'revisar'],
+    'las clases viajan como parámetros, no interpoladas');
+
+// Una sola clase sigue funcionando igual que antes del cambio.
+$modelo->cola(['vista' => 'todo', 'clase' => 'costo', 'orden' => 'monto'], 1, 50);
+assertSeguimientoFiltro(strpos($modelo->sqlFilas, 'c.clase IN (?)') !== false
+    && $modelo->paramsFilas === ['costo'],
+    'una sola clase se filtra igual que siempre');
+
+// Sin clases no hay condición: 'todas' era el valor de la opción vacía del
+// desplegable viejo y tiene que seguir significando "no filtres".
+$modelo->cola(['vista' => 'todo', 'clase' => 'todas', 'orden' => 'monto'], 1, 50);
+assertSeguimientoFiltro(strpos($modelo->sqlFilas, 'c.clase IN') === false,
+    'sin clases elegidas no se agrega condición de clase');
+
+// La unión solo trae las clases que se persiguen, y sale de la misma lista que
+// el filtro: si se separaran, el desplegable ofrecería una clase que la cola
+// nunca puede contener.
+foreach (array_keys(Seguimiento::CLASES) as $clase) {
+    assertSeguimientoFiltro(strpos($modelo->sqlFilas, "'{$clase}'") !== false,
+        "la unión admite la clase {$clase}");
+}
+assertSeguimientoFiltro(strpos($modelo->sqlFilas, "'ajuste'") === false,
+    'las de ajuste no entran a la cola: se aplican solas, no se persiguen');
+
+// ── La clase no se arrastra cuando se miran facturas ────────────────────────
+// Una factura no tiene clase: en la unión viene en NULL. Si el filtro se colara
+// junto a "solo facturas", la lista saldría vacía y nada en pantalla lo
+// explicaría —el desplegable ni siquiera se dibuja en ese caso—.
+require_once __DIR__ . '/../app/core/Controller.php';
+require_once __DIR__ . '/../app/controllers/SeguimientoController.php';
+
+class SeguimientoFiltrosSonda extends SeguimientoController
+{
+    public function __construct() { /* sin requireAuth */ }
+
+    public function leer(array $get)
+    {
+        $_GET = $get;
+        $ref = new ReflectionMethod(SeguimientoController::class, 'filtros');
+        $ref->setAccessible(true);
+        return $ref->invoke($this, null);
+    }
+}
+
+$sonda = new SeguimientoFiltrosSonda();
+
+$f = $sonda->leer(['origen' => 'nota_credito', 'clase' => 'directa,revisar']);
+assertSeguimientoFiltro($f['clase'] === 'directa,revisar',
+    'mirando notas, las clases elegidas se conservan');
+
+$f = $sonda->leer(['origen' => 'factura', 'clase' => 'directa,revisar']);
+assertSeguimientoFiltro($f['clase'] === '',
+    'mirando solo facturas, la clase se descarta en vez de vaciar la lista');
+
+$f = $sonda->leer(['clase' => 'revisar,ajuste,costo']);
+assertSeguimientoFiltro($f['clase'] === 'revisar,costo',
+    'sin tipo de documento la clase vale, saneada');
+
 echo "OK: Filtros y estados de seguimiento\n";

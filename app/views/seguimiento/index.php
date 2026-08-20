@@ -169,21 +169,57 @@ $moneda = function ($valor, $mon = 'CRC') {
             </select>
         </div>
 
-        <div>
-            <label class="filter-label" for="f-clase">Clase de nota</label>
-            <select id="f-clase" name="clase" class="form-control">
-                <option value="">Todas</option>
-                <?php foreach ([
-                    'directa' => 'Directa (corrige factura)',
-                    'costo'   => 'Diferencia de costo',
-                    'cambio'  => 'Cambio de mercadería',
-                    'revisar' => 'Por revisar',
-                ] as $clave => $etiqueta): ?>
-                <option value="<?= $clave ?>" <?= $filtros['clase'] === $clave ? 'selected' : '' ?>>
-                    <?= htmlspecialchars($etiqueta) ?>
-                </option>
-                <?php endforeach; ?>
-            </select>
+        <?php
+        /*
+         * La clase es una pregunta sobre notas y solo aparece cuando puede
+         * haberlas: mirando solo facturas se esconde, porque una factura no
+         * tiene clase y dejarla ahí solo ofrece una forma de vaciar la lista.
+         * El controlador tampoco la arrastra en ese caso.
+         *
+         * Se eligen varias a la vez. El trabajo se reparte por clase —una
+         * directa se persigue distinto que una de costo—, así que "directas y
+         * por revisar" es una pregunta corriente, y de a una obligaba a
+         * recorrer la cola tres veces.
+         *
+         * Viaja como texto separado por comas en un campo escondido, no como
+         * clase[]: así el filtro sigue siendo una cadena y la sesión que lo
+         * recuerda, los enlaces de las pestañas y el export no tienen que
+         * aprender a manejar arreglos.
+         */
+        $clasesElegidas = Seguimiento::clasesPedidas($filtros['clase']);
+        $ocultarClase   = $filtros['origen'] === 'factura';
+        ?>
+        <div id="f-clase-campo"<?= $ocultarClase ? ' hidden' : '' ?>>
+            <label class="filter-label" for="f-clase-boton">Clase de nota</label>
+            <div class="seg-multi<?= $clasesElegidas ? ' is-elegido' : '' ?>" data-seg-multi>
+                <input type="hidden" name="clase" value="<?= htmlspecialchars(implode(',', $clasesElegidas)) ?>"
+                       data-seg-multi-valor>
+                <button type="button" class="form-control seg-multi-boton" id="f-clase-boton"
+                        aria-haspopup="true" aria-expanded="false" data-seg-multi-boton>
+                    <span data-seg-multi-etiqueta>
+                        <?php if (!$clasesElegidas): ?>
+                        Todas
+                        <?php elseif (count($clasesElegidas) === 1): ?>
+                        <?= htmlspecialchars(Seguimiento::CLASES[$clasesElegidas[0]]) ?>
+                        <?php else: ?>
+                        <?= count($clasesElegidas) ?> clases
+                        <?php endif; ?>
+                    </span>
+                    <i class="fas fa-chevron-down seg-multi-flecha"></i>
+                </button>
+                <div class="seg-multi-panel" data-seg-multi-panel hidden>
+                    <?php foreach (Seguimiento::CLASES as $clave => $etiqueta): ?>
+                    <label class="seg-multi-opcion">
+                        <input type="checkbox" value="<?= $clave ?>"
+                               <?= in_array($clave, $clasesElegidas, true) ? 'checked' : '' ?>>
+                        <span><?= htmlspecialchars($etiqueta) ?></span>
+                    </label>
+                    <?php endforeach; ?>
+                    <div class="seg-multi-pie">
+                        <button type="button" class="btn btn-outline btn-sm" data-seg-multi-limpiar>Todas</button>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div>
@@ -760,6 +796,22 @@ $moneda = function ($valor, $mon = 'CRC') {
   .seg-acciones { flex-direction: column; align-items: stretch; }
   .seg-acciones-btns .btn { flex: 1; justify-content: center; }
 }
+
+/* Elegir varias clases de nota: un botón que abre casillas. */
+.seg-multi { position: relative; }
+.seg-multi-boton { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
+                   cursor: pointer; background: #fff; }
+.seg-multi-boton > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seg-multi-flecha { font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
+.seg-multi.is-elegido .seg-multi-boton { border-color: var(--navy); font-weight: 700; color: var(--navy); }
+.seg-multi-panel { position: absolute; z-index: 30; top: calc(100% + 3px); left: 0; min-width: 100%;
+                   width: max-content; max-width: 280px; background: #fff; border: 1px solid var(--border);
+                   border-radius: 8px; box-shadow: 0 12px 30px rgba(15,23,42,.16); padding: 4px; }
+.seg-multi-opcion { display: flex; align-items: center; gap: 7px; padding: 5px 7px; border-radius: 6px;
+                    font-size: 12.5px; cursor: pointer; }
+.seg-multi-opcion:hover { background: var(--border-light); }
+.seg-multi-opcion input { margin: 0; flex-shrink: 0; }
+.seg-multi-pie { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 5px; text-align: right; }
 </style>
 
 <script>
@@ -774,6 +826,74 @@ $moneda = function ($valor, $mon = 'CRC') {
     var panel       = document.getElementById('panel');
     var dialogo     = document.getElementById('dialogo');
     var filterForm  = document.getElementById('seg-filter-form');
+
+    /*
+     * Clase de nota: varias a la vez, y solo mientras la pregunta tenga
+     * sentido. Al pasar el tipo de documento a "Facturas" el campo se esconde
+     * y se vacía en el acto, sin esperar a enviar: si se quedara puesto, la
+     * lista saldría vacía —una factura no tiene clase— y nada en pantalla lo
+     * explicaría.
+     *
+     * Va antes del `if (!tabla)`: la barra de filtros existe aunque la cola
+     * venga sin renglones, que es justo cuando hace falta poder cambiarla.
+     */
+    (function () {
+        var campo = document.getElementById('f-clase-campo');
+        var multi = campo && campo.querySelector('[data-seg-multi]');
+        var origen = document.getElementById('f-origen');
+        if (!campo || !multi) { return; }
+
+        var valor    = multi.querySelector('[data-seg-multi-valor]');
+        var boton    = multi.querySelector('[data-seg-multi-boton]');
+        var panel    = multi.querySelector('[data-seg-multi-panel]');
+        var etiqueta = multi.querySelector('[data-seg-multi-etiqueta]');
+        var limpiar  = multi.querySelector('[data-seg-multi-limpiar]');
+        var casillas = Array.prototype.slice.call(panel.querySelectorAll('input[type="checkbox"]'));
+
+        function elegidas() {
+            return casillas.filter(function (c) { return c.checked; });
+        }
+        function refrescar() {
+            var marcadas = elegidas();
+            valor.value = marcadas.map(function (c) { return c.value; }).join(',');
+            etiqueta.textContent = marcadas.length === 0 ? 'Todas'
+                : (marcadas.length === 1
+                    ? marcadas[0].parentNode.querySelector('span').textContent.trim()
+                    : marcadas.length + ' clases');
+            multi.classList.toggle('is-elegido', marcadas.length > 0);
+        }
+        function abrir(si) {
+            panel.hidden = !si;
+            boton.setAttribute('aria-expanded', si ? 'true' : 'false');
+        }
+
+        boton.addEventListener('click', function () { abrir(panel.hidden); });
+        document.addEventListener('click', function (e) {
+            if (!multi.contains(e.target)) { abrir(false); }
+        });
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') { abrir(false); }
+        });
+        casillas.forEach(function (c) { c.addEventListener('change', refrescar); });
+        limpiar.addEventListener('click', function () {
+            casillas.forEach(function (c) { c.checked = false; });
+            refrescar();
+            abrir(false);
+        });
+
+        if (origen) {
+            origen.addEventListener('change', function () {
+                var esFactura = origen.value === 'factura';
+                campo.hidden = esFactura;
+                if (esFactura) {
+                    casillas.forEach(function (c) { c.checked = false; });
+                    refrescar();
+                    abrir(false);
+                }
+            });
+        }
+    })();
+
     if (!tabla) { return; }
 
     // Los filtros pequeños del encabezado pertenecen al formulario superior

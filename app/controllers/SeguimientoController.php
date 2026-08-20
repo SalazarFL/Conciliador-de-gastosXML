@@ -72,6 +72,20 @@ class SeguimientoController extends Controller
         // Las pestañas son los estados; 'todo' es la única que no lo es.
         $vistas = array_merge(array_keys(Seguimiento::ESTADOS), ['todo']);
         $vista = (string) $this->get('vista', 'pendiente');
+
+        /*
+         * La clase es una pregunta sobre notas: una factura no tiene ninguna.
+         * Si se está mirando solo facturas, la clase no se arrastra —el
+         * desplegable tampoco se dibuja—, porque una clase colada junto a
+         * 'facturas' vacía la lista entera sin nada en pantalla que lo
+         * explique: en la unión, las facturas traen la clase en NULL.
+         *
+         * Se guarda como texto separado por comas: 'directa,costo'.
+         */
+        $origen = (string) $this->get('origen', '');
+        $clases = $origen === 'factura'
+            ? []
+            : Seguimiento::clasesPedidas($this->get('clase', ''));
         $condicionesSaldo = ['activas', 'canceladas'];
         $condicionSaldo = (string) $this->get('condicion_saldo', '');
         $marcas = ['mano', 'auto', 'desajuste'];
@@ -79,10 +93,10 @@ class SeguimientoController extends Controller
 
         return [
             'vista'       => in_array($vista, $vistas, true) ? $vista : 'pendiente',
-            'origen'      => (string) $this->get('origen', ''),
+            'origen'      => $origen,
             'tarea'       => (string) $this->get('tarea', ''),
             'marca'       => in_array($marca, $marcas, true) ? $marca : '',
-            'clase'       => (string) $this->get('clase', ''),
+            'clase'       => implode(',', $clases),
             'responsable' => (string) $this->get('responsable', ''),
             'proveedor'   => ProveedorCatalogo::normalizarClave($this->get('proveedor', '')),
             'sucursal'    => trim((string) $this->get('sucursal', '')),

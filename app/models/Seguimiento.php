@@ -57,6 +57,44 @@ class Seguimiento extends Model
         'completo'   => 'Respaldo completo',
     ];
 
+    /**
+     * Las clases de nota que entran a la cola.
+     *
+     * Estaba escrita tres veces —el WHERE de la unión, el filtro y el
+     * desplegable de la pantalla— y las tres tenían que decir lo mismo. Las
+     * de 'ajuste' no están: no se persiguen, se aplican solas.
+     *
+     * Una factura no tiene clase (la unión la trae en NULL), así que filtrar
+     * por clase deja fuera las facturas por su propia cuenta.
+     */
+    public const CLASES = [
+        'directa' => 'Directa (corrige factura)',
+        'costo'   => 'Diferencia de costo',
+        'cambio'  => 'Cambio de mercadería',
+        'revisar' => 'Por revisar',
+    ];
+
+    /**
+     * Las clases que pide el filtro, saneadas.
+     *
+     * Llegan separadas por comas —'directa,costo'— y no como lista, para que
+     * el filtro siga siendo un texto: así lo recuerda la sesión, viaja en los
+     * enlaces de las pestañas y sale en el export sin que nada de eso tenga
+     * que aprender a manejar arreglos.
+     */
+    public static function clasesPedidas($valor)
+    {
+        $pedidas = is_array($valor) ? $valor : explode(',', (string) $valor);
+        $limpias = [];
+        foreach ($pedidas as $clase) {
+            $clase = strtolower(trim((string) $clase));
+            if ($clase !== '' && isset(self::CLASES[$clase]) && !in_array($clase, $limpias, true)) {
+                $limpias[] = $clase;
+            }
+        }
+        return $limpias;
+    }
+
     public function __construct()
     {
         Esquema::unaVez(static::class, function () { $this->ensureTables(); });
@@ -270,7 +308,7 @@ class Seguimiento extends Model
               FROM notas_credito_lineas l
               JOIN notas_credito_listados li ON li.id = l.listado_id
               LEFT JOIN facturas_xml x ON x.id = l.factura_xml_id
-             WHERE l.clase IN ('directa', 'costo', 'cambio', 'revisar')
+             WHERE l.clase IN ('" . implode("', '", array_keys(self::CLASES)) . "')
                AND li.id = (SELECT MAX(actual.id)
                               FROM notas_credito_listados actual
                              WHERE actual.sociedad_id = li.sociedad_id)";
@@ -408,9 +446,15 @@ class Seguimiento extends Model
             $where[] = 'c.tarea = ?';
             $params[] = $f['tarea'];
         }
-        if (!empty($f['clase']) && $f['clase'] !== 'todas') {
-            $where[] = 'c.clase = ?';
-            $params[] = $f['clase'];
+        // Varias clases a la vez porque el trabajo se reparte por clase —una
+        // directa se persigue distinto que una de costo— y mirarlas de a una
+        // obliga a recorrer la cola tantas veces como clases haya.
+        $clases = self::clasesPedidas($f['clase'] ?? '');
+        if ($clases) {
+            $where[] = 'c.clase IN (' . implode(',', array_fill(0, count($clases), '?')) . ')';
+            foreach ($clases as $clase) {
+                $params[] = $clase;
+            }
         }
         if (!empty($f['responsable'])) {
             $where[] = 's.responsable = ?';
