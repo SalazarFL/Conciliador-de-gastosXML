@@ -51,15 +51,16 @@ function navActive(string $segment, string $uri): string {
 // Título de la página actual para el topbar (sin descripción: solo el nombre)
 $pageLabels = [
     'seguimiento'  => 'Seguimiento de documentos',
-    'facturas'     => 'Facturas ERP · Carga XML',
-    'facturas-erp' => 'Facturas ERP',
+    'facturas'     => 'Facturas · Carga XML',
+    'facturas-erp' => 'Facturas',
     'correo'       => 'Correo',
     'por-pagar'    => 'Pagos semanales',
     'notas-credito'=> 'Notas de crédito',
+    // Devoluciones sigue teniendo su título: la pantalla existe y se llega
+    // por la URL, lo que se retiró es la entrada del menú.
     'devoluciones' => 'Devoluciones',
     'notas-xml'    => 'Notas de crédito · Carga XML',
     'usuarios'     => 'Gestión de Usuarios',
-    'carga'        => 'Carga de documentos',
     'diagnostico'  => 'Diagnóstico de la instalación',
     'avisos'       => 'Avisos',
     'configuracion'=> 'Configuración',
@@ -127,12 +128,6 @@ if (!isset($sociedadActiva)) {
 
             <div class="sidebar-section-label" style="margin-top:16px;">Módulos</div>
 
-            <a href="<?= $baseUrl ?>/carga" class="<?= navActive('carga', $uriClean) ?>"
-               title="Cargar listados del ERP y comprobantes XML">
-                <span class="nav-icon"><i class="fas fa-inbox"></i></span>
-                <span class="nav-label">Carga de documentos</span>
-            </a>
-
             <a href="<?= $baseUrl ?>/por-pagar" class="<?= navActive('por-pagar', $uriClean) ?>" title="Pagos semanales">
                 <span class="nav-icon"><i class="fas fa-file-invoice-dollar"></i></span>
                 <span class="nav-label">Pagos semanales</span>
@@ -145,10 +140,14 @@ if (!isset($sociedadActiva)) {
                 <span class="nav-label">Notas de crédito</span>
             </a>
 
-            <a href="<?= $baseUrl ?>/devoluciones" class="<?= navActive('devoluciones', $uriClean) ?>" title="Devoluciones">
-                <span class="nav-icon"><i class="fas fa-rotate-left"></i></span>
-                <span class="nav-label">Devoluciones</span>
-            </a>
+            <?php /*
+             * Devoluciones no se ofrece por ahora: el módulo está completo y
+             * su ruta responde, pero todavía no se presenta como parte del
+             * trabajo. Se retiró la entrada del menú, no la pantalla — para
+             * volver a ofrecerlo basta con devolver este enlace.
+             *
+             *   <a href="/devoluciones" ...>Devoluciones</a>
+             */ ?>
 
             <a href="<?= $baseUrl ?>/correo" class="<?= navActive('correo', $uriClean) ?>" title="Correo">
                 <span class="nav-icon"><i class="fas fa-envelope-open-text"></i></span>
@@ -157,9 +156,9 @@ if (!isset($sociedadActiva)) {
 
             <a href="<?= $baseUrl ?>/facturas-erp"
                class="<?= navCoincide('facturas-erp', $uriClean) || navCoincide('facturas', $uriClean) ? 'active' : '' ?>"
-               title="Facturas del ERP y carga de comprobantes XML">
+               title="Las facturas de la empresa y la carga de sus comprobantes XML">
                 <span class="nav-icon"><i class="fas fa-file-invoice-dollar"></i></span>
-                <span class="nav-label">Facturas ERP</span>
+                <span class="nav-label">Facturas</span>
             </a>
 
             <div class="sidebar-section-label" style="margin-top:16px;">Administración</div>

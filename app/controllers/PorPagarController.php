@@ -389,8 +389,8 @@ class PorPagarController extends Controller
 
             if ($resumen['resuelta'] < 1) {
                 throw new Exception(
-                    'Ninguna factura del archivo está en Facturas ERP. '
-                    . 'Cargá primero el reporte "Facturas por Proveedor" que las incluya, en Carga de documentos.'
+                    'Ninguna factura del archivo está en Facturas. '
+                    . 'Cargá primero el reporte "Facturas por Proveedor" que las incluya, en Facturas.'
                 );
             }
 
@@ -470,7 +470,7 @@ class PorPagarController extends Controller
         // 'en_otro_pago' salió de esta lista: una factura que ya estaba en el
         // pago de otra semana dejó de cortar la carga. Se paga una sola vez,
         // así que el archivo más reciente manda y la factura se mueve.
-        foreach (['ausente' => 'no están en Facturas ERP',
+        foreach (['ausente' => 'no están en Facturas',
                   'ambigua' => 'tienen más de una factura posible en el ERP',
                   'error' => 'no se pudieron leer'] as $estado => $texto) {
             if (empty($resumen[$estado])) {
@@ -959,7 +959,7 @@ class PorPagarController extends Controller
             }
 
             $msg = 'La factura ' . trim((string) $factura['documento'])
-                . ' ya no es de esta semana. No se eliminó nada: sigue en Facturas ERP, disponible para otra semana.';
+                . ' ya no es de esta semana. No se eliminó nada: sigue en Facturas, disponible para otra semana.';
             if ($archivos['por_fecha'] > 0) {
                 $msg .= ' Su XML y PDF regresaron a la carpeta de documentos por fecha de emisión.';
             }

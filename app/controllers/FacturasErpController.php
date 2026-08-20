@@ -1,6 +1,12 @@
 <?php
 /**
- * Módulo "Facturas ERP".
+ * Módulo "Facturas".
+ *
+ * Se llamaba "Facturas ERP" mientras había que distinguirlo del listado de
+ * comprobantes XML. Para quien lo usa son las facturas de la empresa y ya; el
+ * XML es el respaldo de una de ellas, no otra clase de factura. La ruta sigue
+ * siendo /facturas-erp: los enlaces guardados y los de otras pantallas siguen
+ * funcionando, y renombrarla no cambiaría nada de lo que se ve.
  *
  * Carga el reporte "Facturas por Proveedor" del ERP y muestra sus columnas,
  * con foco en qué facturas siguen con saldo pendiente. Cada carga vuelve a
@@ -32,7 +38,7 @@ class FacturasErpController extends Controller
         $pagina = min($pagina, $totalPaginas);
 
         $this->render('facturaserp.index', [
-            'titulo' => 'Facturas ERP',
+            'titulo' => 'Facturas',
             'facturas' => $modelo->listar($filtros, $porPagina, ($pagina - 1) * $porPagina),
             // El resumen de la pantalla (facturas, con saldo, proveedores) se
             // fue con las tarjetas: era una consulta de agregados por cada
@@ -69,7 +75,7 @@ class FacturasErpController extends Controller
         $pagina = min($pagina, $totalPaginas);
 
         $this->render('facturaserp.incidencias', [
-            'titulo' => 'Incidencias · Facturas ERP',
+            'titulo' => 'Incidencias · Facturas',
             'incidencias' => $modelo->incidencias($filtros, $porPagina, ($pagina - 1) * $porPagina),
             'resumenTipos' => $modelo->resumenIncidencias($filtros),
             'proveedoresFiltro' => ProveedorCatalogo::opciones($modelo->proveedoresConIncidencia($filtros)),
@@ -182,7 +188,7 @@ class FacturasErpController extends Controller
     public function subir()
     {
         if (!$this->isPost()) {
-            $this->redirect($this->url('/carga'));
+            $this->redirect($this->url('/facturas-erp'));
         }
 
         require_once __DIR__ . '/../helpers/FileUploader.php';
@@ -206,7 +212,7 @@ class FacturasErpController extends Controller
             if (!$resultado['ok']) {
                 $detalle = array_merge($resultado['errores'], array_slice($resultado['no_reconocidas'], 0, 5));
                 $this->redirectWithMessage(
-                    $this->url('/carga'),
+                    $this->url('/facturas-erp'),
                     'No se pudo leer el listado: ' . implode(' ', $resultado['errores']),
                     'error',
                     ['failed_files' => $detalle]
@@ -220,7 +226,7 @@ class FacturasErpController extends Controller
             $sociedad = $this->loadModel('Sociedad')->getActiva();
             if (!$sociedad) {
                 $this->redirectWithMessage(
-                    $this->url('/carga'),
+                    $this->url('/facturas-erp'),
                     'Selecciona una sociedad antes de cargar el listado del ERP: el reporte no indica a qué empresa pertenece.',
                     'error'
                 );
@@ -274,7 +280,7 @@ class FacturasErpController extends Controller
             $this->redirectWithMessage($this->url('/facturas-erp'), $mensaje, $tipo, $detalles);
         } catch (Throwable $e) {
             $this->redirectWithMessage(
-                $this->url('/carga'),
+                $this->url('/facturas-erp'),
                 'Error al procesar el listado: ' . $e->getMessage(),
                 'error'
             );

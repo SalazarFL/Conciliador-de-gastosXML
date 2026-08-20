@@ -121,7 +121,7 @@ $totalLineas   = $respaldadas + $conDiferencia + $sinRespaldo;
         $accesos = [
             ['/por-pagar', 'fa-file-invoice-dollar', 'Pagos semanales', 'Verificar el listado del pago semanal', 'rgba(15,118,110,.09)', '#0f766e'],
             ['/correo', 'fa-envelope-open-text', 'Facturas desde Correo', 'Buscar e importar XML y PDF del buzón', 'rgba(240,165,0,.10)', 'var(--gold-dark)'],
-            ['/facturas-erp', 'fa-file-invoice-dollar', 'Facturas ERP', 'Consultar el ERP y cargar facturas XML', 'rgba(27,58,107,.09)', 'var(--navy)'],
+            ['/facturas-erp', 'fa-file-invoice-dollar', 'Facturas', 'Cargar el listado del ERP y consultar saldos', 'rgba(27,58,107,.09)', 'var(--navy)'],
             ['/seguimiento', 'fa-list-check', 'Seguimiento', 'Lo que falta de respaldo o no cuadra', 'rgba(27,58,107,.07)', 'var(--navy-light)'],
         ];
         ?>

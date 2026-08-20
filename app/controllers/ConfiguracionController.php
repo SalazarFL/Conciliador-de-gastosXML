@@ -14,7 +14,7 @@
  * cuentas y la automatización; DiagnosticoController para el respaldo;
  * SociedadesController y UsuariosController para lo suyo). Traerlos aquí
  * obligaría a duplicar los helpers con los que trabajan. Es el mismo reparto
- * que ya usa /carga.
+ * que ya usan las pantallas de carga de cada módulo.
  */
 
 require_once __DIR__ . '/../helpers/MailFetcher.php';

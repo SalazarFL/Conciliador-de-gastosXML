@@ -736,10 +736,10 @@ document.addEventListener('keydown', function (e) {
                 .slice(0, 5).map(function (l) { return l.numero || '(sin número)'; });
             avisoErp.style.display = 'block';
             avisoErp.innerHTML = '<strong>' + problemas + ' fila' + (problemas !== 1 ? 's' : '')
-                + ' no se pudo resolver contra Facturas ERP:</strong> ' + muestra.map(esc).join(', ')
+                + ' no se pudo resolver contra Facturas:</strong> ' + muestra.map(esc).join(', ')
                 + (problemas > muestra.length ? ', …' : '')
                 + '<br>El pago no se carga hasta que todas resuelvan. Si faltan facturas, cargá el reporte '
-                + '“Facturas por Proveedor” que las incluya en <a href="<?= $baseUrl ?>/carga">Carga de documentos</a>.';
+                + '“Facturas por Proveedor” que las incluya en <a href="<?= $baseUrl ?>/facturas-erp">Facturas</a>.';
         } else {
             avisoErp.style.display = 'none';
             avisoErp.innerHTML = '';
@@ -1030,7 +1030,7 @@ document.addEventListener('keydown', function (e) {
                         <?php endif; ?>
                         <form method="POST" action="<?= $baseUrl ?>/por-pagar/factura/quitar/<?= (int) $linea['id'] ?>?<?= htmlspecialchars($queryRetornoFiltros) ?>"
                               style="display:inline;margin-left:4px;"
-                              data-confirm="No se elimina nada: la factura deja de ser de esta semana y vuelve a quedar disponible en Facturas ERP. Su XML y PDF salen de la carpeta del pago y regresan a la carpeta de documentos por fecha de emisión."
+                              data-confirm="No se elimina nada: la factura deja de ser de esta semana y vuelve a quedar disponible en Facturas. Su XML y PDF salen de la carpeta del pago y regresan a la carpeta de documentos por fecha de emisión."
                               data-confirm-title="Quitar de la semana"
                               data-confirm-type="warning"
                               data-confirm-accept="Quitar de la semana">

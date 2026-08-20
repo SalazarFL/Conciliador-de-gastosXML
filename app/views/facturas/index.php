@@ -35,7 +35,7 @@ $urlLimpiarFiltros = $baseUrl . '/facturas?' . http_build_query($parametrosLimpi
             </div>
         </div>
         <a href="<?= $baseUrl ?>/facturas-erp" class="btn btn-outline btn-sm" style="margin-left:auto;">
-            <i class="fas fa-arrow-left" style="margin-right:4px;"></i>Volver a Facturas ERP
+            <i class="fas fa-arrow-left" style="margin-right:4px;"></i>Volver a Facturas
         </a>
     </div>
 
@@ -53,10 +53,6 @@ $urlLimpiarFiltros = $baseUrl . '/facturas?' . http_build_query($parametrosLimpi
             <?php endforeach; ?>
         </select>
 
-        <a href="<?= $baseUrl ?>/carga" class="btn btn-primary btn-sm">
-            <i class="fas fa-inbox" style="margin-right:4px;"></i>Cargar XML
-        </a>
-
         <?php if (!empty($facturas)): ?>
         <span class="badge badge-navy" style="font-size:11px;padding:3px 9px;">
             <i class="fas fa-layer-group"></i>
@@ -67,11 +63,213 @@ $urlLimpiarFiltros = $baseUrl . '/facturas?' . http_build_query($parametrosLimpi
         </span>
         <?php endif; ?>
 
-        <span style="font-size:11.5px;color:var(--text-muted);margin-left:auto;">
-            Los XML se cargan en <a href="<?= $baseUrl ?>/carga">Carga de documentos</a>.
-        </span>
     </div>
 </div>
+
+<?php /*
+ * La subida de comprobantes, acá y no en una pantalla aparte: los XML que
+ * entran son las filas de la tabla de abajo, así que cargar y comprobar que
+ * entraron es el mismo sitio.
+ *
+ * No se pregunta a qué semana van. Al guardarse, cada comprobante busca su
+ * factura en el listado del ERP por el consecutivo, y si esa factura está en
+ * un pago semanal hereda esa semana. Elegirla a mano era una decisión que
+ * nadie tenía por qué tomar, y equivocarse dejaba la factura fuera del pago
+ * sin que nada lo avisara.
+ */ ?>
+<div class="card" style="margin-bottom:10px;">
+    <div class="card-header">
+        <div class="card-title">
+            <i class="fas fa-file-code" style="margin-right:6px;color:var(--gold);"></i>Cargar comprobantes XML
+        </div>
+    </div>
+
+    <form method="post" action="<?= $baseUrl ?>/facturas/subir" enctype="multipart/form-data" id="form-xml">
+        <input type="file" name="xml_files[]" id="xml_files" multiple accept=".xml" style="display:none;">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <label for="xml_files" class="upload-file-btn" style="padding:8px 16px;font-size:12.5px;">
+                <i class="fas fa-folder-open"></i> Seleccionar XML
+            </label>
+            <span id="xml-nombre" style="font-size:12px;color:var(--text-muted);font-style:italic;">
+                Ningún archivo seleccionado
+            </span>
+            <button type="submit" class="btn btn-primary btn-sm" id="xml-btn">
+                <i class="fas fa-cogs" style="margin-right:4px;"></i>Procesar XML
+            </button>
+            <span style="font-size:11px;color:var(--text-muted);margin-left:auto;max-width:420px;">
+                Se suben por tandas, sin límite de cantidad. Los mensajes de Hacienda y las notas
+                de débito se descartan solos.
+            </span>
+        </div>
+    </form>
+
+    <div id="xml-progreso" style="display:none;margin-top:14px;">
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px;gap:6px;flex-wrap:wrap;">
+            <span id="xml-estado" style="font-weight:700;color:var(--navy);">Preparando…</span>
+            <span id="xml-conteo" style="color:var(--text-muted);"></span>
+        </div>
+        <div style="background:#e2e8f0;border-radius:8px;height:14px;overflow:hidden;">
+            <div id="xml-barra" style="background:linear-gradient(90deg,#0c2461,#1e3a8a);height:100%;width:0%;transition:width .3s;"></div>
+        </div>
+        <div id="xml-detalle" style="font-size:11.5px;color:var(--text-muted);margin-top:8px;line-height:1.6;"></div>
+    </div>
+</div>
+
+<script>
+// El XML se sube por tandas contra la cola: el navegador manda de a CHUNK
+// archivos (por debajo del max_file_uploads de PHP) y después pide procesar
+// en lotes. Sin esto, subir 300 XML de una semana se topaba con el límite del
+// servidor y se perdían en silencio los que sobraban.
+(function () {
+    var BASE = '<?= $baseUrl ?>';
+    var formXml = document.getElementById('form-xml');
+    var entrada = document.getElementById('xml_files');
+    if (!formXml || !entrada) { return; }
+
+    entrada.addEventListener('change', function () {
+        var n = entrada.files.length;
+        document.getElementById('xml-nombre').textContent = n === 0
+            ? 'Ningún archivo seleccionado'
+            : (n === 1 ? entrada.files[0].name : n + ' archivos seleccionados');
+    });
+
+    if (!window.fetch || !window.FormData) { return; }
+
+    var CHUNK = 10, LOTE = 10;
+    var boton   = document.getElementById('xml-btn');
+    var panel   = document.getElementById('xml-progreso');
+    var estado  = document.getElementById('xml-estado');
+    var conteo  = document.getElementById('xml-conteo');
+    var barra   = document.getElementById('xml-barra');
+    var detalle = document.getElementById('xml-detalle');
+
+    function enviar(url, fd) {
+        return fetch(url, { method: 'POST', body: fd, credentials: 'same-origin' })
+            .then(function (res) {
+                return res.json().catch(function () { return null; }).then(function (body) {
+                    if (!res.ok || !body || body.ok === false) {
+                        throw new Error((body && body.message) || ('Error HTTP ' + res.status));
+                    }
+                    return body;
+                });
+            });
+    }
+    function postJson(url, data) {
+        var fd = new FormData();
+        Object.keys(data).forEach(function (k) { fd.append(k, data[k]); });
+        return enviar(url, fd);
+    }
+    function dormir(ms) { return new Promise(function (ok) { setTimeout(ok, ms); }); }
+    function decir(t) { estado.textContent = t; }
+    function avanzar(p) { barra.style.width = Math.max(0, Math.min(100, p)) + '%'; }
+    function pintar(e) {
+        var s = (e && e.stats) || {};
+        conteo.textContent = 'Importadas: ' + (s.importado || 0) +
+            ' - Ya en esta semana: ' + (s.duplicado || 0) +
+            ' - Errores: ' + (s.error || 0) + ' - Pendientes: ' + (s.pendiente || 0);
+    }
+
+    formXml.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var archivos = Array.prototype.slice.call(entrada.files);
+        if (!archivos.length) {
+            AppDialog.alert('Selecciona al menos un archivo XML para comenzar la carga.', {
+                title: 'Archivos requeridos', type: 'warning'
+            });
+            return;
+        }
+
+        boton.disabled = true;
+        panel.style.display = 'block';
+        avanzar(0);
+        detalle.textContent = '';
+        decir('Creando importación…');
+
+        var importacionId = 0;
+
+        postJson(BASE + '/facturas/cola/iniciar', { total_esperado: archivos.length })
+        .then(function (inicio) {
+            importacionId = inicio.importacion_id;
+            var cadena = Promise.resolve();
+            for (var i = 0; i < archivos.length; i += CHUNK) {
+                (function (desde) {
+                    cadena = cadena.then(function () {
+                        var tanda = archivos.slice(desde, desde + CHUNK);
+                        var fd = new FormData();
+                        fd.append('importacion_id', importacionId);
+                        tanda.forEach(function (f) { fd.append('xml_files[]', f, f.name); });
+                        decir('Subiendo archivos… (' + Math.min(desde + tanda.length, archivos.length) + '/' + archivos.length + ')');
+                        return enviar(BASE + '/facturas/cola/agregar', fd).then(function () {
+                            avanzar(((desde + tanda.length) / archivos.length) * 30);
+                        });
+                    });
+                })(i);
+            }
+            return cadena;
+        })
+        .then(function () {
+            decir('Procesando facturas…');
+            var sinAvance = 0;
+            function paso() {
+                return postJson(BASE + '/facturas/cola/procesar', {
+                    importacion_id: importacionId, limit: LOTE
+                }).then(function (r) {
+                    var e2 = r.estado || {};
+                    avanzar(30 + ((e2.progress_percent || 0) * 0.7));
+                    pintar(e2);
+                    if (r.completed) { return e2; }
+                    if (!r.processed_in_batch) {
+                        sinAvance++;
+                        if (sinAvance >= 5) { throw new Error('El procesamiento se detuvo sin completar. Volvé a intentarlo.'); }
+                        return dormir(2000).then(paso);
+                    }
+                    sinAvance = 0;
+                    return paso();
+                });
+            }
+            return paso();
+        })
+        .then(function (e2) {
+            avanzar(100);
+            var s = (e2 && e2.stats) || {};
+            var importadas = s.importado || 0, repetidas = s.duplicado || 0, fallos = s.error || 0;
+
+            var problemas = (e2 && e2.recent_issues) || [];
+            if (problemas.length) {
+                detalle.innerHTML = problemas.slice(0, 5).map(function (it) {
+                    var motivo = (it.error_texto || it.estado || '').toString().split(':').pop().trim();
+                    var caja = document.createElement('div');
+                    caja.textContent = '- ' + (it.archivo_original || 'sin nombre') + ' -> ' + (it.estado || '') +
+                                       (motivo ? ' (' + motivo.substring(0, 90) + ')' : '');
+                    return caja.innerHTML;
+                }).join('<br>');
+            }
+
+            if (importadas === 0) {
+                decir(repetidas > 0 && fallos === 0
+                    ? 'Las ' + repetidas + ' facturas ya estaban cargadas; no se duplicaron.'
+                    : '⚠ Terminó sin facturas nuevas (' + fallos + ' con error). Revisá el detalle.');
+                boton.disabled = false;
+                return;
+            }
+            // La lista de abajo es justo la que acaba de cambiar: se recarga
+            // para que las recién importadas aparezcan sin tener que pedirlo.
+            if (repetidas > 0 || fallos > 0) {
+                decir('Listo: ' + importadas + ' importadas, ' + repetidas + ' ya estaban y ' + fallos + ' con error.');
+                setTimeout(function () { window.location.reload(); }, 3500);
+                return;
+            }
+            decir('¡Listo! ' + importadas + ' facturas importadas.');
+            setTimeout(function () { window.location.reload(); }, 800);
+        })
+        .catch(function (err) {
+            decir('Error: ' + err.message);
+            detalle.textContent = 'Podés reintentar: solo se bloquean las facturas que ya estén en la semana seleccionada.';
+            boton.disabled = false;
+        });
+    });
+})();
+</script>
 
 <script>
 // El selector "Semana de trabajo" controla la lista de abajo: al cambiar

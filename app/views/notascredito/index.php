@@ -69,9 +69,24 @@ function ncQuery(array $changes = []) {
             Sociedad: <strong style="color:var(--navy);"><?= htmlspecialchars($sociedadActiva['nombre']) ?></strong>.
             Cada reporte CSV actualiza saldos y agrega los documentos que todavía no existen.
         </div>
-        <a href="<?= $baseUrl ?>/carga" class="btn btn-primary btn-sm">
-            <i class="fas fa-inbox" style="margin-right:4px;"></i>Actualizar desde CSV
-        </a>
+        <?php /*
+         * El CSV se sube acá y no en una pantalla aparte: lo que el archivo
+         * actualiza es la tabla de abajo, así que cargar y comprobar el
+         * resultado es el mismo sitio.
+         */ ?>
+        <form id="form-nc" action="<?= $baseUrl ?>/notas-credito/previa" method="POST"
+              enctype="multipart/form-data" style="display:flex;gap:9px;align-items:center;flex-wrap:wrap;">
+            <input type="file" name="listado_file" id="nc-archivo" accept=".csv" required style="display:none;">
+            <label for="nc-archivo" class="upload-file-btn" style="padding:8px 16px;font-size:12.5px;">
+                <i class="fas fa-folder-open"></i> Seleccionar CSV
+            </label>
+            <span id="nc-archivo-nombre" style="font-size:12px;color:var(--text-muted);font-style:italic;">
+                Ningún archivo seleccionado
+            </span>
+            <button type="submit" class="btn btn-primary btn-sm" id="nc-btn">
+                <i class="fas fa-eye" style="margin-right:4px;"></i>Vista previa
+            </button>
+        </form>
         <div style="font-size:12px;color:var(--text-muted);margin-top:8px;">
             La vista previa indica cuántas notas son nuevas, cuántos saldos cambian y cuántas filas quedarán intactas.
         </div>
@@ -399,6 +414,133 @@ function ncQuery(array $changes = []) {
         </div>
     </div>
 </div>
+
+<!-- Vista previa de la actualización del CSV. Vivía en /carga; se vino con
+     su formulario, que es lo unico que la abre. -->
+<div id="nc-carga-modal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:1000;align-items:center;justify-content:center;padding:12px;">
+    <div style="background:#fff;border-radius:10px;width:min(1000px,100%);max-height:88vh;display:flex;flex-direction:column;overflow:hidden;">
+        <div style="padding:9px 13px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center;">
+            <i class="fas fa-eye" style="color:var(--gold);"></i>
+            <div>
+                <strong>Vista previa de la actualización</strong>
+                <div id="nc-carga-meta" style="font-size:12px;color:var(--text-muted);"></div>
+            </div>
+            <button type="button" data-nc-carga-cerrar
+                    style="margin-left:auto;background:none;border:0;font-size:24px;cursor:pointer;color:var(--text-muted);line-height:1;">&times;</button>
+        </div>
+        <div style="padding:10px 13px;overflow:auto;">
+            <div id="nc-carga-resumen" style="display:flex;gap:12px;flex-wrap:wrap;font-size:12px;margin-bottom:8px;"></div>
+            <div id="nc-carga-aviso"></div>
+            <div style="overflow:auto;max-height:45vh;">
+                <table class="table" style="min-width:900px;font-size:12.5px;">
+                    <thead><tr><th>Fila</th><th>Documento</th><th>Proveedor</th><th>Fecha</th>
+                    <th style="text-align:right;">Monto</th><th style="text-align:right;">Saldo</th></tr></thead>
+                    <tbody id="nc-carga-cuerpo"></tbody>
+                </table>
+            </div>
+        </div>
+        <div style="padding:9px 13px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:7px;">
+            <button type="button" class="btn btn-outline btn-sm" data-nc-carga-cerrar>Cancelar</button>
+            <form method="POST" action="<?= $baseUrl ?>/notas-credito/subir">
+                <input type="hidden" name="archivo_token" id="nc-carga-token">
+                <input type="hidden" name="archivo_nombre" id="nc-carga-original">
+                <button class="btn btn-primary btn-sm" id="nc-carga-confirmar">
+                    <i class="fas fa-rotate"></i> Actualizar saldos
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+// Subida del CSV: se analiza sin escribir y el modal dice qué cambiaría.
+// Confirmar reenvía el archivo ya guardado por su token.
+(function () {
+    var BASE = <?= json_encode($baseUrl) ?>;
+    var form = document.getElementById('form-nc');
+    var modal = document.getElementById('nc-carga-modal');
+    var entrada = document.getElementById('nc-archivo');
+    if (!form || !modal) { return; }
+
+    entrada.addEventListener('change', function () {
+        document.getElementById('nc-archivo-nombre').textContent =
+            entrada.files.length ? entrada.files[0].name : 'Ningún archivo seleccionado';
+    });
+
+    function esc(v) {
+        var d = document.createElement('div');
+        d.textContent = String(v == null ? '' : v);
+        return d.innerHTML;
+    }
+    function moneda(v, m) {
+        return (m === 'USD' ? '$' : '\u20a1') +
+            Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    function fecha(v) {
+        if (!v) { return '\u2014'; }
+        var p = String(v).split('-');
+        return p.length === 3 ? p[2] + '/' + p[1] + '/' + p[0] : v;
+    }
+
+    modal.addEventListener('click', function (e) {
+        if (e.target === modal || e.target.hasAttribute('data-nc-carga-cerrar')) {
+            modal.style.display = 'none';
+        }
+    });
+
+    form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var btn = document.getElementById('nc-btn');
+        btn.disabled = true;
+        fetch(form.action, { method: 'POST', body: new FormData(form), credentials: 'same-origin' })
+            .then(function (res) {
+                return res.json().catch(function () { return null; }).then(function (body) {
+                    if (!res.ok || !body || body.ok === false) {
+                        throw new Error((body && body.message) || ('Error HTTP ' + res.status));
+                    }
+                    return body;
+                });
+            })
+            .then(function (d) {
+                document.getElementById('nc-carga-meta').textContent =
+                    (d.empresa || '') + (d.periodo_desde ? ' - ' + d.periodo_desde + ' al ' + d.periodo_hasta : '');
+                var st = d.estadisticas || {};
+                var impacto = d.impacto || {};
+                document.getElementById('nc-carga-resumen').innerHTML =
+                    '<span>Notas: <b>' + (st.total || 0) + '</b></span>' +
+                    '<span>Nuevas: <b>' + (impacto.nuevas || 0) + '</b></span>' +
+                    '<span>Saldo cambia: <b>' + (impacto.actualizadas || 0) + '</b></span>' +
+                    '<span>Sin cambios: <b>' + (impacto.sin_cambio || 0) + '</b></span>';
+
+                var aviso = document.getElementById('nc-carga-aviso');
+                document.getElementById('nc-carga-confirmar').disabled = false;
+                aviso.innerHTML = '';
+                if (d.duplicado) {
+                    aviso.innerHTML = '<div class="alert alert-info" style="margin-bottom:12px;">' +
+                        'Este mismo archivo ya fue procesado. Puedes aplicarlo de nuevo; las filas iguales no se tocarán.</div>';
+                } else if (d.errores && d.errores.length) {
+                    aviso.innerHTML = '<div class="alert alert-warning" style="margin-bottom:12px;">' +
+                        d.errores.length + ' fila(s) inválidas se van a omitir.</div>';
+                }
+
+                document.getElementById('nc-carga-cuerpo').innerHTML = (d.lineas || []).map(function (r) {
+                    return '<tr><td>' + esc(r.fila_origen) + '</td><td>' + esc(r.documento) + '</td>' +
+                           '<td>' + esc(r.proveedor_nombre) + '</td><td>' + fecha(r.fecha) + '</td>' +
+                           '<td style="text-align:right;">' + moneda(r.monto, r.moneda) + '</td>' +
+                           '<td style="text-align:right;">' + moneda(r.saldo, r.moneda) + '</td></tr>';
+                }).join('');
+
+                document.getElementById('nc-carga-token').value = d.token || '';
+                document.getElementById('nc-carga-original').value = d.archivo || '';
+                modal.style.display = 'flex';
+            })
+            .catch(function (err) {
+                AppDialog.alert(err.message, { title: 'No se pudo analizar el archivo', type: 'danger' });
+            })
+            .then(function () { btn.disabled = false; });
+    });
+})();
+</script>
 
 <script>
 (function () {

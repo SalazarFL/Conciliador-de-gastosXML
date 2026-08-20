@@ -246,7 +246,7 @@ class NotasCreditoController extends Controller
                 @rename($permanentPath, $tempPath);
             }
             $this->redirectWithMessage(
-                $guardado ? $this->url('/notas-credito') : $this->url('/carga'),
+                $this->url('/notas-credito'),
                 ($guardado
                     ? 'Los saldos se actualizaron, pero falló la verificación XML: '
                     : 'No se pudo actualizar el acumulado: ') . $e->getMessage(),

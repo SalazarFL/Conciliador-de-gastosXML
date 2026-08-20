@@ -1,8 +1,12 @@
 <?php
 /**
- * Facturas ERP: carga del reporte "Facturas por Proveedor" y listado en
+ * Facturas: carga del reporte "Facturas por Proveedor" del ERP y listado en
  * columnas. El foco es el saldo pendiente, así que el filtro de saldo va
  * arriba y la columna Saldo se resalta.
+ *
+ * El formulario de subida está acá y no en una pantalla aparte: lo que el
+ * archivo produce se ve en la tabla de abajo, así que cargar y comprobar es
+ * el mismo sitio.
  */
 $baseUrl = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 $facturas = is_array($facturas ?? null) ? $facturas : [];
@@ -63,19 +67,34 @@ function feMonto($v)
         <?php endif; ?>
     </div>
 
-    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
-        <a href="<?= $baseUrl ?>/carga" class="btn btn-primary btn-sm">
-            <i class="fas fa-inbox" style="margin-right:4px;"></i>Cargar listado
-        </a>
-        <span style="font-size:11px;color:var(--text-muted);max-width:560px;">
-            <i class="fas fa-circle-info" style="margin-right:3px;color:var(--navy-light);"></i>
-            El reporte <strong>Facturas por Proveedor</strong> se carga desde
-            <a href="<?= $baseUrl ?>/carga">Carga de documentos</a>, junto con el resto de los
-            archivos. Se puede volver a subir cuantas veces haga falta: las facturas nuevas se
-            agregan, las que cambiaron de saldo se actualizan y las que siguen igual no se tocan.
+    <form method="POST" action="<?= $baseUrl ?>/facturas-erp/subir" enctype="multipart/form-data"
+          id="fe-form-subir" style="display:flex;gap:9px;align-items:center;flex-wrap:wrap;">
+        <input type="file" name="listado_file" id="fe-listado-file" accept=".csv" required
+               style="display:none;" onchange="feNombreArchivo(this)">
+        <label for="fe-listado-file" class="upload-file-btn" style="padding:8px 16px;font-size:12.5px;">
+            <i class="fas fa-folder-open"></i> Seleccionar CSV
+        </label>
+        <span id="fe-listado-nombre" style="font-size:12px;color:var(--text-muted);font-style:italic;">
+            Ningún archivo seleccionado
         </span>
+        <button type="submit" class="btn btn-primary btn-sm">
+            <i class="fas fa-database" style="margin-right:4px;"></i>Cargar listado
+        </button>
+    </form>
+    <div style="font-size:11px;color:var(--text-muted);max-width:640px;margin-top:8px;">
+        <i class="fas fa-circle-info" style="margin-right:3px;color:var(--navy-light);"></i>
+        El reporte <strong>Facturas por Proveedor</strong> se puede volver a subir cuantas veces
+        haga falta: las facturas nuevas se agregan, las que cambiaron de saldo se actualizan y las
+        que siguen igual no se tocan.
     </div>
 </div>
+
+<script>
+function feNombreArchivo(input) {
+    document.getElementById('fe-listado-nombre').textContent =
+        input.files.length ? input.files[0].name : 'Ningún archivo seleccionado';
+}
+</script>
 
 <?php /*
  * Acá vivía una fila de cuatro tarjetas: facturas, con saldo, proveedores e

@@ -18,14 +18,35 @@ foreach ([$desde ?? '', $hasta ?? '', $buscar ?? '', $proveedor ?? ''] as $valor
             <i class="fas fa-arrow-left" style="margin-right:4px;"></i>Volver a Notas de crédito
         </a>
     </div>
-    <div style="padding:0;display:flex;gap:7px;align-items:center;flex-wrap:wrap;">
-        <a href="<?= $baseUrl ?>/carga" class="btn btn-primary btn-sm">
-            <i class="fas fa-inbox" style="margin-right:5px;"></i>Ir a Carga de documentos
-        </a>
-        <span style="font-size:12px;color:var(--text-muted);">
-            Los archivos se cargan desde un solo lugar: listados del ERP y comprobantes XML.
+    <?php /*
+     * La subida vive acá: los comprobantes que entran son las filas de la
+     * tabla de abajo. Al terminar se vuelve a verificar el acumulado de notas
+     * de la sociedad activa.
+     */ ?>
+    <form method="post" action="<?= $baseUrl ?>/notas-xml/subir" enctype="multipart/form-data"
+          style="padding:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <input type="file" name="xml_files[]" id="ncxml-file" accept=".xml" multiple required style="display:none;">
+        <label for="ncxml-file" class="upload-file-btn" style="padding:8px 16px;font-size:12.5px;">
+            <i class="fas fa-folder-open"></i> Seleccionar XML
+        </label>
+        <span id="ncxml-nombre" style="font-size:12px;color:var(--text-muted);font-style:italic;">
+            Ningún archivo seleccionado
         </span>
-    </div>
+        <button type="submit" class="btn btn-primary btn-sm">
+            <i class="fas fa-file-import" style="margin-right:4px;"></i>Importar notas
+        </button>
+        <span style="font-size:11.5px;color:var(--text-muted);margin-left:auto;">
+            Solo notas de crédito electrónicas (NC).
+        </span>
+    </form>
+    <script>
+    document.getElementById('ncxml-file').addEventListener('change', function () {
+        var n = this.files.length;
+        document.getElementById('ncxml-nombre').textContent = n === 0
+            ? 'Ningún archivo seleccionado'
+            : (n === 1 ? this.files[0].name : n + ' archivos seleccionados');
+    });
+    </script>
     <?php if (empty($carpetaRaiz)): ?><div style="margin:8px 0 0;padding:7px 9px;background:#fff7ed;border:1px solid #fdba74;border-radius:7px;color:#9a3412;font-size:11.5px;">Configura primero la carpeta raíz desde el engranaje de Correo.</div><?php endif; ?>
 </div>
 

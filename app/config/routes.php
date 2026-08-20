@@ -17,19 +17,12 @@ $router->get('/logout', 'AuthController@logout');
 $router->get('/', 'HomeController@index');
 $router->get('/home', 'HomeController@index');
 
-// --- CARGA DE DOCUMENTOS (única puerta de entrada de archivos) ---
-// Los cuatro formularios viven en /carga, pero cada POST lo sigue atendiendo
-// el controlador dueño del modelo que escribe: esos manejadores comparten
-// helpers con el resto de su módulo (la cola de XML, la verificación de
-// semanas, el borrado de auditoría) y traerlos aquí obligaría a duplicarlos.
-// El pago semanal y las devoluciones NO están aquí: se cargan dentro del
-// flujo de trabajo de su propio módulo.
-$router->get('/carga', 'CargaController@index');
-$router->post('/carga/listado-facturas', 'FacturasErpController@subir');
-$router->post('/carga/listado-notas/previa', 'NotasCreditoController@previsualizar');
-$router->post('/carga/listado-notas', 'NotasCreditoController@subir');
-$router->post('/carga/comprobantes-facturas', 'FacturasController@subir');
-$router->post('/carga/comprobantes-notas', 'NotasXmlController@subir');
+// Acá vivía /carga: una pantalla que reunía los cuatro formularios de subida.
+// La idea era no tener que saber de antemano qué módulo pedía qué archivo,
+// pero el precio era ir a otra pantalla para cargar y volver para ver el
+// resultado, cada vez. Cada formulario volvió a su módulo —donde se mira lo
+// que ese archivo produce— y los POST se quedaron en el controlador que
+// siempre los atendió, ahora bajo la ruta de su propio módulo.
 
 // --- CONFIGURACIÓN (el engranaje de la barra superior) ---
 // Una sola pantalla para lo que vale en todo el sistema: la carpeta raíz de
@@ -37,7 +30,7 @@ $router->post('/carga/comprobantes-notas', 'NotasXmlController@subir');
 // usuarios y el respaldo. Antes era un modal dentro de Correo y había que
 // saber que se guardaba ahí.
 //
-// Los POST de cada sección NO se mudaron: igual que en /carga, los sigue
+// Los POST de cada sección NO se mudaron: los sigue
 // atendiendo el controlador dueño de lo que escribe —CorreoController,
 // DiagnosticoController, SociedadesController, UsuariosController—, porque
 // comparten helpers con el resto de su módulo.
@@ -71,6 +64,7 @@ $router->post('/sociedades/activar/{id}', 'SociedadesController@activar');
 
 // --- RUTAS DE FACTURAS XML ---
 $router->get('/facturas', 'FacturasController@index');
+$router->post('/facturas/subir', 'FacturasController@subir');
 $router->post('/facturas/cola/iniciar', 'FacturasController@colaIniciar');
 $router->post('/facturas/cola/agregar', 'FacturasController@colaAgregar');
 $router->post('/facturas/cola/procesar', 'FacturasController@colaProcesar');
@@ -79,6 +73,7 @@ $router->get('/facturas/ver/{id}', 'FacturasController@ver');
 
 // --- RUTAS DE NOTAS DE CRÉDITO XML ---
 $router->get('/notas-xml', 'NotasXmlController@index');
+$router->post('/notas-xml/subir', 'NotasXmlController@subir');
 $router->get('/notas-xml/ver/{id}', 'NotasXmlController@ver');
 $router->get('/documentos/xml/{id}', 'DocumentosController@xml');
 $router->get('/documentos/pdf/{id}', 'DocumentosController@pdf');
@@ -145,6 +140,7 @@ $router->post('/por-pagar/forzar', 'PorPagarController@forzar');
 
 // --- RUTAS DE FACTURAS ERP (reporte "Facturas por Proveedor", saldos) ---
 $router->get('/facturas-erp', 'FacturasErpController@index');
+$router->post('/facturas-erp/subir', 'FacturasErpController@subir');
 $router->get('/facturas-erp/incidencias', 'FacturasErpController@incidencias');
 $router->post('/facturas-erp/incidencias/descartar', 'FacturasErpController@descartarIncidencias');
 $router->post('/facturas-erp/incidencias/restaurar', 'FacturasErpController@restaurarIncidencias');
@@ -152,6 +148,8 @@ $router->get('/facturas-erp/exportar', 'FacturasErpController@exportar');
 
 // --- RUTAS DE NOTAS DE CRÉDITO (listados por período) ---
 $router->get('/notas-credito', 'NotasCreditoController@index');
+$router->post('/notas-credito/previa', 'NotasCreditoController@previsualizar');
+$router->post('/notas-credito/subir', 'NotasCreditoController@subir');
 $router->get('/notas-credito/buscar', 'NotasCreditoController@buscar');
 $router->post('/notas-credito/verificar/{id}', 'NotasCreditoController@verificar');
 $router->get('/notas-credito/historial/{id}', 'NotasCreditoController@historial');
