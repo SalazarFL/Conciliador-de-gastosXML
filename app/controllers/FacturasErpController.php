@@ -34,7 +34,9 @@ class FacturasErpController extends Controller
         $this->render('facturaserp.index', [
             'titulo' => 'Facturas ERP',
             'facturas' => $modelo->listar($filtros, $porPagina, ($pagina - 1) * $porPagina),
-            'resumen' => $modelo->resumen($filtros),
+            // El resumen de la pantalla (facturas, con saldo, proveedores) se
+            // fue con las tarjetas: era una consulta de agregados por cada
+            // visita para cifras que nadie usaba para decidir nada.
             'opciones' => $modelo->opcionesFiltro(),
             'proveedoresFiltro' => ProveedorCatalogo::opciones($modelo->proveedoresParaFiltro()),
             'cargas' => $modelo->cargas(10),

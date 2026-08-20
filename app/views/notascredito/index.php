@@ -31,9 +31,6 @@ function ncQuery(array $changes = []) {
 ?>
 
 <style>
-.nc-summary{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:6px;margin-bottom:10px}
-.nc-stat{background:#fff;border:1px solid var(--border);border-radius:8px;padding:8px 10px}
-.nc-stat strong{display:block;font-size:20px;color:var(--navy);line-height:1.05}.nc-stat span{font-size:10px;color:var(--text-muted);font-weight:700;text-transform:uppercase}
 .nc-table-wrap{overflow:auto;max-height:68vh;border:1px solid var(--border);border-radius:9px}
 .nc-table{min-width:1650px}.nc-table thead th{position:sticky;z-index:3}.nc-table .nc-head-labels th{top:0}.nc-table .nc-search-row th{top:29px;padding:3px;background:#f8fafc;z-index:4}
 .nc-table .nc-search-row input,.nc-table .nc-search-row select{width:100%;min-width:78px;height:24px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;padding:2px 5px;font-size:10px;color:var(--navy);outline:none}
@@ -55,7 +52,6 @@ function ncQuery(array $changes = []) {
 .nc-modal-head{padding:9px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}.nc-modal-body{padding:10px 13px;max-height:78vh;overflow:auto}
 .nc-close{margin-left:auto;background:none;border:0;font-size:23px;color:#64748b;cursor:pointer}
 .nc-period{font-size:11px;color:var(--text-muted)}
-@media(max-width:900px){.nc-summary{grid-template-columns:repeat(2,1fr)}}
 </style>
 
 <div class="card mb-20">
@@ -111,14 +107,13 @@ function ncQuery(array $changes = []) {
 </div>
 <?php endif; ?>
 
+<?php /*
+ * Acá vivía una fila de cuatro cifras: total, coinciden, con diferencia y sin
+ * respaldo. La tabla de abajo las dice una por una y el filtro de la columna
+ * Estado lleva a cada grupo. El total sigue vivo donde sirve: en "N filas",
+ * que además se actualiza con cada búsqueda.
+ */ ?>
 <?php if ($listado): ?>
-<div class="nc-summary">
-    <div class="nc-stat"><strong><?= (int) ($resumen['total'] ?? 0) ?></strong><span>Total de notas</span></div>
-    <div class="nc-stat" style="border-left:4px solid #16a34a;"><strong><?= (int) ($resumen['coincide'] ?? 0) ?></strong><span>Coinciden</span></div>
-    <div class="nc-stat" style="border-left:4px solid #dc2626;"><strong><?= (int) ($resumen['con_diferencia'] ?? 0) ?></strong><span>Con diferencia</span></div>
-    <div class="nc-stat" style="border-left:4px solid #94a3b8;"><strong><?= (int) ($resumen['sin_respaldo'] ?? 0) ?></strong><span>Sin respaldo</span></div>
-</div>
-
 <div class="card">
     <form method="GET" action="<?= $baseUrl ?>/notas-credito" class="filter-bar" id="nc-filter-form">
         <input type="hidden" name="listado_id" value="<?= (int) $listado['id'] ?>">

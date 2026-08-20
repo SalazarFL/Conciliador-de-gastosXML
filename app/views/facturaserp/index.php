@@ -6,7 +6,6 @@
  */
 $baseUrl = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 $facturas = is_array($facturas ?? null) ? $facturas : [];
-$resumen = is_array($resumen ?? null) ? $resumen : [];
 $opciones = is_array($opciones ?? null) ? $opciones : ['sucursales' => []];
 $proveedoresFiltro = is_array($proveedoresFiltro ?? null) ? $proveedoresFiltro : [];
 $cargas = is_array($cargas ?? null) ? $cargas : [];
@@ -78,42 +77,14 @@ function feMonto($v)
     </div>
 </div>
 
-<!-- ── Resumen ── -->
-<div class="stats-grid mb-20">
-    <div class="stat-card navy">
-        <div class="stat-label"><i class="fas fa-file-invoice" style="margin-right:5px;"></i>Facturas</div>
-        <div class="stat-value"><?= number_format($resumen['facturas'] ?? 0) ?></div>
-        <div class="stat-sub">
-            ₡<?= feMonto($resumen['monto'] ?? 0) ?> facturado ·
-            <?= number_format($resumen['asignadas_semana'] ?? 0) ?> asignadas
-        </div>
-    </div>
-    <div class="stat-card gold">
-        <div class="stat-label"><i class="fas fa-hand-holding-dollar" style="margin-right:5px;"></i>Con saldo</div>
-        <div class="stat-value"><?= number_format($resumen['con_saldo'] ?? 0) ?></div>
-        <div class="stat-sub">₡<?= feMonto($resumen['saldo'] ?? 0) ?> pendiente</div>
-    </div>
-    <div class="stat-card white">
-        <div class="stat-label"><i class="fas fa-building" style="margin-right:5px;"></i>Proveedores</div>
-        <div class="stat-value"><?= number_format($resumen['proveedores'] ?? 0) ?></div>
-        <div class="stat-sub">en el filtro actual</div>
-    </div>
-    <a href="<?= $baseUrl ?>/facturas-erp/incidencias" class="stat-card white" style="text-decoration:none;">
-        <div class="stat-label"><i class="fas fa-triangle-exclamation" style="margin-right:5px;"></i>Incidencias</div>
-        <div class="stat-value" style="<?= $incidenciasAbiertas > 0 ? 'color:var(--diff);' : '' ?>">
-            <?= number_format($incidenciasTotal) ?>
-        </div>
-        <div class="stat-sub">
-            <?php if ($incidenciasAbiertas > 0): ?>
-                <?= number_format($incidenciasAbiertas) ?> requieren revisión &rarr;
-            <?php elseif ($incidenciasTotal > 0): ?>
-                todas son avisos &rarr;
-            <?php else: ?>
-                sin incidencias registradas
-            <?php endif; ?>
-        </div>
-    </a>
-</div>
+<?php /*
+ * Acá vivía una fila de cuatro tarjetas: facturas, con saldo, proveedores e
+ * incidencias. Eran cifras de lectura —cuánto hay— y este módulo es para
+ * buscar una factura, no para mirar totales.
+ *
+ * La de Incidencias no era una cifra: era la única puerta a esa pantalla. Se
+ * quedó, convertida en el botón que le corresponde, junto a Exportar.
+ */ ?>
 
 <!-- ── Listado ── -->
 <div class="card">
@@ -125,6 +96,15 @@ function feMonto($v)
                 <?= number_format($total) ?>
             </span>
         </div>
+        <a href="<?= $baseUrl ?>/facturas-erp/incidencias" class="btn btn-outline btn-sm"
+           title="Problemas detectados al leer las cargas del reporte del ERP">
+            <i class="fas fa-triangle-exclamation" style="margin-right:4px;<?= $incidenciasAbiertas > 0 ? 'color:var(--diff);' : '' ?>"></i>Incidencias
+            <?php if ($incidenciasAbiertas > 0): ?>
+            <span class="badge" style="font-size:10px;padding:1px 6px;margin-left:4px;background:#fee2e2;color:#991b1b;">
+                <?= number_format($incidenciasAbiertas) ?>
+            </span>
+            <?php endif; ?>
+        </a>
         <a href="<?= htmlspecialchars($urlExportar) ?>" class="btn btn-outline btn-sm">
             <i class="fas fa-file-csv" style="margin-right:4px;"></i>Exportar
         </a>

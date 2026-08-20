@@ -21,9 +21,6 @@ $respaldadas   = (int) ($resumen['respaldada'] ?? 0);
 $conDiferencia = (int) ($resumen['con_diferencia'] ?? 0);
 $sinRespaldo   = (int) ($resumen['sin_respaldo'] ?? 0);
 $totalLineas   = $respaldadas + $conDiferencia + $sinRespaldo;
-$montoTotal    = (float) ($resumen['respaldada_monto'] ?? 0)
-               + (float) ($resumen['con_diferencia_monto'] ?? 0)
-               + (float) ($resumen['sin_respaldo_monto'] ?? 0);
 $contextoListado = [
     'semana_id' => $semanaFiltro,
     'listado_id' => (int) ($listado['id'] ?? 0),
@@ -805,29 +802,15 @@ document.addEventListener('keydown', function (e) {
 
 <?php if ($listado): ?>
 
-<!-- ── Resumen del listado ── -->
-<div class="stats-grid mb-20">
-    <div class="stat-card navy">
-        <div class="stat-label"><i class="fas fa-list-check" style="margin-right:5px;"></i>Pagos semanales</div>
-        <div class="stat-value"><?= $totalLineas ?></div>
-        <div class="stat-sub">₡<?= number_format($montoTotal, 2) ?></div>
-    </div>
-    <div class="stat-card white">
-        <div class="stat-label"><i class="fas fa-circle-check" style="margin-right:5px;"></i>Respaldadas</div>
-        <div class="stat-value" style="color:var(--ok);"><?= $respaldadas ?></div>
-        <div class="stat-sub">XML encontrado y monto cuadra</div>
-    </div>
-    <div class="stat-card white">
-        <div class="stat-label"><i class="fas fa-triangle-exclamation" style="margin-right:5px;"></i>Con diferencia</div>
-        <div class="stat-value" style="color:#dc2626;"><?= $conDiferencia ?></div>
-        <div class="stat-sub">El monto no cuadra con el XML</div>
-    </div>
-    <div class="stat-card white">
-        <div class="stat-label"><i class="fas fa-file-circle-question" style="margin-right:5px;"></i>Sin respaldo</div>
-        <div class="stat-value" style="color:var(--warn);"><?= $sinRespaldo ?></div>
-        <div class="stat-sub">Falta el XML: búscalo en el correo</div>
-    </div>
-</div>
+<?php /*
+ * Acá vivía una fila de cuatro tarjetas: total, respaldadas, con diferencia y
+ * sin respaldo. El checklist de abajo dice lo mismo renglón por renglón, y con
+ * el filtro "Estado" se llega a cada grupo; las tarjetas solo contaban.
+ *
+ * Los tres conteos siguen calculándose arriba: $totalLineas lo usan el aviso
+ * de "mostrando N de M" y las dos confirmaciones de borrar el pago, y
+ * $sinRespaldo decide si se ofrece la búsqueda de los XML sin coincidencia.
+ */ ?>
 
 <!-- ── Checklist ── -->
 <div class="card">

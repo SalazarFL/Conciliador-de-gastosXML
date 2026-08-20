@@ -76,50 +76,16 @@ $moneda = function ($valor, $mon = 'CRC') {
     </div>
 </div>
 
-<!-- ══ Tarjetas de situación ══════════════════════════════════════════════ -->
-<?php // Cuentan sobre toda la cola, no sobre la pestaña abierta: si contaran
-      // solo lo visible, estando en Pendientes las demás dirían cero. ?>
-<div class="stats-grid">
-    <div class="stat-card navy">
-        <div class="stat-label">Pendientes</div>
-        <div class="stat-value"><?= number_format((int) $resumen['pendiente']) ?></div>
-        <div class="stat-sub"><?= number_format((int) $resumen['falta_xml']) ?> sin XML ·
-            <?= number_format((int) $resumen['falta_pdf']) ?> sin PDF</div>
-    </div>
-    <div class="stat-card gold">
-        <div class="stat-label">En revisión</div>
-        <div class="stat-value"><?= number_format((int) $resumen['revision']) ?></div>
-        <div class="stat-sub" style="<?= $resumen['vencidos'] > 0 ? 'color:#8F1A1A;font-weight:700;' : '' ?>">
-            <?= number_format((int) $resumen['vencidos']) ?> con el recordatorio vencido
-        </div>
-    </div>
-    <div class="stat-card white">
-        <div class="stat-label">Dinero en disputa</div>
-        <div class="stat-value" style="font-size:21px;">₡<?= number_format((float) $resumen['monto_diferencia'], 0) ?></div>
-        <div class="stat-sub"><?= number_format((int) $resumen['casos_diferencia']) ?> con diferencia de monto</div>
-    </div>
-    <div class="stat-card white">
-        <div class="stat-label">Listas</div>
-        <div class="stat-value"><?= number_format((int) $resumen['lista']) ?></div>
-        <div class="stat-sub">Con saldo y respaldo completo</div>
-    </div>
-    <div class="stat-card white">
-        <div class="stat-label">Puestas a mano</div>
-        <div class="stat-value" style="<?= $resumen['desajustadas'] > 0 ? 'color:#8F1A1A;' : '' ?>">
-            <?= number_format((int) $resumen['a_mano']) ?>
-        </div>
-        <div class="stat-sub">
-            <?php if ((int) $resumen['desajustadas'] > 0): ?>
-            <a href="?<?= $qs(['vista' => 'todo', 'marca' => 'desajuste', 'pagina' => 1]) ?>">
-                <?= number_format((int) $resumen['desajustadas']) ?> ya no concuerdan
-            </a>
-            <?php else: ?>
-            Todas concuerdan con sus datos
-            <?php endif; ?>
-        </div>
-    </div>
-</div>
-
+<?php /*
+ * Acá vivía una fila de cinco tarjetas de situación. Tres de ellas
+ * —Pendientes, En revisión, Listas— repetían exactamente el número que las
+ * pestañas de abajo ya llevan al lado de su nombre, a dos centímetros de
+ * distancia. Las otras dos —dinero en disputa, puestas a mano— eran datos de
+ * lectura, no de trabajo: nadie hace nada distinto por verlos, y la cola se
+ * ordena sola por dinero en juego.
+ *
+ * $resumen no se fue con ellas: es de donde salen las cuentas de cada pestaña.
+ */ ?>
 <div class="card">
     <div class="card-header">
         <div>
