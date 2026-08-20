@@ -1150,10 +1150,15 @@ class NotaCredito extends Model
         // La clase dice QUÉ es la nota —si corrige una factura, si es una
         // diferencia de costo, si es un cambio de mercadería— y es lo que
         // decide si lleva respaldo XML. Es la misma que usa Seguimiento.
-        $clase = trim((string) ($filters['clase'] ?? ''));
-        if (in_array($clase, ['directa', 'costo', 'cambio', 'ajuste', 'revisar'], true)) {
-            $where[] = 'nl.clase = ?';
-            $params[] = $clase;
+        //
+        // Se piden varias a la vez porque el trabajo se reparte por clase, y
+        // de a una obligaba a recorrer el listado tantas veces como clases.
+        $clases = ClaseNotaCredito::clasesPedidas($filters['clase'] ?? '');
+        if ($clases) {
+            $where[] = 'nl.clase IN (' . implode(',', array_fill(0, count($clases), '?')) . ')';
+            foreach ($clases as $clase) {
+                $params[] = $clase;
+            }
         }
         if (trim((string) ($filters['sucursal'] ?? '')) !== '') {
             $where[] = 'nl.sucursal = ?';

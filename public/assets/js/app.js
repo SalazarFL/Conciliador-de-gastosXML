@@ -530,6 +530,93 @@
 	});
 })();
 
+/* Filtro de clase de nota: casillas, varias a la vez.
+ *
+ * Ninguna marcada quiere decir "todas": es el estado en blanco, no un filtro
+ * que no encuentra nada. Lo elegido se escribe separado por comas en el campo
+ * escondido, que es lo único que viaja en el formulario.
+ *
+ * El refresco va en CAPTURA sobre el picker y no en cada casilla: la pantalla
+ * de Notas de crédito busca en vivo y engancha su propio 'input' a cada
+ * casilla del formulario. En captura, el valor escondido ya está actualizado
+ * cuando ese oyente corre, en vez de depender de quién se registró primero.
+ *
+ * Todo por delegación, igual que el filtro de proveedor. */
+(function () {
+	'use strict';
+
+	function casillas(picker) {
+		return Array.prototype.slice.call(picker.querySelectorAll('[data-clase-casilla]'));
+	}
+
+	function refrescar(picker) {
+		var marcadas = casillas(picker).filter(function (c) { return c.checked; });
+		var valor = picker.querySelector('[data-clase-valor]');
+		var etiqueta = picker.querySelector('[data-clase-etiqueta]');
+
+		valor.value = marcadas.map(function (c) { return c.value; }).join(',');
+		etiqueta.textContent = marcadas.length === 0
+			? 'Todas'
+			: (marcadas.length === 1
+				? marcadas[0].parentNode.querySelector('span').textContent.trim()
+				: marcadas.length + ' clases');
+		picker.classList.toggle('is-elegido', marcadas.length > 0);
+	}
+
+	function abrir(picker, si) {
+		var panel = picker.querySelector('[data-clase-panel]');
+		var boton = picker.querySelector('[data-clase-boton]');
+		picker.classList.toggle('is-abierto', si);
+		if (panel) panel.hidden = !si;
+		if (boton) boton.setAttribute('aria-expanded', si ? 'true' : 'false');
+	}
+
+	function cerrarTodos(excepto) {
+		Array.prototype.forEach.call(document.querySelectorAll('[data-clase-picker].is-abierto'), function (picker) {
+			if (picker !== excepto) abrir(picker, false);
+		});
+	}
+
+	/* Vaciar el filtro desde fuera: lo usa Seguimiento al pasar el tipo de
+	 * documento a "Facturas", donde la clase no significa nada. */
+	window.filtroClaseVaciar = function (picker) {
+		if (!picker) return;
+		casillas(picker).forEach(function (c) { c.checked = false; });
+		refrescar(picker);
+		abrir(picker, false);
+	};
+
+	document.addEventListener('click', function (evento) {
+		if (!evento.target.closest) return;
+
+		var boton = evento.target.closest('[data-clase-boton]');
+		if (boton) {
+			var picker = boton.closest('[data-clase-picker]');
+			cerrarTodos(picker);
+			abrir(picker, !picker.classList.contains('is-abierto'));
+			return;
+		}
+
+		var limpiar = evento.target.closest('[data-clase-limpiar]');
+		if (limpiar) {
+			window.filtroClaseVaciar(limpiar.closest('[data-clase-picker]'));
+			return;
+		}
+
+		if (!evento.target.closest('[data-clase-picker]')) cerrarTodos(null);
+	});
+
+	document.addEventListener('input', function (evento) {
+		if (!evento.target.closest) return;
+		var picker = evento.target.closest('[data-clase-picker]');
+		if (picker && evento.target.hasAttribute('data-clase-casilla')) refrescar(picker);
+	}, true);
+
+	document.addEventListener('keydown', function (evento) {
+		if (evento.key === 'Escape') cerrarTodos(null);
+	});
+})();
+
 document.addEventListener('DOMContentLoaded', function () {
 	var openButtons = document.querySelectorAll('[data-modal-target]');
 	var closeButtons = document.querySelectorAll('[data-modal-close]');

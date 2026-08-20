@@ -959,6 +959,76 @@ table.data-table {
 }
 
 /* ══════════════════════════════
+   FILTRO DE CLASE DE NOTA (compartido por todos los listados)
+   Casillas: se eligen varias a la vez y ninguna marcada quiere decir "todas".
+   Marcado en app/views/partials/filtro-clase.php
+══════════════════════════════ */
+.clase-picker { position: relative; }
+
+.clase-picker-boton {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 5px 8px;
+  background: #fff;
+  overflow: hidden;
+}
+.clase-picker-boton > span {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.clase-picker.is-elegido .clase-picker-boton {
+  border-color: var(--navy-light);
+  background: #F5F8FE;
+}
+.clase-picker-flecha { font-size: 9px; color: var(--text-muted); flex-shrink: 0; }
+.clase-picker.is-abierto .clase-picker-flecha { transform: rotate(180deg); }
+
+.clase-picker-panel {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 3px);
+  left: 0;
+  min-width: 100%;
+  width: max-content;
+  max-width: 260px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, .16);
+  padding: 4px;
+}
+/* Pegado al borde derecho cuando el filtro cae al final de la barra: abrir
+   hacia afuera dejaba el panel medio fuera de la pantalla. */
+.filter-bar > .clase-picker:last-child .clase-picker-panel { left: auto; right: 0; }
+
+.clase-picker-opcion {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 7px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.clase-picker-opcion:hover { background: var(--border-light); }
+.clase-picker-opcion input { margin: 0; flex-shrink: 0; }
+
+.clase-picker-pie {
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  padding-top: 5px;
+  text-align: right;
+}
+
+/* ══════════════════════════════
    FILTRO DE PROVEEDOR (compartido por todos los listados)
    Desplegable con buscador propio: se elige por código o cédula —lo que
    identifica— y el nombre acompaña como referencia.

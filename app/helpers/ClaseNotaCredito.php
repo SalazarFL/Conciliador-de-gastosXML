@@ -27,6 +27,49 @@ class ClaseNotaCredito
     /** Las clases que sí deben tener XML y PDF de respaldo. */
     public const CON_RESPALDO = [self::DIRECTA, self::COSTO, self::CAMBIO];
 
+    /**
+     * Cómo se llama cada clase en pantalla.
+     *
+     * Estaba escrito en cada desplegable que las ofrece —el de Seguimiento y
+     * el de Notas de crédito— en dos listas distintas. Que las listas no sean
+     * iguales es correcto: Seguimiento no ofrece 'ajuste' porque esas notas no
+     * se persiguen, nunca llevan XML. Lo que no tenía por qué diferir eran los
+     * nombres.
+     */
+    public const ETIQUETAS = [
+        self::DIRECTA => 'Directa (corrige factura)',
+        self::COSTO   => 'Diferencia de costo',
+        self::CAMBIO  => 'Cambio de mercadería',
+        self::AJUSTE  => 'Ajuste',
+        self::REVISAR => 'Por revisar',
+    ];
+
+    /**
+     * Las clases que pide un filtro, saneadas.
+     *
+     * Llegan separadas por comas —'directa,costo'— y no como lista, para que
+     * el filtro siga siendo un texto: así lo recuerda la sesión, viaja en los
+     * enlaces y sale en el export sin que nada de eso tenga que aprender a
+     * manejar arreglos.
+     *
+     * $admitidas acota cuáles valen en esa pantalla; por omisión, todas.
+     */
+    public static function clasesPedidas($valor, ?array $admitidas = null)
+    {
+        $admitidas = $admitidas ?? array_keys(self::ETIQUETAS);
+        $pedidas = is_array($valor) ? $valor : explode(',', (string) $valor);
+
+        $limpias = [];
+        foreach ($pedidas as $clase) {
+            $clase = strtolower(trim((string) $clase));
+            if ($clase !== '' && in_array($clase, $admitidas, true)
+                && !in_array($clase, $limpias, true)) {
+                $limpias[] = $clase;
+            }
+        }
+        return $limpias;
+    }
+
     public static function clasificar($documento)
     {
         $numero = self::limpiar($documento);

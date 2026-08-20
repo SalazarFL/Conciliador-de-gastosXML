@@ -2,6 +2,7 @@
 require_once __DIR__ . '/../helpers/NotasCreditoCsvParser.php';
 require_once __DIR__ . '/../helpers/NotasCreditoVerificador.php';
 require_once __DIR__ . '/../helpers/FacturaMatcher.php';
+require_once __DIR__ . '/../helpers/ClaseNotaCredito.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 
 class NotasCreditoController extends Controller
@@ -102,6 +103,10 @@ class NotasCreditoController extends Controller
         }
         // El proveedor no es texto libre: es la clave que eligió el filtro.
         $filters['proveedor'] = ProveedorCatalogo::normalizarClave($filters['proveedor']);
+        // La clase tampoco: son varias, separadas por comas, y solo valen las
+        // que existen. Se normaliza acá para que lo que se recuerda y lo que
+        // viaja en los enlaces sea siempre la misma cadena.
+        $filters['clase'] = implode(',', ClaseNotaCredito::clasesPedidas($filters['clase']));
         return $filters;
     }
 

@@ -136,23 +136,9 @@ assertSeguimientoFiltro($modelo->paramsFilas === [],
     'los valores no permitidos no llegan como parámetros');
 
 // ── Clase de nota: varias a la vez ──────────────────────────────────────────
-// El trabajo se reparte por clase, así que "directas y por revisar" es una
-// pregunta corriente. Llegan como texto separado por comas para que el filtro
-// siga siendo una cadena: así lo recuerda la sesión, viaja en los enlaces de
-// las pestañas y sale en el export sin que nada de eso maneje arreglos.
-
-assertSeguimientoFiltro(Seguimiento::clasesPedidas('directa,costo') === ['directa', 'costo'],
-    'se leen varias clases separadas por comas');
-assertSeguimientoFiltro(Seguimiento::clasesPedidas(' Costo , DIRECTA ') === ['costo', 'directa'],
-    'se aceptan con espacios y en cualquier caja');
-assertSeguimientoFiltro(Seguimiento::clasesPedidas('directa,directa') === ['directa'],
-    'la misma clase repetida no duplica la condición');
-assertSeguimientoFiltro(Seguimiento::clasesPedidas(['costo', 'cambio']) === ['costo', 'cambio'],
-    'también se admite la lista, por si algún día el formulario manda clase[]');
-foreach (['', 'todas', 'ajuste', 'x, ,y', 'directa; DROP TABLE'] as $basura) {
-    assertSeguimientoFiltro(Seguimiento::clasesPedidas($basura) === [],
-        "lo que no es una clase se descarta: '{$basura}'");
-}
+// Cómo se lee la cadena y qué clases admite cada pantalla se comprueba en
+// ClaseNotaFiltroTest, que es donde vive el filtro. Acá interesa lo de esta
+// cola: que lo pedido llegue al SQL como parámetros.
 
 $modelo->cola(['vista' => 'todo', 'clase' => 'directa,revisar', 'orden' => 'monto'], 1, 50);
 assertSeguimientoFiltro(strpos($modelo->sqlFilas, 'c.clase IN (?,?)') !== false,

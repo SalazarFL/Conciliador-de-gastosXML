@@ -1,4 +1,8 @@
 <?php
+// Los nombres de las clases de nota salen de acá, y se usan antes de incluir
+// el parcial que también lo pide.
+require_once __DIR__ . '/../../helpers/ClaseNotaCredito.php';
+
 $baseUrl = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 $listados = is_array($listados ?? null) ? $listados : [];
 $listado = $listado ?? null;
@@ -148,23 +152,19 @@ function ncQuery(array $changes = []) {
             <input type="search" class="form-control" name="q" value="<?= htmlspecialchars($filtros['q'] ?? '') ?>"
                    placeholder="Documento, NC proveedor, entrada o proveedor">
         </div>
-        <div>
-            <label class="filter-label">Clase de nota</label>
-            <select class="form-control" name="clase">
-                <option value="">Todas</option>
-                <?php foreach ([
-                    'directa' => 'Directa (corrige factura)',
-                    'costo'   => 'Diferencia de costo',
-                    'cambio'  => 'Cambio de mercadería',
-                    'ajuste'  => 'Ajuste',
-                    'revisar' => 'Por revisar',
-                ] as $claveClase => $etiquetaClase): ?>
-                <option value="<?= $claveClase ?>" <?= ($filtros['clase'] ?? '') === $claveClase ? 'selected' : '' ?>>
-                    <?= htmlspecialchars($etiquetaClase) ?>
-                </option>
-                <?php endforeach; ?>
-            </select>
-        </div>
+        <?php
+        /*
+         * Las cinco clases, incluida 'ajuste': acá se ve el acumulado entero,
+         * no solo lo que se persigue. Se eligen varias a la vez y el buscador
+         * en vivo se entera solo, porque lo elegido viaja en el campo
+         * escondido del propio formulario.
+         */
+        $claseFiltro = [
+            'valor'  => $filtros['clase'] ?? '',
+            'clases' => ClaseNotaCredito::ETIQUETAS,
+            'id'     => 'nc-clase',
+        ]; include __DIR__ . '/../partials/filtro-clase.php';
+        ?>
         <div>
             <label class="filter-label">Sucursal</label>
             <select class="form-control" name="sucursal">

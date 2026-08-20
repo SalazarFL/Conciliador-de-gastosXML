@@ -30,6 +30,11 @@ require_once __DIR__ . '/../helpers/ClaseNotaCredito.php';
 require_once __DIR__ . '/Notificacion.php';
 require_once __DIR__ . '/ProveedorCatalogo.php';
 
+// Los nombres de las clases de nota salen de acá: sin autoload, el archivo
+// tiene que pedirlo él mismo para que la constante CLASES resuelva aunque a
+// este modelo lo cargue algo que no sea su controlador.
+require_once __DIR__ . '/../helpers/ClaseNotaCredito.php';
+
 class Seguimiento extends Model
 {
     protected $table = 'seguimiento';
@@ -58,41 +63,27 @@ class Seguimiento extends Model
     ];
 
     /**
-     * Las clases de nota que entran a la cola.
+     * Las clases de nota que entran a la cola: todas menos 'ajuste'.
      *
-     * Estaba escrita tres veces —el WHERE de la unión, el filtro y el
-     * desplegable de la pantalla— y las tres tenían que decir lo mismo. Las
-     * de 'ajuste' no están: no se persiguen, se aplican solas.
+     * Las de ajuste no se persiguen —nunca llevan XML, se aplican solas— así
+     * que la cola no las trae y el filtro no debe ofrecerlas. Los nombres
+     * salen de ClaseNotaCredito para que esta pantalla y la de Notas de
+     * crédito llamen igual a lo mismo.
      *
      * Una factura no tiene clase (la unión la trae en NULL), así que filtrar
      * por clase deja fuera las facturas por su propia cuenta.
      */
     public const CLASES = [
-        'directa' => 'Directa (corrige factura)',
-        'costo'   => 'Diferencia de costo',
-        'cambio'  => 'Cambio de mercadería',
-        'revisar' => 'Por revisar',
+        ClaseNotaCredito::DIRECTA => ClaseNotaCredito::ETIQUETAS[ClaseNotaCredito::DIRECTA],
+        ClaseNotaCredito::COSTO   => ClaseNotaCredito::ETIQUETAS[ClaseNotaCredito::COSTO],
+        ClaseNotaCredito::CAMBIO  => ClaseNotaCredito::ETIQUETAS[ClaseNotaCredito::CAMBIO],
+        ClaseNotaCredito::REVISAR => ClaseNotaCredito::ETIQUETAS[ClaseNotaCredito::REVISAR],
     ];
 
-    /**
-     * Las clases que pide el filtro, saneadas.
-     *
-     * Llegan separadas por comas —'directa,costo'— y no como lista, para que
-     * el filtro siga siendo un texto: así lo recuerda la sesión, viaja en los
-     * enlaces de las pestañas y sale en el export sin que nada de eso tenga
-     * que aprender a manejar arreglos.
-     */
+    /** Las clases que pide el filtro, acotadas a las que esta cola contiene. */
     public static function clasesPedidas($valor)
     {
-        $pedidas = is_array($valor) ? $valor : explode(',', (string) $valor);
-        $limpias = [];
-        foreach ($pedidas as $clase) {
-            $clase = strtolower(trim((string) $clase));
-            if ($clase !== '' && isset(self::CLASES[$clase]) && !in_array($clase, $limpias, true)) {
-                $limpias[] = $clase;
-            }
-        }
-        return $limpias;
+        return ClaseNotaCredito::clasesPedidas($valor, array_keys(self::CLASES));
     }
 
     public function __construct()
