@@ -201,6 +201,48 @@ class DocumentoArchivo
         return $ruta;
     }
 
+    /**
+     * Deja en la carpeta del pago semanal una COPIA del par ya archivado.
+     *
+     * Copia y no traslada, a propósito. Esa carpeta existe para entregar los
+     * respaldos de una semana: se arma, se manda y quien la recibe la borra
+     * cuando termina. Mientras el par se mudaba ahí dentro, esa carpeta era el
+     * único ejemplar del documento y borrarla se llevaba el XML y el PDF sin
+     * que nada lo avisara —así se perdieron los respaldos de un pago entero—.
+     * El original se queda en la carpeta del mes, que nadie reparte.
+     *
+     * Idempotente y barato: el organizador corre seguido, y si la copia ya
+     * está y pesa lo mismo no se vuelve a leer el contenido de nada.
+     */
+    public function copiarAPagoSemanal($xmlOrigen, $pdfOrigen, array $documento, $carpetaPago, $proveedor)
+    {
+        $carpeta = $this->carpetaPagoSemanal($carpetaPago);
+        $base = self::nombreBase($documento, $proveedor);
+        $salida = ['ruta_xml' => '', 'ruta_pdf' => '', 'copiados' => 0];
+
+        foreach (['xml' => $xmlOrigen, 'pdf' => $pdfOrigen] as $extension => $origen) {
+            $origen = trim((string) $origen);
+            if ($origen === '' || !is_file($origen)) {
+                continue;
+            }
+
+            $destino = $carpeta . DIRECTORY_SEPARATOR . $base . '.' . $extension;
+            if (is_file($destino) && filesize($destino) === filesize($origen)) {
+                $salida['ruta_' . $extension] = $destino;
+                continue;
+            }
+
+            $this->asegurarDirectorio($carpeta);
+            $copia = $this->copiarValidado($origen, $carpeta, $base, $extension);
+            $salida['ruta_' . $extension] = $copia['ruta'];
+            if ($copia['creado']) {
+                $salida['copiados']++;
+            }
+        }
+
+        return $salida;
+    }
+
     /** Solo admite un nombre de carpeta, nunca rutas absolutas ni recorridos "..". */
     public static function normalizarCarpetaPago($nombre)
     {

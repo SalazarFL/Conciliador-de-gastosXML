@@ -88,6 +88,8 @@ class OrganizadorDocumentos
             if ($incluirNoRegistrados) {
                 $this->organizarNoRegistrados($resumen, (bool) $dryRun);
             }
+            $estado = $this->estadoRutasFaltantes($this->facturas->getParaOrganizarArchivos());
+            $this->anotarFaltantes($estado['sin_archivo'], [], (bool) $dryRun, $resumen);
         } finally {
             flock($fp, LOCK_UN);
             fclose($fp);
@@ -142,6 +144,12 @@ class OrganizadorDocumentos
                     $filasActualizadas = $this->facturas->getParaOrganizarArchivos($ids);
                     $estadoFinal = $this->estadoRutasFaltantes($filasActualizadas);
                     $this->guardarEstadoReconciliacion($estadoFinal['firma'], $completo);
+                    // Lo que quedó sin archivo DESPUÉS de reconciliar: antes
+                    // de esto, la mitad de los faltantes eran archivos que la
+                    // reconciliación acababa de encontrar en otra carpeta.
+                    $this->anotarFaltantes($estadoFinal['sin_archivo'], $ids, false, $resumen);
+                } else {
+                    $this->anotarFaltantes($faltantes['sin_archivo'], $ids, true, $resumen);
                 }
             } else {
                 // Camino habitual: si todas las rutas siguen vigentes, o los
@@ -154,6 +162,7 @@ class OrganizadorDocumentos
                 if (!$dryRun && (string) ($estadoAnterior['firma_faltantes'] ?? '') !== $faltantes['firma']) {
                     $this->guardarEstadoReconciliacion($faltantes['firma'], false);
                 }
+                $this->anotarFaltantes($faltantes['sin_archivo'], $ids, $dryRun, $resumen);
             }
         } finally {
             flock($fp, LOCK_UN);
@@ -206,6 +215,8 @@ class OrganizadorDocumentos
         }
         try {
             $this->organizarRegistrados($resumen, (bool) $dryRun, $ids);
+            $estado = $this->estadoRutasFaltantes($this->facturas->getParaOrganizarArchivos($ids));
+            $this->anotarFaltantes($estado['sin_archivo'], $ids, (bool) $dryRun, $resumen);
             if (!$dryRun) {
                 $this->registrarLog($resumen);
             }
@@ -222,8 +233,10 @@ class OrganizadorDocumentos
         $vigentes = 0;
         $archivosFaltantes = 0;
         $documentosSinArchivos = 0;
+        $sinArchivo = [];
         foreach ($filas as $fila) {
             $existentesDocumento = 0;
+            $prometidoQueFalta = false;
             foreach ([['ruta_xml', 'hash_xml'], ['ruta_pdf', 'hash_pdf']] as $campos) {
                 $ruta = trim((string) ($fila[$campos[0]] ?? ''));
                 $hash = $this->hashValido((string) ($fila[$campos[1]] ?? ''));
@@ -232,6 +245,13 @@ class OrganizadorDocumentos
                     $vigentes++;
                     $existentesDocumento++;
                     continue;
+                }
+                // La marca es para lo que la base promete y no está: una fila
+                // con ruta que apunta al vacío. Una sin ruta —los históricos
+                // que entraron antes del archivo— nunca tuvo archivo, y
+                // señalarla sería ruido, no un aviso.
+                if ($ruta !== '') {
+                    $prometidoQueFalta = true;
                 }
                 if ($ruta !== '' || $hash !== '') {
                     $archivosFaltantes++;
@@ -246,6 +266,9 @@ class OrganizadorDocumentos
             if ($existentesDocumento === 0) {
                 $documentosSinArchivos++;
             }
+            if ($prometidoQueFalta) {
+                $sinArchivo[] = (int) ($fila['id'] ?? 0);
+            }
         }
         sort($items, SORT_STRING);
         return [
@@ -253,7 +276,35 @@ class OrganizadorDocumentos
             'vigentes' => $vigentes,
             'archivos' => $archivosFaltantes,
             'documentos_sin_archivos' => $documentosSinArchivos,
+            'sin_archivo' => $sinArchivo,
         ];
+    }
+
+    /**
+     * Deja anotado en la base qué documentos no tienen el archivo que su ruta
+     * promete, para que la pantalla lo diga antes del clic.
+     *
+     * Hasta ahora esto solo se contaba en el resumen de una corrida, así que
+     * el listado seguía enseñando "respaldada" y uno se enteraba al abrir el
+     * XML. La marca se pone y se quita sola en cada revisión: si el archivo
+     * vuelve —porque se restauró de la papelera o se rebajó del correo—, se
+     * limpia sin que nadie tenga que acordarse.
+     *
+     * $ambito son los documentos revisados; fuera de él no se toca nada,
+     * porque de esos no se sabe. Vacío quiere decir "se revisaron todos".
+     */
+    private function anotarFaltantes(array $faltantes, array $ambito, $dryRun, array &$resumen)
+    {
+        $resumen['marcados_sin_archivo'] = count($faltantes);
+        if ($dryRun || !method_exists($this->facturas, 'marcarArchivosFaltantes')) {
+            return;
+        }
+        try {
+            $this->facturas->marcarArchivosFaltantes($faltantes, $ambito);
+        } catch (Throwable $e) {
+            $resumen['errores']++;
+            $this->agregarOperacion($resumen, ['accion' => 'marcar_sin_archivo', 'error' => $e->getMessage()]);
+        }
     }
 
     private function cargarEstadoReconciliacion()
@@ -659,27 +710,23 @@ class OrganizadorDocumentos
                     continue;
                 }
 
-                // La carpeta depende solo de la fecha de emisión y del tipo,
-                // que no cambian nunca. La única excepción es el pago semanal:
-                // ahí los pares se reúnen aparte para poder entregarlos.
-                // Solo los pares completos entran a la carpeta de pago: esa
-                // carpeta existe para entregar los respaldos, y un documento
-                // al que le falta el PDF no se puede entregar.
-                $enPagoSemanal = $xml !== '' && $pdf !== ''
-                    && !empty($fila['pago_semanal']) && !empty($fila['carpeta_pago']);
+                // La carpeta del documento depende solo de su fecha de emisión
+                // y su tipo, dos datos que no cambian nunca. Ahí vive el
+                // original, siempre, incluso mientras está en un pago semanal:
+                // a la carpeta del pago va una copia (ver copiarAPagoSemanal).
                 $fecha = $this->fechaValida((string) ($fila['fecha_emision'] ?? ''), $xml !== '' ? $xml : $pdf);
                 $tipo = $this->tipoValido((string) ($fila['tipo_documento'] ?? 'FE'));
+                $estado = $tipo;
+                $destinoDir = $this->archivo->carpetaDocumento($fecha, $tipo);
+                $base = pathinfo($xml !== '' ? $xml : $pdf, PATHINFO_FILENAME);
 
-                if ($enPagoSemanal) {
-                    $estado = DocumentoArchivo::CARPETA_PAGOS;
-                    $destinoDir = $this->archivo->carpetaPagoSemanal((string) $fila['carpeta_pago']);
-                    $base = DocumentoArchivo::nombreBase($fila, (string) ($fila['proveedor_nombre'] ?? 'PROVEEDOR'));
-                } else {
-                    $estado = $tipo;
-                    $destinoDir = $this->archivo->carpetaDocumento($fecha, $tipo);
-                    $base = pathinfo($xml !== '' ? $xml : $pdf, PATHINFO_FILENAME);
-                }
                 $movimiento = $this->moverConjunto(['xml' => $xml, 'pdf' => $pdf], $destinoDir, $base, $dryRun);
+
+                // La copia de entrega se refresca aunque el original ya
+                // estuviera en su sitio: es lo que repone una carpeta de pago
+                // que alguien borró después de recibirla.
+                $this->copiarAPagoSemanal($fila, $movimiento['rutas'], $dryRun, $resumen);
+
                 if (!$movimiento['cambio']) {
                     $resumen['ya_ordenados']++;
                     continue;
@@ -720,6 +767,63 @@ class OrganizadorDocumentos
         }
 
         $this->guardarUbicaciones($pendientes, $resumen);
+    }
+
+    /**
+     * Repone la copia de entrega del documento en la carpeta de su pago.
+     *
+     * Solo los pares completos: esa carpeta existe para entregar respaldos, y
+     * un documento al que le falta el PDF no se puede entregar.
+     *
+     * Un fallo aquí no interrumpe el ordenamiento ni deshace el movimiento del
+     * original. La copia es material de entrega, reponible en la próxima
+     * corrida; el original es el documento, y ese ya quedó en su sitio.
+     */
+    private function copiarAPagoSemanal(array $fila, array $rutas, $dryRun, array &$resumen)
+    {
+        if (empty($fila['pago_semanal']) || empty($fila['carpeta_pago'])) {
+            return;
+        }
+        $xml = trim((string) ($rutas['xml'] ?? ''));
+        $pdf = trim((string) ($rutas['pdf'] ?? ''));
+        if ($xml === '' || $pdf === '') {
+            return;
+        }
+
+        if ($dryRun) {
+            $resumen['copias_pago_planificadas']++;
+            $this->contarEstado($resumen, DocumentoArchivo::CARPETA_PAGOS);
+            return;
+        }
+
+        try {
+            $copia = $this->archivo->copiarAPagoSemanal(
+                $xml,
+                $pdf,
+                $fila,
+                (string) $fila['carpeta_pago'],
+                (string) ($fila['proveedor_nombre'] ?? 'PROVEEDOR')
+            );
+            if ($copia['copiados'] > 0) {
+                $resumen['copias_pago']++;
+                $this->agregarOperacion($resumen, [
+                    'documento_id' => (int) $fila['id'],
+                    'accion' => 'copia_pago_semanal',
+                    'xml' => $copia['ruta_xml'],
+                    'pdf' => $copia['ruta_pdf'],
+                ]);
+            } else {
+                $resumen['copias_pago_vigentes']++;
+            }
+            $this->contarEstado($resumen, DocumentoArchivo::CARPETA_PAGOS);
+        } catch (Throwable $e) {
+            $resumen['errores_copia_pago']++;
+            $this->agregarOperacion($resumen, [
+                'documento_id' => (int) ($fila['id'] ?? 0),
+                'accion' => 'copia_pago_semanal',
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
@@ -769,6 +873,14 @@ class OrganizadorDocumentos
             }
         }
 
+        // PAGOS SEMANALES queda fuera de esta pasada: ahí no vive ningún
+        // documento, solo copias de entrega de documentos que sí están
+        // registrados en otra carpeta. Sin esta excepción, cada copia parecería
+        // un archivo suelto y esta misma corrida se la llevaría de vuelta al
+        // mes, deshaciendo la carpeta que se acaba de armar.
+        $carpetaPagos = $this->claveRuta($this->raiz . DIRECTORY_SEPARATOR
+            . DocumentoArchivo::CARPETA_PAGOS . DIRECTORY_SEPARATOR);
+
         $grupos = [];
         $it = new RecursiveIteratorIterator(
             new RecursiveDirectoryIterator($this->raiz, FilesystemIterator::SKIP_DOTS)
@@ -783,6 +895,9 @@ class OrganizadorDocumentos
             }
             $ruta = $item->getPathname();
             if (isset($registradas[$this->claveRuta($ruta)])) {
+                continue;
+            }
+            if (strpos($this->claveRuta($ruta), $carpetaPagos) === 0) {
                 continue;
             }
             $key = $this->claveRuta($item->getPath() . DIRECTORY_SEPARATOR . $item->getBasename('.' . $item->getExtension()));
@@ -1084,9 +1199,14 @@ class OrganizadorDocumentos
             'movidos_no_registrados' => 0,
             'ya_ordenados' => 0,
             'faltantes_en_disco' => 0,
+            'marcados_sin_archivo' => 0,
             'fuera_de_raiz' => 0,
             'por_fecha' => 0,
             'pago_semanal' => 0,
+            'copias_pago' => 0,
+            'copias_pago_vigentes' => 0,
+            'copias_pago_planificadas' => 0,
+            'errores_copia_pago' => 0,
             'ignorados' => 0,
             'errores' => 0,
             'omitido_por_bloqueo' => false,

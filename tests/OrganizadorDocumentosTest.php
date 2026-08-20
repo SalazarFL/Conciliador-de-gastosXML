@@ -128,16 +128,45 @@ try {
         'facturas del mismo mes y tipo comparten carpeta, sea cual sea su estado');
     assertOrganizador(($resumen['por_fecha'] ?? 0) > 0, 'contabiliza los movimientos por fecha y tipo');
 
+    // La carpeta del pago recibe una COPIA y el original se queda en la del
+    // mes. Antes se mudaba ahí dentro, y entonces esa carpeta era el único
+    // ejemplar: borrarla —que es lo que se hace cuando el pago ya se
+    // entregó— se llevaba el respaldo de todos sus documentos.
     $carpetaSemanal = $root . DIRECTORY_SEPARATOR . 'PAGOS SEMANALES' . DIRECTORY_SEPARATOR . 'Pago semana 31';
-    assertOrganizador(dirname($modelo->filas[5]['ruta_xml']) === $carpetaSemanal, 'el monto diferente no saca el XML de la carpeta semanal');
-    assertOrganizador(dirname($modelo->filas[5]['ruta_pdf']) === $carpetaSemanal, 'el monto diferente no saca el PDF de la carpeta semanal');
-    assertOrganizador(basename($modelo->filas[5]['ruta_xml']) === 'FE_PROVEEDOR_200726_00000167.xml', 'el XML semanal conserva tipo, proveedor y fecha con ocho dígitos');
-    assertOrganizador(basename($modelo->filas[5]['ruta_pdf']) === 'FE_PROVEEDOR_200726_00000167.pdf', 'el PDF semanal conserva tipo, proveedor y fecha con ocho dígitos');
-    assertOrganizador(($resumen['pago_semanal'] ?? 0) === 1, 'contabiliza el par enviado al pago semanal');
-    // Un par incompleto sí sale de la carpeta semanal: ahí solo van los pares
-    // completos, porque esa carpeta existe para entregarlos.
+    assertOrganizador(dirname($modelo->filas[5]['ruta_xml']) === $julioFacturas,
+        'la base apunta al original del mes, no a la copia de entrega');
+    assertOrganizador(is_file($modelo->filas[5]['ruta_xml']) && is_file($modelo->filas[5]['ruta_pdf']),
+        'el original sigue en la carpeta del mes');
+    assertOrganizador(is_file($carpetaSemanal . DIRECTORY_SEPARATOR . 'FE_PROVEEDOR_200726_00000167.xml'),
+        'el XML de la copia conserva tipo, proveedor y fecha con ocho dígitos');
+    assertOrganizador(is_file($carpetaSemanal . DIRECTORY_SEPARATOR . 'FE_PROVEEDOR_200726_00000167.pdf'),
+        'el PDF de la copia conserva tipo, proveedor y fecha con ocho dígitos');
+    assertOrganizador(($resumen['copias_pago'] ?? 0) === 1, 'contabiliza la copia dejada en el pago semanal');
+    assertOrganizador(($resumen['pago_semanal'] ?? 0) === 1, 'contabiliza el par entregado al pago semanal');
+
+    // Borrar la carpeta de pago ya no le quita el respaldo a nadie: el
+    // documento sigue completo y la siguiente corrida repone la copia.
+    unlink($carpetaSemanal . DIRECTORY_SEPARATOR . 'FE_PROVEEDOR_200726_00000167.xml');
+    unlink($carpetaSemanal . DIRECTORY_SEPARATOR . 'FE_PROVEEDOR_200726_00000167.pdf');
+    assertOrganizador(is_file($modelo->filas[5]['ruta_xml']),
+        'borrar la carpeta de entrega no toca el documento');
+    $repuesta = (new OrganizadorDocumentos($root, $modelo))->ejecutar(false, false);
+    assertOrganizador(is_file($carpetaSemanal . DIRECTORY_SEPARATOR . 'FE_PROVEEDOR_200726_00000167.xml')
+        && is_file($carpetaSemanal . DIRECTORY_SEPARATOR . 'FE_PROVEEDOR_200726_00000167.pdf'),
+        'la siguiente corrida repone la copia de entrega borrada');
+    assertOrganizador(($repuesta['copias_pago'] ?? 0) === 1, 'y la cuenta como copia nueva');
+
+    $sinCambios = (new OrganizadorDocumentos($root, $modelo))->ejecutar(false, false);
+    assertOrganizador(($sinCambios['copias_pago'] ?? -1) === 0
+        && ($sinCambios['copias_pago_vigentes'] ?? 0) === 1,
+        'con la copia en su sitio no se vuelve a copiar nada');
+
+    // Un par incompleto no entra a la carpeta de pago: esa carpeta existe
+    // para entregar respaldos, y sin PDF no hay nada que entregar.
     assertOrganizador(dirname($modelo->filas[6]['ruta_xml']) === $julioFacturas,
-        'un match semanal sin PDF no entra a la carpeta de pago');
+        'un match semanal sin PDF se queda en la carpeta del mes');
+    assertOrganizador(!is_file($carpetaSemanal . DIRECTORY_SEPARATOR . 'FE_PROVEEDOR_200726_00000167_DUP.xml'),
+        'y no deja copia en la carpeta de pago');
     assertOrganizador(DocumentoArchivo::normalizarCarpetaPago('../Semana: 31') === 'Semana 31', 'limpia recorridos y caracteres inválidos del nombre de carpeta');
     assertOrganizador(is_file(dirname($modelo->filas[1]['ruta_xml']) . DIRECTORY_SEPARATOR . basename($modelo->filas[1]['ruta_pdf'])), 'el par comparte carpeta');
     assertOrganizador(count(glob($julioFacturas . DIRECTORY_SEPARATOR . 'FE_PENDIENTE.*')) === 2, 'el par externo se archiva por su fecha');
