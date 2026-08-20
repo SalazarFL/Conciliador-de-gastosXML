@@ -11,6 +11,7 @@
 require_once __DIR__ . '/../helpers/MailFetcher.php';
 require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 require_once __DIR__ . '/../helpers/DocumentoArchivo.php';
+require_once __DIR__ . '/../helpers/NavegacionDocumentos.php';
 require_once __DIR__ . '/../helpers/RutaDocumento.php';
 require_once __DIR__ . '/../helpers/XmlDocumentImporter.php';
 require_once __DIR__ . '/../helpers/OrganizadorDocumentos.php';
@@ -117,52 +118,27 @@ class CorreoController extends Controller
         } catch (Throwable $e) {
         }
 
-        // Tarjeta de navegación de "Facturas por pagar": si se llegó con el
-        // botón "Buscar en correo" (?pp_listado & pp_linea), se muestran los
-        // datos de la factura seleccionada con flechas para recorrer el
-        // listado de la semana sin volver al otro módulo.
-        $ppNav = null;
-        $ppListadoId = (int) $this->get('pp_listado', 0);
-        if ($ppListadoId > 0) {
-            try {
-                require_once __DIR__ . '/../helpers/FacturaMatcher.php';
-                $ppModelo = $this->loadModel('PorPagar');
-                $ppListado = $ppModelo->getListado($ppListadoId);
-
-                if ($ppListado !== null) {
-                    $ppLineaId = (int) $this->get('pp_linea', 0);
-                    $lineasNav = [];
-                    $idxActual = 0;
-
-                    foreach ($ppModelo->getLineas($ppListadoId) as $l) {
-                        if ((int) $l['id'] === $ppLineaId) {
-                            $idxActual = count($lineasNav);
-                        }
-                        $ts = !empty($l['fecha']) ? strtotime((string) $l['fecha']) : false;
-                        $lineasNav[] = [
-                            'id'        => (int) $l['id'],
-                            'numero'    => (string) $l['numero'],
-                            'busqueda'  => FacturaMatcher::terminoBusquedaCorreo((string) $l['numero']),
-                            'proveedor' => (string) $l['proveedor_texto'],
-                            'fecha'     => $ts !== false ? date('d/m/Y', $ts) : '',
-                            'total'     => (float) $l['total'],
-                            'estado'    => (string) $l['estado'],
-                        ];
-                    }
-
-                    if (!empty($lineasNav)) {
-                        $ppNav = [
-                            'listado_id' => $ppListadoId,
-                            'listado'    => (string) $ppListado['nombre'],
-                            'semana'     => (string) ($ppListado['semana_nombre'] ?? ''),
-                            'idx'        => $idxActual,
-                            'lineas'     => $lineasNav,
-                        ];
-                    }
-                }
-            } catch (Throwable $e) {
-                // Sin listado no hay tarjeta; el buscador funciona igual
-            }
+        /*
+         * Tarjeta del documento que se está buscando: si se llegó con el botón
+         * "Buscar el electrónico" —del pago semanal o de la cola de
+         * seguimiento—, se muestran sus datos con flechas para recorrer esa
+         * lista sin volver al otro módulo.
+         *
+         * Quién arma la lista es NavegacionDocumentos; acá solo se le pasa la
+         * petición y con qué cargar modelos.
+         */
+        $navDoc = null;
+        try {
+            $navDoc = NavegacionDocumentos::desde(
+                $_GET,
+                function ($nombre) { return $this->loadModel($nombre); },
+                $this->url('')
+            );
+        } catch (Throwable $e) {
+            // Sin contexto no hay tarjeta y el buscador funciona igual. Queda
+            // escrito: este catch ya se tragó una vez un método que había
+            // dejado de existir, y la tarjeta no salía sin decir por qué.
+            $this->registrarFallo('Tarjeta del documento en /correo', $e);
         }
 
         // Cuántos buzones hay en TODO el sistema, no solo en esta empresa: es
@@ -219,7 +195,7 @@ class CorreoController extends Controller
                 : '',
             'abrirCorreoUid'  => max(0, (int) $this->get('abrir_uid', 0)),
             'abrirCorreoCarpeta' => mb_substr(trim((string) $this->get('abrir_carpeta', '')), 0, 255, 'UTF-8'),
-            'ppNav'           => $ppNav,
+            'navDoc'          => $navDoc,
             'bandeja'         => $bandeja,
             'historial'       => $historial,
             'conteo'          => $conteo,

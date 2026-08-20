@@ -22,8 +22,14 @@ $badgeEstado = [
     'cerrada'   => ['default', 'fa-box-archive'],
 ];
 
-/** Conserva los filtros al cambiar de página o de pestaña. */
-$qs = function (array $cambios = []) use ($filtros) {
+/**
+ * Conserva los filtros al cambiar de página o de pestaña.
+ *
+ * Con $paraContexto los filtros salen con el prefijo ctx_f_: así viajan a la
+ * pantalla donde se busca el electrónico sin pisarle los suyos, que se llaman
+ * igual —el 'q' de esta cola no es el buscador del listado de facturas—.
+ */
+$qs = function (array $cambios = [], $paraContexto = false) use ($filtros) {
     $base = array_filter([
         'vista'       => $filtros['vista'],
         'origen'      => $filtros['origen'],
@@ -47,7 +53,16 @@ $qs = function (array $cambios = []) use ($filtros) {
         'col_tarea'     => $filtros['col_tarea'],
         'orden'       => $filtros['orden'],
     ], function ($v) { return $v !== '' && $v !== null; });
-    return http_build_query(array_merge($base, $cambios));
+
+    if (!$paraContexto) {
+        return http_build_query(array_merge($base, $cambios));
+    }
+
+    $conPrefijo = [];
+    foreach ($base as $clave => $valor) {
+        $conPrefijo['ctx_f_' . $clave] = $valor;
+    }
+    return http_build_query(array_merge($cambios, $conPrefijo));
 };
 
 $moneda = function ($valor, $mon = 'CRC') {
@@ -526,17 +541,54 @@ $moneda = function ($valor, $mon = 'CRC') {
                     </td>
 
                     <td style="white-space:nowrap;">
-                        <?php // Sin término no hay búsqueda que ofrecer: pasa en una
-                              // nota sin consecutivo propio y sin nombre de proveedor.
-                              if (!$f['xml_ok'] && $f['busqueda'] !== ''): ?>
+                        <?php
+                        /*
+                         * Buscar el electrónico de este documento, en los dos
+                         * sitios donde puede estar: el correo, si todavía no
+                         * entró al sistema, o los comprobantes ya cargados, si
+                         * entró pero no se enganchó con este documento.
+                         *
+                         * Las dos llevan el contexto de la cola —el renglón y
+                         * los filtros puestos— para que la pantalla destino
+                         * muestre la tarjeta y deje pasar al siguiente sin
+                         * volver acá.
+                         *
+                         * Sin término no hay búsqueda que ofrecer: pasa en una
+                         * nota sin consecutivo propio y sin nombre de proveedor.
+                         */
+                        if (!$f['xml_ok'] && $f['busqueda'] !== ''):
+                            $ctxItem = $f['origen'] . ':' . (int) $f['referencia_id'];
+                            $ctxQuery = $qs(['ctx' => 'seguimiento', 'ctx_item' => $ctxItem], true);
+                            $esNota = $f['origen'] === 'nota_credito';
+                            $destinoXml = $esNota ? '/notas-xml' : '/facturas';
+                            /*
+                             * El término va además en el buscador propio del
+                             * destino —'buscar' en el correo, 'q' o 'buscar' en
+                             * los listados— para llegar con el resultado en
+                             * pantalla y no a una lista entera con la tarjeta
+                             * encima. Los filtros de esta cola viajan aparte,
+                             * con prefijo, y no lo pisan.
+                             */
+                            $termino = urlencode((string) $f['busqueda']);
+                            $urlCorreo = $baseUrl . '/correo?buscar=' . $termino
+                                . ($f['busqueda_fecha'] !== '' ? '&amp;fecha=' . urlencode((string) $f['busqueda_fecha']) : '')
+                                . '&amp;' . $ctxQuery;
+                            $urlXml = $baseUrl . $destinoXml . '?'
+                                . ($esNota ? 'buscar=' : 'q=') . $termino . '&amp;' . $ctxQuery;
+                        ?>
                         <a class="btn btn-outline btn-sm"
-                           href="<?= $baseUrl ?>/correo?buscar=<?= urlencode((string) $f['busqueda']) ?><?=
-                               $f['busqueda_fecha'] !== '' ? '&amp;fecha=' . urlencode((string) $f['busqueda_fecha']) : '' ?>"
+                           href="<?= $urlCorreo ?>"
                            target="_blank"
                            title="<?= $f['busqueda_por'] === 'proveedor'
-                               ? 'La nota no trae número propio: se busca por proveedor alrededor de su fecha'
+                               ? 'Buscarlo en el correo. La nota no trae número propio: se busca por proveedor alrededor de su fecha'
                                : 'Buscar este documento en el correo' ?>">
                             <i class="fas fa-envelope-open-text"></i>
+                        </a>
+                        <a class="btn btn-outline btn-sm"
+                           href="<?= $urlXml ?>"
+                           target="_blank"
+                           title="Buscarlo entre los comprobantes XML ya cargados">
+                            <i class="fas fa-file-code"></i>
                         </a>
                         <?php endif; ?>
                         <button type="button" class="btn btn-outline btn-sm js-detalle" title="Ver expediente">
@@ -777,6 +829,10 @@ $moneda = function ($valor, $mon = 'CRC') {
     var panel       = document.getElementById('panel');
     var dialogo     = document.getElementById('dialogo');
     var filterForm  = document.getElementById('seg-filter-form');
+    // Los filtros de esta cola, prefijados, para los enlaces de "buscar el
+    // electrónico" que arma el expediente. Los del renglón se escriben en el
+    // HTML; estos son los mismos para todos.
+    var CTX_COLA = <?= json_encode($qs(['ctx' => 'seguimiento'], true)) ?>;
 
     /*
      * La clase de nota se esconde al pasar el tipo de documento a "Facturas",
@@ -1088,12 +1144,22 @@ $moneda = function ($valor, $mon = 'CRC') {
             : (f.pdf_historico
                 ? '<span class="badge badge-default"><i class="fas fa-file-pdf"></i> PDF histórico</span>'
                 : '<span class="badge badge-miss"><i class="fas fa-file-pdf"></i> Sin PDF</span>');
+        // Los dos sitios donde puede estar el electrónico: el correo, si aún
+        // no entró al sistema, o los comprobantes cargados, si entró pero no
+        // se enganchó con este documento.
         if (!f.xml_ok && f.busqueda) {
-            var urlCorreo = BASE + '/correo?buscar=' + encodeURIComponent(f.busqueda)
-                          + (f.busqueda_fecha ? '&fecha=' + encodeURIComponent(f.busqueda_fecha) : '');
+            var ctx = CTX_COLA + '&ctx_item=' + encodeURIComponent(f.origen + ':' + f.referencia_id);
+            var esNota = f.origen === 'nota_credito';
+            var termino = encodeURIComponent(f.busqueda);
+            var urlCorreo = BASE + '/correo?buscar=' + termino
+                          + (f.busqueda_fecha ? '&fecha=' + encodeURIComponent(f.busqueda_fecha) : '')
+                          + '&' + ctx;
+            var urlXml = BASE + (esNota ? '/notas-xml?buscar=' : '/facturas?q=') + termino + '&' + ctx;
             html += '<a class="btn btn-primary btn-sm" target="_blank" href="' + urlCorreo + '">'
                  + '<i class="fas fa-envelope-open-text"></i> Buscar en el correo'
                  + (f.busqueda_por === 'proveedor' ? ' por proveedor' : '') + '</a>';
+            html += '<a class="btn btn-outline btn-sm" target="_blank" href="' + urlXml + '">'
+                 + '<i class="fas fa-file-code"></i> Buscar en los XML cargados</a>';
         }
         html += '</div>';
 

@@ -530,6 +530,102 @@
 	});
 })();
 
+/* Tarjeta del documento que se está buscando.
+ *
+ * La misma en el correo y en los listados de comprobantes: dice cuál se busca
+ * y deja pasar al siguiente sin volver al módulo del que se vino. Acá está
+ * solo lo que es igual en las tres pantallas —pintar, avanzar, cerrar—; qué
+ * significa "buscar" lo decide cada una escuchando 'navdoc:buscar'.
+ *
+ * Marcado en app/views/partials/tarjeta-documento.php. */
+(function () {
+	'use strict';
+
+	var ESTADOS = {
+		respaldada:     { color: '#16a34a', nombre: 'Con respaldo' },
+		con_diferencia: { color: '#dc2626', nombre: 'Con diferencia' },
+		sin_respaldo:   { color: '#94a3b8', nombre: 'Sin respaldo' }
+	};
+
+	var tarjeta = document.querySelector('[data-navdoc]');
+	if (!tarjeta) return;
+
+	var items;
+	try {
+		items = JSON.parse(tarjeta.dataset.navdocItems || '[]');
+	} catch (e) {
+		items = [];
+	}
+	if (!items.length) return;
+
+	var idx = Math.max(0, Math.min(items.length - 1, parseInt(tarjeta.dataset.navdocIdx, 10) || 0));
+
+	function actual() { return items[idx]; }
+
+	function pintar(avisar) {
+		var it = actual();
+		var est = ESTADOS[it.estado] || ESTADOS.sin_respaldo;
+
+		var punto = tarjeta.querySelector('[data-navdoc-punto]');
+		punto.style.background = est.color;
+		punto.style.boxShadow = '0 0 0 3px ' + est.color + '33';
+		punto.title = est.nombre;
+
+		var numero = tarjeta.querySelector('[data-navdoc-numero]');
+		numero.textContent = it.numero;
+		numero.title = it.numero + ' — ' + est.nombre;
+
+		var proveedor = tarjeta.querySelector('[data-navdoc-proveedor]');
+		proveedor.textContent = it.proveedor;
+		proveedor.title = it.proveedor;
+
+		tarjeta.querySelector('[data-navdoc-fecha]').textContent = it.fecha || '—';
+		tarjeta.querySelector('[data-navdoc-monto]').textContent = '₡' +
+			Number(it.total).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+		tarjeta.querySelector('[data-navdoc-pos]').textContent = (idx + 1) + ' / ' + items.length;
+
+		tarjeta.querySelector('[data-navdoc-prev]').disabled = idx === 0;
+		tarjeta.querySelector('[data-navdoc-next]').disabled = idx === items.length - 1;
+
+		/* La URL sigue al documento visible: si la página se recarga —al
+		 * procesar correos, al filtrar—, la tarjeta vuelve a abrir en ESTE y no
+		 * en el primero. Se suelta lo que trajo la búsqueda anterior para que
+		 * la recarga no la repita. */
+		try {
+			history.replaceState(null, '',
+				window.location.pathname + '?' + tarjeta.dataset.navdocParams +
+				'&ctx_item=' + encodeURIComponent(it.id));
+		} catch (e) {}
+
+		if (avisar) {
+			tarjeta.dispatchEvent(new CustomEvent('navdoc:cambia', { detail: it }));
+		}
+	}
+
+	function buscar() {
+		tarjeta.dispatchEvent(new CustomEvent('navdoc:buscar', { detail: actual() }));
+	}
+
+	tarjeta.querySelector('[data-navdoc-prev]').addEventListener('click', function () {
+		if (idx > 0) { idx--; pintar(true); }
+	});
+	tarjeta.querySelector('[data-navdoc-next]').addEventListener('click', function () {
+		if (idx < items.length - 1) { idx++; pintar(true); }
+	});
+	tarjeta.querySelector('[data-navdoc-buscar]').addEventListener('click', buscar);
+	tarjeta.querySelector('[data-navdoc-cerrar]').addEventListener('click', function () {
+		tarjeta.style.display = 'none';
+		tarjeta.dispatchEvent(new CustomEvent('navdoc:cerrada'));
+	});
+
+	/* Para que la pantalla pueda buscar el primero en cuanto termine de
+	 * prepararse, sin duplicar acá lo que significa buscar en cada una. */
+	window.navdocBuscar = buscar;
+	window.navdocActual = actual;
+
+	pintar(false);
+})();
+
 /* Filtro de clase de nota: casillas, varias a la vez.
  *
  * Ninguna marcada quiere decir "todas": es el estado en blanco, no un filtro

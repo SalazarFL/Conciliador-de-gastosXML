@@ -5,6 +5,7 @@
 
 require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
+require_once __DIR__ . '/../helpers/NavegacionDocumentos.php';
 
 class FacturasController extends Controller
 {
@@ -20,6 +21,23 @@ class FacturasController extends Controller
 			'q', 'proveedor', 'fecha_desde', 'fecha_hasta',
 			'monto_desde', 'monto_hasta', 'respaldo', 'alcance',
 		]);
+
+
+		/*
+		 * Tarjeta del documento que se está buscando: se llega acá con el botón
+		 * "Buscar en los XML cargados" del pago semanal o de la cola de
+		 * seguimiento, y se recorre esa lista sin volver al otro módulo.
+		 */
+		$navDoc = null;
+		try {
+			$navDoc = NavegacionDocumentos::desde(
+				$_GET,
+				function ($nombre) { return $this->loadModel($nombre); },
+				$this->url('')
+			);
+		} catch (Throwable $e) {
+			$this->registrarFallo('Tarjeta del documento en /facturas', $e);
+		}
 
 		$facturas          = [];
 		$historial         = [];
@@ -94,6 +112,7 @@ class FacturasController extends Controller
 			'semanas'           => $semanas,
 			'semanaFiltro'      => $semanaFiltro,
 			'filtros'           => $filtros,
+			'navDoc'            => $navDoc,
 		]);
 	}
 

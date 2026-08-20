@@ -288,6 +288,14 @@ function semanaCambio(sel) {
 }
 </script>
 
+<?php
+/*
+ * La tarjeta del documento que se vino a buscar. Solo aparece si se llegó
+ * desde el pago semanal o desde la cola de seguimiento.
+ */
+include __DIR__ . '/../partials/tarjeta-documento.php';
+?>
+
 <!-- Facturas Importadas -->
 <div class="card">
     <div class="card-header">
@@ -445,3 +453,44 @@ function semanaCambio(sel) {
   Para mover una factura de semana se saca o se mete en el pago que
   corresponda, desde Pagos semanales.
 -->
+
+<script>
+/* La tarjeta del documento que se busca. Pintarla y avanzar lo hace app.js;
+ * acá solo se contesta qué significa "buscar" en esta pantalla: poner el
+ * número en el buscador y enviar el filtro.
+ *
+ * Al pasar al siguiente con las flechas NO se busca solo: la búsqueda recarga
+ * la página, y recargar en cada flecha impediría recorrer la lista de un
+ * vistazo. Se recorre con las flechas y se busca con la lupa. */
+(function () {
+    var tarjeta = document.querySelector('[data-navdoc]');
+    if (!tarjeta) { return; }
+
+    tarjeta.addEventListener('navdoc:buscar', function (evento) {
+        var doc = evento.detail;
+        var campo = document.querySelector('form.filter-bar input[name="q"]');
+        var form = campo && campo.form ? campo.form : document.querySelector('form.filter-bar');
+        if (!campo || !form) { return; }
+
+        campo.value = doc.busqueda || doc.numero;
+        // El contexto viaja con el envío para que la tarjeta siga ahí después
+        // de recargar, apuntando al mismo documento.
+        tarjeta.dataset.navdocParams.split('&').concat(['ctx_item=' + encodeURIComponent(doc.id)])
+            .forEach(function (par) {
+                if (!par) { return; }
+                var trozo = par.split('=');
+                var oculto = form.querySelector('input[type="hidden"][name="' + trozo[0] + '"]');
+                if (!oculto) {
+                    oculto = document.createElement('input');
+                    oculto.type = 'hidden';
+                    oculto.name = decodeURIComponent(trozo[0]);
+                    form.appendChild(oculto);
+                }
+                oculto.value = decodeURIComponent(trozo.slice(1).join('=') || '');
+            });
+
+        if (typeof form.requestSubmit === 'function') { form.requestSubmit(); }
+        else { form.submit(); }
+    });
+})();
+</script>

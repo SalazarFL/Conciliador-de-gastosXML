@@ -98,4 +98,22 @@ $sonda->aplicar('modulo_a', ['q']);
 assertFiltro($_GET === ['q' => 'ACME'],
     'un filtro que ya no existe en la pantalla no se aplica');
 
+// ── Una visita de paso no cambia lo guardado ─────────────────────────
+// Con 'ctx' se llega buscando el electrónico de UN documento: el buscador
+// trae su número, no un criterio que alguien eligió para este listado.
+$_SESSION = [];
+$pedir(['q' => 'ACME', 'proveedor' => '', 'estado' => '']);
+assertFiltro($_SESSION['filtros_modulo']['modulo_a'] === ['q' => 'ACME'],
+    'lo filtrado a mano se guarda');
+
+$get = $pedir(['q' => '00100001010000045587', 'ctx' => 'seguimiento']);
+assertFiltro($get['q'] === '00100001010000045587',
+    'la búsqueda de paso sí se aplica a la pantalla');
+assertFiltro($_SESSION['filtros_modulo']['modulo_a'] === ['q' => 'ACME'],
+    'pero no pisa lo que el módulo tenía guardado');
+
+$get = $pedir([]);
+assertFiltro($get['q'] === 'ACME',
+    'al volver por el menú aparece lo de siempre, no el documento de paso');
+
 echo "OK FiltrosRecordadosTest\n";

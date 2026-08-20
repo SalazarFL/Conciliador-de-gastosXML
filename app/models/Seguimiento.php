@@ -30,11 +30,6 @@ require_once __DIR__ . '/../helpers/ClaseNotaCredito.php';
 require_once __DIR__ . '/Notificacion.php';
 require_once __DIR__ . '/ProveedorCatalogo.php';
 
-// Los nombres de las clases de nota salen de acá: sin autoload, el archivo
-// tiene que pedirlo él mismo para que la constante CLASES resuelva aunque a
-// este modelo lo cargue algo que no sea su controlador.
-require_once __DIR__ . '/../helpers/ClaseNotaCredito.php';
-
 class Seguimiento extends Model
 {
     protected $table = 'seguimiento';
@@ -84,6 +79,75 @@ class Seguimiento extends Model
     public static function clasesPedidas($valor)
     {
         return ClaseNotaCredito::clasesPedidas($valor, array_keys(self::CLASES));
+    }
+
+    /**
+     * Los filtros de la cola, leídos de una petición y saneados.
+     *
+     * Vive en el modelo y no en el controlador porque son varias pantallas las
+     * que necesitan rehacer esta misma cola: la tarjeta de navegación que se
+     * lleva un documento a Correo o al listado de XML recorre la cola filtrada
+     * tal como quedó, y dos lecturas distintas de los mismos parámetros
+     * acabarían recorriendo una lista que no es la que se está viendo.
+     */
+    public static function filtrosDesde(array $get, $sociedadId = 0)
+    {
+        $leer = static function ($clave) use ($get) {
+            return isset($get[$clave]) && !is_array($get[$clave]) ? (string) $get[$clave] : '';
+        };
+
+        // Las pestañas son los estados; 'todo' es la única que no lo es.
+        $vistas = array_merge(array_keys(self::ESTADOS), ['todo']);
+        $vista = $leer('vista');
+        if (!isset($get['vista'])) {
+            $vista = 'pendiente';
+        }
+
+        /*
+         * La clase es una pregunta sobre notas: una factura no tiene ninguna.
+         * Si se está mirando solo facturas, la clase no se arrastra —el
+         * desplegable tampoco se dibuja—, porque una clase colada junto a
+         * 'facturas' vacía la lista entera sin nada en pantalla que lo
+         * explique: en la unión, las facturas traen la clase en NULL.
+         *
+         * Se guarda como texto separado por comas: 'directa,costo'.
+         */
+        $origen = $leer('origen');
+        $clases = $origen === 'factura' ? [] : self::clasesPedidas($leer('clase'));
+
+        $marca = $leer('marca');
+        $condicionSaldo = $leer('condicion_saldo');
+
+        return [
+            'vista'       => in_array($vista, $vistas, true) ? $vista : 'pendiente',
+            'origen'      => $origen,
+            'tarea'       => $leer('tarea'),
+            'marca'       => in_array($marca, ['mano', 'auto', 'desajuste'], true) ? $marca : '',
+            'clase'       => implode(',', $clases),
+            'responsable' => $leer('responsable'),
+            'proveedor'   => ProveedorCatalogo::normalizarClave($leer('proveedor')),
+            'sucursal'    => trim($leer('sucursal')),
+            'contexto_id' => (int) $leer('contexto_id'),
+            'desde'       => self::fechaFiltro($leer('desde')),
+            'hasta'       => self::fechaFiltro($leer('hasta')),
+            'monto_min'   => trim($leer('monto_min')),
+            'condicion_saldo' => in_array($condicionSaldo, ['activas', 'canceladas'], true) ? $condicionSaldo : '',
+            'q'           => trim($leer('q')),
+            'col_documento' => trim($leer('col_documento')),
+            'col_proveedor' => trim($leer('col_proveedor')),
+            'col_monto'     => trim($leer('col_monto')),
+            'col_saldo'     => trim($leer('col_saldo')),
+            'col_respaldo'  => trim($leer('col_respaldo')),
+            'col_tarea'     => trim($leer('col_tarea')),
+            'orden'       => $leer('orden') !== '' ? $leer('orden') : 'monto',
+            'sociedad_id' => (int) $sociedadId,
+        ];
+    }
+
+    private static function fechaFiltro($valor)
+    {
+        $valor = trim((string) $valor);
+        return preg_match('/^\d{4}-\d{2}-\d{2}$/', $valor) ? $valor : '';
     }
 
     public function __construct()

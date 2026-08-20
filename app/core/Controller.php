@@ -251,6 +251,19 @@ class Controller
             return;
         }
 
+        /*
+         * Una visita de paso no cambia lo que este módulo recuerda.
+         *
+         * Con 'ctx' se llega buscando el electrónico de UN documento, desde el
+         * pago semanal o desde la cola de seguimiento: el buscador trae el
+         * número de ese documento, no un criterio que la persona haya elegido
+         * para este listado. Guardarlo dejaría la pantalla filtrada por una
+         * factura suelta la próxima vez que se abra desde el menú.
+         */
+        if (isset($_GET['ctx'])) {
+            return;
+        }
+
         $filtrando = false;
         foreach ($claves as $clave) {
             if (array_key_exists($clave, $_GET)) { $filtrando = true; break; }
@@ -277,6 +290,39 @@ class Controller
             if (in_array($clave, $claves, true) && !isset($_GET[$clave])) {
                 $_GET[$clave] = $valor;
             }
+        }
+    }
+
+    /**
+     * Deja constancia de un fallo que la pantalla decidió aguantar.
+     *
+     * Hay catch que existen para degradar con elegancia: si un adorno de la
+     * pantalla no se puede armar, se sigue sin él. El problema es que ese
+     * mismo catch se traga los errores de programación —un método que ya no
+     * existe, por ejemplo— y entonces el adorno no aparece nunca y nadie sabe
+     * por qué. Esto no cambia el comportamiento: solo escribe qué pasó en
+     * storage/logs/app.log, donde ya viven los demás errores.
+     */
+    protected function registrarFallo(string $donde, Throwable $e): void
+    {
+        try {
+            $archivo = dirname(__DIR__, 2) . '/storage/logs/app.log';
+            $carpeta = dirname($archivo);
+            if (!is_dir($carpeta)) {
+                mkdir($carpeta, 0777, true);
+            }
+            file_put_contents($archivo, sprintf(
+                "[%s] AVISO: %s — %s: %s en %s:%d
+",
+                date('Y-m-d H:i:s'),
+                $donde,
+                get_class($e),
+                $e->getMessage(),
+                $e->getFile(),
+                $e->getLine()
+            ), FILE_APPEND);
+        } catch (Throwable $otro) {
+            // Ni el registro puede tumbar la pantalla que se estaba salvando.
         }
     }
 

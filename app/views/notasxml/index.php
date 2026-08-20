@@ -50,6 +50,14 @@ foreach ([$desde ?? '', $hasta ?? '', $buscar ?? '', $proveedor ?? ''] as $valor
     <?php if (empty($carpetaRaiz)): ?><div style="margin:8px 0 0;padding:7px 9px;background:#fff7ed;border:1px solid #fdba74;border-radius:7px;color:#9a3412;font-size:11.5px;">Configura primero la carpeta raíz desde el engranaje de Correo.</div><?php endif; ?>
 </div>
 
+<?php
+/*
+ * La tarjeta del documento que se vino a buscar. Solo aparece si se llegó
+ * desde la cola de seguimiento.
+ */
+include __DIR__ . '/../partials/tarjeta-documento.php';
+?>
+
 <div class="card">
     <div class="card-header"><div class="card-title">Documentos <span class="badge badge-navy"><?= (int) ($total ?? 0) ?></span></div></div>
     <form method="get" action="<?= $baseUrl ?>/notas-xml" class="filter-bar">
@@ -103,3 +111,44 @@ foreach ([$desde ?? '', $hasta ?? '', $buscar ?? '', $proveedor ?? ''] as $valor
         <?php if ($pagina > 1): ?><a class="btn btn-outline btn-sm" href="?<?= $queryBase ?>&pagina=<?= $pagina-1 ?>">← Anterior</a><?php endif; ?><span style="font-size:12px;">Página <?= (int)$pagina ?> de <?= (int)$paginas ?></span><?php if ($pagina < $paginas): ?><a class="btn btn-outline btn-sm" href="?<?= $queryBase ?>&pagina=<?= $pagina+1 ?>">Siguiente →</a><?php endif; ?>
     </div><?php endif; ?>
 </div>
+
+<script>
+/* La tarjeta del documento que se busca. Pintarla y avanzar lo hace app.js;
+ * acá solo se contesta qué significa "buscar" en esta pantalla: poner el
+ * número en el buscador y enviar el filtro.
+ *
+ * Al pasar al siguiente con las flechas NO se busca solo: la búsqueda recarga
+ * la página, y recargar en cada flecha impediría recorrer la lista de un
+ * vistazo. Se recorre con las flechas y se busca con la lupa. */
+(function () {
+    var tarjeta = document.querySelector('[data-navdoc]');
+    if (!tarjeta) { return; }
+
+    tarjeta.addEventListener('navdoc:buscar', function (evento) {
+        var doc = evento.detail;
+        var campo = document.querySelector('form.filter-bar input[name="buscar"]');
+        var form = campo && campo.form ? campo.form : document.querySelector('form.filter-bar');
+        if (!campo || !form) { return; }
+
+        campo.value = doc.busqueda || doc.numero;
+        // El contexto viaja con el envío para que la tarjeta siga ahí después
+        // de recargar, apuntando al mismo documento.
+        tarjeta.dataset.navdocParams.split('&').concat(['ctx_item=' + encodeURIComponent(doc.id)])
+            .forEach(function (par) {
+                if (!par) { return; }
+                var trozo = par.split('=');
+                var oculto = form.querySelector('input[type="hidden"][name="' + trozo[0] + '"]');
+                if (!oculto) {
+                    oculto = document.createElement('input');
+                    oculto.type = 'hidden';
+                    oculto.name = decodeURIComponent(trozo[0]);
+                    form.appendChild(oculto);
+                }
+                oculto.value = decodeURIComponent(trozo.slice(1).join('=') || '');
+            });
+
+        if (typeof form.requestSubmit === 'function') { form.requestSubmit(); }
+        else { form.submit(); }
+    });
+})();
+</script>

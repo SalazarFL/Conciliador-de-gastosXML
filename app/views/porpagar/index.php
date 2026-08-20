@@ -1018,7 +1018,7 @@ document.addEventListener('keydown', function (e) {
                     </td>
                     <td class="center" style="white-space:nowrap;">
                         <?php if ($linea['estado'] === 'sin_respaldo'): ?>
-                        <a href="<?= $baseUrl ?>/correo?buscar=<?= urlencode((string) $linea['numero_busqueda']) ?>&pp_listado=<?= (int) $listado['id'] ?>&pp_linea=<?= (int) $linea['id'] ?>"
+                        <a href="<?= $baseUrl ?>/correo?buscar=<?= urlencode((string) $linea['numero_busqueda']) ?>&ctx=pago&ctx_lista=<?= (int) $listado['id'] ?>&ctx_item=<?= (int) $linea['id'] ?>"
                            class="btn btn-outline btn-sm" title="Buscar esta factura en el correo">
                             <i class="fas fa-envelope-open-text"></i> Buscar en correo
                         </a>

@@ -15,7 +15,7 @@ $abrirCorreoCarpeta = trim((string) ($abrirCorreoCarpeta ?? ''));
 // reasignan— en Configuración, que es donde vive el ⚙.
 $cuentas        = is_array($cuentas ?? null) ? $cuentas : [];
 $cuentaActivaId = (int) ($cuentaActivaId ?? 0);
-$ppNav          = is_array($ppNav ?? null) ? $ppNav : null;
+$navDoc         = is_array($navDoc ?? null) ? $navDoc : null;
 $carpetasCorreo = is_array($carpetasCorreo ?? null) ? $carpetasCorreo : [];
 $modoCorreo      = in_array(($modoCorreo ?? 'facturas'), ['facturas','descargas'], true) ? $modoCorreo : 'facturas';
 $loteGeneral     = is_array($loteGeneral ?? null) ? $loteGeneral : null;
@@ -141,35 +141,14 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                 </div>
             </div>
         </aside>
-        <?php if ($ppNav): ?>
-        <!-- Tarjeta "Facturas por pagar": factura seleccionada + navegación
-             (ancho de la columna del correo; persiste al cambiar de cuenta) -->
-        <div id="pp-nav" style="flex-shrink:0;padding:5px 8px;background:#f8fafc;border-bottom:1px solid var(--border);border-left:3px solid var(--gold);">
-            <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
-                <span id="pp-circulo" title="" style="width:10px;height:10px;border-radius:50%;flex:none;background:#94a3b8;box-shadow:0 0 0 2px rgba(148,163,184,.2);"></span>
-                <div id="pp-numero" style="flex:1;min-width:0;font-weight:700;color:var(--navy);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></div>
-                <button type="button" id="pp-cerrar" title="Cerrar" style="background:none;border:none;font-size:18px;color:#94a3b8;cursor:pointer;line-height:1;padding:0 2px;flex:none;">&times;</button>
-            </div>
-            <div id="pp-proveedor" style="font-size:11.5px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:2px;"></div>
-            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:6px;margin-bottom:4px;">
-                <span id="pp-fecha" style="font-size:11.5px;color:var(--text-muted);"></span>
-                <span id="pp-monto" style="font-weight:700;color:var(--navy);font-size:13px;white-space:nowrap;"></span>
-            </div>
-            <div style="display:flex;align-items:center;gap:6px;">
-                <button type="button" class="btn btn-outline btn-sm" id="pp-prev" title="Factura anterior del listado" style="padding:3px 9px;">
-                    <i class="fas fa-arrow-left"></i>
-                </button>
-                <span id="pp-pos" title="<?= htmlspecialchars($ppNav['listado'] . ($ppNav['semana'] !== '' ? ' · ' . $ppNav['semana'] : '')) ?>"
-                      style="font-size:12px;color:var(--text-muted);flex:1;text-align:center;white-space:nowrap;"></span>
-                <button type="button" class="btn btn-primary btn-sm" id="pp-buscar" title="Buscar este número en el correo" style="padding:3px 10px;">
-                    <i class="fas fa-magnifying-glass"></i>
-                </button>
-                <button type="button" class="btn btn-outline btn-sm" id="pp-next" title="Siguiente factura del listado" style="padding:3px 9px;">
-                    <i class="fas fa-arrow-right"></i>
-                </button>
-            </div>
-        </div>
-        <?php endif; ?>
+        <?php
+        /*
+         * La tarjeta del documento que se busca. Es la misma de los listados
+         * de comprobantes: se llega acá desde el pago semanal o desde la cola
+         * de seguimiento, y se recorre esa lista sin volver al otro módulo.
+         */
+        include __DIR__ . '/../partials/tarjeta-documento.php';
+        ?>
         <div class="correo-buscador">
             <div class="correo-cuenta-fila">
                 <button type="button" class="btn btn-outline btn-sm" id="btn-carpetas-toggle"
@@ -942,8 +921,8 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             // sola tras un reload: el texto guardado puede ser el de la
             // factura anterior y confunde. Ahí manda la lupa de la tarjeta.
             setTimeout(function () {
-                var pp = document.getElementById('pp-nav');
-                if (pp && pp.style.display !== 'none') return;
+                var tarjeta = document.querySelector('[data-navdoc]');
+                if (tarjeta && tarjeta.style.display !== 'none') return;
                 if (btnCargar && !btnCargar.disabled) cargarCorreos();
             }, 150);
         }
@@ -960,112 +939,62 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     if (BUSCAR_INICIAL && inputBuscar && btnCargar && !btnCargar.disabled) {
         inputBuscar.value = BUSCAR_INICIAL;
         setTimeout(function () {
-            // Un enlace procedente de por-pagar usa el mismo motor propio de
-            // la lupa de la tarjeta (PP_NAV ya está asignado al ejecutarse).
-            var origenBusqueda = BUSCAR_FECHA ? 'tarjeta' : 'bandeja';
-            var fechaReferencia = BUSCAR_FECHA;
-            var numeroContexto = '';
-            try {
-                if (PP_NAV && PP_NAV.lineas && PP_NAV.lineas.length) {
-                    var i = Math.max(0, Math.min(PP_NAV.lineas.length - 1, PP_NAV.idx || 0));
-                    origenBusqueda = 'tarjeta';
-                    fechaReferencia = PP_NAV.lineas[i].fecha || '';
-                    numeroContexto = PP_NAV.lineas[i].numero || '';
-                }
-            } catch (e) {}
+            // Con tarjeta, la búsqueda inicial es la misma que hace su lupa:
+            // el motor que mira alrededor de la fecha del documento.
+            var doc = null;
+            try { doc = window.navdocActual ? window.navdocActual() : null; } catch (e) {}
+
             cargarCorreos({
-                origenBusqueda: origenBusqueda,
-                fechaReferencia: fechaReferencia,
-                numeroContexto: numeroContexto
+                origenBusqueda: (doc || BUSCAR_FECHA) ? 'tarjeta' : 'bandeja',
+                fechaReferencia: doc ? (doc.fecha || '') : BUSCAR_FECHA,
+                numeroContexto: doc ? (doc.numero || '') : ''
             });
         }, 200);
     }
 
-    // ── Tarjeta de navegación de "Facturas por pagar" ──
-    // Muestra la factura seleccionada del listado y permite recorrerlo con
-    // las flechas; la lupa pone el número de la factura visible en el
-    // buscador y ejecuta la búsqueda.
-    var PP_NAV = <?= json_encode($ppNav) ?>;
-    var ppCard = document.getElementById('pp-nav');
+    /* ── Tarjeta del documento que se busca ──
+     *
+     * Pintarla, avanzar y cerrar lo hace app.js, que es de donde sale la misma
+     * tarjeta en los listados de comprobantes. Acá solo se contesta qué
+     * significa "buscar" en esta pantalla: poner el número en el buscador y
+     * lanzar el motor propio de la tarjeta, que ignora los selectores de la
+     * bandeja, mira 15 días alrededor de la fecha del documento y amplía a
+     * todo el buzón si no encuentra.
+     */
+    var navCard = document.querySelector('[data-navdoc]');
 
-    // Parámetros pp_* de la factura visible; se arrastran al cambiar de cuenta
-    // para que la tarjeta se quede. '' = tarjeta cerrada o sin contexto.
+    // Parámetros del documento visible; se arrastran al cambiar de cuenta para
+    // que la tarjeta se quede. '' = tarjeta cerrada o sin contexto.
     var ppSuffixActual = '';
 
-    if (PP_NAV && ppCard && PP_NAV.lineas && PP_NAV.lineas.length) {
-        var ppIdx = Math.max(0, Math.min(PP_NAV.lineas.length - 1, PP_NAV.idx || 0));
-        var ppEstados = {
-            respaldada:     { color: '#16a34a', nombre: 'Respaldada' },
-            con_diferencia: { color: '#dc2626', nombre: 'Con diferencia' },
-            sin_respaldo:   { color: '#94a3b8', nombre: 'Sin respaldo' }
-        };
-        var ppPrev = document.getElementById('pp-prev');
-        var ppNext = document.getElementById('pp-next');
+    if (navCard) {
+        ppSuffixActual = navCard.dataset.navdocParams + '&ctx_item='
+                       + encodeURIComponent((window.navdocActual && window.navdocActual().id) || '');
 
-        function ppPintar() {
-            var l = PP_NAV.lineas[ppIdx];
-            var est = ppEstados[l.estado] || ppEstados.sin_respaldo;
-
-            var circulo = document.getElementById('pp-circulo');
-            circulo.style.background = est.color;
-            circulo.style.boxShadow = '0 0 0 3px ' + est.color + '33';
-            circulo.title = est.nombre;
-
-            var numero = document.getElementById('pp-numero');
-            numero.textContent = l.numero;
-            numero.title = l.numero + ' — ' + est.nombre;
-
-            var proveedor = document.getElementById('pp-proveedor');
-            proveedor.textContent = l.proveedor;
-            proveedor.title = l.proveedor;
-
-            document.getElementById('pp-fecha').textContent = l.fecha || '—';
-            document.getElementById('pp-monto').textContent = '₡' +
-                Number(l.total).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-            document.getElementById('pp-pos').textContent = (ppIdx + 1) + ' / ' + PP_NAV.lineas.length;
-
-            ppPrev.disabled = ppIdx === 0;
-            ppNext.disabled = ppIdx === PP_NAV.lineas.length - 1;
-            ppSuffixActual = 'pp_listado=' + PP_NAV.listado_id + '&pp_linea=' + l.id;
-
-            // Mantener la URL al día con la factura visible: si la página se
-            // recarga (p. ej. al procesar correos), la tarjeta reabre en ESTA
-            // factura y no en la inicial. También suelta el ?buscar= original
-            // para que el reload no re-ejecute la búsqueda vieja (la última
-            // búsqueda se restaura sola desde sessionStorage).
-            try { history.replaceState(null, '', BASE + '/correo?' + ppSuffixActual); } catch (e) {}
-        }
-
-        ppPrev.addEventListener('click', function () {
-            if (ppIdx > 0) { ppIdx--; ppPintar(); }
-        });
-        ppNext.addEventListener('click', function () {
-            if (ppIdx < PP_NAV.lineas.length - 1) { ppIdx++; ppPintar(); }
-        });
-
-        document.getElementById('pp-buscar').addEventListener('click', function () {
+        navCard.addEventListener('navdoc:buscar', function (evento) {
             if (!inputBuscar || !btnCargar || btnCargar.disabled) return;
-            var l = PP_NAV.lineas[ppIdx];
-            inputBuscar.value = l.busqueda || l.numero;
-            // Motor de tarjeta: ignora los selectores de la bandeja, busca
-            // 15 días antes/después y amplía a todo el buzón si no encuentra.
+            var doc = evento.detail;
+            inputBuscar.value = doc.busqueda || doc.numero;
             cargarCorreos({
                 origenBusqueda: 'tarjeta',
-                fechaReferencia: l.fecha || '',
-                numeroContexto: l.numero || ''
+                fechaReferencia: doc.fecha || '',
+                numeroContexto: doc.numero || ''
             });
         });
 
-        document.getElementById('pp-cerrar').addEventListener('click', function () {
-            ppCard.style.display = 'none';
-            ppSuffixActual = ''; // ya no se arrastra al cambiar de cuenta
-            // Quitar los parámetros pp_* para que un reload no la resucite
-            try { history.replaceState(null, '', BASE + '/correo' + (MODO_CORREO !== 'facturas' ? '?modo=' + encodeURIComponent(MODO_CORREO) : '')); } catch (e) {}
+        navCard.addEventListener('navdoc:cambia', function (evento) {
+            ppSuffixActual = navCard.dataset.navdocParams + '&ctx_item='
+                           + encodeURIComponent(evento.detail.id);
         });
 
-        ppPintar();
-    } else if (ppCard) {
-        ppCard.style.display = 'none';
+        navCard.addEventListener('navdoc:cerrada', function () {
+            ppSuffixActual = ''; // ya no se arrastra al cambiar de cuenta
+            // Sin los parámetros del contexto, un reload no la resucita.
+            try {
+                history.replaceState(null, '', BASE + '/correo'
+                    + (MODO_CORREO !== 'facturas' ? '?modo=' + encodeURIComponent(MODO_CORREO) : ''));
+            } catch (e) {}
+        });
     }
 
     function mostrarYRecargar(html, autoListar) {

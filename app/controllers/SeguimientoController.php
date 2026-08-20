@@ -14,6 +14,7 @@ require_once __DIR__ . '/../models/Seguimiento.php';
 require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 require_once __DIR__ . '/../helpers/ClaseNotaCredito.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
+require_once __DIR__ . '/../helpers/NavegacionDocumentos.php';
 
 class SeguimientoController extends Controller
 {
@@ -66,61 +67,17 @@ class SeguimientoController extends Controller
         ]);
     }
 
-    /** Los filtros que entiende la pantalla, saneados. */
+    /**
+     * Los filtros que entiende la pantalla, saneados.
+     *
+     * El trabajo lo hace el modelo: la tarjeta de navegación que abre esta
+     * cola en Correo y en los listados de XML tiene que rehacer exactamente
+     * la misma consulta para poder recorrerla, y dos lecturas de $_GET que
+     * se puedan desincronizar darían una lista distinta a la que se ve acá.
+     */
     private function filtros($sociedad)
     {
-        // Las pestañas son los estados; 'todo' es la única que no lo es.
-        $vistas = array_merge(array_keys(Seguimiento::ESTADOS), ['todo']);
-        $vista = (string) $this->get('vista', 'pendiente');
-
-        /*
-         * La clase es una pregunta sobre notas: una factura no tiene ninguna.
-         * Si se está mirando solo facturas, la clase no se arrastra —el
-         * desplegable tampoco se dibuja—, porque una clase colada junto a
-         * 'facturas' vacía la lista entera sin nada en pantalla que lo
-         * explique: en la unión, las facturas traen la clase en NULL.
-         *
-         * Se guarda como texto separado por comas: 'directa,costo'.
-         */
-        $origen = (string) $this->get('origen', '');
-        $clases = $origen === 'factura'
-            ? []
-            : Seguimiento::clasesPedidas($this->get('clase', ''));
-        $condicionesSaldo = ['activas', 'canceladas'];
-        $condicionSaldo = (string) $this->get('condicion_saldo', '');
-        $marcas = ['mano', 'auto', 'desajuste'];
-        $marca = (string) $this->get('marca', '');
-
-        return [
-            'vista'       => in_array($vista, $vistas, true) ? $vista : 'pendiente',
-            'origen'      => $origen,
-            'tarea'       => (string) $this->get('tarea', ''),
-            'marca'       => in_array($marca, $marcas, true) ? $marca : '',
-            'clase'       => implode(',', $clases),
-            'responsable' => (string) $this->get('responsable', ''),
-            'proveedor'   => ProveedorCatalogo::normalizarClave($this->get('proveedor', '')),
-            'sucursal'    => trim((string) $this->get('sucursal', '')),
-            'contexto_id' => (int) $this->get('contexto_id', 0),
-            'desde'       => $this->fecha($this->get('desde', '')),
-            'hasta'       => $this->fecha($this->get('hasta', '')),
-            'monto_min'   => trim((string) $this->get('monto_min', '')),
-            'condicion_saldo' => in_array($condicionSaldo, $condicionesSaldo, true) ? $condicionSaldo : '',
-            'q'           => trim((string) $this->get('q', '')),
-            'col_documento' => trim((string) $this->get('col_documento', '')),
-            'col_proveedor' => trim((string) $this->get('col_proveedor', '')),
-            'col_monto'     => trim((string) $this->get('col_monto', '')),
-            'col_saldo'     => trim((string) $this->get('col_saldo', '')),
-            'col_respaldo'  => trim((string) $this->get('col_respaldo', '')),
-            'col_tarea'     => trim((string) $this->get('col_tarea', '')),
-            'orden'       => (string) $this->get('orden', 'monto'),
-            'sociedad_id' => $sociedad ? (int) $sociedad['id'] : 0,
-        ];
-    }
-
-    private function fecha($valor)
-    {
-        $valor = trim((string) $valor);
-        return preg_match('/^\d{4}-\d{2}-\d{2}$/', $valor) ? $valor : '';
+        return Seguimiento::filtrosDesde($_GET, $sociedad ? (int) $sociedad['id'] : 0);
     }
 
     /**
@@ -188,45 +145,34 @@ class SeguimientoController extends Controller
     }
 
     /**
-     * Con qué se busca el documento en el correo.
+     * Con qué se busca el documento, y por qué.
      *
-     * En una factura es su propio número. En una nota de crédito NO: el
+     * El término lo decide NavegacionDocumentos, que es quien lo necesita para
+     * la tarjeta de las pantallas donde se busca; acá se agrega lo que la
+     * pantalla enseña alrededor: si se está buscando por número o por
+     * proveedor —que cambia el texto del botón— y la fecha de referencia.
+     *
+     * En una factura el término es su propio número. En una nota NO: el
      * número largo del reporte es el consecutivo de la factura que la nota
-     * corrige, no el de la nota (ver ClaseNotaCredito), así que buscarlo
-     * traía siempre el correo equivocado —el de la factura—.
-     *
-     * Lo que sí identifica a la nota es el consecutivo del proveedor, cuando
-     * el reporte lo trae. Cuando no viene —lo corriente— no hay ningún número
-     * que buscar, y lo único honesto es abrir el correo por el nombre del
-     * proveedor alrededor de la fecha de la nota. Por eso viaja la fecha: el
-     * buscador del correo mira primero 15 días antes y después.
+     * corrige (ver ClaseNotaCredito), así que buscarlo traía siempre el
+     * documento equivocado. Cuando la nota no trae consecutivo propio —lo
+     * corriente— no hay número que buscar y se cae al nombre del proveedor,
+     * acotado a los 15 días alrededor de su fecha.
      */
     private function decorarBusqueda(array &$fila)
     {
-        $fila['busqueda_por'] = 'numero';
+        $fila['busqueda'] = NavegacionDocumentos::busquedaDe($fila);
         $fila['busqueda_fecha'] = '';
 
-        if (($fila['origen'] ?? '') !== 'nota_credito') {
-            $fila['busqueda'] = FacturaMatcher::terminoBusquedaCorreo((string) $fila['documento']);
-            return;
-        }
+        $esNotaSinNumero = ($fila['origen'] ?? '') === 'nota_credito'
+            && trim((string) ($fila['nc_proveedor'] ?? '')) === '';
+        $fila['busqueda_por'] = $esNotaSinNumero ? 'proveedor' : 'numero';
 
-        $numeroNota = trim((string) ($fila['nc_proveedor'] ?? ''));
-        if ($numeroNota !== '') {
-            $fila['busqueda'] = FacturaMatcher::terminoBusquedaCorreo($numeroNota);
-            return;
-        }
-
-        // El nombre completo casi nunca aparece tal cual en el correo: los
-        // dos primeros tokens (ya sin "S.A." ni sufijos) son los que sí
-        // están en el remitente o en el asunto, y ambos deben aparecer.
-        $tokens = array_slice(FacturaMatcher::tokenizarProveedor($fila['proveedor'] ?? ''), 0, 2);
-        $fila['busqueda_por'] = 'proveedor';
-        $fila['busqueda'] = implode(' ', $tokens);
-
-        $fecha = strtotime((string) ($fila['fecha'] ?? ''));
-        if ($fecha !== false) {
-            $fila['busqueda_fecha'] = date('d/m/Y', $fecha);
+        if ($esNotaSinNumero) {
+            $fecha = strtotime((string) ($fila['fecha'] ?? ''));
+            if ($fecha !== false) {
+                $fila['busqueda_fecha'] = date('d/m/Y', $fecha);
+            }
         }
     }
 

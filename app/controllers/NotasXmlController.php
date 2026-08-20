@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/../helpers/XmlDocumentImporter.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
+require_once __DIR__ . '/../helpers/NavegacionDocumentos.php';
 
 class NotasXmlController extends Controller
 {
@@ -9,6 +10,22 @@ class NotasXmlController extends Controller
     public function index()
     {
         $this->recordarFiltros('notas_xml', ['desde', 'hasta', 'buscar', 'proveedor']);
+
+        /*
+         * Tarjeta del documento que se está buscando: se llega acá con el botón
+         * "Buscar en los XML cargados" del pago semanal o de la cola de
+         * seguimiento, y se recorre esa lista sin volver al otro módulo.
+         */
+        $navDoc = null;
+        try {
+            $navDoc = NavegacionDocumentos::desde(
+                $_GET,
+                function ($nombre) { return $this->loadModel($nombre); },
+                $this->url('')
+            );
+        } catch (Throwable $e) {
+            $this->registrarFallo('Tarjeta del documento en /notas-xml', $e);
+        }
 
         $desde = $this->fechaValida((string) $this->get('desde', ''));
         $hasta = $this->fechaValida((string) $this->get('hasta', ''));
@@ -29,6 +46,7 @@ class NotasXmlController extends Controller
             'proveedoresFiltro' => ProveedorCatalogo::opciones($modelo->proveedoresParaFiltro('NC')),
             'pagina' => $page, 'paginas' => $paginas, 'total' => $total,
             'carpetaRaiz' => DocumentoArchivo::raizConfigurada(),
+            'navDoc' => $navDoc,
         ]);
     }
 
