@@ -100,9 +100,23 @@ include __DIR__ . '/../partials/tarjeta-documento.php';
             <td><?= htmlspecialchars($n['fecha_emision']) ?></td><td><?= htmlspecialchars($n['proveedor_nombre'] ?? '—') ?></td>
             <td style="font-family:monospace;white-space:nowrap;"><?= htmlspecialchars($n['consecutivo_completo']) ?></td><td><strong><?= htmlspecialchars($n['numero_factura_asistente']) ?></strong></td>
             <td><?= htmlspecialchars($n['moneda']) ?></td><td class="right"><?= number_format((float)$n['subtotal'],2) ?></td><td class="right"><?= number_format((float)$n['iva'],2) ?></td><td class="right"><strong><?= number_format((float)$n['total'],2) ?></strong></td>
-            <td><?php if (!empty($n['ruta_pdf']) && is_file($n['ruta_pdf'])): ?><span class="badge badge-green">Disponible</span><?php else: ?><span class="badge" style="background:#fef3c7;color:#92400e;">Pendiente</span><?php endif; ?></td>
+            <td style="white-space:nowrap;">
+                <?php if (!empty($n['archivo_perdido'])): ?>
+                <?php
+                // Se archivó y ya no está: la marca desmiente a "Disponible"
+                // en el mismo renglón, y trae con qué reponerlo.
+                $marcaArchivo = ['id' => (int) $n['id'], 'estado' => [
+                    'perdido' => true,
+                    'recuperable' => !empty($n['archivo_recuperable']),
+                    'que_falta' => $n['archivo_que_falta'] ?? '',
+                ]];
+                include __DIR__ . '/../partials/marca-archivo.php';
+                ?>
+                <?php elseif (!empty($n['archivo_pdf_ok'])): ?><span class="badge badge-green">Disponible</span>
+                <?php else: ?><span class="badge" style="background:#fef3c7;color:#92400e;">Pendiente</span><?php endif; ?>
+            </td>
             <td><?= !empty($n['correo_cuenta_id']) ? 'Correo' : 'Carga XML' ?></td>
-            <td style="white-space:nowrap;"><a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/notas-xml/ver/<?= (int)$n['id'] ?>" title="Detalle"><i class="fas fa-eye"></i></a> <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/documentos/xml/<?= (int)$n['id'] ?>" target="_blank" title="Ver XML"><i class="fas fa-code"></i></a><?php if (!empty($n['ruta_pdf']) && is_file($n['ruta_pdf'])): ?> <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/documentos/pdf/<?= (int)$n['id'] ?>" target="_blank" title="Ver PDF"><i class="fas fa-file-pdf"></i></a><?php endif; ?></td>
+            <td style="white-space:nowrap;"><a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/notas-xml/ver/<?= (int)$n['id'] ?>" title="Detalle"><i class="fas fa-eye"></i></a> <?php if (!empty($n['archivo_xml_ok'])): ?><a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/documentos/xml/<?= (int)$n['id'] ?>" target="_blank" title="Ver XML"><i class="fas fa-code"></i></a><?php endif; ?><?php if (!empty($n['archivo_pdf_ok'])): ?> <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/documentos/pdf/<?= (int)$n['id'] ?>" target="_blank" title="Ver PDF"><i class="fas fa-file-pdf"></i></a><?php endif; ?></td>
         </tr>
         <?php endforeach; ?>
         </tbody>

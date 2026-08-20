@@ -92,8 +92,8 @@ class DocumentosController extends Controller
             $seArchivo = $registro && $ruta !== '';
             echo $seArchivo
                 ? 'Este ' . strtoupper($tipo) . ' se archivó y ya no está en la carpeta compartida. '
-                    . 'En el listado de comprobantes sale marcado "Archivo perdido", y desde ahí se puede '
-                    . 'volver a bajar del correo si se guardó el mensaje del que salió.'
+                    . 'Volvé al renglón de este documento: sale marcado "Archivo perdido", y ahí mismo '
+                    . 'está el botón para volver a bajarlo del correo.'
                 : ($tipo === 'pdf' ? 'El PDF está pendiente o no está disponible.' : 'El XML local no está disponible.');
             exit;
         }

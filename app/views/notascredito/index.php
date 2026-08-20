@@ -303,6 +303,17 @@ function ncQuery(array $changes = []) {
                                 <?= htmlspecialchars($row['xml_numero'] ?: $row['xml_consecutivo']) ?>
                             </a>
                             <div class="nc-reason"><?= htmlspecialchars($row['xml_proveedor'] ?: '') ?></div>
+                            <?php
+                            // El XML está vinculado, pero su archivo puede
+                            // haber desaparecido de la carpeta compartida: el
+                            // enlace de arriba llevaría a una pantalla sin nada.
+                            $marcaArchivo = ['id' => (int) $row['factura_xml_id'], 'estado' => [
+                                'perdido' => !empty($row['archivo_perdido']),
+                                'recuperable' => !empty($row['archivo_recuperable']),
+                                'que_falta' => $row['archivo_que_falta'] ?? '',
+                            ]];
+                            include __DIR__ . '/../partials/marca-archivo.php';
+                            ?>
                         <?php else: ?>—<?php endif; ?>
                     </td>
                     <td class="right"><?= $row['xml_total'] !== null ? ncMonto($row['xml_total'], $row['moneda']) : '—' ?></td>
@@ -595,6 +606,19 @@ function ncQuery(array $changes = []) {
             xmlHtml = '<a href="'+BASE+'/notas-xml/ver/'+Number(row.factura_xml_id)+'" target="_blank" rel="noopener" class="nc-doc" title="Abrir visualización del XML">' +
                 esc(row.xml_numero || row.xml_consecutivo || '')+'</a>' +
                 '<div class="nc-reason">'+esc(row.xml_proveedor || '')+'</div>';
+            // El mismo aviso que pinta el servidor: el XML está vinculado pero
+            // su archivo ya no está donde la base dice. Filtrar en vivo no
+            // puede hacer desaparecer un problema.
+            if (row.archivo_perdido) {
+                xmlHtml += '<div><span class="badge badge-perdido" title="Se archivó y ya no está en la carpeta compartida">' +
+                    '<i class="fas fa-link-slash"></i> ' +
+                    (row.archivo_que_falta ? 'Falta el '+esc(row.archivo_que_falta) : 'Archivo perdido') + '</span>' +
+                    (row.archivo_recuperable
+                        ? '<button type="button" class="btn-recuperar" data-recuperar-doc="'+Number(row.factura_xml_id)+'"' +
+                          ' title="Volver a bajarlo del correo y dejarlo en su misma carpeta">' +
+                          '<i class="fas fa-cloud-arrow-down"></i></button>'
+                        : '') + '</div>';
+            }
         }
         var totalXml = row.xml_total !== null && row.xml_total !== '' ? money(row.xml_total, row.moneda) : '—';
         var diferencia = row.diferencia !== null && row.diferencia !== '' ? money(row.diferencia, row.moneda) : '—';

@@ -15,6 +15,7 @@ require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 require_once __DIR__ . '/../helpers/ClaseNotaCredito.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 require_once __DIR__ . '/../helpers/NavegacionDocumentos.php';
+require_once __DIR__ . '/../helpers/EstadoArchivo.php';
 
 class SeguimientoController extends Controller
 {
@@ -126,17 +127,17 @@ class SeguimientoController extends Controller
     private function decorar(array $filas)
     {
         foreach ($filas as &$fila) {
-            $fila['xml_ok'] = $this->archivoPresente($fila['ruta_xml'] ?? '');
-            $fila['pdf_ok'] = $this->archivoPresente($fila['ruta_pdf'] ?? '');
-            $fila['pdf_historico'] = ($fila['estado_pdf'] ?? '') === 'no_disponible_historico';
             // No es lo mismo no haber tenido nunca el comprobante que haberlo
             // tenido y haberlo perdido: lo primero se resuelve buscándolo, lo
-            // segundo volviéndolo a bajar del correo. La ruta guardada es la
-            // que separa un caso del otro.
-            $fila['xml_perdido'] = !$fila['xml_ok'] && trim((string) ($fila['ruta_xml'] ?? '')) !== '';
-            $fila['pdf_perdido'] = !$fila['pdf_ok'] && trim((string) ($fila['ruta_pdf'] ?? '')) !== '';
-            $fila['recuperable'] = !empty($fila['recuperable'])
-                && ($fila['xml_perdido'] || $fila['pdf_perdido']);
+            // segundo volviéndolo a bajar del correo. Quién es quién lo decide
+            // EstadoArchivo, que es el mismo criterio en todos los módulos.
+            $archivo = EstadoArchivo::de($fila);
+            $fila['xml_ok'] = $archivo['xml_ok'];
+            $fila['pdf_ok'] = $archivo['pdf_ok'];
+            $fila['xml_perdido'] = !$archivo['xml_ok'] && trim((string) ($fila['ruta_xml'] ?? '')) !== '';
+            $fila['pdf_perdido'] = !$archivo['pdf_ok'] && trim((string) ($fila['ruta_pdf'] ?? '')) !== '';
+            $fila['recuperable'] = $archivo['recuperable'];
+            $fila['pdf_historico'] = ($fila['estado_pdf'] ?? '') === 'no_disponible_historico';
             $this->decorarBusqueda($fila);
             // El recordatorio solo tiene sentido mientras el renglón siga en
             // revisión: en las demás pestañas no hay nada que esperar.
@@ -182,12 +183,6 @@ class SeguimientoController extends Controller
                 $fila['busqueda_fecha'] = date('d/m/Y', $fecha);
             }
         }
-    }
-
-    private function archivoPresente($ruta)
-    {
-        $ruta = trim((string) $ruta);
-        return $ruta !== '' && is_file($ruta);
     }
 
     // ── Acciones ────────────────────────────────────────────────────────────
@@ -253,6 +248,10 @@ class SeguimientoController extends Controller
             }
 
             $decoradas = $this->decorar([$fila]);
+            // El estado del archivo ya está resuelto arriba; la ruta de una
+            // carpeta del disco de la oficina no tiene por qué viajar al
+            // navegador.
+            unset($decoradas[0]['ruta_xml'], $decoradas[0]['ruta_pdf']);
             $this->json([
                 'ok' => true,
                 'fila' => $decoradas[0],

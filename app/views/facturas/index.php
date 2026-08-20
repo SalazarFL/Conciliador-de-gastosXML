@@ -420,34 +420,33 @@ include __DIR__ . '/../partials/tarjeta-documento.php';
                         <td class="right muted"><?= number_format((float)($f['iva'] ?? 0), 2) ?></td>
                         <td class="right" style="font-weight:700;"><?= number_format((float)($f['total'] ?? 0), 2) ?></td>
                         <td class="center">
-                            <?php if (!empty($f['_par_completo'])): ?>
+                            <?php if (!empty($f['archivo_perdido'])): ?>
+                            <?php
+                            // Se archivó y desapareció de la carpeta compartida.
+                            // Va antes que los demás estados porque los desmiente:
+                            // la ruta está guardada, el archivo no está.
+                            $marcaArchivo = ['id' => (int) $f['id'], 'estado' => [
+                                'perdido' => true,
+                                'recuperable' => !empty($f['archivo_recuperable']),
+                                'que_falta' => $f['archivo_que_falta'] ?? '',
+                            ]];
+                            include __DIR__ . '/../partials/marca-archivo.php';
+                            ?>
+                            <?php elseif (!empty($f['archivo_xml_ok']) && !empty($f['archivo_pdf_ok'])): ?>
                             <span class="badge badge-green"><i class="fas fa-check-circle"></i> XML + PDF</span>
-                            <?php elseif (!empty($f['_perdido'])): ?>
-                            <?php // La ruta apunta a un archivo que ya no está: se archivó y se borró. ?>
-                            <span class="badge" style="background:#fef3c7;color:#92400e;"
-                                  title="Se archivó y ya no está en la carpeta compartida">
-                                <i class="fas fa-link-slash"></i> Archivo perdido
-                            </span>
-                            <?php elseif (empty($f['_xml_disponible']) && empty($f['_pdf_disponible'])): ?>
+                            <?php elseif (empty($f['archivo_xml_ok']) && empty($f['archivo_pdf_ok'])): ?>
                             <span class="badge" style="background:#fee2e2;color:#991b1b;"><i class="fas fa-triangle-exclamation"></i> Sin archivos</span>
-                            <?php elseif (empty($f['_xml_disponible'])): ?>
+                            <?php elseif (empty($f['archivo_xml_ok'])): ?>
                             <span class="badge" style="background:#fef3c7;color:#92400e;"><i class="fas fa-file-circle-xmark"></i> Falta XML</span>
                             <?php else: ?>
                             <span class="badge" style="background:#fef3c7;color:#92400e;"><i class="fas fa-file-pdf"></i> Falta PDF</span>
                             <?php endif; ?>
                         </td>
-                        <td class="center" style="white-space:nowrap;">
+                        <td class="center">
                             <a href="<?= $baseUrl ?>/facturas/ver/<?= (int)$f['id'] ?>"
                                class="btn btn-outline btn-sm" title="Ver detalle">
                                 <i class="fas fa-eye"></i>
                             </a>
-                            <?php if (!empty($f['_recuperable'])): ?>
-                            <button type="button" class="btn btn-primary btn-sm"
-                                    data-recuperar-doc="<?= (int) $f['id'] ?>"
-                                    title="Volver a bajarlo del correo y dejarlo en su misma carpeta">
-                                <i class="fas fa-cloud-arrow-down"></i>
-                            </button>
-                            <?php endif; ?>
                         </td>
                     </tr>
                     <?php endforeach; ?>

@@ -464,8 +464,10 @@ su mes y la copia se repone la próxima vez que se ordene el archivo
 ### Cuando un archivo se pierde de todos modos
 
 El organizador anota qué documentos tienen una ruta que apunta al vacío, y esos
-salen marcados **"Archivo perdido"** en el listado de comprobantes y en la cola
-de seguimiento —antes había que hacer clic para enterarse—.
+salen marcados **"Archivo perdido"** en el renglón, en todos los módulos donde
+el documento aparece: el checklist del pago semanal, la cola de seguimiento, el
+listado de comprobantes, Notas de crédito y sus XML. Antes había que hacer clic
+en el XML para enterarse, de uno en uno.
 
 De los que se guardó el correo del que salieron se pueden volver a bajar, con
 el botón de la nube del renglón o en masa:

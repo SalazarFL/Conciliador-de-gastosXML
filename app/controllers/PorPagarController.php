@@ -20,6 +20,7 @@
 require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 require_once __DIR__ . '/../helpers/DocumentoArchivo.php';
 require_once __DIR__ . '/../helpers/NumeroFactura.php';
+require_once __DIR__ . '/../helpers/EstadoArchivo.php';
 require_once __DIR__ . '/../helpers/PagoSemanalResolutor.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 

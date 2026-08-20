@@ -18,6 +18,7 @@
  */
 
 require_once __DIR__ . '/../helpers/NumeroFactura.php';
+require_once __DIR__ . '/../helpers/EstadoArchivo.php';
 require_once __DIR__ . '/ProveedorCatalogo.php';
 
 class FacturaErp extends Model
@@ -29,6 +30,13 @@ class FacturaErp extends Model
     use AlcanceSociedad;
 
     protected $table = 'facturas_erp';
+
+    /**
+     * Las rutas no son suyas —vienen del comprobante enlazado— pero salen en
+     * sus consultas, y quien las lee necesita la ruta real de esta máquina
+     * para poder preguntar si el archivo sigue estando.
+     */
+    protected $camposRuta = ['ruta_xml', 'ruta_pdf'];
 
     /** Diferencia por debajo de la cual dos saldos son el mismo saldo. */
     const EPSILON_SALDO = 0.005;
@@ -673,6 +681,7 @@ class FacturaErp extends Model
                        x.consecutivo_completo AS xml_consecutivo,
                        x.total AS xml_total, x.fecha_emision AS xml_fecha,
                        x.ruta_xml, x.ruta_pdf, x.estado_pdf,
+                       " . EstadoArchivo::columnaRecuperable('x.') . " AS recuperable,
                        p.razon_social AS xml_proveedor
                   FROM facturas_erp e
                   LEFT JOIN facturas_xml x ON x.id = e.factura_xml_id

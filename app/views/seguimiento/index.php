@@ -1178,6 +1178,17 @@ $moneda = function ($valor, $mon = 'CRC') {
             : (f.pdf_historico
                 ? '<span class="badge badge-default"><i class="fas fa-file-pdf"></i> PDF histórico</span>'
                 : '<span class="badge badge-miss"><i class="fas fa-file-pdf"></i> Sin PDF</span>');
+        // Se archivó y desapareció de la carpeta compartida, que no es lo
+        // mismo que no haberlo tenido nunca: este se puede volver a bajar.
+        if (f.xml_perdido || f.pdf_perdido) {
+            html += '<span class="badge badge-perdido" title="Se archivó y ya no está en la carpeta compartida">' +
+                    '<i class="fas fa-link-slash"></i> Archivo perdido</span>';
+            if (f.recuperable) {
+                html += '<button type="button" class="btn-recuperar" data-recuperar-doc="' + Number(f.factura_xml_id) + '"' +
+                        ' title="Volver a bajarlo del correo y dejarlo en su misma carpeta">' +
+                        '<i class="fas fa-cloud-arrow-down"></i></button>';
+            }
+        }
         // Los dos sitios donde puede estar el electrónico: el correo, si aún
         // no entró al sistema, o los comprobantes cargados, si entró pero no
         // se enganchó con este documento.

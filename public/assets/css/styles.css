@@ -863,6 +863,23 @@ table.data-table {
 .badge-navy    { background: rgba(12,36,97,.10);  color: var(--navy); }
 .badge-gold    { background: rgba(240,165,0,.14); color: var(--gold-dark); }
 .badge-green   { background: #D2FAF0; color: #0B6B5A; }
+/* El archivo se guardó y ya no está donde la base dice. No es "falta el
+   comprobante" —ese nunca llegó—: este llegó y desapareció de la carpeta
+   compartida, y por eso se puede reponer. */
+.badge-perdido { background: #FEF3C7; color: #92400E; }
+
+/* Bajarlo otra vez del correo. Va pegado a la marca, en el mismo renglón:
+   enterarse y arreglarlo son el mismo gesto. */
+.btn-recuperar {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 2px 7px; margin-left: 3px;
+  border: 1px solid var(--navy); border-radius: 999px;
+  background: var(--navy); color: #fff;
+  font-size: 10.5px; font-family: inherit; line-height: 1.6;
+  cursor: pointer; vertical-align: middle;
+}
+.btn-recuperar:hover:not(:disabled) { background: var(--navy-light); border-color: var(--navy-light); }
+.btn-recuperar:disabled { opacity: .6; cursor: progress; }
 
 /* ══════════════════════════════
    FORMS

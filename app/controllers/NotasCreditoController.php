@@ -4,6 +4,7 @@ require_once __DIR__ . '/../helpers/NotasCreditoVerificador.php';
 require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 require_once __DIR__ . '/../helpers/ClaseNotaCredito.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
+require_once __DIR__ . '/../helpers/EstadoArchivo.php';
 
 class NotasCreditoController extends Controller
 {
@@ -42,7 +43,7 @@ class NotasCreditoController extends Controller
 
         $listado = $listadoId > 0 ? $modelo->getListado($listadoId) : null;
         $filters = $this->filtrosLineas();
-        $rows = $listado ? $modelo->getLineasFiltradas($listadoId, $filters) : [];
+        $rows = $this->conEstadoDeArchivo($listado ? $modelo->getLineasFiltradas($listadoId, $filters) : []);
 
         $this->render('notascredito/index', [
             'title' => 'Notas de crédito - Nexo Fiscal',
@@ -83,7 +84,7 @@ class NotasCreditoController extends Controller
                 throw new Exception('El listado no pertenece a la sociedad activa.');
             }
 
-            $rows = $modelo->getLineasFiltradas($listadoId, $this->filtrosLineas());
+            $rows = $this->conEstadoDeArchivo($modelo->getLineasFiltradas($listadoId, $this->filtrosLineas()));
             $this->json([
                 'ok' => true,
                 'total' => count($rows),
@@ -93,6 +94,23 @@ class NotasCreditoController extends Controller
         } catch (Throwable $e) {
             $this->json(['ok' => false, 'message' => $e->getMessage()], 422);
         }
+    }
+
+    /**
+     * Si el comprobante enlazado todavía tiene sus archivos.
+     *
+     * Se resuelve en el servidor y las rutas se quitan antes de devolver las
+     * filas: esta pantalla filtra en vivo y se repinta con JSON, y la ruta de
+     * una carpeta del disco de la oficina no tiene por qué viajar al
+     * navegador. Lo que necesita la tabla es el sí o el no.
+     */
+    private function conEstadoDeArchivo(array $filas)
+    {
+        $filas = EstadoArchivo::decorar($filas);
+        foreach ($filas as $i => $fila) {
+            unset($filas[$i]['ruta_xml'], $filas[$i]['ruta_pdf'], $filas[$i]['recuperable']);
+        }
+        return $filas;
     }
 
     private function filtrosLineas()

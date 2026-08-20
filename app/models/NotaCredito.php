@@ -3,10 +3,18 @@
  * Persistencia del módulo "Notas de crédito".
  */
 require_once __DIR__ . '/../helpers/ClaseNotaCredito.php';
+require_once __DIR__ . '/../helpers/EstadoArchivo.php';
 require_once __DIR__ . '/ProveedorCatalogo.php';
 
 class NotaCredito extends Model
 {
+    /**
+     * Las rutas son del comprobante enlazado, no suyas, pero salen en sus
+     * consultas: quien las lee necesita la ruta real de esta máquina para
+     * poder preguntar si el archivo sigue estando.
+     */
+    protected $camposRuta = ['ruta_xml', 'ruta_pdf'];
+
     protected $table = 'notas_credito_listados';
 
     /** Dos saldos con una diferencia menor a medio centavo son el mismo. */
@@ -1011,6 +1019,8 @@ class NotaCredito extends Model
                        f.fecha_emision AS xml_fecha,
                        f.total AS xml_total,
                        f.moneda AS xml_moneda,
+                       f.ruta_xml, f.ruta_pdf,
+                       " . EstadoArchivo::columnaRecuperable('f.') . " AS recuperable,
                        p.razon_social AS xml_proveedor
                 FROM notas_credito_lineas nl
                 JOIN notas_credito_listados l ON l.id = nl.listado_id
@@ -1083,6 +1093,8 @@ class NotaCredito extends Model
                        f.fecha_emision AS xml_fecha,
                        f.total AS xml_total,
                        f.moneda AS xml_moneda,
+                       f.ruta_xml, f.ruta_pdf,
+                       " . EstadoArchivo::columnaRecuperable('f.') . " AS recuperable,
                        p.razon_social AS xml_proveedor
                 FROM notas_credito_lineas nl
                 LEFT JOIN facturas_xml f ON f.id = nl.factura_xml_id
@@ -1236,6 +1248,8 @@ class NotaCredito extends Model
                        f.fecha_emision AS xml_fecha,
                        f.total AS xml_total,
                        f.moneda AS xml_moneda,
+                       f.ruta_xml, f.ruta_pdf,
+                       " . EstadoArchivo::columnaRecuperable('f.') . " AS recuperable,
                        p.razon_social AS xml_proveedor
                 FROM notas_credito_lineas nl
                 LEFT JOIN facturas_xml f ON f.id = nl.factura_xml_id

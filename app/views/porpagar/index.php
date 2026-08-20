@@ -983,6 +983,20 @@ document.addEventListener('keydown', function (e) {
                         <?php else: ?>
                         <span class="badge" style="background:#f1f5f9;color:#475569;"><i class="fas fa-file-circle-question"></i> Sin respaldo</span>
                         <?php endif; ?>
+
+                        <?php
+                        /*
+                         * "Respaldada" con el archivo borrado es la peor
+                         * mentira que puede decir esta pantalla: el pago se
+                         * entrega con el respaldo, y aquí es donde se arma.
+                         * La marca desmiente al estado en el mismo renglón.
+                         */
+                        $marcaArchivo = [
+                            'id' => (int) ($linea['factura_xml_id'] ?? 0),
+                            'estado' => EstadoArchivo::de($linea),
+                        ];
+                        include __DIR__ . '/../partials/marca-archivo.php';
+                        ?>
                     </td>
                     <td style="white-space:nowrap;"><?= ppFecha($linea['fecha_emision']) ?></td>
                     <td style="max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:var(--navy);"

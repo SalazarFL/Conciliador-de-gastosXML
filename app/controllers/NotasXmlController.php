@@ -2,6 +2,7 @@
 require_once __DIR__ . '/../helpers/XmlDocumentImporter.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 require_once __DIR__ . '/../helpers/NavegacionDocumentos.php';
+require_once __DIR__ . '/../helpers/EstadoArchivo.php';
 
 class NotasXmlController extends Controller
 {
@@ -40,7 +41,11 @@ class NotasXmlController extends Controller
 
         $this->render('notasxml/index', [
             'title' => 'Notas de crédito · Carga XML - Nexo Fiscal',
-            'notas' => $modelo->getNotasXml($desde, $hasta, $buscar, $proveedor, $page, $perPage),
+            // Decoradas con lo que la columna no dice: si el archivo que su
+            // ruta promete sigue estando en la carpeta compartida.
+            'notas' => EstadoArchivo::decorar(
+                $modelo->getNotasXml($desde, $hasta, $buscar, $proveedor, $page, $perPage)
+            ),
             'desde' => $desde, 'hasta' => $hasta, 'buscar' => $buscar,
             'proveedor' => $proveedor,
             'proveedoresFiltro' => ProveedorCatalogo::opciones($modelo->proveedoresParaFiltro('NC')),

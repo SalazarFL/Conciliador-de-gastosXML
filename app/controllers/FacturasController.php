@@ -6,6 +6,7 @@
 require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 require_once __DIR__ . '/../helpers/NavegacionDocumentos.php';
+require_once __DIR__ . '/../helpers/EstadoArchivo.php';
 
 class FacturasController extends Controller
 {
@@ -74,34 +75,24 @@ class FacturasController extends Controller
 
 			$facturas = $facturaModel->buscarConImportacion($consulta);
 			$respaldo = (string) ($filtros['respaldo'] ?? '');
-			$facturas = array_values(array_filter(array_map(static function ($factura) {
-				$factura['_xml_disponible'] = !empty($factura['ruta_xml'])
-					&& is_file((string) $factura['ruta_xml']);
-				$factura['_pdf_disponible'] = !empty($factura['ruta_pdf'])
-					&& is_file((string) $factura['ruta_pdf']);
-				$factura['_par_completo'] = $factura['_xml_disponible'] && $factura['_pdf_disponible'];
-				// Se archivó y ya no está, que no es lo mismo que no haberse
-				// archivado nunca: hay una ruta apuntando al vacío. Si además
-				// se guardó el correo del que salió y la huella del XML, se
-				// puede volver a bajar y dejar en esa misma ruta.
-				$factura['_perdido'] = (!empty($factura['ruta_xml']) && !$factura['_xml_disponible'])
-					|| (!empty($factura['ruta_pdf']) && !$factura['_pdf_disponible']);
-				$factura['_recuperable'] = $factura['_perdido']
-					&& (int) ($factura['correo_uid'] ?? 0) > 0
-					&& trim((string) ($factura['hash_xml'] ?? '')) !== '';
-				return $factura;
-			}, $facturas), static function ($factura) use ($respaldo) {
-				if ($respaldo === 'con_par') {
-					return !empty($factura['_par_completo']);
+			// Se mira el disco, no solo la columna: la ruta puede estar guardada
+			// y el archivo haber desaparecido de la carpeta compartida.
+			$facturas = array_values(array_filter(
+				EstadoArchivo::decorar($facturas),
+				static function ($factura) use ($respaldo) {
+					$par = !empty($factura['archivo_xml_ok']) && !empty($factura['archivo_pdf_ok']);
+					if ($respaldo === 'con_par') {
+						return $par;
+					}
+					if ($respaldo === 'sin_par') {
+						return !$par;
+					}
+					if ($respaldo === 'perdido') {
+						return !empty($factura['archivo_perdido']);
+					}
+					return true;
 				}
-				if ($respaldo === 'sin_par') {
-					return empty($factura['_par_completo']);
-				}
-				if ($respaldo === 'perdido') {
-					return !empty($factura['_perdido']);
-				}
-				return true;
-			}));
+			));
 		} catch (Exception $e) {
 			$this->redirectWithMessage($this->url('/facturas'), 'No fue posible cargar facturas: ' . $e->getMessage(), 'warning');
 		}
