@@ -75,9 +75,18 @@ class Retorno
 
         // Mismo servidor. Un Referer de otro host es, en el mejor de los casos,
         // alguien que llegó desde fuera; en el peor, un enlace preparado.
-        $hostActual = strtolower(trim((string) ($server['HTTP_HOST'] ?? '')));
-        $hostReferer = strtolower(trim((string) ($partes['host'] ?? '')));
-        if ($hostReferer !== '' && $hostActual !== '' && $hostReferer !== $hostActual) {
+        //
+        // Se compara host Y PUERTO. HTTP_HOST los trae juntos
+        // ("192.168.1.50:8484") y parse_url los devuelve por separado, así que
+        // comparar contra parse_url()['host'] a secas descartaba TODOS los
+        // Referer en cuanto el sitio no vivía en el puerto 80 —que es como se
+        // publica en la red local— y "Volver" caía siempre en el destino por
+        // omisión.
+        $autoridadActual = self::autoridad($server['HTTP_HOST'] ?? '');
+        $autoridadReferer = self::autoridad(
+            ($partes['host'] ?? '') . (isset($partes['port']) ? ':' . $partes['port'] : '')
+        );
+        if ($autoridadReferer !== '' && $autoridadActual !== '' && $autoridadReferer !== $autoridadActual) {
             return null;
         }
 
@@ -103,6 +112,31 @@ class Retorno
 
         $consulta = trim((string) ($partes['query'] ?? ''));
         return $ruta . ($consulta !== '' ? '?' . $consulta : '');
+    }
+
+    /**
+     * "host:puerto" normalizado, para comparar dos direcciones del mismo sitio.
+     *
+     * El puerto por omisión no se escribe: "equipo:80" y "equipo" son el mismo
+     * servidor y el navegador manda tanto uno como otro. Se parsea con el "//"
+     * delante en vez de partir por el último ":" porque una dirección IPv6
+     * lleva los suyos dentro ("[::1]:8484").
+     */
+    private static function autoridad($valor)
+    {
+        $valor = strtolower(trim((string) $valor));
+        if ($valor === '') {
+            return '';
+        }
+        $partes = @parse_url('//' . $valor);
+        if (!is_array($partes) || empty($partes['host'])) {
+            return '';
+        }
+        $puerto = (string) ($partes['port'] ?? '');
+        if ($puerto === '80' || $puerto === '443') {
+            $puerto = '';
+        }
+        return $partes['host'] . ($puerto !== '' ? ':' . $puerto : '');
     }
 
     /** "Volver a Facturas" para el tooltip: el botón dice solo "Volver". */

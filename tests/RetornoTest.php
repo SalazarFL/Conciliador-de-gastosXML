@@ -52,6 +52,45 @@ assertRetorno($r['url'] === '/xmlconcilia/public/facturas',
 $r = Retorno::anterior(peticion('', $aqui), $base, '/facturas');
 assertRetorno($r['url'] === '/xmlconcilia/public/facturas', 'un Referer vacío es no tener Referer');
 
+// ── En un puerto que no es el 80 ────────────────────────────────
+// El caso real: la aplicación se publica en la red local en el 8484.
+// HTTP_HOST trae host y puerto juntos ("192.168.1.50:8484") y parse_url los
+// devuelve por separado, así que comparar contra parse_url()['host'] a secas
+// descartaba TODOS los Referer y "Volver" caía siempre en el destino por
+// omisión. Se compara la autoridad completa.
+$enRed = [
+    'HTTP_HOST' => '192.168.1.50:8484',
+    'REQUEST_URI' => '/xmlconcilia/public/facturas/ver/5877',
+    'HTTP_REFERER' => 'http://192.168.1.50:8484/xmlconcilia/public/por-pagar?listado_id=7',
+];
+$r = Retorno::anterior($enRed, $base, '/facturas');
+assertRetorno($r['url'] === '/xmlconcilia/public/por-pagar?listado_id=7',
+    'el puerto no puede descartar un Referer del propio servidor');
+
+// Y el puerto sigue contando: otro puerto es otro sitio.
+$otroPuerto = $enRed;
+$otroPuerto['HTTP_REFERER'] = 'http://192.168.1.50:9999/xmlconcilia/public/por-pagar';
+$r = Retorno::anterior($otroPuerto, $base, '/facturas');
+assertRetorno($r['url'] === '/xmlconcilia/public/facturas',
+    'un puerto distinto es otro servidor y se descarta');
+
+// El 80 se escriba o no, es el mismo sitio.
+$r = Retorno::anterior([
+    'HTTP_HOST' => 'auxiliar-06c',
+    'REQUEST_URI' => $aqui,
+    'HTTP_REFERER' => 'http://auxiliar-06c:80/xmlconcilia/public/seguimiento',
+], $base, '/facturas');
+assertRetorno($r['url'] === '/xmlconcilia/public/seguimiento',
+    '"equipo:80" y "equipo" son el mismo servidor');
+
+// IPv6: los dos puntos del puerto no se confunden con los de la dirección.
+$r = Retorno::anterior([
+    'HTTP_HOST' => '[::1]:8484',
+    'REQUEST_URI' => $aqui,
+    'HTTP_REFERER' => 'http://[::1]:8484/xmlconcilia/public/correo',
+], $base, '/facturas');
+assertRetorno($r['url'] === '/xmlconcilia/public/correo', 'una dirección IPv6 se compara entera');
+
 // ── Otro servidor: no ─────────────────────────────────────────────
 $r = Retorno::anterior(peticion('http://sitio-ajeno.com/trampa', $aqui), $base, '/facturas');
 assertRetorno($r['url'] === '/xmlconcilia/public/facturas',
