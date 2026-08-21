@@ -424,6 +424,27 @@ try {
                     (int) ($acomodo['faltantes_en_disco'] ?? 0),
                     (int) ($acomodo['errores'] ?? 0) + (int) ($acomodo['errores_copia_pago'] ?? 0)
                 ));
+
+                // Las que se quedaron fuera de la carpeta del pago, con nombre.
+                // El acomodo automático es el que corre cuando no hay nadie
+                // mirando: si acá no quedan anotadas, la única forma de saber
+                // cuáles faltan es volver a cargar el pago desde la pantalla.
+                if (!empty($acomodo['sin_par_completo'])) {
+                    registrar($rutaLog, sprintf(
+                        'Sin copiar al pago (%d): les falta el XML o el PDF.',
+                        (int) $acomodo['sin_par_completo']
+                    ));
+                    foreach (($acomodo['incompletos'] ?? []) as $doc) {
+                        registrar($rutaLog, sprintf(
+                            '  · %s · %s — falta el %s',
+                            trim((string) ($doc['numero'] ?? '')) !== ''
+                                ? (string) $doc['numero']
+                                : ('documento ' . (int) ($doc['documento_id'] ?? 0)),
+                            (string) ($doc['proveedor'] ?? ''),
+                            (string) ($doc['falta'] ?? '')
+                        ));
+                    }
+                }
             }
         }
     }

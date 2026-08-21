@@ -30,6 +30,13 @@ class OrganizadorDocumentos
      */
     private const LOTE_UBICACION = 100;
 
+    /**
+     * Cuántas facturas incompletas se nombran. La lista es para ir a buscar
+     * documentos, no un informe: pasadas unas decenas ya no se lee, y el
+     * contador sigue diciendo cuántas son en total.
+     */
+    private const MAX_INCOMPLETOS = 50;
+
     private $archivo;
     private $facturas;
     private $raiz;
@@ -843,6 +850,13 @@ class OrganizadorDocumentos
         $xml = trim((string) ($rutas['xml'] ?? ''));
         $pdf = trim((string) ($rutas['pdf'] ?? ''));
         if ($xml === '' || $pdf === '') {
+            // Este documento no va a llegar a la carpeta del pago. Antes se
+            // salía callado y el resultado era una carpeta con menos archivos
+            // que facturas, sin nada que dijera cuáles ni por qué: había que
+            // comparar la carpeta contra el listado a mano. Se anota cuál es y
+            // qué le falta; quien decide qué hacer con eso es quien mira.
+            $resumen['sin_par_completo']++;
+            $this->anotarIncompleto($resumen, $fila, $xml === '', $pdf === '');
             return;
         }
 
@@ -1327,6 +1341,8 @@ class OrganizadorDocumentos
             'copias_pago_vigentes' => 0,
             'copias_pago_planificadas' => 0,
             'errores_copia_pago' => 0,
+            'sin_par_completo' => 0,
+            'incompletos' => [],
             'ignorados' => 0,
             'carpetas_podadas' => 0,
             'errores' => 0,
@@ -1336,6 +1352,38 @@ class OrganizadorDocumentos
     }
 
     /** Reparte el movimiento en el contador que le toca según a dónde fue. */
+    /**
+     * Qué factura se quedó fuera de la carpeta del pago y qué le falta.
+     *
+     * Se guarda el nombre con el que la reconoce quien la busca —número,
+     * proveedor— y no solo el id: esta lista se lee para ir a conseguir el
+     * documento que falta, y nadie reconoce una factura por su id.
+     *
+     * `falta_xml` distingue el caso raro del común. Que falte el PDF es lo
+     * corriente: el proveedor mandó el XML solo. Que falte el XML de algo que
+     * el pago da por respaldado es otra cosa —el archivo se perdió— y por eso
+     * viaja aparte en vez de resumirse en un contador.
+     */
+    private function anotarIncompleto(array &$resumen, array $fila, $faltaXml, $faltaPdf)
+    {
+        if (count($resumen['incompletos']) >= self::MAX_INCOMPLETOS) {
+            return;
+        }
+        $falta = [];
+        if ($faltaXml) $falta[] = 'XML';
+        if ($faltaPdf) $falta[] = 'PDF';
+
+        $resumen['incompletos'][] = [
+            'documento_id' => (int) ($fila['id'] ?? 0),
+            'numero' => trim((string) ($fila['numero_factura_asistente'] ?? '')),
+            'proveedor' => trim((string) ($fila['proveedor_nombre'] ?? '')),
+            'fecha_emision' => trim((string) ($fila['fecha_emision'] ?? '')),
+            'falta' => implode(' y ', $falta),
+            'falta_xml' => (bool) $faltaXml,
+            'falta_pdf' => (bool) $faltaPdf,
+        ];
+    }
+
     private function contarEstado(array &$resumen, $estado)
     {
         if ($estado === DocumentoArchivo::CARPETA_PAGOS) $resumen['pago_semanal']++;

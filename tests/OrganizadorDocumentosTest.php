@@ -139,7 +139,7 @@ $modelo = new FacturaOrganizadorFalsa([
     3 => ['id'=>3, 'tipo_documento'=>'FE', 'fecha_emision'=>'2026-07-20', 'ruta_xml'=>$diffXml, 'ruta_pdf'=>$diffPdf, 'con_diferencia'=>1, 'coincide_registro'=>0],
     4 => ['id'=>4, 'tipo_documento'=>'FE', 'fecha_emision'=>'2026-07-20', 'ruta_xml'=>$sinMatchXml, 'ruta_pdf'=>$sinMatchPdf, 'con_diferencia'=>0, 'coincide_registro'=>0],
     5 => ['id'=>5, 'tipo_documento'=>'FE', 'fecha_emision'=>'2026-07-20', 'numero_factura_asistente'=>'0000000167', 'proveedor_nombre'=>'PROVEEDOR', 'ruta_xml'=>$semanalXml, 'ruta_pdf'=>$semanalPdf, 'con_diferencia'=>1, 'coincide_registro'=>0, 'pago_semanal'=>1, 'carpeta_pago'=>'Pago semana 31'],
-    6 => ['id'=>6, 'tipo_documento'=>'FE', 'fecha_emision'=>'2026-07-20', 'ruta_xml'=>$semanalIncompletaXml, 'ruta_pdf'=>null, 'con_diferencia'=>0, 'coincide_registro'=>1, 'pago_semanal'=>1, 'carpeta_pago'=>'Pago semana 31'],
+    6 => ['id'=>6, 'tipo_documento'=>'FE', 'fecha_emision'=>'2026-07-20', 'numero_factura_asistente'=>'0000000168', 'proveedor_nombre'=>'FERRETERIA EL CLAVO', 'ruta_xml'=>$semanalIncompletaXml, 'ruta_pdf'=>null, 'con_diferencia'=>0, 'coincide_registro'=>1, 'pago_semanal'=>1, 'carpeta_pago'=>'Pago semana 31'],
 ]);
 
 try {
@@ -213,6 +213,26 @@ try {
         'un match semanal sin PDF se queda en la carpeta del mes');
     assertOrganizador(!is_file($carpetaSemanal . DIRECTORY_SEPARATOR . 'FE_PROVEEDOR_200726_00000167_DUP.xml'),
         'y no deja copia en la carpeta de pago');
+
+    // Pero no se va en silencio. Que la carpeta tenga menos archivos que el
+    // pago facturas es correcto; que nadie pueda saber cuáles faltan, no.
+    assertOrganizador(($resumen['sin_par_completo'] ?? 0) === 1,
+        'cuenta el par incompleto que no llegó a la carpeta del pago');
+    $incompletos = $resumen['incompletos'] ?? [];
+    assertOrganizador(count($incompletos) === 1, 'y lo nombra uno por uno');
+    assertOrganizador((int) $incompletos[0]['documento_id'] === 6, 'dice de qué documento se trata');
+    assertOrganizador($incompletos[0]['numero'] === '0000000168', 'con el número con que se lo busca');
+    assertOrganizador($incompletos[0]['proveedor'] === 'FERRETERIA EL CLAVO', 'y su proveedor');
+    assertOrganizador($incompletos[0]['falta'] === 'PDF', 'y qué de las dos mitades le falta');
+    assertOrganizador($incompletos[0]['falta_pdf'] === true && $incompletos[0]['falta_xml'] === false,
+        'distingue cuál falta: al PDF se lo pide el proveedor, al XML se lo recupera');
+
+    // Los que no están en ningún pago no entran a esta lista: no hay carpeta
+    // de entrega que llenar, así que no falta nada.
+    assertOrganizador(
+        count(array_filter($incompletos, fn($d) => (int) $d['documento_id'] !== 6)) === 0,
+        'la NC suelta sin PDF no se reporta: no es de ningún pago'
+    );
     assertOrganizador(DocumentoArchivo::normalizarCarpetaPago('../Semana: 31') === 'Semana 31', 'limpia recorridos y caracteres inválidos del nombre de carpeta');
     assertOrganizador(is_file(dirname($modelo->filas[1]['ruta_xml']) . DIRECTORY_SEPARATOR . basename($modelo->filas[1]['ruta_pdf'])), 'el par comparte carpeta');
     assertOrganizador(count(glob($julioFacturas . DIRECTORY_SEPARATOR . 'FE_PENDIENTE.*')) === 2, 'el par externo se archiva por su fecha');

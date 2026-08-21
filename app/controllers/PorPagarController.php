@@ -439,6 +439,16 @@ class PorPagarController extends Controller
             $total = $erp->contarPago($listadoId);
             $nuevas = max(0, $total - $yaEstaban);
 
+            // La carpeta del pago se creó arriba, en prepararSemana(); esto es
+            // lo que la llena. Sin esta línea quedaba vacía hasta que corriera
+            // la tarea programada —que ordena cada quince minutos y solo si
+            // está activa en esa computadora—, así que quien cargaba el pago
+            // abría la carpeta recién creada y no encontraba nada. Las otras
+            // tres puertas que cambian la composición del pago (actualizar el
+            // listado, quitar una factura, borrar la semana) ya movían sus
+            // archivos en el momento; esta, que es la más grande, no.
+            $archivos = $this->reubicarArchivos($erp->idsXmlDePago($listadoId));
+
             $msg = ($listadoPrevio
                     ? "Pago \"{$nombre}\": +{$nuevas} facturas nuevas (total {$total})"
                     : "Pago \"{$nombre}\": {$total} facturas del ERP")
@@ -447,10 +457,27 @@ class PorPagarController extends Controller
                     : '')
                 . " — {$stats['respaldada']} respaldadas, {$stats['con_diferencia']} con diferencia, {$stats['sin_respaldo']} sin respaldo.";
 
+            if ($archivos['copias_pago'] > 0) {
+                $msg .= ' ' . $archivos['copias_pago']
+                    . ' comprobante(s) se copiaron a la carpeta del pago.';
+            }
+            $incompletas = $this->avisoIncompletas($archivos);
+            if ($incompletas['texto'] !== '') {
+                $msg .= ' ' . $incompletas['texto'];
+            }
+            if ($archivos['aviso'] !== '') {
+                $msg .= ' ' . $archivos['aviso'];
+            }
+
             $this->redirectWithMessage(
                 $this->url('/por-pagar?listado_id=' . $listadoId . '&semana_id=' . (int) $semanaId),
                 $msg,
-                $stats['sin_respaldo'] + $stats['con_diferencia'] > 0 ? 'warning' : 'success'
+                ($stats['sin_respaldo'] + $stats['con_diferencia'] > 0
+                    || $archivos['aviso'] !== ''
+                    || $incompletas['texto'] !== '')
+                    ? 'warning'
+                    : 'success',
+                $incompletas['detalle']
             );
         } catch (Throwable $e) {
             $this->redirectWithMessage($this->url('/por-pagar'), 'Error al cargar el pago: ' . $e->getMessage(), 'error');
@@ -795,7 +822,9 @@ class PorPagarController extends Controller
      */
     private function reubicarArchivos(array $facturaIds)
     {
-        $resultado = ['movidos' => 0, 'por_fecha' => 0, 'pago_semanal' => 0, 'aviso' => ''];
+        $resultado = ['movidos' => 0, 'por_fecha' => 0, 'pago_semanal' => 0,
+                      'copias_pago' => 0, 'sin_par' => 0, 'incompletos' => [],
+                      'aviso' => ''];
 
         $facturaIds = array_values(array_unique(array_filter(array_map('intval', $facturaIds))));
         if (!$facturaIds) {
@@ -816,14 +845,85 @@ class PorPagarController extends Controller
             $resultado['movidos'] = (int) ($resumen['movidos'] ?? 0);
             $resultado['por_fecha'] = (int) ($resumen['por_fecha'] ?? 0);
             $resultado['pago_semanal'] = (int) ($resumen['pago_semanal'] ?? 0);
+            $resultado['copias_pago'] = (int) ($resumen['copias_pago'] ?? 0);
+            $resultado['sin_par'] = (int) ($resumen['sin_par_completo'] ?? 0);
+            $resultado['incompletos'] = is_array($resumen['incompletos'] ?? null)
+                ? $resumen['incompletos']
+                : [];
             if (!empty($resumen['errores'])) {
                 $resultado['aviso'] = $resumen['errores'] . ' documento(s) no se pudieron mover.';
+            }
+            // Un fallo al copiar no interrumpe el acomodo del original, así que
+            // sin decirlo acá la carpeta del pago quedaría incompleta en
+            // silencio, que es justo lo que esta carpeta no puede permitirse.
+            if (!empty($resumen['errores_copia_pago'])) {
+                $resultado['aviso'] = trim($resultado['aviso'] . ' ' . $resumen['errores_copia_pago']
+                    . ' copia(s) no llegaron a la carpeta del pago.');
             }
         } catch (Throwable $e) {
             $resultado['aviso'] = 'No se pudieron mover los archivos: ' . $e->getMessage();
         }
 
         return $resultado;
+    }
+
+    /**
+     * "Falta el PDF" no le sirve a nadie si no dice de cuál factura.
+     *
+     * La carpeta del pago solo recibe pares completos —se entrega para
+     * respaldar, y un documento sin su PDF no se puede entregar—, así que
+     * siempre va a tener menos archivos que facturas tiene el pago. Esa
+     * diferencia era invisible: había que comparar la carpeta contra el
+     * listado a mano para descubrir cuáles faltaban.
+     *
+     * Se nombra cada una como se la busca: número, proveedor y qué le falta.
+     */
+    private function nombrarIncompletas(array $incompletas)
+    {
+        $lineas = [];
+        foreach ($incompletas as $doc) {
+            $numero = trim((string) ($doc['numero'] ?? ''));
+            $proveedor = trim((string) ($doc['proveedor'] ?? ''));
+            $falta = trim((string) ($doc['falta'] ?? ''));
+
+            $etiqueta = $numero !== ''
+                ? NumeroFactura::xmlOchoDigitos($numero)
+                : ('documento ' . (int) ($doc['documento_id'] ?? 0));
+            if ($proveedor !== '') {
+                $etiqueta .= ' · ' . $proveedor;
+            }
+            $lineas[] = $etiqueta . ($falta !== '' ? ' — falta el ' . $falta : '');
+        }
+        return $lineas;
+    }
+
+    /**
+     * El aviso de las incompletas, listo para el mensaje y para el detalle
+     * desplegable del toast. Devuelve ['texto' => ..., 'detalle' => [...]].
+     */
+    private function avisoIncompletas(array $archivos)
+    {
+        $sinPar = (int) ($archivos['sin_par'] ?? 0);
+        if ($sinPar < 1) {
+            return ['texto' => '', 'detalle' => []];
+        }
+
+        $nombradas = $this->nombrarIncompletas($archivos['incompletos'] ?? []);
+        $texto = $sinPar . ' factura(s) no se copiaron a la carpeta del pago porque'
+            . ' les falta el XML o el PDF.';
+        if (count($nombradas) < $sinPar) {
+            $texto .= ' Se nombran las primeras ' . count($nombradas) . '.';
+        }
+
+        return [
+            'texto' => $texto,
+            'detalle' => $nombradas
+                ? ['aviso_lista' => [
+                    'titulo' => 'Sin copiar al pago (' . $sinPar . ')',
+                    'items' => $nombradas,
+                  ]]
+                : [],
+        ];
     }
 
     // ── Verificar, eliminar ────────────────────────────────────────
@@ -858,10 +958,34 @@ class PorPagarController extends Controller
 
             $destino = '/por-pagar?listado_id=' . (int) $id . '&semana_id=' . (int) ($registro['semana_id'] ?? 0);
             $stats = $this->ejecutarMatching((int) $id, $erp);
+
+            // Volver a cruzar puede estrenar respaldos —un XML que llegó
+            // después, un documento recuperado de un respaldo—, y un respaldo
+            // nuevo es una copia que falta en la carpeta del pago.
+            $archivos = $this->reubicarArchivos($erp->idsXmlDePago((int) $id));
+
+            $mensaje = "Verificación actualizada: {$stats['respaldada']} respaldadas, {$stats['con_diferencia']} con diferencia, {$stats['sin_respaldo']} sin respaldo.";
+            if ($archivos['copias_pago'] > 0) {
+                $mensaje .= ' ' . $archivos['copias_pago']
+                    . ' comprobante(s) se copiaron a la carpeta del pago.';
+            }
+            $incompletas = $this->avisoIncompletas($archivos);
+            if ($incompletas['texto'] !== '') {
+                $mensaje .= ' ' . $incompletas['texto'];
+            }
+            if ($archivos['aviso'] !== '') {
+                $mensaje .= ' ' . $archivos['aviso'];
+            }
+
             $this->redirectWithMessage(
                 $this->url($destino),
-                "Verificación actualizada: {$stats['respaldada']} respaldadas, {$stats['con_diferencia']} con diferencia, {$stats['sin_respaldo']} sin respaldo.",
-                $stats['sin_respaldo'] + $stats['con_diferencia'] > 0 ? 'warning' : 'success'
+                $mensaje,
+                ($stats['sin_respaldo'] + $stats['con_diferencia'] > 0
+                    || $archivos['aviso'] !== ''
+                    || $incompletas['texto'] !== '')
+                    ? 'warning'
+                    : 'success',
+                $incompletas['detalle']
             );
         } catch (Throwable $e) {
             $this->redirectWithMessage($this->url('/por-pagar'), 'No se pudo verificar: ' . $e->getMessage(), 'error');
@@ -1075,6 +1199,10 @@ class PorPagarController extends Controller
             $this->ejecutarMatching($listadoId, $erp);
             $ncResueltas = $aprendido ? $this->reprocesarNotasCredito($aliasTexto) : 0;
 
+            // Vincular a mano es afirmar que ese comprobante respalda esta
+            // factura: desde ese momento le toca estar en la carpeta del pago.
+            $archivos = $this->reubicarArchivos([(int) $xml['id']]);
+
             $this->json([
                 'ok' => true,
                 'estado' => $estado,
@@ -1082,6 +1210,8 @@ class PorPagarController extends Controller
                 'alias_aprendido' => $aprendido,
                 'codigo_aprendido' => $codigoAprendido,
                 'notas_resueltas' => $ncResueltas,
+                'copias_pago' => $archivos['copias_pago'],
+                'aviso_archivos' => $archivos['aviso'],
             ]);
         } catch (Throwable $e) {
             $this->json(['ok' => false, 'message' => 'No se pudo vincular: ' . $e->getMessage()], 500);

@@ -41,6 +41,16 @@ class EstadoArchivo
             'perdido'     => $perdido,
             'recuperable' => $perdido && self::puedeBajarseDelCorreo($fila),
             'que_falta'   => self::queFalta($rutaXml, $xmlOk, $rutaPdf, $pdfOk),
+            // El par completo es lo que se puede entregar. La carpeta del pago
+            // semanal solo recibe pares: un documento al que le falta el PDF
+            // no sirve para respaldar un pago, así que no se copia.
+            'entregable'  => $xmlOk && $pdfOk,
+            // Y la otra mitad de la historia: lo que nunca llegó. `que_falta`
+            // habla de lo que se archivó y desapareció —eso se recupera del
+            // correo—; esto habla de lo que el proveedor no mandó nunca, que
+            // hay que ir a conseguir. Confundirlos manda a buscar al lugar
+            // equivocado.
+            'nunca_llego' => self::nuncaLlego($rutaXml, $rutaPdf),
         ];
     }
 
@@ -75,6 +85,15 @@ class EstadoArchivo
         }
         return (int) ($fila['correo_uid'] ?? 0) > 0
             && trim((string) ($fila['hash_xml'] ?? '')) !== '';
+    }
+
+    /** Los que ni siquiera tienen ruta: nunca entraron al sistema. */
+    private static function nuncaLlego($rutaXml, $rutaPdf)
+    {
+        $faltan = [];
+        if ($rutaXml === '') $faltan[] = 'XML';
+        if ($rutaPdf === '') $faltan[] = 'PDF';
+        return implode(' y ', $faltan);
     }
 
     private static function queFalta($rutaXml, $xmlOk, $rutaPdf, $pdfOk)

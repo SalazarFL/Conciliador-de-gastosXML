@@ -512,6 +512,20 @@ if (!isset($sociedadActiva)) {
             $duplicateFiles = $extractList('duplicate_files');
             $serverWarning  = trim((string) ($det['server_limit_warning'] ?? ''));
 
+            /*
+             * Lista con título propio. Las dos de arriba nacieron para la
+             * carga de archivos y llevan su título puesto ("Ya existían", "Con
+             * error"); esta la titula quien la manda, porque no todo lo que
+             * hay que enumerar es un archivo que falló. La usa el pago semanal
+             * para nombrar las facturas que no llegaron a su carpeta.
+             */
+            $avisoLista   = is_array($det['aviso_lista'] ?? null) ? $det['aviso_lista'] : [];
+            $avisoTitulo  = trim((string) ($avisoLista['titulo'] ?? ''));
+            $avisoItems   = is_array($avisoLista['items'] ?? null)
+                ? array_values(array_filter(array_map('strval', $avisoLista['items'])))
+                : [];
+            if ($avisoTitulo === '') { $avisoItems = []; }
+
             $icons  = ['success' => 'fa-check-circle', 'error' => 'fa-times-circle', 'warning' => 'fa-exclamation-triangle', 'info' => 'fa-info-circle'];
             $titles = ['success' => 'Listo', 'error' => 'Error', 'warning' => 'Atención', 'info' => 'Información'];
 
@@ -533,7 +547,7 @@ if (!isset($sociedadActiva)) {
                     </div>
                     <button type="button" class="flash-toast-close" onclick="dismissToast()" aria-label="Cerrar">&times;</button>
                 </div>
-                <?php if ($serverWarning !== '' || !empty($duplicateFiles) || !empty($failedFiles)): ?>
+                <?php if ($serverWarning !== '' || !empty($duplicateFiles) || !empty($failedFiles) || !empty($avisoItems)): ?>
                 <div class="flash-toast-extra">
                     <?php if ($serverWarning !== ''): ?>
                     <div class="flash-toast-warning-box">
@@ -553,6 +567,14 @@ if (!isset($sociedadActiva)) {
                         <div class="flash-toast-list-title">Con error (<?= count($failedFiles) ?>)</div>
                         <ul class="flash-toast-list">
                             <?php foreach ($failedFiles as $f): ?><li><?= htmlspecialchars($f) ?></li><?php endforeach; ?>
+                        </ul>
+                    </div>
+                    <?php endif; ?>
+                    <?php if (!empty($avisoItems)): ?>
+                    <div class="flash-toast-list-wrap">
+                        <div class="flash-toast-list-title"><?= htmlspecialchars($avisoTitulo) ?></div>
+                        <ul class="flash-toast-list">
+                            <?php foreach ($avisoItems as $f): ?><li><?= htmlspecialchars($f) ?></li><?php endforeach; ?>
                         </ul>
                     </div>
                     <?php endif; ?>

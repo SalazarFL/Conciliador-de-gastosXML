@@ -991,12 +991,34 @@ document.addEventListener('keydown', function (e) {
                          * entrega con el respaldo, y aquí es donde se arma.
                          * La marca desmiente al estado en el mismo renglón.
                          */
+                        $estadoArchivo = EstadoArchivo::de($linea);
                         $marcaArchivo = [
                             'id' => (int) ($linea['factura_xml_id'] ?? 0),
-                            'estado' => EstadoArchivo::de($linea),
+                            'estado' => $estadoArchivo,
                         ];
                         include __DIR__ . '/../partials/marca-archivo.php';
                         ?>
+
+                        <?php
+                        /*
+                         * El par incompleto: hay comprobante, pero le falta una
+                         * de las dos mitades y por eso NO se copió a la carpeta
+                         * del pago. Es distinto de "archivo perdido" —que lo
+                         * marca el partial de arriba y se recupera del correo—:
+                         * esto nunca llegó, hay que pedírselo al proveedor.
+                         *
+                         * Va acá y no solo en el mensaje de la carga porque el
+                         * mensaje dura diez segundos y esto es una tarea: quien
+                         * arma el pago vuelve a esta pantalla a ver qué le falta.
+                         */
+                        $nuncaLlego = trim((string) ($estadoArchivo['nunca_llego'] ?? ''));
+                        if (!empty($linea['factura_xml_id']) && $nuncaLlego !== ''):
+                        ?>
+                        <span class="badge" style="background:#fef3c7;color:#92400e;"
+                              title="No se copió a la carpeta del pago: esa carpeta solo recibe el par XML+PDF completo. Este <?= htmlspecialchars($nuncaLlego) ?> nunca llegó al sistema.">
+                            <i class="fas fa-file-circle-xmark"></i> Sin <?= htmlspecialchars($nuncaLlego) ?>
+                        </span>
+                        <?php endif; ?>
                     </td>
                     <td style="white-space:nowrap;"><?= ppFecha($linea['fecha_emision']) ?></td>
                     <td style="max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:var(--navy);"

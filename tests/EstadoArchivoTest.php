@@ -30,6 +30,8 @@ try {
     $ok = EstadoArchivo::de(['ruta_xml' => $xml, 'ruta_pdf' => $pdf]);
     assertEstadoArchivo($ok['xml_ok'] && $ok['pdf_ok'] && !$ok['perdido'],
         'con los dos archivos en su sitio no hay nada perdido');
+    assertEstadoArchivo($ok['entregable'] && $ok['nunca_llego'] === '',
+        'y el par completo es lo único que se puede entregar en un pago');
 
     // ── El histórico que nunca se archivó ──────────────────────────────────
     // Sin ruta no hay promesa que romper: falta el comprobante, que es otro
@@ -38,6 +40,21 @@ try {
     assertEstadoArchivo(!$historico['perdido'] && !$historico['recuperable'],
         'una fila sin ruta no cuenta como archivo perdido');
 
+    // Que no sea "perdido" no quiere decir que esté completo. El pago semanal
+    // no copia esta factura a su carpeta, y hasta ahora eso no se decía en
+    // ningún lado porque `perdido` y `que_falta` callaban los dos.
+    assertEstadoArchivo(!$historico['entregable'],
+        'lo que nunca llegó tampoco se puede entregar');
+    assertEstadoArchivo($historico['nunca_llego'] === 'XML y PDF',
+        'y se nombra lo que nunca llegó, aparte de lo que se perdió');
+
+    // El caso corriente de verdad: el proveedor mandó el XML y nunca el PDF.
+    $soloXml = EstadoArchivo::de(['ruta_xml' => $xml, 'ruta_pdf' => '']);
+    assertEstadoArchivo(!$soloXml['perdido'] && $soloXml['que_falta'] === '',
+        'un PDF que nunca llegó no es un archivo perdido: no hay nada que reponer');
+    assertEstadoArchivo(!$soloXml['entregable'] && $soloXml['nunca_llego'] === 'PDF',
+        'pero sí es la razón por la que esa factura no llega a la carpeta del pago');
+
     // ── La ruta apunta al vacío ────────────────────────────────────────────
     unlink($pdf);
     $medio = EstadoArchivo::de(['ruta_xml' => $xml, 'ruta_pdf' => $pdf]);
@@ -45,6 +62,8 @@ try {
         'perder solo el PDF ya es perder un archivo');
     assertEstadoArchivo($medio['que_falta'] === 'PDF',
         'y se dice cuál falta, que es lo que se lee en el renglón');
+    assertEstadoArchivo(!$medio['entregable'] && $medio['nunca_llego'] === '',
+        'un PDF borrado no es un PDF que nunca llegó: se recupera, no se pide');
 
     unlink($xml);
     $ambos = EstadoArchivo::de(['ruta_xml' => $xml, 'ruta_pdf' => $pdf]);
