@@ -44,6 +44,58 @@ try {
     assertArchivo(is_file($primero['ruta_xml']) && is_file($primero['ruta_pdf']), 'crea el par XML/PDF');
     assertArchivo(substr($nombreNc, -8) === '00000167', 'las notas de crédito usan exactamente 8 dígitos');
     assertArchivo($nombreFe === 'FE_DADA_TEXTIL_080626_00077153', 'las facturas conservan proveedor y fecha con consecutivo de 8 dígitos');
+
+    /*
+     * La Ñ en el nombre del archivo.
+     *
+     * "COMPAÑIA RIO JAVA" se archivaba como FE_COMPA_NIA_RIO_JAVA: iconv no
+     * reemplazaba la letra sino que le anteponía una marca ("~N"), y el filtro
+     * de caracteres convertía esa marca en separador. No era cosa de la Ñ: a
+     * "JOSÉ PÉREZ" le pasaba lo mismo (JOS_E_P_EREZ), y en nombres de
+     * proveedor las tildes son la regla, no la excepción.
+     *
+     * Ahora la Ñ se conserva —es una letra, no un acento— y las tildes se
+     * quitan de verdad, con un mapa que dice exactamente qué sale.
+     */
+    $conEnie = function ($proveedor) {
+        return DocumentoArchivo::nombreBase(
+            ['tipo_documento' => 'FE', 'fecha_emision' => '2026-07-17', 'numero_factura_asistente' => '00016987'],
+            $proveedor
+        );
+    };
+
+    assertArchivo($conEnie('COMPAÑIA RIO JAVA') === 'FE_COMPAÑIA_RIO_JAVA_170726_00016987',
+        'la Ñ se queda en el nombre del archivo, no se parte en _N');
+    assertArchivo($conEnie('MUÑOZ & MUÑOZ') === 'FE_MUÑOZ_MUÑOZ_170726_00016987',
+        'varias eñes en el mismo nombre, todas intactas');
+    assertArchivo($conEnie('ÑANDU EXPRESS') === 'FE_ÑANDU_EXPRESS_170726_00016987',
+        'también cuando la palabra empieza con Ñ');
+    assertArchivo($conEnie('compañía peñaranda') === 'FE_COMPAÑIA_PEÑARANDA_170726_00016987',
+        'la minúscula sube a Ñ y la tilde de la í se va: son dos cosas distintas');
+
+    assertArchivo($conEnie('DISTRIBUIDORA JOSÉ PÉREZ') === 'FE_DISTRIBUIDORA_JOSE_PEREZ_170726_00016987',
+        'las tildes se quitan sin partir la palabra');
+    assertArchivo($conEnie('PANADERÍA LA ESPIGA') === 'FE_PANADERIA_LA_ESPIGA_170726_00016987',
+        'incluida la í, que era la que más aparecía rota');
+    assertArchivo($conEnie('ÜBER ÖSTERREICH') === 'FE_UBER_OSTERREICH_170726_00016987',
+        'la diéresis tampoco deja marca');
+
+    // El nombre no puede depender de la máquina: la carpeta es compartida y
+    // la aplicación corre en varias. Con iconv, lo que salía dependía de la
+    // biblioteca de cada equipo.
+    assertArchivo($conEnie('COMPAÑIA RIO JAVA') === $conEnie('COMPAÑIA RIO JAVA'),
+        'el mismo proveedor da siempre el mismo nombre');
+
+    // Sin nombre utilizable queda el marcador, no un nombre vacío.
+    assertArchivo($conEnie('') === 'FE_PROVEEDOR_170726_00016987', 'sin proveedor hay marcador');
+    assertArchivo($conEnie('S.A.') === 'FE_PROVEEDOR_170726_00016987',
+        'un nombre que es solo sufijo societario también');
+
+    // El tope de largo cuenta letras, no bytes: cortar una Ñ por la mitad
+    // dejaría un byte suelto en el nombre de un archivo del disco.
+    $largo = $conEnie(str_repeat('AÑ', 30));
+    assertArchivo(mb_check_encoding($largo, 'UTF-8'),
+        'recortar un nombre largo no parte una Ñ en dos');
     assertArchivo(strpos($primero['ruta_xml'], 'SISTEMA' . DIRECTORY_SEPARATOR . '2026' . DIRECTORY_SEPARATOR . '07 JULIO' . DIRECTORY_SEPARATOR . 'Facturas') !== false, 'estructura SISTEMA/año/mes/tipo');
     // Lo archivado cuelga de SISTEMA y la advertencia queda a la vista: la
     // raíz es una carpeta compartida donde también se trabaja, y el árbol de

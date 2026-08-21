@@ -1076,7 +1076,10 @@ class OrganizadorDocumentos
         }
 
         $this->asegurarDestinoDentroRaiz($destinoDir);
-        $base = preg_replace('/[^A-Za-z0-9._-]+/u', '_', trim((string) $base));
+        // La Ñ entra en la lista de lo que se conserva: si no, este barrido
+        // deshacía en el primer acomodo lo que DocumentoArchivo::tokenProveedor()
+        // se cuidó de respetar al archivar, y el archivo volvía a COMPA_NIA.
+        $base = preg_replace('/[^A-Za-z0-9Ññ._-]+/u', '_', trim((string) $base));
         $base = trim($base, '._-') !== '' ? trim($base, '._-') : 'DOCUMENTO';
         $baseDestino = $base;
         $intento = 0;

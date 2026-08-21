@@ -108,12 +108,17 @@ $semanalXml = $entrada . DIRECTORY_SEPARATOR . 'FE_PAGO_SEMANAL.xml';
 $semanalPdf = $entrada . DIRECTORY_SEPARATOR . 'FE_PAGO_SEMANAL.pdf';
 $semanalIncompletaXml = $entrada . DIRECTORY_SEPARATOR . 'FE_PAGO_INCOMPLETO.xml';
 $ncSolo = $entrada . DIRECTORY_SEPARATOR . 'NC_SIN_PDF.xml';
+// Un documento ya archivado con la Ñ en su nombre: el acomodo vuelve a
+// limpiar el nombre en cada corrida, y ese barrido se la comía.
+$enieXml = $entrada . DIRECTORY_SEPARATOR . 'FE_COMPAÑIA_RIO_JAVA_170726_00016987.xml';
+$eniePdf = $entrada . DIRECTORY_SEPARATOR . 'FE_COMPAÑIA_RIO_JAVA_170726_00016987.pdf';
 file_put_contents($feXml, $xmlFactura); file_put_contents($fePdf, '%PDF par');
 file_put_contents($diffXml, $xmlFactura); file_put_contents($diffPdf, '%PDF diferencia');
 file_put_contents($sinMatchXml, $xmlFactura); file_put_contents($sinMatchPdf, '%PDF sin match');
 file_put_contents($semanalXml, $xmlFactura); file_put_contents($semanalPdf, '%PDF semanal');
 file_put_contents($semanalIncompletaXml, $xmlFactura);
 file_put_contents($ncSolo, $xmlNc);
+file_put_contents($enieXml, $xmlFactura); file_put_contents($eniePdf, '%PDF eñe');
 
 $externoXml = $entrada . DIRECTORY_SEPARATOR . 'FE_PENDIENTE.xml';
 $externoPdf = $entrada . DIRECTORY_SEPARATOR . 'FE_PENDIENTE.pdf';
@@ -139,6 +144,7 @@ $modelo = new FacturaOrganizadorFalsa([
     3 => ['id'=>3, 'tipo_documento'=>'FE', 'fecha_emision'=>'2026-07-20', 'ruta_xml'=>$diffXml, 'ruta_pdf'=>$diffPdf, 'con_diferencia'=>1, 'coincide_registro'=>0],
     4 => ['id'=>4, 'tipo_documento'=>'FE', 'fecha_emision'=>'2026-07-20', 'ruta_xml'=>$sinMatchXml, 'ruta_pdf'=>$sinMatchPdf, 'con_diferencia'=>0, 'coincide_registro'=>0],
     5 => ['id'=>5, 'tipo_documento'=>'FE', 'fecha_emision'=>'2026-07-20', 'numero_factura_asistente'=>'0000000167', 'proveedor_nombre'=>'PROVEEDOR', 'ruta_xml'=>$semanalXml, 'ruta_pdf'=>$semanalPdf, 'con_diferencia'=>1, 'coincide_registro'=>0, 'pago_semanal'=>1, 'carpeta_pago'=>'Pago semana 31'],
+    8 => ['id'=>8, 'tipo_documento'=>'FE', 'fecha_emision'=>'2026-07-20', 'numero_factura_asistente'=>'00016987', 'proveedor_nombre'=>'COMPAÑIA RIO JAVA', 'ruta_xml'=>$enieXml, 'ruta_pdf'=>$eniePdf, 'con_diferencia'=>0, 'coincide_registro'=>1],
     6 => ['id'=>6, 'tipo_documento'=>'FE', 'fecha_emision'=>'2026-07-20', 'numero_factura_asistente'=>'0000000168', 'proveedor_nombre'=>'FERRETERIA EL CLAVO', 'ruta_xml'=>$semanalIncompletaXml, 'ruta_pdf'=>null, 'con_diferencia'=>0, 'coincide_registro'=>1, 'pago_semanal'=>1, 'carpeta_pago'=>'Pago semana 31'],
 ]);
 
@@ -242,6 +248,17 @@ try {
     assertOrganizador(!is_dir($root . DIRECTORY_SEPARATOR . '2026'), 'no deja el árbol vacío de donde se mudaron los archivos');
     assertOrganizador(is_dir($root . DIRECTORY_SEPARATOR . 'PAGOS SEMANALES'), 'la carpeta de entrega sigue en la raíz, fuera de SISTEMA');
     assertOrganizador(is_file($xmlBandeja), 'no archiva lo que está en tránsito dentro de _TRABAJO');
+    // La Ñ sobrevive al acomodo. El organizador vuelve a limpiar el nombre en
+    // cada corrida, y su barrido dejaba fuera la Ñ: deshacía en el primer
+    // acomodo lo que el archivado se cuidó de respetar, y el archivo volvía a
+    // llamarse FE_COMPA_NIA_RIO_JAVA.
+    assertOrganizador(basename($modelo->filas[8]['ruta_xml']) === 'FE_COMPAÑIA_RIO_JAVA_170726_00016987.xml',
+        'el acomodo no se come la Ñ del nombre del archivo');
+    assertOrganizador(is_file($modelo->filas[8]['ruta_xml']) && is_file($modelo->filas[8]['ruta_pdf']),
+        'y el par con Ñ queda donde dice la base');
+    assertOrganizador(strpos(basename($modelo->filas[8]['ruta_xml']), '_NIA_') === false,
+        'no reaparece el guion bajo que partía COMPAÑIA en dos');
+
     assertOrganizador(($resumen['errores'] ?? 1) === 0, 'termina sin errores');
     // Con la base en el servidor, una consulta por documento agotaba el tiempo
     // de la petición al ordenar una semana entera (cientos de documentos).

@@ -350,24 +350,67 @@ class DocumentoArchivo
         return ['ruta' => $destino, 'hash' => $hash, 'creado' => true];
     }
 
+    /**
+     * Acentos que se van, letra a letra. La Ñ no está: no es un acento.
+     *
+     * Esto lo hacía iconv con ASCII//TRANSLIT, y hacía dos cosas mal.
+     *
+     * La primera es la que se ve: en esta plataforma TRANSLIT no reemplaza la
+     * letra, le antepone una marca —Ñ→"~N", É→"'E"—, y el filtro de abajo
+     * convertía esa marca en un espacio. El token se partía en dos y
+     * "COMPAÑIA RIO JAVA" se archivaba como COMPA_NIA_RIO_JAVA, igual que
+     * "JOSÉ PÉREZ" como JOS_E_P_EREZ. No era cosa de la Ñ: era de cualquier
+     * letra con tilde, que en nombres de proveedor son casi todos.
+     *
+     * La segunda no se ve y es peor: lo que TRANSLIT devuelve depende de la
+     * biblioteca de CADA máquina, y la aplicación corre en varias. El mismo
+     * proveedor podía archivarse con un nombre en una computadora y con otro
+     * en la de al lado, sobre la misma carpeta compartida.
+     *
+     * Un mapa no se transporta ni cambia de opinión: dice exactamente qué
+     * sale, aquí y en cualquier equipo.
+     */
+    private const ACENTOS = [
+        'Á' => 'A', 'À' => 'A', 'Ä' => 'A', 'Â' => 'A', 'Ã' => 'A', 'Å' => 'A',
+        'É' => 'E', 'È' => 'E', 'Ë' => 'E', 'Ê' => 'E',
+        'Í' => 'I', 'Ì' => 'I', 'Ï' => 'I', 'Î' => 'I',
+        'Ó' => 'O', 'Ò' => 'O', 'Ö' => 'O', 'Ô' => 'O', 'Õ' => 'O',
+        'Ú' => 'U', 'Ù' => 'U', 'Ü' => 'U', 'Û' => 'U',
+        'Ç' => 'C', 'Ý' => 'Y',
+    ];
+
+    /**
+     * El nombre del proveedor tal como va en el nombre del archivo.
+     *
+     * La Ñ se conserva. Es una letra del idioma, no un acento: COMPAÑIA y
+     * COMPANIA no son la misma palabra, y este nombre lo lee la persona que
+     * abre la carpeta compartida en el Explorador.
+     *
+     * Los acentos sí se van (Á→A, Ü→U): ahí la letra es la misma, y quitarlos
+     * evita que el mismo proveedor genere dos nombres distintos según cómo lo
+     * escribiera quien emitió el comprobante.
+     */
     private static function tokenProveedor($nombre)
     {
         $valor = mb_strtoupper(trim((string) $nombre), 'UTF-8');
-        $ascii = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $valor);
-        if (is_string($ascii) && $ascii !== '') {
-            $valor = $ascii;
-        }
+        $valor = strtr($valor, self::ACENTOS);
         $valor = str_replace('.', '', $valor);
-        $valor = preg_replace('/[^A-Z0-9 ]/', ' ', $valor);
-        $valor = preg_replace('/\s+/', ' ', trim($valor));
+
+        // Lo que no sea letra, dígito o Ñ pasa a ser separador. Con /u, porque
+        // sin él la Ñ son dos bytes y la clase los trataría por separado.
+        $valor = preg_replace('/[^A-Z0-9Ñ ]/u', ' ', $valor);
+        $valor = preg_replace('/\s+/u', ' ', trim((string) $valor));
+
         $sufijos = array_flip(self::SUFIJOS_SOCIETARIOS);
         $tokens = array_values(array_filter(explode(' ', $valor), function ($token) use ($sufijos) {
             return $token !== '' && !isset($sufijos[$token]);
         }));
         $token = $tokens ? implode('_', $tokens) : 'PROVEEDOR';
-        return trim(substr($token, 0, self::MAX_TOKEN_PROVEEDOR), '_');
-    }
 
+        // mb_substr y no substr: el tope es de letras, y cortar una Ñ por la
+        // mitad dejaría un byte suelto en el nombre de un archivo.
+        return trim(mb_substr($token, 0, self::MAX_TOKEN_PROVEEDOR, 'UTF-8'), '_') ?: 'PROVEEDOR';
+    }
     private function asegurarDirectorio($ruta)
     {
         if (!is_dir($ruta) && !mkdir($ruta, 0777, true) && !is_dir($ruta)) {
