@@ -126,7 +126,8 @@ class NotasXmlController extends Controller
             require_once __DIR__ . '/../helpers/NotasCreditoVerificador.php';
             NotasCreditoVerificador::verificarTodosSociedad((int) $sociedad['id'], $this->loadModel('NotaCredito'));
         } catch (Throwable $e) {
-            // Best effort: el listado conserva su verificación manual.
+            // Best effort: el listado conserva la verificación anterior y la
+            // próxima entrada de notas la repite.
         }
     }
 }

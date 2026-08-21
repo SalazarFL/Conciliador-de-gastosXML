@@ -278,6 +278,23 @@ class NotasCreditoController extends Controller
         }
     }
 
+    /**
+     * Rehace el cruce completo de un acumulado.
+     *
+     * Ya no hay botón que la llame: el cruce corre solo cada vez que entra
+     * algo que pueda cambiarlo —el CSV del listado, los XML del módulo Notas
+     * XML, la cola de importación y las notas que llegan por Descargas de
+     * Correo—, y vincular o desvincular a mano escribe el estado de una vez.
+     * Pedirlo desde la pantalla repetía sobre miles de líneas un cruce que ya
+     * estaba hecho.
+     *
+     * La ruta se conserva para lo que ocurre fuera de esos caminos: recuperar
+     * documentos desde un respaldo, borrar una factura o cambiar las reglas de
+     * emparejamiento. A diferencia de la carga del CSV —que solo revisa las
+     * líneas nuevas o con saldo distinto—, esta suelta los emparejamientos
+     * automáticos del listado y los vuelve a calcular todos; los manuales se
+     * respetan.
+     */
     public function verificar($id)
     {
         if (!$this->isPost()) {

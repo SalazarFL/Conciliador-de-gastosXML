@@ -239,6 +239,11 @@ class FacturasController extends Controller
 	/**
 	 * Revalida los listados por período después de importar NC XML, tanto por
 	 * carga directa como por la cola usada desde Correo.
+	 *
+	 * Corre sola cada vez que entran notas y reemplaza al botón "Verificar
+	 * nuevamente" del módulo, igual que verificarSemanasPorPagar reemplazó al
+	 * de Por Pagar. Nunca lanza: la verificación automática no debe romper la
+	 * importación que la disparó.
 	 */
 	private function verificarListadosNotasCredito()
 	{
@@ -251,7 +256,7 @@ class FacturasController extends Controller
 			$modelo = $this->loadModel('NotaCredito');
 			NotasCreditoVerificador::verificarTodosSociedad((int) $sociedad['id'], $modelo);
 		} catch (Throwable $e) {
-			// Best effort: el botón "Verificar nuevamente" permite reintentarlo.
+			// Best effort: la próxima entrada de notas lo repite.
 		}
 	}
 

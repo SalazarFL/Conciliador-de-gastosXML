@@ -97,43 +97,37 @@ function ncQuery(array $changes = []) {
     <?php endif; ?>
 </div>
 
-<?php if (!empty($listados)): ?>
-<div class="card mb-20">
-    <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
-        <div style="flex:1;min-width:280px;">
-            <label style="font-size:11px;font-weight:700;color:var(--navy);">Estado acumulado de la sociedad</label>
-            <div style="font-size:14px;font-weight:750;color:var(--navy);padding-top:7px;">
-                <?= $listado ? number_format((int) $listado['total_lineas'], 0, ',', '.') : 0 ?> notas conservadas
-            </div>
-        </div>
-        <?php if ($listado): ?>
-        <form method="POST" action="<?= $baseUrl ?>/notas-credito/verificar/<?= (int) $listado['id'] ?>">
-            <button class="btn btn-outline btn-sm"><i class="fas fa-rotate"></i> Verificar nuevamente</button>
-        </form>
-        <button type="button" class="btn btn-outline btn-sm" id="nc-history-open"
-                data-listado="<?= (int) $listado['id'] ?>">
-            <i class="fas fa-clock-rotate-left"></i> Historial
-        </button>
-        <?php endif; ?>
-    </div>
-    <?php if ($listado): ?>
-    <div class="nc-period" style="margin-top:8px;">
-        Última carga: <?= htmlspecialchars($listado['archivo_origen']) ?> ·
-        Empresa del reporte: <?= htmlspecialchars($listado['empresa_reporte'] ?: '—') ?> ·
-        Período: <?= ncFecha($listado['periodo_desde']) ?> al <?= ncFecha($listado['periodo_hasta']) ?>
-    </div>
-    <?php endif; ?>
-</div>
-<?php endif; ?>
-
 <?php /*
  * Acá vivía una fila de cuatro cifras: total, coinciden, con diferencia y sin
  * respaldo. La tabla de abajo las dice una por una y el filtro de la columna
- * Estado lleva a cada grupo. El total sigue vivo donde sirve: en "N filas",
- * que además se actualiza con cada búsqueda.
+ * Estado lleva a cada grupo. El total sigue vivo donde sirve: en "N de M
+ * notas conservadas", que además se actualiza con cada búsqueda.
  */ ?>
 <?php if ($listado): ?>
 <div class="card">
+    <?php /*
+     * Encabezado al modo de Facturas: el título, debajo de qué carga viene lo
+     * que se está mirando y, a la derecha, lo que se puede hacer. Era una
+     * tarjeta suelta que repetía el total y ocupaba una franja entera.
+     */ ?>
+    <div class="card-header" style="flex-wrap:wrap;">
+        <div>
+            <div class="card-title">
+                <i class="fas fa-list" style="margin-right:6px;color:var(--navy-light);"></i>Notas del acumulado
+            </div>
+            <div class="nc-period" style="margin-top:3px;">
+                Última carga: <?= htmlspecialchars($listado['archivo_origen']) ?> ·
+                Empresa del reporte: <?= htmlspecialchars($listado['empresa_reporte'] ?: '—') ?> ·
+                Período: <?= ncFecha($listado['periodo_desde']) ?> al <?= ncFecha($listado['periodo_hasta']) ?>
+            </div>
+        </div>
+        <button type="button" class="btn btn-outline btn-sm" id="nc-history-open"
+                style="margin-left:auto;" data-listado="<?= (int) $listado['id'] ?>"
+                title="Cuándo se verificó el acumulado y qué cambió en cada verificación">
+            <i class="fas fa-clock-rotate-left"></i> Historial
+        </button>
+    </div>
+
     <form method="GET" action="<?= $baseUrl ?>/notas-credito" class="filter-bar" id="nc-filter-form">
         <input type="hidden" name="listado_id" value="<?= (int) $listado['id'] ?>">
         <?php
@@ -205,7 +199,7 @@ function ncQuery(array $changes = []) {
         <i class="fas fa-filter" style="color:var(--navy-light);"></i>
         <span>
             Mostrando <strong id="nc-result-count"><?= count($lineas) ?></strong> de
-            <strong id="nc-list-total"><?= (int) ($resumen['total'] ?? 0) ?></strong> filas.
+            <strong id="nc-list-total"><?= (int) ($resumen['total'] ?? 0) ?></strong> notas conservadas.
             La búsqueda se aplica al acumulado completo. Desplázate horizontalmente para ver todas las columnas.
         </span>
         <?php if ($filtrosActivos): ?>
@@ -584,8 +578,17 @@ function ncQuery(array $changes = []) {
     function stateLabel(value) {
         return {coincide:'Coincide', con_diferencia:'Con diferencia', sin_respaldo:'Sin respaldo'}[value] || value || '—';
     }
+    // Sin el botón de verificar a mano, este historial es el único lugar que
+    // dice qué disparó cada cruce: faltaban dos de los orígenes que escribe
+    // el verificador y salían crudos ("carga_incremental").
     function originLabel(value) {
-        return {manual:'Manual', automatico:'Automática', carga_inicial:'Carga inicial'}[value] || value || 'Automática';
+        return {
+            manual: 'Manual',
+            automatico: 'Automática',
+            carga_inicial: 'Carga inicial',
+            carga_incremental: 'Carga del listado',
+            alias_nuevo: 'Alias nuevo'
+        }[value] || value || 'Automática';
     }
     function lineRow(row) {
         var estado = String(row.estado || 'sin_respaldo');
