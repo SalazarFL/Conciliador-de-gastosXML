@@ -1042,9 +1042,22 @@ document.addEventListener('keydown', function (e) {
                             <i class="fas fa-eye"></i>
                         </a>
                         <?php endif; ?>
+                        <?php
+                        /*
+                         * El aviso promete lo que de verdad va a pasar con ESTA
+                         * fila. Era uno solo para todas y hablaba del XML y del
+                         * PDF que salen de la carpeta del pago: en una factura
+                         * sin vincular no hay comprobante que mover, así que el
+                         * diálogo anunciaba un movimiento de archivos que nunca
+                         * ocurría (quitarFactura solo los reubica si hay XML).
+                         */
+                        $quitarAviso = !empty($linea['factura_xml_id'])
+                            ? 'No se elimina nada: la factura deja de ser de esta semana y vuelve a quedar disponible en Facturas. Su XML y PDF salen de la carpeta del pago y regresan a la carpeta de documentos por fecha de emisión.'
+                            : 'No se elimina nada: la factura deja de ser de esta semana y vuelve a quedar disponible en Facturas para otro pago. No tiene ningún XML vinculado, así que no se mueve ningún archivo.';
+                        ?>
                         <form method="POST" action="<?= $baseUrl ?>/por-pagar/factura/quitar/<?= (int) $linea['id'] ?>?<?= htmlspecialchars($queryRetornoFiltros) ?>"
                               style="display:inline;margin-left:4px;"
-                              data-confirm="No se elimina nada: la factura deja de ser de esta semana y vuelve a quedar disponible en Facturas. Su XML y PDF salen de la carpeta del pago y regresan a la carpeta de documentos por fecha de emisión."
+                              data-confirm="<?= htmlspecialchars($quitarAviso) ?>"
                               data-confirm-title="Quitar de la semana"
                               data-confirm-type="warning"
                               data-confirm-accept="Quitar de la semana">
