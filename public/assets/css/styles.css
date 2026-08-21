@@ -2765,6 +2765,43 @@ body.correo-resizing * { pointer-events: none; }
   color: var(--navy);
 }
 
+/* El árbol de la carpeta compartida: qué carpeta administra la aplicación y
+   qué carpeta es para trabajar. Va sangrado como un explorador de archivos
+   porque eso es lo que la persona tiene abierto al lado cuando lo lee. */
+.cfg-arbol {
+  margin-top: 7px;
+  border-left: 2px solid var(--border);
+  padding-left: 10px;
+}
+
+.cfg-arbol-linea {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-weight: 600;
+  color: var(--navy);
+}
+
+.cfg-arbol-linea:first-child { margin-top: 0; }
+
+.cfg-arbol-hijo {
+  padding-left: 20px;
+  margin-top: 2px;
+}
+
+.cfg-arbol-tag {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .3px;
+  padding: 1px 6px;
+  border-radius: 9px;
+}
+
+.cfg-arbol-tag.no-tocar { background: #fee2e2; color: #b91c1c; }
+.cfg-arbol-tag.para-trabajar { background: #dcfce7; color: #15803d; }
+
 @media (max-width: 980px) {
   .cfg-shell { grid-template-columns: minmax(0, 1fr); }
 

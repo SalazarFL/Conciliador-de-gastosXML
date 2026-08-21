@@ -92,10 +92,47 @@ $secciones[] = ['sistema', 'fa-desktop', 'Esta computadora', 'Estado de la insta
                             <i class="fas fa-folder-open" style="color:var(--gold);"></i>Carpeta raíz de XML y PDF
                         </div>
                         <div class="cfg-row-ayuda">
-                            Dentro de esta raíz se crea <code>AAAA/MM MES/Facturas</code> o
-                            <code>AAAA/MM MES/Notas de crédito</code>, según la fecha de emisión.
-                            El nombre del archivo se mantiene como
-                            <code>FE_PROVEEDOR_120726_00004354</code> o <code>NC_…</code>.
+                            <?php /*
+                             * El árbol, dibujado, en vez de la ruta escrita en prosa: la
+                             * pregunta que trae a la gente a esta pantalla no es cómo se
+                             * llama la carpeta, sino cuál se puede tocar. SISTEMA es lo
+                             * que la aplicación administra —y lleva dentro su propia nota
+                             * de advertencia—; PAGOS SEMANALES es donde se trabaja.
+                             */ ?>
+                            Dentro de esta raíz la aplicación arma su propia estructura, y no
+                            todas las carpetas son iguales:
+                            <div class="cfg-arbol">
+                                <div class="cfg-arbol-linea">
+                                    <i class="fas fa-folder-closed" style="color:var(--navy-light);"></i>
+                                    <code>SISTEMA</code>
+                                    <span class="cfg-arbol-tag no-tocar">no se toca</span>
+                                </div>
+                                <div class="cfg-arbol-hijo">
+                                    <code>AAAA/MM MES/Facturas</code> · <code>Notas de crédito</code> ·
+                                    <code>Notas de débito</code>, según la fecha de emisión, con el nombre
+                                    <code>FE_PROVEEDOR_120726_00004354</code>. Es lo que bajó del correo:
+                                    la aplicación guarda dónde está cada archivo, así que moverlos a mano
+                                    los da por perdidos.
+                                </div>
+                                <div class="cfg-arbol-linea">
+                                    <i class="fas fa-folder-open" style="color:var(--gold);"></i>
+                                    <code>PAGOS SEMANALES</code>
+                                    <span class="cfg-arbol-tag para-trabajar">para trabajar</span>
+                                </div>
+                                <div class="cfg-arbol-hijo">
+                                    Una carpeta por pago, con una <strong>copia</strong> de cada respaldo.
+                                    Se arma sola, se envía y se puede borrar sin afectar nada.
+                                </div>
+                                <div class="cfg-arbol-linea">
+                                    <i class="fas fa-folder-closed" style="color:var(--text-muted);"></i>
+                                    <code>_TRABAJO</code>
+                                    <span class="cfg-arbol-tag no-tocar">no se toca</span>
+                                </div>
+                                <div class="cfg-arbol-hijo">
+                                    Lo que está en tránsito: adjuntos de la bandeja sin importar,
+                                    archivos subidos a mano y los respaldos de la base.
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <div class="cfg-row-ancha" style="display:flex;gap:6px;">
@@ -143,8 +180,9 @@ $secciones[] = ['sistema', 'fa-desktop', 'Esta computadora', 'Estado de la insta
                         <?php else: ?>
                         <i class="fas fa-circle-check" style="color:var(--ok);margin-right:4px;"></i>
                         Guardando en <span class="cfg-ruta"><?= htmlspecialchars($carpetaRaiz) ?></span>
-                        · el archivo se acomoda solo: cada documento a la carpeta de su mes y una
-                        <strong>copia</strong> a la del pago semanal. Nunca se borra nada.
+                        · el archivo se acomoda solo: cada documento a su mes dentro de
+                        <code>SISTEMA</code> y una <strong>copia</strong> a la carpeta del pago
+                        semanal. Nunca se borra nada.
                         <?php endif; ?>
                     </div>
                     <button type="button" class="btn btn-primary btn-sm" id="cfg-guardar">

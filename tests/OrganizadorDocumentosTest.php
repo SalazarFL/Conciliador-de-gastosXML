@@ -123,6 +123,16 @@ file_put_contents($externoXml, $xmlFactura); file_put_contents($externoPdf, '%PD
 file_put_contents($externoNc, $xmlNc);
 file_put_contents($mh, '<?xml version="1.0"?><MensajeHacienda><Clave>50620072600310100000000100001030000000000000000001</Clave><Mensaje>1</Mensaje></MensajeHacienda>');
 
+// Lo que está en tránsito no es archivo: el adjunto que todavía no se importa
+// vive en _TRABAJO y otra tabla guarda su ruta. Si el barrido de sueltos se lo
+// llevara al mes, ese XML aparecería archivado sin haberse importado nunca y
+// la fila de la bandeja quedaría apuntando al vacío.
+$bandeja = $root . DIRECTORY_SEPARATOR . '_TRABAJO' . DIRECTORY_SEPARATOR . 'BANDEJA'
+         . DIRECTORY_SEPARATOR . 'xml';
+mkdir($bandeja, 0700, true);
+$xmlBandeja = $bandeja . DIRECTORY_SEPARATOR . 'FE_SIN_IMPORTAR.xml';
+file_put_contents($xmlBandeja, $xmlFactura);
+
 $modelo = new FacturaOrganizadorFalsa([
     1 => ['id'=>1, 'tipo_documento'=>'FE', 'fecha_emision'=>'2026-07-20', 'ruta_xml'=>$feXml, 'ruta_pdf'=>$fePdf, 'con_diferencia'=>0, 'coincide_registro'=>1],
     2 => ['id'=>2, 'tipo_documento'=>'NC', 'fecha_emision'=>'2026-07-20', 'ruta_xml'=>$ncSolo, 'ruta_pdf'=>null, 'con_diferencia'=>0, 'coincide_registro'=>1],
@@ -139,9 +149,15 @@ try {
     // estado de la factura ya no parte el árbol: por eso las cuatro primeras
     // —completa, incompleta, con diferencia y sin match— terminan repartidas
     // solo entre Facturas y Notas de crédito del mes que les toca.
-    $julioFacturas = $root . DIRECTORY_SEPARATOR . '2026' . DIRECTORY_SEPARATOR . '07 JULIO'
+    //
+    // Todo eso cuelga de SISTEMA. Los archivos de esta prueba nacen en el
+    // árbol viejo, colgado de la raíz, así que de paso comprueba la mudanza:
+    // un archivo local de antes del cambio se acomoda solo en la primera
+    // corrida y no deja el esqueleto de carpetas atrás.
+    $sistema = $root . DIRECTORY_SEPARATOR . 'SISTEMA';
+    $julioFacturas = $sistema . DIRECTORY_SEPARATOR . '2026' . DIRECTORY_SEPARATOR . '07 JULIO'
         . DIRECTORY_SEPARATOR . 'Facturas';
-    $julioNotas = $root . DIRECTORY_SEPARATOR . '2026' . DIRECTORY_SEPARATOR . '07 JULIO'
+    $julioNotas = $sistema . DIRECTORY_SEPARATOR . '2026' . DIRECTORY_SEPARATOR . '07 JULIO'
         . DIRECTORY_SEPARATOR . 'Notas de crédito';
 
     assertOrganizador(dirname($modelo->filas[1]['ruta_xml']) === $julioFacturas,
@@ -201,7 +217,11 @@ try {
     assertOrganizador(is_file(dirname($modelo->filas[1]['ruta_xml']) . DIRECTORY_SEPARATOR . basename($modelo->filas[1]['ruta_pdf'])), 'el par comparte carpeta');
     assertOrganizador(count(glob($julioFacturas . DIRECTORY_SEPARATOR . 'FE_PENDIENTE.*')) === 2, 'el par externo se archiva por su fecha');
     assertOrganizador(is_file($julioNotas . DIRECTORY_SEPARATOR . 'NC_EXTERNA_SIN_PDF.xml'), 'la NC externa sin PDF se archiva con las notas de crédito');
-    assertOrganizador(count(glob($root . DIRECTORY_SEPARATOR . '2026' . DIRECTORY_SEPARATOR . '07 JULIO' . DIRECTORY_SEPARATOR . 'IGNORADOS' . DIRECTORY_SEPARATOR . 'MENSAJE HACIENDA SOLO' . DIRECTORY_SEPARATOR . '*.xml')) === 1, 'separa el MensajeHacienda aislado');
+    assertOrganizador(count(glob($sistema . DIRECTORY_SEPARATOR . '2026' . DIRECTORY_SEPARATOR . '07 JULIO' . DIRECTORY_SEPARATOR . 'IGNORADOS' . DIRECTORY_SEPARATOR . 'MENSAJE HACIENDA SOLO' . DIRECTORY_SEPARATOR . '*.xml')) === 1, 'separa el MensajeHacienda aislado');
+    assertOrganizador(is_file($sistema . DIRECTORY_SEPARATOR . 'LEEME - NO MODIFICAR.txt'), 'deja la advertencia dentro de SISTEMA');
+    assertOrganizador(!is_dir($root . DIRECTORY_SEPARATOR . '2026'), 'no deja el árbol vacío de donde se mudaron los archivos');
+    assertOrganizador(is_dir($root . DIRECTORY_SEPARATOR . 'PAGOS SEMANALES'), 'la carpeta de entrega sigue en la raíz, fuera de SISTEMA');
+    assertOrganizador(is_file($xmlBandeja), 'no archiva lo que está en tránsito dentro de _TRABAJO');
     assertOrganizador(($resumen['errores'] ?? 1) === 0, 'termina sin errores');
     // Con la base en el servidor, una consulta por documento agotaba el tiempo
     // de la petición al ordenar una semana entera (cientos de documentos).
@@ -215,6 +235,12 @@ try {
         ['00000000999', '<DetalleUnico>MANUAL-999</DetalleUnico></FacturaElectronica>'],
         $xmlFactura
     );
+    // La corrida anterior vació esta carpeta y la poda se la llevó: para
+    // dejar aquí un par nuevo hay que volver a crearla, igual que haría quien
+    // copie archivos a mano en la carpeta compartida.
+    if (!is_dir($entrada)) {
+        mkdir($entrada, 0700, true);
+    }
     $xmlManual = $entrada . DIRECTORY_SEPARATOR . 'FE_MANUAL_ORIGINAL.xml';
     $pdfManual = $entrada . DIRECTORY_SEPARATOR . 'FE_MANUAL_ORIGINAL.pdf';
     file_put_contents($xmlManual, $xmlManualContenido);

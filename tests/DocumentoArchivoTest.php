@@ -44,7 +44,14 @@ try {
     assertArchivo(is_file($primero['ruta_xml']) && is_file($primero['ruta_pdf']), 'crea el par XML/PDF');
     assertArchivo(substr($nombreNc, -8) === '00000167', 'las notas de crédito usan exactamente 8 dígitos');
     assertArchivo($nombreFe === 'FE_DADA_TEXTIL_080626_00077153', 'las facturas conservan proveedor y fecha con consecutivo de 8 dígitos');
-    assertArchivo(strpos($primero['ruta_xml'], '2026' . DIRECTORY_SEPARATOR . '07 JULIO' . DIRECTORY_SEPARATOR . 'Facturas') !== false, 'estructura año/mes/tipo');
+    assertArchivo(strpos($primero['ruta_xml'], 'SISTEMA' . DIRECTORY_SEPARATOR . '2026' . DIRECTORY_SEPARATOR . '07 JULIO' . DIRECTORY_SEPARATOR . 'Facturas') !== false, 'estructura SISTEMA/año/mes/tipo');
+    // Lo archivado cuelga de SISTEMA y la advertencia queda a la vista: la
+    // raíz es una carpeta compartida donde también se trabaja, y el árbol de
+    // años suelto ahí no decía de quién era ni que no se puede tocar.
+    $sistema = $root . DIRECTORY_SEPARATOR . 'SISTEMA';
+    assertArchivo(dirname($primero['ruta_xml'], 4) === $sistema, 'el árbol de años cuelga de SISTEMA');
+    assertArchivo(is_file($sistema . DIRECTORY_SEPARATOR . 'LEEME - NO MODIFICAR.txt'), 'deja la nota de advertencia dentro de SISTEMA');
+    assertArchivo(!is_dir($root . DIRECTORY_SEPARATOR . '2026'), 'no queda un árbol de años en la raíz');
     assertArchivo($repetido['xml_creado'] === false && $repetido['ruta_xml'] === $primero['ruta_xml'], 'reutiliza el mismo hash');
     assertArchivo(strpos($colision['archivo_xml'], '_DUP_') !== false, 'no sobrescribe una colisión');
     // La carpeta sale de la fecha de emisión y el tipo, y de nada más: debajo

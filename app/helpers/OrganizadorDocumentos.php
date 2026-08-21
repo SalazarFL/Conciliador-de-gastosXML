@@ -12,6 +12,13 @@ require_once __DIR__ . '/../models/Semana.php';
  * que no cambian nunca—, así que ordenar es idempotente: correrlo dos veces no
  * mueve nada la segunda. La única excepción es PAGOS SEMANALES, donde se
  * reúnen los pares completos de una semana para poder entregarlos.
+ *
+ * Todo el árbol de años vive bajo SISTEMA (ver DocumentoArchivo). Como el
+ * destino se recalcula en cada corrida, esa mudanza no necesitó migración
+ * aparte: la primera pasada después del cambio se lleva cada par a su carpeta
+ * nueva y anota la ruta en la base. Lo que queda vacío atrás se poda al final,
+ * porque un árbol de años fantasma junto a SISTEMA es exactamente la confusión
+ * que SISTEMA vino a quitar.
  */
 class OrganizadorDocumentos
 {
@@ -36,6 +43,7 @@ class OrganizadorDocumentos
     private $rutasPorExtension = ['xml' => [], 'pdf' => []];
     private $rutasPorHash = ['xml' => [], 'pdf' => []];
     private $rutasReclamadas = [];
+    private $carpetasVaciadas = [];
 
     public function __construct($raiz = '', $facturas = null)
     {
@@ -84,6 +92,12 @@ class OrganizadorDocumentos
         }
 
         try {
+            if (!$dryRun) {
+                // Antes de mover nada: si la carpeta no existe, la nota de
+                // "no modificar" tampoco, y es lo primero que debería ver
+                // quien abra la carpeta compartida.
+                $this->archivo->asegurarCarpetaSistema();
+            }
             $this->organizarRegistrados($resumen, (bool) $dryRun);
             if ($incluirNoRegistrados) {
                 $this->organizarNoRegistrados($resumen, (bool) $dryRun);
@@ -91,6 +105,7 @@ class OrganizadorDocumentos
             $estado = $this->estadoRutasFaltantes($this->facturas->getParaOrganizarArchivos());
             $this->anotarFaltantes($estado['sin_archivo'], [], (bool) $dryRun, $resumen);
             if (!$dryRun) {
+                $this->podarCarpetasVacias($resumen);
                 $this->anotarOrden();
             }
         } finally {
@@ -217,10 +232,14 @@ class OrganizadorDocumentos
             return $resumen;
         }
         try {
+            if (!$dryRun) {
+                $this->archivo->asegurarCarpetaSistema();
+            }
             $this->organizarRegistrados($resumen, (bool) $dryRun, $ids);
             $estado = $this->estadoRutasFaltantes($this->facturas->getParaOrganizarArchivos($ids));
             $this->anotarFaltantes($estado['sin_archivo'], $ids, (bool) $dryRun, $resumen);
             if (!$dryRun) {
+                $this->podarCarpetasVacias($resumen);
                 $this->registrarLog($resumen);
             }
         } finally {
@@ -910,13 +929,23 @@ class OrganizadorDocumentos
             }
         }
 
-        // PAGOS SEMANALES queda fuera de esta pasada: ahí no vive ningún
-        // documento, solo copias de entrega de documentos que sí están
-        // registrados en otra carpeta. Sin esta excepción, cada copia parecería
-        // un archivo suelto y esta misma corrida se la llevaría de vuelta al
-        // mes, deshaciendo la carpeta que se acaba de armar.
-        $carpetaPagos = $this->claveRuta($this->raiz . DIRECTORY_SEPARATOR
-            . DocumentoArchivo::CARPETA_PAGOS . DIRECTORY_SEPARATOR);
+        // Dos carpetas quedan fuera de esta pasada.
+        //
+        // PAGOS SEMANALES: ahí no vive ningún documento, solo copias de
+        // entrega de documentos que sí están registrados en otra carpeta. Sin
+        // esta excepción, cada copia parecería un archivo suelto y esta misma
+        // corrida se la llevaría de vuelta al mes, deshaciendo la carpeta que
+        // se acaba de armar.
+        //
+        // _TRABAJO: es material en tránsito —los adjuntos de la bandeja que
+        // todavía no se importan, los PDF de devoluciones, lo que se subió a
+        // mano— y otras tablas guardan su ruta. Archivarlo sería darle a un
+        // XML sin importar la carpeta definitiva de un comprobante y romper
+        // de paso la fila que lo apunta.
+        $fuera = [];
+        foreach ([DocumentoArchivo::CARPETA_PAGOS, RutaDocumento::TRABAJO] as $nombre) {
+            $fuera[] = $this->claveRuta($this->raiz . DIRECTORY_SEPARATOR . $nombre . DIRECTORY_SEPARATOR);
+        }
 
         $grupos = [];
         $it = new RecursiveIteratorIterator(
@@ -931,10 +960,18 @@ class OrganizadorDocumentos
                 continue;
             }
             $ruta = $item->getPathname();
-            if (isset($registradas[$this->claveRuta($ruta)])) {
+            $clave = $this->claveRuta($ruta);
+            if (isset($registradas[$clave])) {
                 continue;
             }
-            if (strpos($this->claveRuta($ruta), $carpetaPagos) === 0) {
+            $excluida = false;
+            foreach ($fuera as $prefijo) {
+                if (strpos($clave, $prefijo) === 0) {
+                    $excluida = true;
+                    break;
+                }
+            }
+            if ($excluida) {
                 continue;
             }
             $key = $this->claveRuta($item->getPath() . DIRECTORY_SEPARATOR . $item->getBasename('.' . $item->getExtension()));
@@ -1066,6 +1103,7 @@ class OrganizadorDocumentos
                     throw new RuntimeException('No se pudo mover ' . $origen . ' a ' . $destino . '.');
                 }
                 $movidos[] = ['origen' => $origen, 'destino' => $destino];
+                $this->carpetasVaciadas[$this->claveRuta(dirname($origen))] = dirname($origen);
             }
         } catch (Throwable $e) {
             $this->revertirMovimientos($movidos);
@@ -1155,12 +1193,16 @@ class OrganizadorDocumentos
         return strpos($texto, 'NC_') !== false || strpos($texto, 'NOTAS DE CR') !== false ? 'NC' : 'FE';
     }
 
+    /**
+     * Lo que no es un comprobante también es del sistema: cuelga del mismo
+     * mes, en IGNORADOS. El nivel del mes lo arma DocumentoArchivo y no este
+     * archivo: cuando estaban las dos listas de meses, mover el árbol dejaba
+     * la mitad de las carpetas en el sitio viejo.
+     */
     private function carpetaIgnorados($fecha, $motivo)
     {
         $ts = strtotime((string) $fecha) ?: time();
-        $meses = [1=>'ENERO',2=>'FEBRERO',3=>'MARZO',4=>'ABRIL',5=>'MAYO',6=>'JUNIO',7=>'JULIO',8=>'AGOSTO',9=>'SEPTIEMBRE',10=>'OCTUBRE',11=>'NOVIEMBRE',12=>'DICIEMBRE'];
-        return $this->raiz . DIRECTORY_SEPARATOR . date('Y', $ts)
-            . DIRECTORY_SEPARATOR . date('m', $ts) . ' ' . $meses[(int) date('n', $ts)]
+        return $this->archivo->carpetaMes(date('Y-m-d', $ts))
             . DIRECTORY_SEPARATOR . 'IGNORADOS' . DIRECTORY_SEPARATOR . $motivo;
     }
 
@@ -1211,6 +1253,47 @@ class OrganizadorDocumentos
         return $this->claveRuta($a) === $this->claveRuta($b);
     }
 
+    /**
+     * Borra las carpetas que quedaron vacías después de mover sus archivos.
+     *
+     * Solo carpetas, y solo si están vacías: rmdir falla con cualquier cosa
+     * dentro, así que un archivo que alguien dejó a mano detiene la poda de
+     * ese ramal. Sube hasta la raíz para que un año entero mudado no deje el
+     * esqueleto AAAA/MM MES/Facturas colgando al lado de SISTEMA.
+     *
+     * Las tres carpetas de primer nivel nunca se podan aunque estén vacías:
+     * son la estructura de la carpeta compartida, y verlas desaparecer sería
+     * leer que la aplicación se desconfiguró.
+     */
+    private function podarCarpetasVacias(array &$resumen)
+    {
+        $protegidas = [];
+        foreach ([DocumentoArchivo::CARPETA_SISTEMA, DocumentoArchivo::CARPETA_PAGOS, RutaDocumento::TRABAJO] as $nombre) {
+            $protegidas[$this->claveRuta($this->raiz . DIRECTORY_SEPARATOR . $nombre)] = true;
+        }
+        $raiz = $this->claveRuta($this->raiz);
+
+        foreach ($this->carpetasVaciadas as $carpeta) {
+            $actual = $carpeta;
+            while ($actual !== '' && is_dir($actual)) {
+                $clave = $this->claveRuta($actual);
+                if ($clave === $raiz || isset($protegidas[$clave]) || !$this->esRutaDentro($actual, $this->raiz)) {
+                    break;
+                }
+                if (!@rmdir($actual)) {
+                    break;
+                }
+                $resumen['carpetas_podadas']++;
+                $padre = dirname($actual);
+                if ($this->claveRuta($padre) === $clave) {
+                    break;
+                }
+                $actual = $padre;
+            }
+        }
+        $this->carpetasVaciadas = [];
+    }
+
     private function resumenBase($dryRun)
     {
         return [
@@ -1245,6 +1328,7 @@ class OrganizadorDocumentos
             'copias_pago_planificadas' => 0,
             'errores_copia_pago' => 0,
             'ignorados' => 0,
+            'carpetas_podadas' => 0,
             'errores' => 0,
             'omitido_por_bloqueo' => false,
             'operaciones' => [],

@@ -2,9 +2,18 @@
 /**
  * Archivo durable de comprobantes fuera de la base de datos.
  *
- * Estructura: RAIZ/AAAA/MM MES/Facturas|Notas de crédito/ARCHIVO.ext
+ * Estructura: RAIZ/SISTEMA/AAAA/MM MES/Facturas|Notas de crédito/ARCHIVO.ext
  * Los archivos se copian primero como .partial, se valida SHA-256 y solo
  * entonces se renombran. Nunca sobrescribe un contenido diferente.
+ *
+ * Por qué SISTEMA: la raíz es una carpeta compartida donde también se trabaja
+ * —se arman los pagos semanales, se dejan archivos a mano— y ahí dentro el
+ * árbol de años no se distinguía de una carpeta cualquiera. Todo lo que la
+ * aplicación bajó del correo cuelga de SISTEMA, con su nota de advertencia,
+ * para que se vea de un vistazo qué no hay que mover: la base guarda la ruta
+ * de cada documento, y un archivo cambiado de lugar deja de abrirse y aparece
+ * marcado como perdido. Lo que sí es para trabajar —PAGOS SEMANALES, con
+ * copias— queda al lado, fuera de SISTEMA.
  *
  * La carpeta depende solo de la fecha de emisión y del tipo de documento:
  * dos datos que no cambian nunca. Antes había además una subcarpeta por
@@ -18,6 +27,12 @@ require_once __DIR__ . '/RutaDocumento.php';
 class DocumentoArchivo
 {
     public const CARPETA_PAGOS = 'PAGOS SEMANALES';
+
+    /** Todo lo que la aplicación archiva cuelga de aquí. Ver el docblock. */
+    public const CARPETA_SISTEMA = 'SISTEMA';
+
+    /** La advertencia que queda dentro de SISTEMA, para quien abra la carpeta. */
+    public const NOTA_SISTEMA = 'LEEME - NO MODIFICAR.txt';
 
     /** Tope del nombre del proveedor dentro del archivo: FE_<proveedor>_ddmmyy_00000000. */
     public const MAX_TOKEN_PROVEEDOR = 45;
@@ -36,6 +51,7 @@ class DocumentoArchivo
     ];
 
     private $raiz;
+    private $notaSistemaLista = false;
 
     public function __construct($raiz = '')
     {
@@ -167,20 +183,47 @@ class DocumentoArchivo
         return $tipo . '_' . self::tokenProveedor($proveedor) . '_' . $fecha . '_' . $numero;
     }
 
-    /** AAAA/MM MES/Facturas|Notas de crédito — solo fecha de emisión y tipo. */
-    public function carpetaDocumento($fecha, $tipo)
+    /** La carpeta que la aplicación administra: dentro no se toca nada. */
+    public function carpetaSistema()
+    {
+        return $this->raiz . DIRECTORY_SEPARATOR . self::CARPETA_SISTEMA;
+    }
+
+    /** SISTEMA/AAAA/MM MES, que es el nivel donde se reparte todo lo archivado. */
+    public function carpetaMes($fecha)
     {
         $ts = strtotime($fecha);
         if ($ts === false) {
             throw new RuntimeException('El XML no contiene una fecha de emisión válida.');
         }
-        $mes = (int) date('n', $ts);
+
+        return $this->carpetaSistema() . DIRECTORY_SEPARATOR . date('Y', $ts)
+            . DIRECTORY_SEPARATOR . date('m', $ts) . ' ' . self::MESES[(int) date('n', $ts)];
+    }
+
+    /** SISTEMA/AAAA/MM MES/Facturas|Notas de crédito — solo fecha y tipo. */
+    public function carpetaDocumento($fecha, $tipo)
+    {
         $tipo = strtoupper(trim($tipo));
         $grupo = $tipo === 'NC' ? 'Notas de crédito' : ($tipo === 'ND' ? 'Notas de débito' : 'Facturas');
 
-        return $this->raiz . DIRECTORY_SEPARATOR . date('Y', $ts)
-            . DIRECTORY_SEPARATOR . date('m', $ts) . ' ' . self::MESES[$mes]
-            . DIRECTORY_SEPARATOR . $grupo;
+        return $this->carpetaMes($fecha) . DIRECTORY_SEPARATOR . $grupo;
+    }
+
+    /**
+     * Deja creada la carpeta SISTEMA con su nota de advertencia.
+     *
+     * La nota es el motivo de que la carpeta se llame así: quien abra la
+     * carpeta compartida desde el explorador no tiene por qué saber que esos
+     * archivos los administra una aplicación. Se escribe una sola vez —si
+     * alguien la borra, la siguiente corrida la repone— y nunca se sobrescribe
+     * una existente, por si alguien le agregó algo.
+     */
+    public function asegurarCarpetaSistema()
+    {
+        $carpeta = $this->carpetaSistema();
+        $this->asegurarDirectorio($carpeta);
+        return $carpeta;
     }
 
     /** Carpeta elegida para reunir los pares XML/PDF de un pago semanal. */
@@ -330,5 +373,58 @@ class DocumentoArchivo
         if (!is_dir($ruta) && !mkdir($ruta, 0777, true) && !is_dir($ruta)) {
             throw new RuntimeException('No se pudo crear la carpeta: ' . $ruta);
         }
+        $this->asegurarNotaSistema($ruta);
+    }
+
+    /**
+     * La advertencia va cuando SISTEMA ya existe, no antes: crearla al abrir
+     * la aplicación llenaría de carpetas cualquier ruta que alguien escriba
+     * por error en la configuración. Un fallo al escribirla no interrumpe el
+     * archivado —el documento importa más que su letrero—.
+     */
+    private function asegurarNotaSistema($ruta)
+    {
+        if ($this->notaSistemaLista) {
+            return;
+        }
+        $sistema = $this->carpetaSistema();
+        $normal = rtrim((string) $ruta, '/' . DIRECTORY_SEPARATOR);
+        $dentro = strcasecmp($normal, $sistema) === 0
+            || stripos($normal, $sistema . DIRECTORY_SEPARATOR) === 0;
+        if (!$dentro || !is_dir($sistema)) {
+            return;
+        }
+        $this->notaSistemaLista = true;
+        $nota = $sistema . DIRECTORY_SEPARATOR . self::NOTA_SISTEMA;
+        if (is_file($nota)) {
+            return;
+        }
+        @file_put_contents($nota, self::textoNotaSistema());
+    }
+
+    private static function textoNotaSistema()
+    {
+        $lineas = [
+            'CARPETA DEL SISTEMA - NO MODIFICAR',
+            '',
+            'Lo que hay aquí lo administra Nexo Fiscal: son los XML y los PDF tal',
+            'como llegaron por correo, ordenados por año, mes y tipo de documento.',
+            '',
+            'No mover, no renombrar y no borrar nada de esta carpeta. La aplicación',
+            'guarda la ruta de cada documento; un archivo cambiado de lugar deja de',
+            'abrirse desde el sistema y aparece marcado como perdido.',
+            '',
+            'Si necesitas los respaldos de un pago, están en la carpeta',
+            '"' . self::CARPETA_PAGOS . '", al lado de esta. Esa sí es para trabajar:',
+            'se arma sola con una COPIA de cada documento y se puede enviar o borrar',
+            'sin afectar nada.',
+            '',
+            'Este archivo lo genera Nexo Fiscal.',
+        ];
+
+        // BOM y saltos de Windows: la nota se abre con el Bloc de notas desde
+        // el explorador, y sin ellos aparece en una sola línea y con los
+        // acentos rotos, que es justo lo contrario de lo que busca.
+        return "\xEF\xBB\xBF" . implode("\r\n", $lineas) . "\r\n";
     }
 }

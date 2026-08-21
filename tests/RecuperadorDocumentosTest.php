@@ -94,7 +94,10 @@ class BuzonFalso
 // ── Preparación ─────────────────────────────────────────────────────────────
 
 $raiz = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'xmlconcilia_recuperador_' . bin2hex(random_bytes(5));
-$mes = $raiz . DIRECTORY_SEPARATOR . '2026' . DIRECTORY_SEPARATOR . '07 JULIO' . DIRECTORY_SEPARATOR . 'Facturas';
+// Lo archivado vive bajo SISTEMA: la carpeta que la aplicación administra
+// y que no se toca a mano (ver DocumentoArchivo).
+$mes = $raiz . DIRECTORY_SEPARATOR . 'SISTEMA' . DIRECTORY_SEPARATOR . '2026'
+     . DIRECTORY_SEPARATOR . '07 JULIO' . DIRECTORY_SEPARATOR . 'Facturas';
 $buzonDir = $raiz . DIRECTORY_SEPARATOR . '_correo';
 mkdir($mes, 0700, true);
 mkdir($buzonDir, 0700, true);

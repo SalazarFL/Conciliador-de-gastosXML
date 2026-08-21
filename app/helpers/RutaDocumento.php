@@ -9,8 +9,8 @@
  * el documento solo se abre en la computadora que lo importó. Guardando la
  * ruta relativa a la raíz, la misma fila sirve para todos:
  *
- *   en la base   2026/07 JULIO/Facturas/FE_PROVEEDOR_010726_00000123.xml
- *   en el disco  <raíz de esa máquina>\2026\07 JULIO\Facturas\FE_...xml
+ *   en la base   SISTEMA/2026/07 JULIO/Facturas/FE_PROVEEDOR_010726_00000123.xml
+ *   en el disco  <raíz de esa máquina>\SISTEMA\2026\07 JULIO\Facturas\FE_...xml
  *
  * Las dos conversiones son idempotentes y toleran la forma contraria: pedir
  * absoluta() sobre algo ya absoluto lo devuelve igual, y relativa() sobre algo
