@@ -965,7 +965,7 @@ document.addEventListener('keydown', function (e) {
                     <th>Fecha</th>
                     <th>Documento ERP</th>
                     <th>Proveedor</th>
-                    <th class="right">Saldo</th>
+                    <th class="right">Monto</th>
                     <th>Factura XML</th>
                     <th class="right">Diferencia</th>
                     <th class="center" style="width:155px;">Acciones</th>
@@ -1029,7 +1029,23 @@ document.addEventListener('keydown', function (e) {
                         title="<?= htmlspecialchars($linea['proveedor_nombre']) ?>">
                         <?= htmlspecialchars($linea['proveedor_nombre']) ?>
                     </td>
-                    <td class="right" style="white-space:nowrap;"><?= number_format((float) $linea['saldo_pago'], 2) ?></td>
+                    <?php
+                    /*
+                     * El monto de la factura, no su saldo.
+                     *
+                     * El checklist se recorre comparando contra el comprobante:
+                     * al lado están el total del XML y la diferencia, y esa
+                     * diferencia es monto − total XML. Con el saldo en medio la
+                     * fila no cerraba —tres números de los que solo dos se
+                     * relacionaban—, y el saldo además baja a cero al pagar, así
+                     * que la columna se vaciaba justo cuando había que archivar
+                     * el pago.
+                     *
+                     * El saldo no se pierde: sale en la exportación a Excel, que
+                     * es donde se mira el dinero que se debe.
+                     */
+                    ?>
+                    <td class="right" style="white-space:nowrap;"><?= number_format((float) $linea['monto'], 2) ?></td>
                     <td style="white-space:nowrap;">
                         <?php if (!empty($linea['factura_xml_id'])): ?>
                         <?php if (!empty($linea['match_manual'])): ?>

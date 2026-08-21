@@ -44,8 +44,31 @@ assertPorPagarExcel(strpos($metodo, "'.xlsx'") !== false, 'la descarga usa exten
 assertPorPagarExcel(strpos($metodo, 'text/csv') === false && strpos($metodo, 'fputcsv') === false,
     'la exportación ya no genera CSV');
 
+// Monto y saldo son dos cosas y cada una vive donde sirve.
+//
+// En pantalla manda el MONTO de la factura: el checklist se recorre comparando
+// contra el comprobante, y la diferencia que sale al lado es monto − total XML.
+// El saldo ahí no cierra con nada y encima baja a cero al pagar, justo cuando
+// hay que archivar el pago.
+//
+// En el Excel van los dos: esa hoja se abre para mirar el dinero que se debe.
+assertPorPagarExcel(strpos($metodo, "'Monto ERP', 'Saldo'") !== false,
+    'la exportación conserva las dos columnas: el monto de la factura y su saldo');
+assertPorPagarExcel(strpos($metodo, "\$linea['saldo_pago']") !== false,
+    'y el saldo que exporta es el congelado al entrar al pago, no el de hoy');
+
 $vista = (string) file_get_contents(__DIR__ . '/../app/views/porpagar/index.php');
 assertPorPagarExcel(strpos($vista, 'fa-file-excel') !== false && strpos($vista, 'Exportar Excel') !== false,
     'el botón identifica claramente la descarga de Excel');
+
+$inicioTabla = strpos($vista, '<th class="right">Monto</th>');
+assertPorPagarExcel($inicioTabla !== false,
+    'el listado titula la columna por lo que muestra: el monto de la factura');
+$finTabla = strpos($vista, '</tbody>', $inicioTabla);
+$tabla = substr($vista, $inicioTabla, $finTabla - $inicioTabla);
+assertPorPagarExcel(strpos($tabla, "number_format((float) \$linea['monto'], 2)") !== false,
+    'y la celda pinta el monto');
+assertPorPagarExcel(strpos($tabla, "\$linea['saldo_pago']") === false,
+    'el saldo ya no se cuela en el renglón del checklist');
 
 echo "OK: Exportación XLSX de facturas por pagar\n";
