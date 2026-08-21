@@ -778,6 +778,60 @@ class FacturaErp extends Model
     }
 
     /**
+     * Facturas del ERP que todavía no tienen comprobante, en tandas por id.
+     *
+     * Es la mitad que le faltaba a `engancharXml`. Aquella resuelve el XML que
+     * llega y busca su factura; esta alimenta el caso contrario —la factura que
+     * llega y busca el XML que ya estaba—, que era el que dejaba el reporte del
+     * ERP entero sin cruzar hasta que alguien armara un pago semanal.
+     *
+     * No se acota a una carga ni a un pago a propósito: `factura_xml_id` es de
+     * la fila, no del pago, así que cualquier factura sin comprobante es
+     * candidata, venga de esta carga o de una vieja. Las manuales quedan fuera
+     * —ese vínculo lo decidió una persona— y las que ya tienen XML también:
+     * este camino solo agrega, nunca deshace.
+     *
+     * Se pagina por `id` y no por OFFSET porque las filas emparejadas salen del
+     * conjunto al escribirse; con OFFSET, cada tanda se saltaría tantas filas
+     * como haya enganchado la anterior.
+     */
+    public function getFacturasSinRespaldoParaMatching($desdeId = 0, $limite = 2000)
+    {
+        $params = [(int) $desdeId];
+        $sql = "SELECT id, documento, numero_corto, proveedor_codigo, proveedor_nombre,
+                       monto, saldo, COALESCE(saldo_pago, saldo) AS saldo_pago,
+                       factura_xml_id, estado_respaldo AS estado, diferencia,
+                       match_manual, porpagar_listado_id
+                  FROM facturas_erp
+                 WHERE id > ?
+                   AND factura_xml_id IS NULL
+                   AND match_manual = 0
+                   AND tipo IN ('F','FE','FACT')"
+             . $this->condicionSociedad('', $params) . '
+                 ORDER BY id ASC
+                 LIMIT ' . max(1, (int) $limite);
+        return $this->fetchAll($sql, $params) ?: [];
+    }
+
+    /**
+     * Los XML que ya respaldan alguna factura.
+     *
+     * Un comprobante respalda una sola factura. Al cruzar toda la tabla de una
+     * vez —y no un pago, donde la consulta ya venía acotada— hay que saber
+     * cuáles están tomados antes de empezar, o la primera factura sin
+     * comprobante se llevaría un XML que ya es de otra.
+     */
+    public function idsXmlEnganchados()
+    {
+        $params = [];
+        $sql = 'SELECT DISTINCT factura_xml_id FROM facturas_erp
+                 WHERE factura_xml_id IS NOT NULL'
+             . $this->condicionSociedad('', $params);
+        $filas = $this->fetchAll($sql, $params) ?: [];
+        return array_values(array_map('intval', array_column($filas, 'factura_xml_id')));
+    }
+
+    /**
      * Engancha un comprobante recién importado con su factura del ERP.
      *
      * Es la pieza por la que el correo dejó de pedir semana. Antes, quien

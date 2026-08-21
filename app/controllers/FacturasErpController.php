@@ -243,6 +243,8 @@ class FacturasErpController extends Controller
                 $resultado['incidencias']
             );
 
+            $enganche = $this->engancharComprobantes($modelo);
+
             $mensaje = sprintf(
                 '%s facturas leídas: %s nuevas, %s con saldo actualizado y %s sin cambios.',
                 number_format(count($resultado['facturas']), 0, ',', '.'),
@@ -250,6 +252,13 @@ class FacturasErpController extends Controller
                 number_format($r['actualizadas'], 0, ',', '.'),
                 number_format($r['sin_cambio'], 0, ',', '.')
             );
+
+            if ($enganche['enganchadas'] > 0) {
+                $mensaje .= sprintf(
+                    ' %s factura(s) encontraron su comprobante entre los XML ya cargados.',
+                    number_format($enganche['enganchadas'], 0, ',', '.')
+                );
+            }
 
             // El reporte cierra con un "Total General": si el saldo leído lo
             // reproduce, la importación está confirmada de punta a punta.
@@ -284,6 +293,33 @@ class FacturasErpController extends Controller
                 'Error al procesar el listado: ' . $e->getMessage(),
                 'error'
             );
+        }
+    }
+
+    /**
+     * Cruza contra los XML ya cargados las facturas que no tienen comprobante.
+     *
+     * Faltaba esta mitad. El sistema sabía enganchar un XML que llega con la
+     * factura que ya estaba —lo hace XmlDocumentImporter al importarlo—, pero
+     * no al revés: cargar el reporte del ERP teniendo los comprobantes en la
+     * base dejaba todo en "sin respaldo" hasta que alguien armara un pago
+     * semanal, que era el único lugar donde corría el emparejador.
+     *
+     * No se acota a las filas de esta carga: alcanza a toda factura sin
+     * comprobante, así que la primera corrida también recoge lo que quedó atrás
+     * de cargas viejas. Después se agota sola —lo emparejado sale del conjunto—
+     * y lo que queda revisando son las facturas que de verdad no tienen XML.
+     *
+     * Nunca lanza: la importación ya está guardada y esto es un extra.
+     */
+    private function engancharComprobantes($modelo)
+    {
+        try {
+            require_once __DIR__ . '/../helpers/PorPagarVerificador.php';
+            return PorPagarVerificador::engancharSinRespaldo($modelo, $this->loadModel('Factura'));
+        } catch (Throwable $e) {
+            // La próxima carga lo reintenta, y el pago semanal lo cubre igual.
+            return ['enganchadas' => 0, 'revisadas' => 0];
         }
     }
 

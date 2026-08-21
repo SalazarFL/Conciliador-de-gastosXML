@@ -403,4 +403,123 @@ class PorPagarVerificador
             // Best effort: otra asignación o el botón manual la repiten.
         }
     }
+
+    /**
+     * Le busca comprobante a toda factura del ERP que no lo tenga.
+     *
+     * El emparejador corría solo dentro de un pago semanal. Mientras la única
+     * pregunta fue "¿qué respalda lo que pagamos esta semana?" eso alcanzaba,
+     * pero `factura_xml_id` es de la fila, no del pago: una factura puede tener
+     * su comprobante sin que nadie la haya metido en un pago. El resultado era
+     * que cargar el reporte del ERP con los XML ya en la base dejaba todo en
+     * "sin respaldo" hasta que alguien armara el pago, y quien miraba Facturas
+     * no tenía cómo saber que el XML sí estaba.
+     *
+     * Esto es la vuelta que faltaba, con las mismas reglas del pago —el índice,
+     * la guarda de cédula, el desempate por proveedor— para que una factura no
+     * diga una cosa en Facturas y otra en Pago semanal.
+     *
+     * Solo agrega. Una factura que no encuentra su comprobante se deja como
+     * está: acá no se sabe si le falta el XML o si simplemente no es
+     * electrónica, y borrar un estado que otro camino escribió sería opinar
+     * sobre lo que no se preguntó.
+     */
+    public static function engancharSinRespaldo($erp, $facturas, $tanda = 2000)
+    {
+        @set_time_limit(300);
+
+        $vacio = ['enganchadas' => 0, 'revisadas' => 0];
+        if (!method_exists($erp, 'getFacturasSinRespaldoParaMatching')
+            || $facturas === null
+            || !method_exists($facturas, 'getCandidatasParaPago')) {
+            return $vacio;
+        }
+
+        $indice = self::indexar($facturas->getCandidatasParaPago());
+        if (!$indice['consecutivo'] && !$indice['corto']) {
+            return $vacio;
+        }
+
+        // Los comprobantes que ya respaldan algo no están en oferta.
+        $usadas = [];
+        if (method_exists($erp, 'idsXmlEnganchados')) {
+            foreach ($erp->idsXmlEnganchados() as $xmlId) {
+                $usadas[(int) $xmlId] = true;
+            }
+        }
+
+        $enganchadas = 0;
+        $revisadas = 0;
+        $listados = [];
+        $desdeId = 0;
+        $tanda = max(1, (int) $tanda);
+
+        while (true) {
+            $lineas = $erp->getFacturasSinRespaldoParaMatching($desdeId, $tanda);
+            if (!$lineas) {
+                break;
+            }
+
+            $pendientes = [];
+            $aprendidas = [];
+            $vetos = [];
+
+            foreach ($lineas as $linea) {
+                $desdeId = max($desdeId, (int) $linea['id']);
+                $revisadas++;
+
+                $xml = self::buscarXml($linea, $indice, $usadas, $vetos);
+                if ($xml === null) {
+                    continue;
+                }
+
+                $usadas[(int) $xml['id']] = true;
+                $diferencia = round((float) $linea['monto'] - (float) $xml['total'], 2);
+                $estado = abs($diferencia) <= FacturaMatcher::TOLERANCIA_CRC
+                    ? 'respaldada'
+                    : 'con_diferencia';
+
+                $pendientes[] = self::fila(
+                    (int) $linea['id'],
+                    (int) $xml['id'],
+                    $estado,
+                    $estado === 'con_diferencia' ? $diferencia : null,
+                    (float) $xml['_score_numero'],
+                    (float) $xml['_score_proveedor']
+                );
+                $aprendidas[] = $linea;
+                $enganchadas++;
+
+                if (!empty($linea['porpagar_listado_id'])) {
+                    $listados[(int) $linea['porpagar_listado_id']] = true;
+                }
+            }
+
+            if ($pendientes) {
+                $erp->actualizarRespaldoLote($pendientes);
+            }
+
+            // Solo los códigos de lo que cambió: la cosecha recalcula desde los
+            // emparejamientos, y pasarle los miles de códigos de una tanda
+            // entera sería pedirle que recalcule lo que nadie tocó. Una tanda
+            // sin novedades no tiene nada que enseñarle al mapa.
+            if ($aprendidas || $vetos) {
+                self::aprenderDelMapa($aprendidas, $vetos);
+            }
+
+            if (count($lineas) < $tanda) {
+                break;
+            }
+        }
+
+        // Las que estaban en un pago le heredan la semana a su comprobante,
+        // igual que cuando el enganche ocurre al importar el XML.
+        if ($listados && method_exists($erp, 'sincronizarSemanaXml')) {
+            foreach (array_keys($listados) as $listadoId) {
+                $erp->sincronizarSemanaXml($listadoId);
+            }
+        }
+
+        return ['enganchadas' => $enganchadas, 'revisadas' => $revisadas];
+    }
 }
