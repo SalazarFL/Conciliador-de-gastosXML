@@ -3,6 +3,7 @@ require_once __DIR__ . '/../helpers/XmlDocumentImporter.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 require_once __DIR__ . '/../helpers/NavegacionDocumentos.php';
 require_once __DIR__ . '/../helpers/EstadoArchivo.php';
+require_once __DIR__ . '/../helpers/Retorno.php';
 
 class NotasXmlController extends Controller
 {
@@ -111,7 +112,11 @@ class NotasXmlController extends Controller
         if (!$nota || strtoupper((string) $nota['tipo_documento']) !== 'NC') {
             $this->redirectWithMessage($this->url('/notas-xml'), 'Nota XML no encontrada.', 'warning');
         }
-        $this->render('notasxml/detalle', ['title' => 'Detalle de Nota XML', 'nota' => $nota]);
+        $this->render('notasxml/detalle', [
+            'title' => 'Detalle de Nota XML',
+            'nota' => $nota,
+            'retorno' => Retorno::anterior($_SERVER, $this->url(''), '/notas-xml'),
+        ]);
     }
 
     private function fechaValida($fecha)

@@ -1,5 +1,12 @@
-<?php $baseUrl = defined('APP_URL') ? APP_URL : '/xmlconcilia/public'; $n = $nota; ?>
-<div style="margin-bottom:12px;"><a href="<?= $baseUrl ?>/notas-xml" class="btn btn-outline btn-sm"><i class="fas fa-arrow-left"></i> Volver</a></div>
+<?php
+$baseUrl = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
+$n = $nota;
+// Igual que el detalle de factura: acá se entra desde el listado de
+// notas XML, desde el acumulado de notas de crédito y desde una
+// devolución, así que "Volver" tiene que saber de dónde se vino.
+$retorno = $retorno ?? ['url' => $baseUrl . '/notas-xml', 'titulo' => 'Volver a Notas de crédito XML'];
+?>
+<div style="margin-bottom:12px;"><a href="<?= htmlspecialchars($retorno['url']) ?>" class="btn btn-outline btn-sm" title="<?= htmlspecialchars($retorno['titulo']) ?>"><i class="fas fa-arrow-left"></i> Volver</a></div>
 <div class="card">
     <div class="card-header"><div class="card-title">NC <?= htmlspecialchars($n['numero_factura_asistente']) ?></div></div>
     <div style="padding:10px 12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;font-size:12.5px;">

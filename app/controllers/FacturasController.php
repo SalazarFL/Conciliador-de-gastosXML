@@ -7,6 +7,8 @@ require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 require_once __DIR__ . '/../helpers/NavegacionDocumentos.php';
 require_once __DIR__ . '/../helpers/EstadoArchivo.php';
+require_once __DIR__ . '/../helpers/NumeroFactura.php';
+require_once __DIR__ . '/../helpers/Retorno.php';
 
 class FacturasController extends Controller
 {
@@ -571,7 +573,11 @@ class FacturasController extends Controller
 
 			$this->render('facturas/detalle', [
 				'title' => 'Detalle de Factura - Nexo Fiscal',
-				'factura' => $factura
+				'factura' => $factura,
+				// Al detalle se entra desde cuatro pantallas distintas. "Volver"
+				// devuelve a la que se venía —con sus filtros— en vez de soltar
+				// a la persona en un listado que no pidió.
+				'retorno' => Retorno::anterior($_SERVER, $this->url(''), '/facturas'),
 			]);
 		} catch (Exception $e) {
 			$this->redirectWithMessage($this->url('/facturas'), 'Error al cargar detalle: ' . $e->getMessage(), 'error');
