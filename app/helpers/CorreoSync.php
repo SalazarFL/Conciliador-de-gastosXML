@@ -11,9 +11,16 @@
  * tiempo. Carpeta sin cambios = 1 solo viaje (STATUS); con correo nuevo = 1
  * viaje extra por los encabezados nuevos; renumerada o con movidos/eliminados
  * = reindexado de esa carpeta. Se procesan primero las nunca sincronizadas y
- * las más viejas; las sincronizadas hace <2 min se saltan (ya están al día en
- * esta ronda). La fase 2 rellena los nombres de adjuntos y destinatarios CC
+ * las más viejas; las revisadas hace poco se saltan (ya están al día en esta
+ * pasada). La fase 2 rellena los nombres de adjuntos y destinatarios CC
  * por tandas.
+ *
+ * Las dos fases reparten el presupuesto: las carpetas nunca se llevan toda la
+ * tanda. Antes la fase 2 solo corría cuando la vuelta por las carpetas
+ * terminaba dentro de la misma tanda, y en un buzón de 150 carpetas eso
+ * nunca pasaba (solo el STATUS de todas cuesta ~25 s): la cola de metadatos
+ * se quedaba parada días enteros mientras el navegador seguía pidiendo
+ * tandas sin fin.
  *
  * Devuelve stats con 'completado' = false cuando quedan carpetas o metadatos
  * pendientes, para que el disparador vuelva a llamar hasta terminar.
@@ -77,8 +84,17 @@ class CorreoSync
         $stats = [
             'carpetas' => 0, 'nuevos' => 0, 'reindexadas' => 0,
             'podados' => 0, 'capturas_detectadas' => 0,
-            'restantes' => 0, 'completado' => true,
+            'restantes' => 0, 'carpetas_totales' => 0, 'carpetas_por_revisar' => 0,
+            'metadatos_resueltos' => 0, 'metadatos_pendientes' => 0,
+            'completado' => true,
         ];
+
+        // Reparto del presupuesto: las carpetas se llevan como mucho esta
+        // parte de la tanda y el resto queda garantizado para la cola de
+        // metadatos, que si no se queda sin turno para siempre. La primera
+        // carpeta siempre entra (el reloj se mira antes de cada una), así
+        // que ninguna de las dos fases se queda en cero.
+        $presupuestoCarpetas = $presupuestoSegundos * 0.6;
 
         try {
             // El índice es una caché buscable, no el archivo documental. Una
@@ -100,23 +116,42 @@ class CorreoSync
             $estados = $indice->getCarpetas();
 
             // Nunca sincronizadas primero, luego de la más vieja a la más nueva
-            usort($carpetas, function ($a, $b) use ($estados) {
-                $ta = !empty($estados[$a]['ultima_sync']) ? (int) strtotime($estados[$a]['ultima_sync']) : 0;
-                $tb = !empty($estados[$b]['ultima_sync']) ? (int) strtotime($estados[$b]['ultima_sync']) : 0;
-                return $ta - $tb;
+            $edad = function ($carpeta) use ($estados) {
+                $registro = $estados[$carpeta] ?? null;
+                return ($registro && $registro['edad_sync'] !== null)
+                    ? (int) $registro['edad_sync']
+                    : PHP_INT_MAX;
+            };
+            usort($carpetas, function ($a, $b) use ($edad) {
+                return $edad($b) <=> $edad($a);
             });
 
-            foreach ($carpetas as $i => $carpeta) {
-                // Sincronizada hace <2 min: al día para esta ronda
-                $registro = $estados[$carpeta] ?? null;
-                if ($registro && !empty($registro['ultima_sync'])
-                    && (time() - (int) strtotime($registro['ultima_sync'])) < 120) {
+            // Carpetas que toca revisar en esta pasada. Una pasada completa
+            // por un buzón grande no cabe en una sola tanda, así que la
+            // ventana de frescura tiene que ser bastante más larga que lo que
+            // tarda la vuelta entera: con 2 minutos, las primeras carpetas ya
+            // estaban "viejas" antes de llegar a las últimas y cada tanda
+            // volvía a empezar por el principio sin terminar nunca.
+            // El correo nuevo llega a la carpeta base, y esa sí se vigila
+            // seguido para que la bandeja no se vea atrasada.
+            $carpetaBase = trim((string) ($config['carpeta'] ?? 'INBOX'));
+            $porRevisar = [];
+            foreach ($carpetas as $carpeta) {
+                $ventana = ($carpeta === $carpetaBase) ? 60 : 300;
+                if ($edad($carpeta) < $ventana) {
                     continue;
                 }
+                $porRevisar[] = $carpeta;
+            }
+            $stats['carpetas_totales'] = count($carpetas);
+            $stats['carpetas_por_revisar'] = count($porRevisar);
 
-                if ((microtime(true) - $inicio) > $presupuestoSegundos) {
+            foreach ($porRevisar as $i => $carpeta) {
+                $registro = $estados[$carpeta] ?? null;
+
+                if ((microtime(true) - $inicio) > $presupuestoCarpetas) {
                     // Presupuesto agotado: el que llama vuelve a llamar para seguir
-                    $stats['restantes'] = count($carpetas) - $i;
+                    $stats['restantes'] = count($porRevisar) - $i;
                     $stats['completado'] = false;
                     break;
                 }
@@ -226,48 +261,64 @@ class CorreoSync
             // procesaba dos veces). pendientesMetadatos agrupa por carpeta,
             // así cada carpeta IMAP se abre una vez por tanda y del mensaje
             // se leen estructura y encabezados en el mismo viaje.
+            // Corre en TODAS las tandas, queden o no carpetas por revisar:
+            // es la única forma de que la cola avance en un buzón con tantas
+            // carpetas que la vuelta nunca cabe entera en una tanda.
             $stats['adjuntos'] = 0;
             $stats['cc'] = 0;
-            if ($stats['completado']) {
-                $agotado = false;
+            $agotado = false;
 
-                foreach ($indice->pendientesMetadatos(500) as $fila) {
-                    if ((microtime(true) - $inicio) > $presupuestoSegundos) {
-                        $agotado = true;
-                        break;
-                    }
+            foreach ($indice->pendientesMetadatos(500) as $fila) {
+                if ((microtime(true) - $inicio) > $presupuestoSegundos) {
+                    $agotado = true;
+                    break;
+                }
 
-                    if (!empty($fila['adjuntos_pendiente'])) {
-                        $texto = $fetcher->adjuntosDeMensaje((int) $fila['uid'], (string) $fila['carpeta']);
-                        if ($texto !== null) {
-                            $indice->guardarAdjuntos((int) $fila['id'], $texto);
-                            $stats['adjuntos']++;
-                        }
-                    }
+                // Un correo cuenta como resuelto cuando ya no le falta
+                // nada; si el buzón no responde por él, se reintenta.
+                $resuelto = true;
 
-                    if (!empty($fila['cc_pendiente'])) {
-                        $destinatarios = $fetcher->destinatariosDeMensaje((int) $fila['uid'], (string) $fila['carpeta']);
-                        if ($destinatarios !== null) {
-                            $indice->guardarDestinatarios(
-                                (int) $fila['id'],
-                                $destinatarios['cc'],
-                                $destinatarios['reply_to']
-                            );
-                            $stats['cc']++;
-                        }
+                if (!empty($fila['adjuntos_pendiente'])) {
+                    $texto = $fetcher->adjuntosDeMensaje((int) $fila['uid'], (string) $fila['carpeta']);
+                    if ($texto !== null) {
+                        $indice->guardarAdjuntos((int) $fila['id'], $texto);
+                        $stats['adjuntos']++;
+                    } else {
+                        $resuelto = false;
                     }
                 }
 
-                // Sigue habiendo pendientes → el que llama repite; pero si en
-                // toda la tanda no se avanzó nada (solo carpetas inaccesibles),
-                // se da por completado para no ciclar.
-                $stats['adjuntos_pendientes'] = $indice->contarPendientesAdjuntos();
-                $stats['cc_pendientes'] = $indice->contarPendientesCc();
-                $pendientes = $stats['adjuntos_pendientes'] + $stats['cc_pendientes'];
-                $procesados = $stats['adjuntos'] + $stats['cc'];
-                if ($pendientes > 0 && ($procesados > 0 || $agotado)) {
-                    $stats['completado'] = false;
+                if (!empty($fila['cc_pendiente'])) {
+                    $destinatarios = $fetcher->destinatariosDeMensaje((int) $fila['uid'], (string) $fila['carpeta']);
+                    if ($destinatarios !== null) {
+                        $indice->guardarDestinatarios(
+                            (int) $fila['id'],
+                            $destinatarios['cc'],
+                            $destinatarios['reply_to']
+                        );
+                        $stats['cc']++;
+                    } else {
+                        $resuelto = false;
+                    }
                 }
+
+                if ($resuelto) {
+                    $stats['metadatos_resueltos']++;
+                }
+            }
+
+            // Sigue habiendo pendientes → el que llama repite; pero si en
+            // toda la tanda no se avanzó nada (solo carpetas inaccesibles),
+            // se da por completado para no ciclar.
+            // 'metadatos_pendientes' cuenta CORREOS (una visita resuelve
+            // adjuntos y destinatarios juntos); las otras dos cuentan
+            // campos y se conservan para el registro de la tarea.
+            $stats['metadatos_pendientes'] = $indice->contarPendientesMetadatos();
+            $stats['adjuntos_pendientes'] = $indice->contarPendientesAdjuntos();
+            $stats['cc_pendientes'] = $indice->contarPendientesCc();
+            if ($stats['metadatos_pendientes'] > 0
+                && ($stats['metadatos_resueltos'] > 0 || $agotado)) {
+                $stats['completado'] = false;
             }
         } finally {
             if ($fetcherPropio) {

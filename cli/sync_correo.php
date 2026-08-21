@@ -106,7 +106,7 @@ try {
             $resumenCuentas[(int) $c['id']] = [
                 'id' => (int) $c['id'], 'nombre' => (string) $c['nombre'],
                 'nuevos' => 0, 'adjuntos' => 0, 'adjuntos_pendientes' => null,
-                'cc' => 0, 'cc_pendientes' => null,
+                'cc' => 0, 'cc_pendientes' => null, 'metadatos_pendientes' => null,
                 'completado' => true, 'error' => 'Cuenta sin credenciales completas',
             ];
             continue;
@@ -124,7 +124,7 @@ try {
             'stats'  => [
                 'id' => (int) $c['id'], 'nombre' => (string) $c['nombre'],
                 'nuevos' => 0, 'adjuntos' => 0, 'adjuntos_pendientes' => null,
-                'cc' => 0, 'cc_pendientes' => null,
+                'cc' => 0, 'cc_pendientes' => null, 'metadatos_pendientes' => null,
                 'capturas_detectadas' => 0, 'capturas_procesadas' => 0,
                 'documentos_revision' => 0, 'capturas_error' => 0,
                 'completado' => false, 'error' => null,
@@ -154,6 +154,9 @@ try {
                 $acc['stats']['adjuntos_pendientes'] = $stats['adjuntos_pendientes'] ?? $acc['stats']['adjuntos_pendientes'];
                 $acc['stats']['cc'] += (int) ($stats['cc'] ?? 0);
                 $acc['stats']['cc_pendientes'] = $stats['cc_pendientes'] ?? $acc['stats']['cc_pendientes'];
+                // Correos incompletos, contados una sola vez (adjuntos + CC
+                // del mismo mensaje se resuelven en la misma visita).
+                $acc['stats']['metadatos_pendientes'] = $stats['metadatos_pendientes'] ?? $acc['stats']['metadatos_pendientes'];
                 $acc['stats']['capturas_detectadas'] += (int) ($stats['capturas_detectadas'] ?? 0);
                 $capturaCorrida['detectados'] += (int) ($stats['capturas_detectadas'] ?? 0);
                 $acc['stats']['completado'] = (bool) ($stats['completado'] ?? true);
@@ -412,11 +415,12 @@ try {
                 registrar($rutaLog, 'Acomodo del archivo: omitido, hay otra corrida en curso.');
             } else {
                 registrar($rutaLog, sprintf(
-                    'Acomodo del archivo: %d movidos a su mes; %d copias al pago semanal (%d ya estaban); %d ya ordenados; %d sin archivo en disco; %d errores.',
+                    'Acomodo del archivo: %d movidos a su mes; %d copias al pago semanal (%d ya estaban); %d ya ordenados; %d carpetas vacías podadas; %d sin archivo en disco; %d errores.',
                     (int) ($acomodo['movidos'] ?? 0),
                     (int) ($acomodo['copias_pago'] ?? 0),
                     (int) ($acomodo['copias_pago_vigentes'] ?? 0),
                     (int) ($acomodo['ya_ordenados'] ?? 0),
+                    (int) ($acomodo['carpetas_podadas'] ?? 0),
                     (int) ($acomodo['faltantes_en_disco'] ?? 0),
                     (int) ($acomodo['errores'] ?? 0) + (int) ($acomodo['errores_copia_pago'] ?? 0)
                 ));
@@ -438,9 +442,9 @@ foreach ($resumenCuentas as $r) {
         (int) $r['adjuntos'],
         (int) $r['cc'],
         (int) ($r['documentos_revision'] ?? 0),
-        ($r['adjuntos_pendientes'] === null || $r['cc_pendientes'] === null)
+        $r['metadatos_pendientes'] === null
             ? '?'
-            : (string) ((int) $r['adjuntos_pendientes'] + (int) $r['cc_pendientes']),
+            : (string) (int) $r['metadatos_pendientes'],
         $r['completado'] ? 'al día' : 'quedan pendientes',
         $r['error'] ? ' [' . $r['error'] . ']' : ''
     ));
@@ -460,7 +464,7 @@ $estado = [
         'cola' => $resumenCapturas,
     ],
     'pendientes_total' => array_sum(array_map(function ($r) {
-        return max(0, (int) $r['adjuntos_pendientes']) + max(0, (int) $r['cc_pendientes']);
+        return max(0, (int) $r['metadatos_pendientes']);
     }, $resumenCuentas)),
     'todo_al_dia'      => $errorGlobal === null && !array_filter($resumenCuentas, function ($r) {
         return !$r['completado'];

@@ -50,7 +50,7 @@ $porTanda        = 10;
 $presupuestoTanda = 60;
 
 $dirCorreo  = MailFetcher::storagePath();
-$rutaLock   = $dirCorreo . DIRECTORY_SEPARATOR . 'lotes.lock';
+$rutaLock   = CorreoLote::rutaLock(); // el mismo que toma el latido del navegador
 $rutaLog    = $dirCorreo . DIRECTORY_SEPARATOR . 'lotes_worker.log';
 $rutaEstado = $dirCorreo . DIRECTORY_SEPARATOR . 'lotes_estado.json';
 

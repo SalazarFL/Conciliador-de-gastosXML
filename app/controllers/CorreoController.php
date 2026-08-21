@@ -163,7 +163,16 @@ class CorreoController extends Controller
 
         $loteGeneral = null;
         try {
-            $loteGeneral = $this->loadModel('CorreoLote')->ultimo($cuentaActivaId);
+            $lotes = $this->loadModel('CorreoLote');
+            $loteGeneral = $lotes->ultimo($cuentaActivaId);
+            // Una descarga en curso de OTRA cuenta no puede desaparecer de la
+            // pantalla solo porque se cambió de buzón: desde aquí se sigue
+            // viendo, pausando o cancelando. Solo cede el puesto cuando la
+            // cuenta activa tiene una corriendo.
+            if (!$loteGeneral
+                || !in_array($loteGeneral['estado'], ['pendiente', 'ejecutando'], true)) {
+                $loteGeneral = $lotes->enCurso() ?: $loteGeneral;
+            }
         } catch (Throwable $e) {
         }
 
@@ -283,6 +292,8 @@ class CorreoController extends Controller
         }
         $mesAplicado = '';
         $mesProbado = '';
+        $respaldoBuzon = false;
+        $pendientesIndice = 0;
         $rangoTarjetaAplicado = false;
         $rangoTarjetaProbado = $esBusquedaTarjeta
             && $fechaDesdeTarjeta !== '' && $fechaHastaTarjeta !== '';
@@ -426,9 +437,15 @@ class CorreoController extends Controller
             }
 
             $respaldoAcotado = $rangoTarjetaProbado || $mes !== '' || (int) $config['dias_atras'] > 0;
+            $pendientesIndice = $indice->contarPendientesAdjuntos();
             if ($ambito === 'asunto_remitente' && $terminoObjetivo !== '' && !$coincidenciaLocalObjetivo
                 && $respaldoAcotado
-                && $indice->contarPendientesAdjuntos() > 0) {
+                && $pendientesIndice > 0) {
+                // Búsqueda TEXT contra el buzón, carpeta por carpeta: es la
+                // que tarda un minuto. Solo se llega aquí cuando el número no
+                // está en el índice, y eso pasa mientras queden adjuntos sin
+                // leer. Se avisa en la respuesta para poder explicarlo.
+                $respaldoBuzon = true;
                 $configMime = $config;
                 if ($rangoTarjetaProbado) {
                     $configMime['dias_atras'] = 0;
@@ -537,9 +554,55 @@ class CorreoController extends Controller
             'rango_aplicado' => $rangoTarjetaAplicado,
             'ampliado_todo' => $rangoTarjetaProbado && !$rangoTarjetaAplicado,
             'fuente' => $fuente,
+            // El resultado vino de preguntarle al buzón porque el índice
+            // todavía no tiene los nombres de los adjuntos: explica la espera.
+            'respaldo_buzon' => $respaldoBuzon,
+            'pendientes_indice' => $pendientesIndice,
             'ultima_sync' => $ultimaSync,
             'correos' => $lista['correos'],
         ]);
+    }
+
+    /**
+     * Carpetas donde tiene sentido buscar dentro del rango de fechas pedido.
+     *
+     * El respaldo contra el buzón es una búsqueda TEXT (encabezados y cuerpo)
+     * y el servidor la resuelve leyendo mensajes: recorrer las 150 carpetas
+     * del archivo para encontrar una factura de los últimos 60 días tardaba
+     * cerca de un minuto. El índice ya sabe qué carpetas tienen correo en ese
+     * rango; las demás no pueden tener nada. Las que nunca se indexaron se
+     * incluyen igual, porque de esas el índice no puede opinar.
+     *
+     * Devuelve [] cuando la búsqueda no tiene fecha de corte: ahí sí hay que
+     * mirar el buzón entero.
+     */
+    private function carpetasCandidatas($fetcher, $indice, array $config)
+    {
+        $desde = 0;
+        $fechaDesde = trim((string) ($config['fecha_desde'] ?? ''));
+        if ($fechaDesde !== '' && strtotime($fechaDesde) !== false) {
+            $desde = (int) strtotime($fechaDesde . ' 00:00:00');
+        } elseif ((int) ($config['dias_atras'] ?? 0) > 0) {
+            $dias = (int) $config['dias_atras'];
+            $desde = (int) strtotime(date('Y-m-d 00:00:00', strtotime("-{$dias} days")));
+        }
+        if ($desde <= 0) {
+            return [];
+        }
+
+        try {
+            $conCorreo = $indice->carpetasConMensajesDesde($desde);
+            $indexadas = $indice->getCarpetas();
+            $candidatas = [];
+            foreach ($fetcher->carpetasABuscar() as $carpeta) {
+                if (isset($conCorreo[$carpeta]) || !isset($indexadas[$carpeta])) {
+                    $candidatas[] = $carpeta;
+                }
+            }
+            return $candidatas;
+        } catch (Throwable $e) {
+            return []; // ante la duda, el buzón entero: lento pero completo
+        }
     }
 
     /** Busca un número en encabezados/cuerpo MIME e hidrata sus adjuntos. */
@@ -552,7 +615,7 @@ class CorreoController extends Controller
                 (int) $limite,
                 (string) $numero,
                 'texto_mime',
-                (string) $carpeta,
+                $carpeta !== '' ? (string) $carpeta : $this->carpetasCandidatas($fetcher, $indice, $config),
                 (int) $offset
             );
 
@@ -698,6 +761,8 @@ class CorreoController extends Controller
             // la conexión. completado=true corta el ciclo de tandas del JS.
             return [
                 'carpetas' => 0, 'nuevos' => 0, 'reindexadas' => 0, 'restantes' => 0,
+                'carpetas_totales' => 0, 'carpetas_por_revisar' => 0,
+                'metadatos_resueltos' => 0, 'metadatos_pendientes' => 0,
                 'adjuntos' => 0, 'cc' => 0, 'completado' => true, 'en_curso' => true, 'segundos' => 0,
             ];
         }
@@ -1172,6 +1237,69 @@ class CorreoController extends Controller
     }
 
     /**
+     * Latido de la descarga en curso: la mueve desde CUALQUIER pantalla.
+     *
+     * El único motor dentro del navegador vivía en el modo Descargas, así que
+     * cambiar de buzón o irse a otro módulo dejaba el lote quieto —parecía
+     * que la descarga se había quitado— hasta volver a esa pantalla o hasta
+     * que corriera la tarea programada de Windows, que no está instalada en
+     * todas las computadoras. Ahora el trabajo avanza mientras haya cualquier
+     * pantalla del sistema abierta.
+     *
+     * El lock evita que dos pestañas (o la tarea programada y una pestaña)
+     * abran dos conexiones IMAP para el mismo lote: quien no lo consigue solo
+     * informa el avance.
+     */
+    public function lotesLatido()
+    {
+        if (!$this->isPost()) { $this->json(['ok' => false, 'message' => 'Metodo no permitido.'], 405); }
+        @set_time_limit(120);
+
+        $lotes = $this->loadModel('CorreoLote');
+        $lote = $lotes->enCurso();
+        if (!$lote) {
+            $this->json(['ok' => true, 'lote' => null]);
+        }
+
+        $ocupado = false;
+        $error = '';
+        if ((string) $this->post('avanzar', '1') !== '0') {
+            $lock = CorreoLote::adquirirLock();
+            if ($lock === null) {
+                $ocupado = true;
+            } else {
+                try {
+                    // Tanda corta: este viaje no lo está mirando nadie y no
+                    // tiene por qué acaparar un proceso del servidor.
+                    $r = $this->procesarTandaLote((int) $lote['id'], 4, 15);
+                    $lote = $r['lote'] ?: $lote;
+                    $error = empty($r['ok']) ? (string) $r['message'] : '';
+                } catch (Throwable $e) {
+                    $error = $e->getMessage();
+                } finally {
+                    CorreoLote::liberarLock($lock);
+                }
+            }
+        }
+
+        $this->json([
+            'ok' => true,
+            'ocupado' => $ocupado,
+            // Con el buzón caído el que llama espera en vez de insistir.
+            'error' => $error,
+            'lote' => [
+                'id' => (int) $lote['id'],
+                'estado' => (string) $lote['estado'],
+                'cuenta_id' => (int) $lote['cuenta_id'],
+                'cuenta_nombre' => (string) ($lote['cuenta_nombre'] ?? ''),
+                'total_mensajes' => (int) $lote['total_mensajes'],
+                'procesados' => (int) $lote['procesados'],
+                'documentos_importados' => (int) ($lote['documentos_importados'] ?? 0),
+            ],
+        ]);
+    }
+
+    /**
      * Procesa una tanda de correos de un lote del modo Descargas y devuelve el
      * resultado en un array (no emite JSON ni corta la ejecución).
      *
@@ -1221,9 +1349,26 @@ class CorreoController extends Controller
         try {
             if ($fetcherPropio || !$fetcher->estaConectado()) { $fetcher->conectar(); }
         } catch (Throwable $e) {
+            // Que el buzón no conteste no es culpa de estos correos: vuelven a
+            // la cola para reintentarlos más tarde. Antes se marcaban como
+            // error de una vez, así que un corte de red se comía el lote
+            // completo a razón de una tanda por viaje. Tras varios intentos
+            // sí se dan por perdidos, para que un buzón mal configurado no
+            // deje el lote girando para siempre.
+            $reintentar = [];
             foreach ($items as $item) {
+                if ((int) ($item['intentos'] ?? 0) < 3) {
+                    $reintentar[] = (int) $item['id'];
+                    continue;
+                }
                 $lotes->incidencia($loteId, (int) $item['id'], 'conexion', $e->getMessage());
                 $lotes->finalizarItem((int) $item['id'], ['estado' => 'error', 'detalle' => $e->getMessage()]);
+            }
+            if ($reintentar) {
+                // Una sola incidencia por tanda: durante un corte largo, una
+                // por correo y por viaje inunda la lista sin decir más.
+                $lotes->incidencia($loteId, $reintentar[0], 'conexion', $e->getMessage());
+                $lotes->devolverAPendiente($reintentar);
             }
             if ($fetcherPropio) { $fetcher->cerrar(); }
             return ['ok' => false, 'lote' => $lotes->get($loteId), 'procesados_ahora' => 0, 'incidencias' => [],

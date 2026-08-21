@@ -112,6 +112,9 @@ $router->post('/correo/general/incidencias', 'CorreoController@generalIncidencia
 $router->post('/correo/incidencias/descartar', 'CorreoController@incidenciasDescartar');
 $router->post('/correo/incidencias/restaurar', 'CorreoController@incidenciasRestaurar');
 $router->post('/correo/general/procesar', 'CorreoController@generalProcesar');
+// La descarga en curso avanza desde cualquier pantalla del sistema, no solo
+// desde el modo Descargas que la inició.
+$router->post('/correo/lotes/latido', 'CorreoController@lotesLatido');
 $router->post('/correo/general/pausar', 'CorreoController@generalPausar');
 $router->post('/correo/general/reanudar', 'CorreoController@generalReanudar');
 $router->post('/correo/general/cancelar', 'CorreoController@generalCancelar');

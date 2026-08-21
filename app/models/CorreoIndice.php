@@ -263,6 +263,28 @@ class CorreoIndice extends Model
         return ['total' => $total, 'correos' => $filas];
     }
 
+    /**
+     * Carpetas con al menos un correo desde esa fecha, indexadas por nombre.
+     *
+     * Sirve para no pasear una búsqueda IMAP por las 150 carpetas del buzón:
+     * las de años anteriores no pueden tener nada de los últimos 60 días.
+     */
+    public function carpetasConMensajesDesde($timestampMinimo)
+    {
+        $filas = $this->fetchAll(
+            "SELECT carpeta FROM {$this->table}
+             WHERE cuenta_id = ? AND timestamp >= ?
+             GROUP BY carpeta",
+            [$this->cuentaId, (int) $timestampMinimo]
+        ) ?: [];
+
+        $mapa = [];
+        foreach ($filas as $fila) {
+            $mapa[(string) $fila['carpeta']] = true;
+        }
+        return $mapa;
+    }
+
     public function contarTotal()
     {
         return (int) $this->fetchColumn(
@@ -357,6 +379,21 @@ class CorreoIndice extends Model
         );
     }
 
+    /**
+     * CORREOS a los que les falta algún metadato, contados una sola vez.
+     * Sumar adjuntos + CC contaba dos veces al mismo mensaje (una visita
+     * resuelve ambos) y la pantalla decía "faltan 400" cuando eran 200.
+     */
+    public function contarPendientesMetadatos()
+    {
+        return (int) $this->fetchColumn(
+            "SELECT COUNT(*) FROM {$this->table}
+             WHERE cuenta_id = ?
+               AND (adjuntos_pendiente = 1 OR destinatarios_pendientes = 1)",
+            [$this->cuentaId]
+        );
+    }
+
     public function pendientesCc($limite = 400)
     {
         $limite = max(1, min(1000, (int) $limite));
@@ -432,11 +469,22 @@ class CorreoIndice extends Model
 
     /**
      * Estado de todas las carpetas de la cuenta, indexado por carpeta.
+     *
+     * 'edad_sync' son los segundos desde la última revisión, calculados por
+     * la BASE. La aplicación corre en la computadora de cada persona y la
+     * base vive en otra: restar aquí una fecha escrita allá daba una edad
+     * falsa en cuanto los dos relojes (o sus zonas horarias) no coincidían,
+     * y con eso ninguna carpeta parecía revisada nunca.
      */
     public function getCarpetas()
     {
         $mapa = [];
-        foreach ($this->fetchAll("SELECT * FROM correo_carpetas WHERE cuenta_id = ?", [$this->cuentaId]) as $fila) {
+        $filas = $this->fetchAll(
+            "SELECT *, TIMESTAMPDIFF(SECOND, ultima_sync, NOW()) AS edad_sync
+             FROM correo_carpetas WHERE cuenta_id = ?",
+            [$this->cuentaId]
+        );
+        foreach ($filas as $fila) {
             $mapa[(string) $fila['carpeta']] = $fila;
         }
         return $mapa;
@@ -584,6 +632,15 @@ class CorreoIndice extends Model
         $db = self::getDB();
         $transaccionPropia = !$db->inTransaction();
 
+        // Lo que ya se leyó del buzón no se vuelve a pedir. Un reindexado
+        // reconstruye la carpeta entera, pero los mensajes que siguen ahí son
+        // los mismos: mover o borrar diez correos de una carpeta de mil dejaba
+        // los otros novecientos noventa sin adjuntos ni CC otra vez. Con la
+        // cola así de larga, buscar un número de factura se iba a IMAP —una
+        // búsqueda TEXT carpeta por carpeta, de un minuto— en vez de
+        // contestar desde el índice.
+        $filas = $this->conservarMetadatos($carpeta, $uidvalidity, $filas);
+
         if ($transaccionPropia) {
             $db->beginTransaction();
         }
@@ -616,6 +673,51 @@ class CorreoIndice extends Model
             }
             throw $e;
         }
+    }
+
+    /**
+     * Devuelve las filas a insertar con los metadatos que ya estaban leídos
+     * para ese mismo mensaje (mismo uidvalidity + uid). Solo rellena lo que
+     * la fila entrante no trae: los encabezados recién bajados mandan.
+     *
+     * Si el servidor renumeró la carpeta (uidvalidity distinto), los uid
+     * viejos no identifican nada y no se conserva nada.
+     */
+    private function conservarMetadatos($carpeta, $uidvalidity, array $filas)
+    {
+        if (!$filas) {
+            return $filas;
+        }
+
+        $conocidos = [];
+        $previas = $this->fetchAll(
+            "SELECT uid, adjuntos, cc, reply_to, consecutivo, numero_corto
+             FROM {$this->table}
+             WHERE cuenta_id = ? AND carpeta = ? AND uidvalidity = ?
+               AND (adjuntos IS NOT NULL OR cc IS NOT NULL OR reply_to IS NOT NULL)",
+            [$this->cuentaId, (string) $carpeta, (int) $uidvalidity]
+        ) ?: [];
+        foreach ($previas as $previa) {
+            $conocidos[(int) $previa['uid']] = $previa;
+        }
+        if (!$conocidos) {
+            return $filas;
+        }
+
+        foreach ($filas as &$fila) {
+            $previa = $conocidos[(int) ($fila['uid'] ?? 0)] ?? null;
+            if (!$previa) {
+                continue;
+            }
+            foreach (['adjuntos', 'cc', 'reply_to', 'consecutivo', 'numero_corto'] as $campo) {
+                if (!isset($fila[$campo]) && $previa[$campo] !== null) {
+                    $fila[$campo] = $previa[$campo];
+                }
+            }
+        }
+        unset($fila);
+
+        return $filas;
     }
 
     public function contarCarpeta($carpeta)
@@ -686,7 +788,11 @@ class CorreoIndice extends Model
                         consecutivo = COALESCE(VALUES(consecutivo), consecutivo),
                         numero_corto = COALESCE(VALUES(numero_corto), numero_corto),
                         asunto = VALUES(asunto),
-                        adjuntos = VALUES(adjuntos),
+                        -- Un encabezado recién bajado no trae los nombres de
+                        -- los adjuntos (eso cuesta otro viaje al buzón):
+                        -- pisarlos con NULL mandaba el mensaje de vuelta a la
+                        -- cola aunque ya estuvieran leídos.
+                        adjuntos = COALESCE(VALUES(adjuntos), adjuntos),
                         fecha = VALUES(fecha),
                         timestamp = VALUES(timestamp)";
 

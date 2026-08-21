@@ -537,8 +537,17 @@ class MailFetcher
         $offset = max(0, (int) $offset);
         $maxOverview = max($limite + $offset, 1500);
 
-        $carpetaFiltro = trim((string) $carpetaFiltro);
-        $carpetas = $carpetaFiltro !== '' ? [$carpetaFiltro] : $this->carpetasABuscar();
+        // Puede llegar una carpeta, o una lista de carpetas candidatas (quien
+        // llama ya descartó las que no pueden tener nada). Vacío = todo el buzón.
+        if (is_array($carpetaFiltro)) {
+            $carpetas = array_values(array_filter(array_map('strval', $carpetaFiltro), 'strlen'));
+            if (empty($carpetas)) {
+                $carpetas = $this->carpetasABuscar();
+            }
+        } else {
+            $carpetaFiltro = trim((string) $carpetaFiltro);
+            $carpetas = $carpetaFiltro !== '' ? [$carpetaFiltro] : $this->carpetasABuscar();
+        }
 
         foreach ($carpetas as $carpeta) {
             if (!$this->abrirCarpeta($carpeta)) {

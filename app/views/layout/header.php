@@ -249,6 +249,101 @@ if (!isset($sociedadActiva)) {
                 ?>
                 <?php if (!empty($_SESSION['user_id'])): ?>
 
+                <?php // Descarga de correos en curso. Va en la barra de todas
+                      // las pantallas porque el trabajo es del sistema, no de
+                      // la pantalla que lo empezó: irse a otro módulo o
+                      // cambiar de buzón ya no lo detiene ni lo esconde.
+                      // Fuera del modo Descargas este renglón además lo hace
+                      // avanzar; dentro de él manda el motor de esa pantalla.
+                $enModoDescargas = isset($modoCorreo) && $modoCorreo === 'descargas'
+                                   && strpos($uriClean, '/correo') !== false; ?>
+                <a href="<?= $baseUrl ?>/correo?modo=descargas" id="descargaChip"
+                   class="topbar-action" style="display:none;align-items:center;gap:6px;
+                          font-size:11.5px;color:var(--navy);text-decoration:none;font-weight:600;
+                          background:#eef3fb;border:1px solid #c3d0e8;border-radius:7px;padding:3px 8px;"
+                   title="Descarga de correos en curso">
+                    <i class="fas fa-cloud-arrow-down"></i>
+                    <span id="descargaChipTexto">Descargando…</span>
+                    <span style="width:52px;height:5px;background:#d7e0f0;border-radius:6px;overflow:hidden;">
+                        <span id="descargaChipBarra" style="display:block;height:100%;width:0%;
+                              background:linear-gradient(90deg,#0c2461,#1e3a8a);transition:width .3s;"></span>
+                    </span>
+                </a>
+
+                <script>
+                (function () {
+                    var chip  = document.getElementById('descargaChip');
+                    var texto = document.getElementById('descargaChipTexto');
+                    var barra = document.getElementById('descargaChipBarra');
+                    if (!chip) return;
+
+                    var base = <?= json_encode($baseUrl) ?>;
+                    // En el modo Descargas solo se mira: esa pantalla ya tiene
+                    // su propio bucle y dos motores abrirían dos conexiones.
+                    var soloMirar = <?= $enModoDescargas ? 'true' : 'false' ?>;
+                    var SIN_TRABAJO_MS = 60000; // nada que hacer: preguntar de vez en cuando
+                    var enVuelo = false;
+                    var reloj = null;
+
+                    function programar(ms) {
+                        clearTimeout(reloj);
+                        reloj = setTimeout(latido, ms);
+                    }
+
+                    function pintar(lote) {
+                        if (!lote) {
+                            chip.style.display = 'none';
+                            return;
+                        }
+                        var total = Number(lote.total_mensajes || 0);
+                        var hechos = Number(lote.procesados || 0);
+                        var pct = total ? Math.min(100, Math.round(hechos * 100 / total)) : 0;
+                        chip.style.display = 'flex';
+                        texto.textContent = hechos.toLocaleString('es-CR') + '/'
+                                          + total.toLocaleString('es-CR') + ' correos';
+                        barra.style.width = pct + '%';
+                        chip.title = 'Descarga de correos en curso — lote #' + lote.id
+                                   + (lote.cuenta_nombre ? ' · ' + lote.cuenta_nombre : '')
+                                   + ' · ' + pct + '%. Clic para verla.';
+                    }
+
+                    function latido() {
+                        clearTimeout(reloj);
+                        if (enVuelo) return;
+                        enVuelo = true;
+                        var fd = new FormData();
+                        fd.append('avanzar', soloMirar ? '0' : '1');
+                        fetch(base + '/correo/lotes/latido', {
+                            method: 'POST', body: fd, credentials: 'same-origin'
+                        })
+                            .then(function (r) { return r.json(); })
+                            .then(function (d) {
+                                enVuelo = false;
+                                pintar(d && d.ok ? d.lote : null);
+                                // Con trabajo en curso se encadena de una vez:
+                                // cada viaje ya trae dentro su tanda de correos.
+                                // Si el buzón no contestó, se espera: insistir
+                                // contra una red caída no adelanta nada.
+                                var hayTrabajo = d && d.ok && d.lote && !d.error;
+                                programar(hayTrabajo ? 1200 : SIN_TRABAJO_MS);
+                            })
+                            .catch(function () {
+                                // Si la base o el buzón no contestan, el
+                                // renglón calla y se vuelve a preguntar luego.
+                                enVuelo = false;
+                                programar(SIN_TRABAJO_MS);
+                            });
+                    }
+
+                    latido();
+                    // Al volver a la pestaña, retomar sin esperar el turno: el
+                    // navegador frena los temporizadores en segundo plano.
+                    document.addEventListener('visibilitychange', function () {
+                        if (!document.hidden) latido();
+                    });
+                })();
+                </script>
+
                 <!-- Campana de avisos. Va junto al engranaje porque son la
                      misma clase de cosa: no pertenecen a la pantalla que se
                      está mirando, sino al sistema.

@@ -1,9 +1,50 @@
 <?php
 /** Estado persistente de una ejecución del modo Descargas de Correo. */
+require_once __DIR__ . '/../helpers/MailFetcher.php';
+
 class CorreoLote extends Model
 {
     protected $table = 'correo_lotes';
     private static $schemaIncidenciasLista = false;
+
+    /**
+     * Archivo de lock que serializa a los motores que hacen avanzar un lote:
+     * la tarea programada de Windows y el latido del navegador. Los items se
+     * toman de forma atómica, así que dos motores a la vez no se pisan, pero
+     * sí abrirían dos conexiones IMAP contra el mismo buzón para hacer el
+     * mismo trabajo. No es el lock de la sincronización del índice: son
+     * trabajos distintos y pueden convivir.
+     *
+     * El archivo es local a cada computadora, así que deja un motor por
+     * máquina —no uno en toda la oficina—: es el mismo número de conexiones
+     * que cuando cada quien tenía abierto el modo Descargas.
+     */
+    public static function rutaLock()
+    {
+        return MailFetcher::storagePath() . DIRECTORY_SEPARATOR . 'lotes.lock';
+    }
+
+    /** Toma el lock sin bloquear; null si otro motor ya está trabajando. */
+    public static function adquirirLock()
+    {
+        $fp = @fopen(self::rutaLock(), 'c');
+        if ($fp === false) {
+            return null;
+        }
+        if (!flock($fp, LOCK_EX | LOCK_NB)) {
+            fclose($fp);
+            return null;
+        }
+        return $fp;
+    }
+
+    public static function liberarLock($fp)
+    {
+        if (is_resource($fp)) {
+            flock($fp, LOCK_UN);
+            fclose($fp);
+        }
+    }
 
     /**
      * Correos del índice que son candidatos del modo Descargas.
@@ -227,6 +268,27 @@ class CorreoLote extends Model
                                LEFT JOIN correo_cuentas c ON c.id = l.cuenta_id
                                LEFT JOIN sociedades s ON s.id = l.sociedad_id
                                {$where} ORDER BY l.id DESC LIMIT 1", $params);
+        return $row ?: null;
+    }
+
+    /**
+     * El lote que tiene trabajo por delante, sea de la cuenta que sea.
+     *
+     * Una descarga en curso es del sistema, no de la pantalla que la empezó:
+     * cambiar de buzón o de módulo no puede hacerla desaparecer. El más
+     * viejo primero, igual que el worker. Un lote pausado no cuenta: ahí la
+     * quietud se pidió a propósito.
+     */
+    public function enCurso()
+    {
+        $row = $this->fetchOne(
+            "SELECT l.*, c.nombre AS cuenta_nombre, s.nombre AS sociedad_nombre
+               FROM {$this->table} l
+               LEFT JOIN correo_cuentas c ON c.id = l.cuenta_id
+               LEFT JOIN sociedades s ON s.id = l.sociedad_id
+              WHERE l.estado IN ('pendiente', 'ejecutando')
+              ORDER BY l.id ASC LIMIT 1"
+        );
         return $row ?: null;
     }
 
