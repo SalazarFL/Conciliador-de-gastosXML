@@ -28,6 +28,7 @@
  */
 require_once __DIR__ . '/../helpers/ClaseNotaCredito.php';
 require_once __DIR__ . '/../helpers/EstadoArchivo.php';
+require_once __DIR__ . '/../helpers/AplicacionNotaCredito.php';
 require_once __DIR__ . '/Notificacion.php';
 require_once __DIR__ . '/ProveedorCatalogo.php';
 
@@ -119,7 +120,27 @@ class Seguimiento extends Model
         $marca = $leer('marca');
         $condicionSaldo = $leer('condicion_saldo');
 
+        /*
+         * Situación de la nota frente a su factura. 'con_nota' no es un
+         * estado sino la pregunta cruzada: todo lo que tiene nota de crédito
+         * en juego, venga del lado de la nota o del de la factura.
+         *
+         * Igual que con la clase, un estado de nota no se arrastra cuando se
+         * están mirando solo facturas: en la unión las facturas traen la
+         * situación en NULL, así que colarlo vaciaba la cola entera sin nada
+         * en pantalla que lo explicara. 'con_nota' sí sobrevive, porque esa
+         * pregunta también es sobre facturas.
+         */
+        $aplicacion = $leer('aplicacion');
+        if ($aplicacion !== 'con_nota' && !isset(AplicacionNotaCredito::ESTADOS[$aplicacion])) {
+            $aplicacion = '';
+        }
+        if ($origen === 'factura' && $aplicacion !== '' && $aplicacion !== 'con_nota') {
+            $aplicacion = '';
+        }
+
         return [
+            'aplicacion'  => $aplicacion,
             'vista'       => in_array($vista, $vistas, true) ? $vista : 'pendiente',
             'origen'      => $origen,
             'tarea'       => $leer('tarea'),
@@ -361,10 +382,24 @@ class Seguimiento extends Model
                 " . EstadoArchivo::columnaRecuperable('x.') . " AS recuperable,
                 x.consecutivo_completo AS consecutivo,
                 " . sprintf($tarea, 'l.estado', 'l.estado') . " AS tarea,
-                COALESCE(ABS(l.diferencia), l.monto) AS en_juego
+                COALESCE(ABS(l.diferencia), l.monto) AS en_juego,
+                /*
+                 * Contra qué factura se descuenta esta nota. Es otra pregunta
+                 * que la del respaldo: el respaldo es si el documento existe,
+                 * esto es si la plata tiene dónde aplicarse. Las dos hacen
+                 * falta en la misma cola, porque quien la trabaja decide con
+                 * las dos a la vez.
+                 */
+                l.estado_aplicacion AS aplicacion_estado,
+                l.factura_erp_id AS aplicacion_factura_id,
+                fe.documento AS aplicacion_factura_doc,
+                fe.saldo AS aplicacion_factura_saldo,
+                0 AS notas_vivas,
+                0 AS notas_vivas_saldo
               FROM notas_credito_lineas l
               JOIN notas_credito_listados li ON li.id = l.listado_id
               LEFT JOIN facturas_xml x ON x.id = l.factura_xml_id
+              LEFT JOIN facturas_erp fe ON fe.id = l.factura_erp_id
              WHERE l.clase IN ('" . implode("', '", array_keys(self::CLASES)) . "')
                AND li.id = (SELECT MAX(actual.id)
                               FROM notas_credito_listados actual
@@ -407,7 +442,24 @@ class Seguimiento extends Model
                 " . EstadoArchivo::columnaRecuperable('x.') . " AS recuperable,
                 x.consecutivo_completo AS consecutivo,
                 " . sprintf($tarea, 'pe.estado_respaldo', 'pe.estado_respaldo') . " AS tarea,
-                COALESCE(ABS(pe.diferencia), COALESCE(pe.saldo_pago, pe.saldo)) AS en_juego
+                COALESCE(ABS(pe.diferencia), COALESCE(pe.saldo_pago, pe.saldo)) AS en_juego,
+                /*
+                 * Del lado de la factura la pregunta se da vuelta: no contra
+                 * qué se aplica, sino cuánta nota tiene esperando. Sale por
+                 * subconsulta y no por JOIN porque una factura puede tener
+                 * varias notas y un JOIN duplicaría el renglón en la cola.
+                 * Va por el índice idx_nc_linea_factura_erp.
+                 */
+                NULL AS aplicacion_estado,
+                NULL AS aplicacion_factura_id,
+                NULL AS aplicacion_factura_doc,
+                NULL AS aplicacion_factura_saldo,
+                (SELECT COUNT(*) FROM notas_credito_lineas nca
+                  WHERE nca.factura_erp_id = pe.id
+                    AND nca.estado_aplicacion = 'aplicable') AS notas_vivas,
+                (SELECT COALESCE(SUM(nca.saldo), 0) FROM notas_credito_lineas nca
+                  WHERE nca.factura_erp_id = pe.id
+                    AND nca.estado_aplicacion = 'aplicable') AS notas_vivas_saldo
               FROM facturas_erp pe
               LEFT JOIN porpagar_listados li ON li.id = pe.porpagar_listado_id
               LEFT JOIN facturas_xml x ON x.id = pe.factura_xml_id";
@@ -599,6 +651,22 @@ class Seguimiento extends Model
         if (!empty($f['col_tarea']) && isset(self::TAREAS[$f['col_tarea']])) {
             $where[] = 'c.tarea = ?';
             $params[] = $f['col_tarea'];
+        }
+
+        /*
+         * Situación frente a la factura que corrige.
+         *
+         * 'con_nota' es la misma pregunta desde el otro lado y por eso vale
+         * para los dos orígenes: una nota que se puede aplicar y una factura
+         * que tiene notas esperando son las dos caras de lo mismo, y quien
+         * trabaja la cola quiere verlas juntas.
+         */
+        $aplicacion = (string) ($f['aplicacion'] ?? '');
+        if ($aplicacion === 'con_nota') {
+            $where[] = "(c.aplicacion_estado = 'aplicable' OR c.notas_vivas > 0)";
+        } elseif ($aplicacion !== '' && isset(AplicacionNotaCredito::ESTADOS[$aplicacion])) {
+            $where[] = 'c.aplicacion_estado = ?';
+            $params[] = $aplicacion;
         }
 
         return [$where ? 'WHERE ' . implode(' AND ', $where) : '', $params];

@@ -19,6 +19,8 @@
 
 require_once __DIR__ . '/../helpers/NumeroFactura.php';
 require_once __DIR__ . '/../helpers/EstadoArchivo.php';
+require_once __DIR__ . '/../helpers/FacturasErpCsvParser.php';
+require_once __DIR__ . '/../helpers/LineaRevision.php';
 require_once __DIR__ . '/ProveedorCatalogo.php';
 
 class FacturaErp extends Model
@@ -408,6 +410,108 @@ class FacturaErp extends Model
             $out[$f['firma']] = $f['motivo'];
         }
         return $out;
+    }
+
+    // ------------------------------------------------------------------
+    // Rescate desde la bandeja de revisión
+    // ------------------------------------------------------------------
+
+    /**
+     * Convierte lo que alguien escribió en el formulario de revisión en una
+     * factura con la misma forma que las que salen del parser.
+     *
+     * Valida aquí y no en el controlador porque esta misma comprobación la
+     * necesita la reaplicación automática de una corrección recordada, que no
+     * pasa por ningún formulario.
+     */
+    public static function sanearDesdeRevision(array $campos)
+    {
+        $documento = trim((string) ($campos['documento'] ?? ''));
+        $proveedor = trim((string) ($campos['proveedor_codigo'] ?? ''));
+        if ($proveedor === '') {
+            throw new InvalidArgumentException('Falta el código del proveedor.');
+        }
+
+        $fechaEmision = LineaRevision::fecha($campos['fecha_emision'] ?? '');
+        if ($fechaEmision === null) {
+            throw new InvalidArgumentException('La fecha de emisión no es una fecha válida.');
+        }
+        $fechaVence = LineaRevision::fecha($campos['fecha_vence'] ?? '');
+
+        foreach (['monto', 'saldo'] as $obligatorio) {
+            if (trim((string) ($campos[$obligatorio] ?? '')) === '') {
+                throw new InvalidArgumentException('Falta el ' . $obligatorio . '.');
+            }
+        }
+
+        $tipo = mb_strtoupper(trim((string) ($campos['tipo'] ?? 'F')), 'UTF-8') ?: 'F';
+
+        $factura = [
+            'proveedor_codigo' => $proveedor,
+            'proveedor_nombre' => trim((string) ($campos['proveedor_nombre'] ?? '')),
+            'sucursal' => trim((string) ($campos['sucursal'] ?? '')),
+            'tipo' => mb_substr($tipo, 0, 5),
+            'documento' => $documento,
+            'numero_corto' => FacturasErpCsvParser::numeroCorto($documento),
+            'fecha_emision' => $fechaEmision,
+            'fecha_vence' => $fechaVence,
+            'origen' => trim((string) ($campos['origen'] ?? '')),
+            'moneda' => trim((string) ($campos['moneda'] ?? '¢')),
+            'monto' => LineaRevision::numero($campos['monto']),
+            'saldo' => LineaRevision::numero($campos['saldo']),
+            'saldo_colones' => trim((string) ($campos['saldo_colones'] ?? '')) !== ''
+                ? LineaRevision::numero($campos['saldo_colones'])
+                : null,
+        ];
+        $factura['clave'] = FacturasErpCsvParser::clave($factura);
+
+        return $factura;
+    }
+
+    /**
+     * Mete al listado una factura rescatada. Devuelve su id.
+     *
+     * La identidad se respeta igual que en una carga normal: si ya existe una
+     * factura con la misma clave, esto no se importa por la puerta de atrás.
+     */
+    public function insertarDesdeRevision(array $campos, $sociedadId, $cargaId = null)
+    {
+        $factura = self::sanearDesdeRevision($campos);
+
+        $params = [$factura['clave']];
+        $sql = 'SELECT id FROM facturas_erp WHERE clave = ?'
+             . $this->condicionSociedad('', $params);
+        if ($this->fetchColumn($sql, $params)) {
+            throw new RuntimeException(
+                'Ya existe una factura con ese proveedor, documento y fecha de emisión: '
+                . 'corrígela en el listado en vez de agregarla otra vez.'
+            );
+        }
+
+        $columnas = 'clave, sociedad_id, proveedor_codigo, proveedor_nombre, sucursal, tipo, documento,
+                     numero_corto, fecha_emision, fecha_vence, origen, moneda, monto, saldo,
+                     saldo_colones, carga_id';
+        return (int) $this->insert(
+            "INSERT INTO facturas_erp ({$columnas}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [
+                $factura['clave'],
+                (int) $sociedadId > 0 ? (int) $sociedadId : null,
+                $factura['proveedor_codigo'],
+                $factura['proveedor_nombre'],
+                $factura['sucursal'],
+                $factura['tipo'],
+                $factura['documento'],
+                $factura['numero_corto'],
+                $factura['fecha_emision'],
+                $factura['fecha_vence'],
+                $factura['origen'],
+                $factura['moneda'],
+                $factura['monto'],
+                $factura['saldo'],
+                $factura['saldo_colones'],
+                $cargaId !== null ? (int) $cargaId : null,
+            ]
+        );
     }
 
     private function insertarNuevas(array $nuevas, $cargaId, $sociedadId = 0)

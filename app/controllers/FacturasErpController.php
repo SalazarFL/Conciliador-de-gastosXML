@@ -37,9 +37,13 @@ class FacturasErpController extends Controller
         $totalPaginas = max(1, (int) ceil($total / $porPagina));
         $pagina = min($pagina, $totalPaginas);
 
+        $facturas = $modelo->listar($filtros, $porPagina, ($pagina - 1) * $porPagina);
+
         $this->render('facturaserp.index', [
             'titulo' => 'Facturas',
-            'facturas' => $modelo->listar($filtros, $porPagina, ($pagina - 1) * $porPagina),
+            'facturas' => $facturas,
+            // Qué factura de esta página tiene una nota de crédito esperando.
+            'notasPorFactura' => $this->notasDeLasFacturas($facturas),
             // El resumen de la pantalla (facturas, con saldo, proveedores) se
             // fue con las tarjetas: era una consulta de agregados por cada
             // visita para cifras que nadie usaba para decidir nada.
@@ -49,11 +53,185 @@ class FacturasErpController extends Controller
             'ultimaCarga' => $modelo->ultimaCarga(),
             'incidenciasAbiertas' => $modelo->contarIncidencias(['severidad' => 'alerta']),
             'incidenciasTotal' => $modelo->contarIncidencias([]),
+            'revisionPendientes' => $this->pendientesDeRevision(),
             'filtros' => $filtros,
             'pagina' => $pagina,
             'totalPaginas' => $totalPaginas,
             'total' => $total,
         ]);
+    }
+
+    /**
+     * Las líneas que la carga no supo leer, para corregirlas a mano.
+     *
+     * Es la pantalla que le faltaba al módulo: hasta ahora, una fila que no
+     * encajaba en ningún patrón se descartaba sin dejar rastro y no había
+     * forma de enterarse, y mucho menos de recuperarla.
+     */
+    public function revision()
+    {
+        $sociedad = $this->loadModel('Sociedad')->getActiva();
+        if (!$sociedad) {
+            $this->redirectWithMessage(
+                $this->url('/facturas-erp'),
+                'Seleccioná una sociedad para ver sus líneas en revisión.',
+                'warning'
+            );
+        }
+
+        $bandeja = $this->bandeja();
+        $this->render('facturaserp.revision', [
+            'titulo' => 'Líneas en revisión · Facturas',
+            'modulo' => 'facturas-erp',
+            'pendientes' => $bandeja->pendientes((int) $sociedad['id']),
+            'resueltas' => $bandeja->resueltas((int) $sociedad['id'], 50),
+            'memoria' => $bandeja->memoria((int) $sociedad['id']),
+            'campos' => self::CAMPOS_REVISION,
+        ]);
+    }
+
+    /** Qué se puede editar de una línea rescatada, y cómo se llama en pantalla. */
+    const CAMPOS_REVISION = [
+        'proveedor_codigo' => ['Código de proveedor', 'texto'],
+        'proveedor_nombre' => ['Nombre del proveedor', 'texto'],
+        'sucursal'         => ['Sucursal', 'texto'],
+        'tipo'             => ['Tipo', 'texto'],
+        'documento'        => ['Documento', 'texto'],
+        'fecha_emision'    => ['Fecha de emisión', 'fecha'],
+        'fecha_vence'      => ['Vence', 'fecha'],
+        'origen'           => ['Compra', 'texto'],
+        'moneda'           => ['Moneda', 'texto'],
+        'monto'            => ['Monto', 'importe'],
+        'saldo'            => ['Saldo', 'importe'],
+    ];
+
+    /** Guarda una línea corregida como una factura más del listado. */
+    public function guardarRevision()
+    {
+        if (!$this->isPost()) {
+            $this->redirect($this->url('/facturas-erp/revision'));
+        }
+        $volver = $this->url('/facturas-erp/revision');
+
+        try {
+            $sociedad = $this->loadModel('Sociedad')->getActiva();
+            if (!$sociedad) {
+                throw new Exception('No hay una sociedad activa.');
+            }
+            $bandeja = $this->bandeja();
+            $linea = $bandeja->buscar((int) $sociedad['id'], (int) $this->post('id', 0));
+            if (!$linea) {
+                throw new Exception('Esa línea ya no está en la bandeja.');
+            }
+            if ($linea['estado'] !== 'pendiente') {
+                throw new Exception('Esa línea ya fue resuelta.');
+            }
+
+            $campos = $this->camposDelFormulario(array_keys(self::CAMPOS_REVISION));
+            $modelo = $this->loadModel('FacturaErp');
+            $id = $modelo->insertarDesdeRevision($campos, (int) $sociedad['id'], $linea['carga_id']);
+
+            $bandeja->marcarIncluida($linea['id'], $campos, $id, $_SESSION['usuario_id'] ?? null);
+            $recordar = $this->post('recordar', '') !== '';
+            if ($recordar) {
+                $bandeja->recordar(
+                    (int) $sociedad['id'],
+                    $linea,
+                    'incluir',
+                    $campos,
+                    'Corregida a mano desde la bandeja de revisión.',
+                    $_SESSION['usuario_id'] ?? null
+                );
+            }
+
+            $this->engancharComprobantes($modelo);
+
+            $this->redirectWithMessage(
+                $volver,
+                'La línea entró al listado como una factura más.'
+                . ($recordar ? ' La próxima carga la va a corregir sola.' : ''),
+                'success'
+            );
+        } catch (Throwable $e) {
+            $this->redirectWithMessage($volver, 'No se pudo guardar: ' . $e->getMessage(), 'error');
+        }
+    }
+
+    /** Deja fuera una línea: no es un dato que deba entrar al listado. */
+    public function descartarRevision()
+    {
+        if (!$this->isPost()) {
+            $this->redirect($this->url('/facturas-erp/revision'));
+        }
+        $volver = $this->url('/facturas-erp/revision');
+
+        try {
+            $sociedad = $this->loadModel('Sociedad')->getActiva();
+            if (!$sociedad) {
+                throw new Exception('No hay una sociedad activa.');
+            }
+            $bandeja = $this->bandeja();
+            $linea = $bandeja->buscar((int) $sociedad['id'], (int) $this->post('id', 0));
+            if (!$linea) {
+                throw new Exception('Esa línea ya no está en la bandeja.');
+            }
+
+            $nota = (string) $this->post('nota', '');
+            $bandeja->marcarDescartada($linea['id'], $nota, $_SESSION['usuario_id'] ?? null);
+            $recordar = $this->post('recordar', '') !== '';
+            if ($recordar) {
+                $bandeja->recordar(
+                    (int) $sociedad['id'],
+                    $linea,
+                    'descartar',
+                    [],
+                    $nota,
+                    $_SESSION['usuario_id'] ?? null
+                );
+            }
+
+            $this->redirectWithMessage(
+                $volver,
+                'Línea descartada.' . ($recordar ? ' No va a volver a preguntarse.' : ''),
+                'success'
+            );
+        } catch (Throwable $e) {
+            $this->redirectWithMessage($volver, 'No se pudo descartar: ' . $e->getMessage(), 'error');
+        }
+    }
+
+    /** Olvida una decisión recordada: la línea vuelve a preguntarse. */
+    public function olvidarRevision()
+    {
+        if (!$this->isPost()) {
+            $this->redirect($this->url('/facturas-erp/revision'));
+        }
+        $volver = $this->url('/facturas-erp/revision');
+
+        try {
+            $sociedad = $this->loadModel('Sociedad')->getActiva();
+            if (!$sociedad) {
+                throw new Exception('No hay una sociedad activa.');
+            }
+            $this->bandeja()->olvidar((int) $sociedad['id'], (int) $this->post('memoria_id', 0));
+            $this->redirectWithMessage(
+                $volver,
+                'Decisión olvidada: la próxima carga vuelve a preguntar por esa línea.',
+                'success'
+            );
+        } catch (Throwable $e) {
+            $this->redirectWithMessage($volver, 'No se pudo olvidar: ' . $e->getMessage(), 'error');
+        }
+    }
+
+    /** Los campos que llegan del formulario de revisión, sin nada de más. */
+    private function camposDelFormulario(array $permitidos)
+    {
+        $campos = [];
+        foreach ($permitidos as $campo) {
+            $campos[$campo] = trim((string) $this->post('campo_' . $campo, ''));
+        }
+        return $campos;
     }
 
     /** Historial de problemas detectados en cada carga. */
@@ -234,6 +412,13 @@ class FacturasErpController extends Controller
             $meta = $resultado['meta'];
             $meta['sociedad_id'] = (int) $sociedad['id'];
 
+            // Las líneas que el parser no supo leer se reparten antes de
+            // importar: las que ya tienen una corrección guardada entran con
+            // ella, las que ya se dijo que no van se descartan solas, y el
+            // resto queda preguntando en la bandeja.
+            $reparto = $this->repartirRevision($resultado['revision'], (int) $sociedad['id']);
+            $resultado = FacturasErpCsvParser::conFacturasRescatadas($resultado, $reparto['facturas']);
+
             $modelo = $this->loadModel('FacturaErp');
             $r = $modelo->importar(
                 $resultado['facturas'],
@@ -243,7 +428,18 @@ class FacturasErpController extends Controller
                 $resultado['incidencias']
             );
 
+            $pendientes = $this->bandeja()->registrarPendientes(
+                (int) $sociedad['id'],
+                $reparto['pendientes'],
+                (int) ($r['carga_id'] ?? 0) ?: null
+            );
+            $this->bandeja()->marcarMemoriaAplicada($reparto['memoria_ids']);
+
             $enganche = $this->engancharComprobantes($modelo);
+            // Pagar una factura mueve su saldo, y con eso cambia la situación
+            // de las notas que la corrigen aunque las notas no se hayan
+            // tocado. Por eso el cruce se rehace desde acá también.
+            $this->recalcularNotas((int) $sociedad['id']);
 
             $mensaje = sprintf(
                 '%s facturas leídas: %s nuevas, %s con saldo actualizado y %s sin cambios.',
@@ -257,6 +453,27 @@ class FacturasErpController extends Controller
                 $mensaje .= sprintf(
                     ' %s factura(s) encontraron su comprobante entre los XML ya cargados.',
                     number_format($enganche['enganchadas'], 0, ',', '.')
+                );
+            }
+
+            // Lo que antes desaparecía en silencio ahora se dice en voz alta.
+            if ($reparto['facturas']) {
+                $mensaje .= sprintf(
+                    ' %s línea(s) entraron con la corrección que ya habías guardado.',
+                    number_format(count($reparto['facturas']), 0, ',', '.')
+                );
+            }
+            if ($reparto['descartadas'] > 0) {
+                $mensaje .= sprintf(
+                    ' %s línea(s) se descartaron solas porque ya lo habías decidido.',
+                    number_format($reparto['descartadas'], 0, ',', '.')
+                );
+            }
+            if ($pendientes > 0) {
+                $mensaje .= sprintf(
+                    ' Atención: %s línea(s) del reporte no se pudieron leer y quedaron esperando '
+                    . 'que decidas si entran.',
+                    number_format($pendientes, 0, ',', '.')
                 );
             }
 
@@ -286,6 +503,10 @@ class FacturasErpController extends Controller
                 }, array_slice($r['descuadres'], 0, 5));
             }
 
+            if ($pendientes > 0 && $tipo === 'success') {
+                $tipo = 'warning';
+            }
+
             $this->redirectWithMessage($this->url('/facturas-erp'), $mensaje, $tipo, $detalles);
         } catch (Throwable $e) {
             $this->redirectWithMessage(
@@ -294,6 +515,97 @@ class FacturasErpController extends Controller
                 'error'
             );
         }
+    }
+
+    /**
+     * Rehace el cruce entre las notas de crédito y las facturas que corrigen.
+     *
+     * Va envuelto: es información de apoyo, y que el módulo de notas falle no
+     * puede impedir que se cargue el listado del ERP.
+     */
+    private function recalcularNotas($sociedadId)
+    {
+        try {
+            return $this->loadModel('NotaCredito')->recalcularAplicacion($sociedadId);
+        } catch (Throwable $e) {
+            return ['revisadas' => 0, 'actualizadas' => 0, 'estados' => []];
+        }
+    }
+
+    /**
+     * Las notas vivas que corrigen estas facturas, para pintar el aviso en su
+     * renglón. Si algo falla, la pantalla sale sin avisos en vez de no salir.
+     */
+    private function notasDeLasFacturas(array $facturas)
+    {
+        try {
+            return $this->loadModel('NotaCredito')
+                ->notasVivasDeFacturas(array_column($facturas, 'id'));
+        } catch (Throwable $e) {
+            return [];
+        }
+    }
+
+    /** Cuántas líneas están esperando que alguien decida. */
+    private function pendientesDeRevision()
+    {
+        try {
+            $sociedad = $this->loadModel('Sociedad')->getActiva();
+            return $sociedad ? $this->bandeja()->contarPendientes((int) $sociedad['id']) : 0;
+        } catch (Throwable $e) {
+            // El aviso es un extra: que falte no puede tumbar el listado.
+            return 0;
+        }
+    }
+
+    /** La bandeja de líneas en revisión de este módulo. */
+    private function bandeja()
+    {
+        require_once __DIR__ . '/../models/LineaEnRevision.php';
+        static $bandeja = null;
+        if ($bandeja === null) {
+            $bandeja = new LineaEnRevision('facturas_erp');
+        }
+        return $bandeja;
+    }
+
+    /**
+     * Reparte las líneas ilegibles del archivo y devuelve las que pueden
+     * entrar ya convertidas en facturas.
+     *
+     * Una corrección recordada que ya no valida —porque el reporte cambió lo
+     * suficiente— no se fuerza: vuelve a la bandeja con el motivo, que es
+     * preferible a meter al listado un dato que no se sostiene.
+     */
+    private function repartirRevision(array $lineas, $sociedadId)
+    {
+        if (!$lineas) {
+            return ['facturas' => [], 'pendientes' => [], 'descartadas' => 0, 'memoria_ids' => []];
+        }
+
+        $reparto = $this->bandeja()->repartir($sociedadId, $lineas);
+
+        $facturas = [];
+        $memoriaIds = [];
+        $pendientes = $reparto['pendientes'];
+
+        foreach ($reparto['corregidas'] as $linea) {
+            try {
+                $facturas[] = FacturaErp::sanearDesdeRevision($linea['campos']);
+                $memoriaIds[] = $linea['memoria_id'] ?? 0;
+            } catch (Throwable $e) {
+                $linea['motivo'] = 'La corrección guardada ya no sirve para esta línea ('
+                    . $e->getMessage() . ') ' . $linea['motivo'];
+                $pendientes[] = $linea;
+            }
+        }
+
+        return [
+            'facturas' => $facturas,
+            'pendientes' => $pendientes,
+            'descartadas' => count($reparto['descartadas']),
+            'memoria_ids' => $memoriaIds,
+        ];
     }
 
     /**

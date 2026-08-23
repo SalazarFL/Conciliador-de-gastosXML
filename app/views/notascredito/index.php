@@ -2,6 +2,8 @@
 // Los nombres de las clases de nota salen de acá, y se usan antes de incluir
 // el parcial que también lo pide.
 require_once __DIR__ . '/../../helpers/ClaseNotaCredito.php';
+// La situación de cada nota frente a su factura: etiquetas y colores.
+require_once __DIR__ . '/../../helpers/AplicacionNotaCredito.php';
 
 $baseUrl = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 $listados = is_array($listados ?? null) ? $listados : [];
@@ -61,7 +63,18 @@ function ncQuery(array $changes = []) {
 <div class="card mb-20">
     <div class="card-header mb-12" style="flex-wrap:wrap;">
         <div class="card-title"><i class="fas fa-file-circle-minus" style="color:var(--gold);margin-right:6px;"></i>Notas de crédito acumuladas</div>
-        <a href="<?= $baseUrl ?>/notas-xml" class="btn btn-primary btn-sm" style="margin-left:auto;"
+        <?php if ((int) ($revisionPendientes ?? 0) > 0): ?>
+        <a href="<?= $baseUrl ?>/notas-credito/revision" class="btn btn-outline btn-sm"
+           style="margin-left:auto;border-color:#f59e0b;color:#92400e;"
+           title="Filas del reporte que no se pudieron leer y esperan que decidas si entran">
+            <i class="fas fa-inbox" style="margin-right:4px;color:#d97706;"></i>En revisión
+            <span class="badge" style="font-size:10px;padding:1px 6px;margin-left:4px;background:#fef3c7;color:#92400e;">
+                <?= number_format((int) $revisionPendientes) ?>
+            </span>
+        </a>
+        <?php endif; ?>
+        <a href="<?= $baseUrl ?>/notas-xml" class="btn btn-primary btn-sm"
+           style="<?= (int) ($revisionPendientes ?? 0) > 0 ? '' : 'margin-left:auto;' ?>"
            title="Importar comprobantes XML de notas de crédito">
             <i class="fas fa-file-code" style="margin-right:4px;"></i>Cargar notas XML
         </a>
@@ -187,6 +200,24 @@ function ncQuery(array $changes = []) {
                 <option value="sin_saldo" <?= ($filtros['condicion_saldo'] ?? '') === 'sin_saldo' ? 'selected' : '' ?>>Sin saldo</option>
             </select>
         </div>
+        <?php /*
+         * Por dónde se entra a "qué puedo aplicar hoy". El estado sale de
+         * cruzar el saldo de la nota con el de la factura que corrige, así
+         * que se mueve solo cuando se paga una factura, sin que nadie lo
+         * marque a mano.
+         */ ?>
+        <div>
+            <label class="filter-label">Situación</label>
+            <select class="form-control" name="aplicacion">
+                <option value="">Todas</option>
+                <?php foreach (AplicacionNotaCredito::ESTADOS as $ncApValor => $ncApInfo):
+                    if ($ncApValor === AplicacionNotaCredito::NO_APLICA) { continue; } ?>
+                <option value="<?= $ncApValor ?>" <?= ($filtros['aplicacion'] ?? '') === $ncApValor ? 'selected' : '' ?>>
+                    <?= htmlspecialchars($ncApInfo[0]) ?>
+                </option>
+                <?php endforeach; ?>
+            </select>
+        </div>
         <div class="filter-actions">
             <button type="submit" class="btn btn-primary btn-sm"><i class="fas fa-search"></i> Buscar</button>
             <?php if ($filtrosActivos): ?>
@@ -284,7 +315,26 @@ function ncQuery(array $changes = []) {
                     </td>
                     <td class="nc-provider"><?= htmlspecialchars($row['proveedor_nombre']) ?></td>
                     <td><?= htmlspecialchars($row['sucursal'] ?: '—') ?></td>
-                    <td class="nc-doc"><?= htmlspecialchars($row['documento']) ?></td>
+                    <td class="nc-doc">
+                        <?= htmlspecialchars($row['documento']) ?>
+                        <?php
+                        $apl = (string) ($row['estado_aplicacion'] ?? 'no_aplica');
+                        $colorApl = AplicacionNotaCredito::color($apl);
+                        if ($colorApl !== 'neutro'):
+                            $estiloApl = $colorApl === 'ok'
+                                ? 'background:#dcfce7;color:#166534;border:1px solid #86efac;'
+                                : 'background:#fef3c7;color:#92400e;border:1px solid #fcd34d;';
+                        ?>
+                        <div>
+                            <span class="badge" style="font-size:9.5px;padding:1px 6px;margin-top:3px;<?= $estiloApl ?>">
+                                <?= htmlspecialchars(AplicacionNotaCredito::etiqueta($apl)) ?>
+                                <?php if (!empty($row['factura_erp_documento'])): ?>
+                                    · factura <?= htmlspecialchars((string) $row['factura_erp_documento']) ?>
+                                <?php endif; ?>
+                            </span>
+                        </div>
+                        <?php endif; ?>
+                    </td>
                     <td><?= ncFecha($row['fecha']) ?></td>
                     <td class="nc-doc"><?= htmlspecialchars($row['nc_proveedor'] ?: '—') ?></td>
                     <td><?= ncFecha($row['fecha_nc_proveedor']) ?></td>
@@ -523,9 +573,15 @@ function ncQuery(array $changes = []) {
                 if (d.duplicado) {
                     aviso.innerHTML = '<div class="alert alert-info" style="margin-bottom:12px;">' +
                         'Este mismo archivo ya fue procesado. Puedes aplicarlo de nuevo; las filas iguales no se tocarán.</div>';
-                } else if (d.errores && d.errores.length) {
-                    aviso.innerHTML = '<div class="alert alert-warning" style="margin-bottom:12px;">' +
-                        d.errores.length + ' fila(s) inválidas se van a omitir.</div>';
+                }
+                // Las filas ilegibles ya no "se omiten": van a la bandeja de
+                // revisión, donde se pueden corregir e incluir. Decirlo desde
+                // la vista previa evita la sorpresa de cargar y descubrir
+                // después que faltaban notas.
+                if (d.revision) {
+                    aviso.innerHTML += '<div class="alert alert-warning" style="margin-bottom:12px;">' +
+                        d.revision + ' fila(s) no se pudieron leer y van a quedar en revisión, ' +
+                        'para que decidas si entran. Ninguna se descarta sola.</div>';
                 }
 
                 document.getElementById('nc-carga-cuerpo').innerHTML = (d.lineas || []).map(function (r) {
@@ -631,7 +687,7 @@ function ncQuery(array $changes = []) {
             '<td>'+estadoHtml+'</td>'+
             '<td class="nc-provider">'+esc(row.proveedor_nombre || '')+'</td>'+
             '<td>'+esc(row.sucursal || '—')+'</td>'+
-            '<td class="nc-doc">'+esc(row.documento || '')+'</td>'+
+            '<td class="nc-doc">'+esc(row.documento || '')+aplicacionHtml(row)+'</td>'+
             '<td>'+dateEs(row.fecha)+'</td>'+
             '<td class="nc-doc">'+esc(row.nc_proveedor || '—')+'</td>'+
             '<td>'+dateEs(row.fecha_nc_proveedor)+'</td>'+
@@ -647,6 +703,31 @@ function ncQuery(array $changes = []) {
                     '<button class="btn btn-outline btn-sm" title="Desvincular"><i class="fas fa-link-slash"></i></button></form>' : '')+
                 '</div></td></tr>';
     }
+    /*
+     * La situación de la nota frente a la factura que corrige. Va pegada al
+     * documento y no en una columna propia porque es información de esa nota,
+     * y una columna más en una tabla de trece no la lee nadie.
+     */
+    var APLICACION = <?= json_encode(
+        array_map(function ($e) { return ['etiqueta' => $e[0], 'color' => $e[1]]; },
+                  AplicacionNotaCredito::ESTADOS),
+        JSON_UNESCAPED_UNICODE
+    ) ?>;
+    var APLICACION_COLOR = {
+        ok:     'background:#dcfce7;color:#166534;border:1px solid #86efac;',
+        aviso:  'background:#fef3c7;color:#92400e;border:1px solid #fcd34d;',
+        neutro: ''
+    };
+    function aplicacionHtml(row) {
+        var info = APLICACION[row.estado_aplicacion];
+        if (!info || info.color === 'neutro') { return ''; }
+        var extra = row.factura_erp_documento
+            ? ' · factura ' + esc(String(row.factura_erp_documento))
+            : '';
+        return '<div><span class="badge" style="font-size:9.5px;padding:1px 6px;margin-top:3px;' +
+               APLICACION_COLOR[info.color] + '">' + esc(info.etiqueta) + extra + '</span></div>';
+    }
+
     function renderLines(rows) {
         if (!linesBody) return;
         if (!rows.length) {

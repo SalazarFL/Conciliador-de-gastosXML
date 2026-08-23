@@ -4,6 +4,8 @@
  */
 require_once __DIR__ . '/../helpers/ClaseNotaCredito.php';
 require_once __DIR__ . '/../helpers/EstadoArchivo.php';
+require_once __DIR__ . '/../helpers/LineaRevision.php';
+require_once __DIR__ . '/../helpers/AplicacionNotaCredito.php';
 require_once __DIR__ . '/ProveedorCatalogo.php';
 
 class NotaCredito extends Model
@@ -195,6 +197,17 @@ class NotaCredito extends Model
             'carga_cambio_id' => "ADD COLUMN carga_cambio_id INT UNSIGNED NULL AFTER carga_id, ADD KEY idx_nc_linea_carga_cambio (carga_cambio_id)",
             'saldo_cambiado_en' => "ADD COLUMN saldo_cambiado_en DATETIME NULL AFTER carga_cambio_id",
             'creado_en' => "ADD COLUMN creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER motivo_match",
+            // A qué factura del ERP corrige esta nota y en qué situación
+            // está. No es el emparejamiento con el XML —eso es factura_xml_id
+            // y es el respaldo de la nota misma—: esto es contra qué factura
+            // se descuenta la plata.
+            'factura_erp_id' => "ADD COLUMN factura_erp_id INT UNSIGNED NULL AFTER factura_xml_id,
+                                 ADD KEY idx_nc_linea_factura_erp (factura_erp_id)",
+            'estado_aplicacion' => "ADD COLUMN estado_aplicacion
+                                    ENUM('aplicable','factura_liquidada','aplicada','sin_factura',
+                                         'sin_referencia','no_aplica')
+                                    NOT NULL DEFAULT 'no_aplica' AFTER factura_erp_id,
+                                    ADD KEY idx_nc_linea_estado_aplicacion (estado_aplicacion)",
         ];
 
         try {
@@ -376,6 +389,261 @@ class NotaCredito extends Model
             $linea['datos_origen'] ?: null,
             $cargaId !== null ? (int) $cargaId : null,
         ];
+    }
+
+    // ------------------------------------------------------------------
+    // Contra qué factura se descuenta cada nota
+    // ------------------------------------------------------------------
+
+    /**
+     * Vuelve a cruzar las notas con las facturas del ERP y guarda en qué
+     * situación quedó cada una.
+     *
+     * Se recalcula entero y no de forma incremental porque el estado depende
+     * de DOS saldos que se mueven por su cuenta: una nota puede no haber
+     * cambiado en absoluto y pasar de "lista para aplicar" a "su factura ya
+     * está en cero" solo porque alguien pagó la factura. Por eso corre
+     * después de cargar cualquiera de los dos listados.
+     *
+     * Dos consultas y un UPDATE por tandas: cruzar de a una serían ~940
+     * viajes a un servidor que está a 85 ms.
+     */
+    public function recalcularAplicacion($sociedadId)
+    {
+        require_once __DIR__ . '/../helpers/AplicacionNotaCredito.php';
+
+        $sociedadId = (int) $sociedadId;
+
+        // Índice de facturas por proveedor + los ocho dígitos con los que
+        // cruza este módulo. Se guardan todas las candidatas: si dos facturas
+        // del mismo proveedor comparten cola, la nota no se ata a ninguna.
+        $porClave = [];
+        foreach ($this->fetchAll(
+            "SELECT id, proveedor_codigo, documento, numero_corto, saldo
+               FROM facturas_erp
+              WHERE sociedad_id = ? AND tipo IN ('F','FE','FACT')",
+            [$sociedadId]
+        ) ?: [] as $f) {
+            $corto = (string) ($f['numero_corto'] ?? '');
+            if ($corto === '') {
+                $corto = substr(str_pad(preg_replace('/\D/', '', (string) $f['documento']), 8, '0', STR_PAD_LEFT), -8);
+            }
+            $porClave[$f['proveedor_codigo'] . '|' . $corto][] = $f;
+        }
+
+        $notas = $this->fetchAll(
+            "SELECT nl.id, nl.clase, nl.documento, nl.saldo, nl.proveedor_codigo,
+                    nl.factura_erp_id, nl.estado_aplicacion
+               FROM notas_credito_lineas nl
+               JOIN notas_credito_listados li ON li.id = nl.listado_id
+              WHERE li.sociedad_id = ?",
+            [$sociedadId]
+        ) ?: [];
+
+        $cambios = [];
+        $resumen = [];
+        foreach ($notas as $n) {
+            $facturaId = null;
+            $factura = null;
+
+            $consecutivo = AplicacionNotaCredito::consecutivoFactura($n['documento']);
+            if ($consecutivo !== null
+                && in_array($n['clase'], AplicacionNotaCredito::CLASES_CON_FACTURA, true)) {
+                $candidatas = $porClave[
+                    $n['proveedor_codigo'] . '|' . AplicacionNotaCredito::clavesCorta($consecutivo)
+                ] ?? [];
+                // Una sola candidata o nada: emparejar "la primera que
+                // aparezca" entre varias sería inventarse el dato.
+                if (count($candidatas) === 1) {
+                    $factura = $candidatas[0];
+                    $facturaId = (int) $factura['id'];
+                }
+            }
+
+            $estado = AplicacionNotaCredito::estado(
+                $n['clase'],
+                $n['documento'],
+                $n['saldo'],
+                $factura
+            );
+            $resumen[$estado] = ($resumen[$estado] ?? 0) + 1;
+
+            if ((int) ($n['factura_erp_id'] ?? 0) !== (int) $facturaId
+                || (string) $n['estado_aplicacion'] !== $estado) {
+                $cambios[] = ['id' => (int) $n['id'], 'factura' => $facturaId, 'estado' => $estado];
+            }
+        }
+
+        foreach (array_chunk($cambios, 300) as $tanda) {
+            $casoFactura = 'factura_erp_id = CASE id';
+            $casoEstado = 'estado_aplicacion = CASE id';
+            $params = [];
+            $paramsEstado = [];
+            foreach ($tanda as $c) {
+                $casoFactura .= ' WHEN ? THEN ?';
+                $params[] = $c['id'];
+                $params[] = $c['factura'];
+                $casoEstado .= ' WHEN ? THEN ?';
+                $paramsEstado[] = $c['id'];
+                $paramsEstado[] = $c['estado'];
+            }
+            $ids = array_column($tanda, 'id');
+            $this->execute(
+                'UPDATE notas_credito_lineas SET ' . $casoFactura . ' ELSE factura_erp_id END, '
+                . $casoEstado . ' ELSE estado_aplicacion END'
+                . ' WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')',
+                array_merge($params, $paramsEstado, $ids)
+            );
+        }
+
+        return ['revisadas' => count($notas), 'actualizadas' => count($cambios), 'estados' => $resumen];
+    }
+
+    /**
+     * Las notas vivas que corrigen estas facturas, para poder avisar antes de
+     * pagarlas. Devuelve factura_erp_id => [notas].
+     */
+    public function notasVivasDeFacturas(array $facturaIds)
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $facturaIds))));
+        if (!$ids) {
+            return [];
+        }
+
+        $porFactura = [];
+        foreach (array_chunk($ids, 500) as $tanda) {
+            $filas = $this->fetchAll(
+                "SELECT id, factura_erp_id, documento, clase, monto, saldo, moneda, proveedor_nombre
+                   FROM notas_credito_lineas
+                  WHERE factura_erp_id IN (" . implode(',', array_fill(0, count($tanda), '?')) . ")
+                    AND estado_aplicacion = 'aplicable'
+                  ORDER BY saldo DESC",
+                $tanda
+            ) ?: [];
+            foreach ($filas as $fila) {
+                $porFactura[(int) $fila['factura_erp_id']][] = $fila;
+            }
+        }
+        return $porFactura;
+    }
+
+    // ------------------------------------------------------------------
+    // Rescate desde la bandeja de revisión
+    // ------------------------------------------------------------------
+
+    /**
+     * Convierte lo que alguien escribió en el formulario de revisión en una
+     * línea con la misma forma que las que salen del parser.
+     *
+     * Vive en el modelo y no en el controlador porque la reaplicación
+     * automática de una corrección recordada la necesita igual, y esa no pasa
+     * por ningún formulario.
+     */
+    public static function sanearDesdeRevision(array $campos)
+    {
+        $documento = trim((string) ($campos['documento'] ?? ''));
+        if ($documento === '') {
+            throw new InvalidArgumentException('Falta el número de documento de la nota.');
+        }
+
+        $nombre = trim((string) ($campos['proveedor_nombre'] ?? ''));
+        if ($nombre === '') {
+            throw new InvalidArgumentException('Falta el nombre del proveedor.');
+        }
+
+        $fecha = LineaRevision::fecha($campos['fecha'] ?? '');
+        if ($fecha === null) {
+            throw new InvalidArgumentException('La fecha de la nota no es una fecha válida.');
+        }
+
+        if (trim((string) ($campos['monto'] ?? '')) === '') {
+            throw new InvalidArgumentException('Falta el monto de la nota.');
+        }
+
+        $moneda = mb_strtoupper(trim((string) ($campos['moneda'] ?? 'CRC')), 'UTF-8');
+        if (!in_array($moneda, ['CRC', 'USD'], true)) {
+            $moneda = ($moneda === '$' || strpos($moneda, '$(') === 0) ? 'USD' : 'CRC';
+        }
+
+        $saldo = trim((string) ($campos['saldo'] ?? ''));
+        $conversion = trim((string) ($campos['monto_conversion'] ?? ''));
+
+        return [
+            'fila_origen' => (int) ($campos['fila_origen'] ?? 0),
+            'proveedor_codigo' => trim((string) ($campos['proveedor_codigo'] ?? '')),
+            'proveedor_nombre' => $nombre,
+            'sucursal' => trim((string) ($campos['sucursal'] ?? '')),
+            'documento' => $documento,
+            'fecha' => $fecha,
+            'nc_proveedor' => trim((string) ($campos['nc_proveedor'] ?? '')) ?: null,
+            'fecha_nc_proveedor' => LineaRevision::fecha($campos['fecha_nc_proveedor'] ?? ''),
+            'entrada_asociada' => trim((string) ($campos['entrada_asociada'] ?? '')) ?: null,
+            'moneda' => $moneda,
+            'monto' => LineaRevision::numero($campos['monto']),
+            'saldo' => $saldo !== '' ? LineaRevision::numero($saldo) : 0.0,
+            'monto_conversion' => $conversion !== '' ? LineaRevision::numero($conversion) : 0.0,
+            'datos_origen' => null,
+        ];
+    }
+
+    /**
+     * Mete al acumulado una nota rescatada. Devuelve su id.
+     *
+     * El acumulado no admite dos identidades iguales —la carga entera se cae
+     * si las encuentra—, así que una nota rescatada tiene que pasar por la
+     * misma puerta que las demás.
+     */
+    public function insertarDesdeRevision(array $campos, $sociedadId, $cargaId = null)
+    {
+        $linea = self::sanearDesdeRevision($campos);
+        $linea['datos_origen'] = json_encode(
+            ['rescatada_en_revision' => date('Y-m-d H:i:s'), 'celdas' => $campos['celdas'] ?? []],
+            JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE
+        );
+
+        $listadoId = (int) $this->fetchColumn(
+            'SELECT id FROM notas_credito_listados WHERE sociedad_id = ? ORDER BY id DESC LIMIT 1',
+            [(int) $sociedadId]
+        );
+        if ($listadoId <= 0) {
+            throw new RuntimeException(
+                'Todavía no hay un acumulado de notas para esta sociedad: cargá primero un CSV.'
+            );
+        }
+
+        $clave = self::claveCarga($linea);
+        foreach ($this->fetchAll(
+            'SELECT proveedor_codigo, proveedor_nombre, sucursal, documento, moneda, monto
+               FROM notas_credito_lineas WHERE listado_id = ?',
+            [$listadoId]
+        ) ?: [] as $fila) {
+            if (self::claveCarga($fila) === $clave) {
+                throw new RuntimeException(
+                    'Ya existe una nota con ese proveedor, sucursal, documento, moneda y monto '
+                    . 'en el acumulado.'
+                );
+            }
+        }
+
+        $this->begin();
+        try {
+            $id = (int) $this->insert(
+                'INSERT INTO notas_credito_lineas (' . implode(', ', self::COLUMNAS_LINEA) . ')'
+                . ' VALUES (' . implode(', ', array_fill(0, count(self::COLUMNAS_LINEA), '?')) . ')',
+                $this->valoresLinea($listadoId, $linea, $cargaId)
+            );
+            $this->execute(
+                'UPDATE notas_credito_listados
+                    SET total_lineas = (SELECT COUNT(*) FROM notas_credito_lineas WHERE listado_id = ?)
+                  WHERE id = ?',
+                [$listadoId, $listadoId]
+            );
+            $this->commit();
+            return ['id' => $id, 'listado_id' => $listadoId];
+        } catch (Throwable $e) {
+            $this->rollback();
+            throw $e;
+        }
     }
 
     public function crearLinea($listadoId, array $linea)
@@ -1147,6 +1415,22 @@ class NotaCredito extends Model
             $where[] = "(nl.nc_proveedor IS NULL OR TRIM(nl.nc_proveedor) = '')";
         }
 
+        // Situación de la nota frente a la factura que corrige. Es por donde
+        // se entra a "qué puedo aplicar hoy".
+        $aplicacion = trim((string) ($filters['aplicacion'] ?? ''));
+        if ($aplicacion !== '' && isset(AplicacionNotaCredito::ESTADOS[$aplicacion])) {
+            $where[] = 'nl.estado_aplicacion = ?';
+            $params[] = $aplicacion;
+        }
+
+        // Llegar desde el renglón de una factura: "mostrame las notas de
+        // ESTA factura". Es el destino del botón que sale en Facturas.
+        $facturaErpId = (int) ($filters['factura_erp_id'] ?? 0);
+        if ($facturaErpId > 0) {
+            $where[] = 'nl.factura_erp_id = ?';
+            $params[] = $facturaErpId;
+        }
+
         // El listado del ERP no siempre trae el código en la línea, así que
         // aquí el nombre sigue contando: es lo único que tienen las que no lo
         // traen.
@@ -1250,10 +1534,15 @@ class NotaCredito extends Model
                        f.moneda AS xml_moneda,
                        f.ruta_xml, f.ruta_pdf,
                        " . EstadoArchivo::columnaRecuperable('f.') . " AS recuperable,
-                       p.razon_social AS xml_proveedor
+                       p.razon_social AS xml_proveedor,
+                       nl.factura_erp_id, nl.estado_aplicacion,
+                       fe.documento AS factura_erp_documento,
+                       fe.saldo AS factura_erp_saldo,
+                       fe.monto AS factura_erp_monto
                 FROM notas_credito_lineas nl
                 LEFT JOIN facturas_xml f ON f.id = nl.factura_xml_id
                 LEFT JOIN proveedores p ON p.id = f.proveedor_id
+                LEFT JOIN facturas_erp fe ON fe.id = nl.factura_erp_id
                 WHERE {$whereSql}
                 ORDER BY FIELD(nl.estado, 'con_diferencia', 'sin_respaldo', 'coincide'),
                          nl.proveedor_nombre ASC, nl.fecha DESC, nl.id ASC";

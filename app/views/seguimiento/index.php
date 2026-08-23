@@ -9,6 +9,10 @@
  */
 $baseUrl = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 
+// La situación de una nota frente a la factura que corrige: etiquetas y
+// colores, los mismos que usan Facturas y Notas de crédito.
+require_once __DIR__ . '/../../helpers/AplicacionNotaCredito.php';
+
 $badgeTarea = [
     'falta_xml'  => ['miss', 'fa-file-circle-xmark'],
     'falta_pdf'  => ['warn', 'fa-file-pdf'],
@@ -36,6 +40,7 @@ $qs = function (array $cambios = [], $paraContexto = false) use ($filtros) {
         'tarea'       => $filtros['tarea'],
         'marca'       => $filtros['marca'],
         'clase'       => $filtros['clase'],
+        'aplicacion'  => $filtros['aplicacion'] ?? '',
         'responsable' => $filtros['responsable'],
         'proveedor'   => $filtros['proveedor'] ?? '',
         'sucursal'    => $filtros['sucursal'] ?? '',
@@ -216,13 +221,55 @@ $moneda = function ($valor, $mon = 'CRC') {
             </select>
         </div>
 
+        <?php /*
+         * 'completo' sí se ofrece: se quedaba fuera del desplegable y por eso
+         * se podía preguntar qué le falta a un documento pero no cuáles no
+         * tienen nada pendiente, que es la mitad que dice si el trabajo va
+         * avanzando. Lleva su propio texto porque bajo el rótulo "Qué falta"
+         * la etiqueta de siempre —"Respaldo completo"— se lee al revés.
+         */ ?>
         <div>
             <label class="filter-label" for="f-tarea">Qué falta</label>
             <select id="f-tarea" name="tarea" class="form-control">
                 <option value="">Cualquier cosa</option>
-                <?php foreach ($tareas as $clave => $etiqueta): if ($clave === 'completo') continue; ?>
+                <?php foreach ($tareas as $clave => $etiqueta): ?>
                 <option value="<?= $clave ?>" <?= $filtros['tarea'] === $clave ? 'selected' : '' ?>>
-                    <?= htmlspecialchars($etiqueta) ?>
+                    <?= $clave === 'completo' ? 'Nada: ya está completo' : htmlspecialchars($etiqueta) ?>
+                </option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+
+        <?php /*
+         * Nota de crédito en juego.
+         *
+         * 'Con nota en juego' cruza los dos orígenes —notas que se pueden
+         * aplicar y facturas que tienen nota esperando— porque son las dos
+         * caras de lo mismo y quien trabaja la cola las necesita juntas.
+         *
+         * Las demás opciones son la situación de UNA NOTA, así que no se
+         * ofrecen cuando se están mirando facturas: preguntarle a una factura
+         * si está "lista para aplicar" no significa nada, y elegirlo vaciaba
+         * la cola sin nada en pantalla que lo explicara. Es el mismo trato
+         * que recibe el filtro de clase, por la misma razón.
+         */
+        $segSoloFacturas = ($filtros['origen'] ?? '') === 'factura';
+        ?>
+        <div>
+            <label class="filter-label" for="f-aplicacion">Nota de crédito</label>
+            <select id="f-aplicacion" name="aplicacion" class="form-control">
+                <option value="">Cualquiera</option>
+                <option value="con_nota" <?= ($filtros['aplicacion'] ?? '') === 'con_nota' ? 'selected' : '' ?>>
+                    Con nota en juego
+                </option>
+                <?php foreach (AplicacionNotaCredito::ESTADOS as $segApValor => $segApInfo):
+                    if (in_array($segApValor, [AplicacionNotaCredito::NO_APLICA, AplicacionNotaCredito::APLICADA], true)) {
+                        continue;
+                    } ?>
+                <option value="<?= $segApValor ?>" data-solo-notas="1"
+                        <?= $segSoloFacturas ? 'hidden disabled' : '' ?>
+                        <?= ($filtros['aplicacion'] ?? '') === $segApValor ? 'selected' : '' ?>>
+                    <?= htmlspecialchars($segApInfo[0]) ?>
                 </option>
                 <?php endforeach; ?>
             </select>
@@ -416,6 +463,53 @@ $moneda = function ($valor, $mon = 'CRC') {
                             · <?= htmlspecialchars(mb_strimwidth((string) $f['contexto'], 0, 26, '…')) ?>
                             <?php endif; ?>
                         </div>
+
+                        <?php
+                        /*
+                         * La nota de crédito en juego, mirada desde los dos
+                         * lados: si el renglón es una nota, contra qué factura
+                         * se descuenta; si es una factura, cuánta nota tiene
+                         * esperando. Es lo mismo que sale en Facturas y en
+                         * Notas de crédito, y tiene que estar aquí porque esta
+                         * es la cola donde se trabaja.
+                         */
+                        $segApl = (string) ($f['aplicacion_estado'] ?? '');
+                        $segColor = $segApl !== '' ? AplicacionNotaCredito::color($segApl) : 'neutro';
+                        $segEstilo = $segColor === 'ok'
+                            ? 'background:#dcfce7;color:#166534;border:1px solid #86efac;'
+                            : 'background:#fef3c7;color:#92400e;border:1px solid #fcd34d;';
+                        ?>
+
+                        <?php if ($esNc && $segColor !== 'neutro'): ?>
+                        <div style="margin-top:4px;">
+                            <?php if (!empty($f['aplicacion_factura_id'])): ?>
+                            <a href="<?= $baseUrl ?>/facturas-erp?q=<?= urlencode((string) $f['aplicacion_factura_doc']) ?>"
+                               class="badge" style="font-size:9.5px;padding:1px 6px;text-decoration:none;<?= $segEstilo ?>"
+                               title="<?= htmlspecialchars(AplicacionNotaCredito::etiqueta($segApl)) ?>. Saldo de esa factura: <?= number_format((float) $f['aplicacion_factura_saldo'], 2) ?>. Clic para abrirla.">
+                                <?= htmlspecialchars(AplicacionNotaCredito::etiqueta($segApl)) ?>
+                                · <?= htmlspecialchars(mb_strimwidth((string) $f['aplicacion_factura_doc'], 0, 22, '…')) ?>
+                            </a>
+                            <?php else: ?>
+                            <span class="badge" style="font-size:9.5px;padding:1px 6px;<?= $segEstilo ?>">
+                                <?= htmlspecialchars(AplicacionNotaCredito::etiqueta($segApl)) ?>
+                            </span>
+                            <?php endif; ?>
+                        </div>
+                        <?php endif; ?>
+
+                        <?php if (!$esNc && (int) ($f['notas_vivas'] ?? 0) > 0): ?>
+                        <div style="margin-top:4px;">
+                            <a href="<?= $baseUrl ?>/notas-credito?factura_erp_id=<?= (int) $f['referencia_id'] ?>"
+                               class="badge"
+                               style="font-size:9.5px;padding:1px 6px;text-decoration:none;
+                                      background:#fef3c7;color:#92400e;border:1px solid #fcd34d;"
+                               title="Esta factura tiene <?= (int) $f['notas_vivas'] ?> nota(s) de crédito sin aplicar. Si se paga completa, la nota queda para otra factura del proveedor.">
+                                <i class="fas fa-file-circle-minus" style="margin-right:3px;"></i>
+                                Nota directa<?= (int) $f['notas_vivas'] > 1 ? ' ×' . (int) $f['notas_vivas'] : '' ?>
+                                · <?= number_format((float) $f['notas_vivas_saldo'], 2) ?>
+                            </a>
+                        </div>
+                        <?php endif; ?>
                     </td>
 
                     <td>
@@ -891,6 +985,39 @@ $moneda = function ($valor, $mon = 'CRC') {
                 window.filtroClaseVaciar(campo.querySelector('[data-clase-picker]'));
             }
         });
+    })();
+
+    /*
+     * Las situaciones de una nota no se le preguntan a una factura.
+     *
+     * El desplegable no desaparece entero porque una de sus opciones —"Con
+     * nota en juego"— sí es una pregunta sobre facturas, y es justamente la
+     * que sirve antes de pagar: cuáles de las que voy a pagar traen una nota
+     * esperando. Lo que se va son las opciones que solo tienen sentido del
+     * lado de la nota.
+     */
+    (function () {
+        var origen = document.getElementById('f-origen');
+        var aplicacion = document.getElementById('f-aplicacion');
+        if (!origen || !aplicacion) { return; }
+
+        var soloNotas = Array.prototype.slice.call(
+            aplicacion.querySelectorAll('[data-solo-notas]')
+        );
+
+        function ajustar() {
+            var esFactura = origen.value === 'factura';
+            soloNotas.forEach(function (opcion) {
+                opcion.hidden = esFactura;
+                opcion.disabled = esFactura;
+                // Si la que estaba elegida deja de valer, se vuelve a
+                // "Cualquiera" en vez de dejar la cola vacía sin explicación.
+                if (esFactura && opcion.selected) { aplicacion.value = ''; }
+            });
+        }
+
+        origen.addEventListener('change', ajustar);
+        ajustar();
     })();
 
     if (!tabla) { return; }

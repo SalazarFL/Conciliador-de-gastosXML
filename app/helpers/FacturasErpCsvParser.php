@@ -31,6 +31,7 @@
  */
 
 require_once __DIR__ . '/NumeroFactura.php';
+require_once __DIR__ . '/LineaRevision.php';
 
 class FacturasErpCsvParser
 {
@@ -72,6 +73,7 @@ class FacturasErpCsvParser
         $totalesSucursal = [];
         $totalesProveedor = [];
         $noReconocidas = [];
+        $revision = [];
         $proveedores = [];
         $impresoEn = null;
         $rangoTexto = null;
@@ -108,10 +110,21 @@ class FacturasErpCsvParser
             }
 
             // ── Cambio de sucursal (puede venir incrustado en el pie) ──
+            //
+            // Se toma la sucursal y se quitan sus dos celdas, pero la fila
+            // SIGUE evaluándose. Antes se cortaba aquí con un `continue`, y
+            // como el pie de página se imprime encima de la fila que venía
+            // saliendo, una fila que traía a la vez el cambio de sucursal y
+            // una factura perdía la factura entera, sin error y sin rastro.
+            // Es el mismo trato que ya reciben los tokens del pie: se les
+            // saca lo que estorba y lo que queda se lee normal.
             $iSuc = array_search('Sucursal', $c, true);
             if ($iSuc !== false && isset($c[$iSuc + 1])) {
                 $sucursal = $c[$iSuc + 1];
-                continue;
+                array_splice($c, $iSuc, 2);
+                if (!$c) {
+                    continue;
+                }
             }
 
             // ── Totales impresos: son el checksum del reporte ──
@@ -194,7 +207,19 @@ class FacturasErpCsvParser
                 continue;
             }
 
+            // ── Lo que no encajó en ningún patrón ──
+            // No se tira ni tumba la carga: queda como línea en revisión, con
+            // sus celdas crudas y lo poco que se le pudo deducir, para que
+            // alguien la corrija y la meta al listado o diga que no va.
             $noReconocidas[] = 'Línea ' . ($i + 1) . ': ' . mb_substr(implode(' | ', array_slice($c, 0, 6)), 0, 120);
+            $revision[] = [
+                'fila_origen' => $i + 1,
+                'motivo' => 'La fila no tiene la forma de una factura del reporte '
+                    . '(documento, dos fechas, compra, moneda, monto y saldo).',
+                'celdas' => array_values($c),
+                'campos' => self::camposProbables($c, $proveedorCodigo, $proveedorNombre, $sucursal),
+                'firma' => LineaRevision::firma('facturas_erp', $c, $proveedorCodigo),
+            ];
         }
 
         // La clave se calcula al final: el número puede haber llegado tarde.
@@ -204,12 +229,17 @@ class FacturasErpCsvParser
 
         $cuadre = self::cuadrar($facturas, $totalesSucursal, $totalesProveedor, $totalGeneralSaldo);
 
+        // Una línea sin clasificar ya no tumba el archivo entero.
+        //
+        // Tumbarlo era el reflejo correcto mientras no había dónde ponerla:
+        // entre importar a medias sin avisar y no importar nada, no importar
+        // nada era lo honesto. Ahora hay bandeja de revisión, así que entra
+        // todo lo que sí se leyó y la línea rara queda preguntando. Lo que no
+        // se afloja es el cuadre contra los totales impresos: si de verdad se
+        // perdió plata, la diferencia sigue saliendo por ahí.
         $errores = [];
         if (!$facturas) {
             $errores[] = 'No se reconoció ninguna factura: ¿es el reporte "Facturas por Proveedor"?';
-        }
-        if ($noReconocidas) {
-            $errores[] = count($noReconocidas) . ' línea(s) del reporte no se pudieron clasificar.';
         }
         $claves = array_column($facturas, 'clave');
         $repetidas = count($claves) - count(array_unique($claves));
@@ -232,7 +262,92 @@ class FacturasErpCsvParser
             'cuadre' => $cuadre,
             'errores' => $errores,
             'no_reconocidas' => $noReconocidas,
+            'revision' => $revision,
+            // Los totales impresos viajan con el resultado para poder volver
+            // a cuadrar cuando se le sumen las líneas rescatadas: si no, una
+            // línea que entró por la bandeja seguiría contándose como
+            // faltante y el descuadre sonaría todas las semanas.
+            'totales' => [
+                'sucursal' => $totalesSucursal,
+                'proveedor' => $totalesProveedor,
+                'general_saldo' => $totalGeneralSaldo,
+            ],
         ];
+    }
+
+    /**
+     * El mismo resultado, pero con las facturas que se rescataron de la
+     * bandeja de revisión ya adentro y el cuadre rehecho contra los totales
+     * impresos. Es lo que convierte un rescate en parte de la lectura del
+     * archivo, y no en un parche colgando por fuera.
+     */
+    public static function conFacturasRescatadas(array $resultado, array $rescatadas)
+    {
+        if (!$rescatadas) {
+            return $resultado;
+        }
+
+        $resultado['facturas'] = array_merge($resultado['facturas'], array_values($rescatadas));
+        $totales = $resultado['totales'] ?? ['sucursal' => [], 'proveedor' => [], 'general_saldo' => null];
+        $resultado['cuadre'] = self::cuadrar(
+            $resultado['facturas'],
+            $totales['sucursal'] ?? [],
+            $totales['proveedor'] ?? [],
+            $totales['general_saldo'] ?? null
+        );
+        $resultado['incidencias'] = self::analizarIncidencias($resultado['facturas'], $resultado['cuadre']);
+
+        return $resultado;
+    }
+
+    /**
+     * Lo que se le puede deducir a una fila que no encajó, para que quien la
+     * revise no tenga que teclearla entera: se reconoce cada dato por su
+     * forma, sin suponer en qué columna está. Lo que no se reconozca queda
+     * vacío y lo llena la persona.
+     */
+    private static function camposProbables(array $c, $proveedorCodigo, $proveedorNombre, $sucursal)
+    {
+        $campos = [
+            'proveedor_codigo' => (string) $proveedorCodigo,
+            'proveedor_nombre' => (string) $proveedorNombre,
+            'sucursal' => (string) $sucursal,
+            'tipo' => 'F',
+            'documento' => '',
+            'fecha_emision' => '',
+            'fecha_vence' => '',
+            'origen' => '',
+            'moneda' => '¢',
+            'monto' => '',
+            'saldo' => '',
+        ];
+
+        $fechas = [];
+        $montos = [];
+        foreach ($c as $celda) {
+            $celda = trim((string) $celda);
+            if ($celda === '') {
+                continue;
+            }
+            if ($campos['documento'] === '' && preg_match('/^([A-Z]+)-\s*(\S*)$/u', $celda, $m)) {
+                $campos['tipo'] = $m[1];
+                $campos['documento'] = $m[2];
+                continue;
+            }
+            if (self::esFecha($celda)) { $fechas[] = $celda; continue; }
+            if (self::esMonto($celda)) { $montos[] = $celda; continue; }
+            if ($celda === '¢' || strpos($celda, '$') === 0) { $campos['moneda'] = $celda; continue; }
+            if ($campos['origen'] === '' && preg_match('/^[A-Za-zÁÉÍÓÚÑáéíóúñ]{4,10}$/u', $celda)) {
+                $campos['origen'] = $celda;
+            }
+        }
+
+        if (isset($fechas[0])) { $campos['fecha_emision'] = $fechas[0]; }
+        if (isset($fechas[1])) { $campos['fecha_vence'] = $fechas[1]; }
+        if (isset($montos[0])) { $campos['monto'] = $montos[0]; }
+        if (isset($montos[1])) { $campos['saldo'] = $montos[1]; }
+
+        return $campos;
     }
 
     // ------------------------------------------------------------------
@@ -408,48 +523,69 @@ class FacturasErpCsvParser
         foreach ($facturas as $f) {
             $p = $f['proveedor_codigo'];
             $s = $p . '|' . $f['sucursal'];
-            if (!isset($porProveedor[$p])) { $porProveedor[$p] = ['monto' => 0.0, 'saldo' => 0.0]; }
-            if (!isset($porSucursal[$s])) { $porSucursal[$s] = ['monto' => 0.0, 'saldo' => 0.0]; }
+            if (!isset($porProveedor[$p])) { $porProveedor[$p] = ['monto' => 0.0, 'saldo' => 0.0, 'mixta' => false]; }
+            if (!isset($porSucursal[$s])) { $porSucursal[$s] = ['monto' => 0.0, 'saldo' => 0.0, 'mixta' => false]; }
             $porProveedor[$p]['monto'] += $f['monto'];
             $porProveedor[$p]['saldo'] += $f['saldo'];
             $porSucursal[$s]['monto'] += $f['monto'];
             $porSucursal[$s]['saldo'] += $f['saldo'];
+            if (!self::enColones($f['moneda'])) {
+                $porProveedor[$p]['mixta'] = true;
+                $porSucursal[$s]['mixta'] = true;
+            }
         }
 
         $descuadres = [];
         $redondeos = 0;
         $verificados = 0;
+        $noComparables = 0;
 
-        foreach ($totalesSucursal as $t) {
-            $verificados++;
-            $leido = $porSucursal[$t['proveedor'] . '|' . $t['sucursal']] ?? ['monto' => 0.0, 'saldo' => 0.0];
+        $comparar = function ($t, $leido, $ambito, $sucursal) use (&$descuadres, &$redondeos, &$noComparables) {
+            // Un grupo con facturas en dólares no se puede cuadrar contra su
+            // total impreso: el reporte suma los dólares ya convertidos a
+            // colones y aquí no hay tipo de cambio con qué reproducirlo. En
+            // los reportes reales aparece en la sucursal de un proveedor que
+            // factura en las dos monedas: su total impreso es la suma de los
+            // colones más los dólares convertidos, y nunca coincide con la
+            // suma en crudo. Compararlos igual gritaba "no cuadra" en todas
+            // las cargas por algo que sí cuadra, y una alarma que siempre
+            // suena no es una alarma. Se cuentan aparte para que tampoco se
+            // ignoren en silencio.
+            if (!empty($leido['mixta'])) {
+                $noComparables++;
+                return;
+            }
             $dif = max(abs($leido['monto'] - $t['monto']), abs($leido['saldo'] - $t['saldo']));
-            if ($dif <= 0.01) { continue; }
-            if ($dif <= self::TOLERANCIA_TOTAL) { $redondeos++; continue; }
+            if ($dif <= 0.01) { return; }
+            if ($dif <= self::TOLERANCIA_TOTAL) { $redondeos++; return; }
             $descuadres[] = [
-                'ambito' => 'sucursal',
+                'ambito' => $ambito,
                 'proveedor' => $t['proveedor'],
-                'sucursal' => $t['sucursal'],
+                'sucursal' => $sucursal,
                 'leido_monto' => round($leido['monto'], 2),
                 'impreso_monto' => $t['monto'],
                 'diferencia' => round($dif, 2),
             ];
+        };
+
+        foreach ($totalesSucursal as $t) {
+            $verificados++;
+            $comparar(
+                $t,
+                $porSucursal[$t['proveedor'] . '|' . $t['sucursal']] ?? ['monto' => 0.0, 'saldo' => 0.0, 'mixta' => false],
+                'sucursal',
+                $t['sucursal']
+            );
         }
 
         foreach ($totalesProveedor as $t) {
             $verificados++;
-            $leido = $porProveedor[$t['proveedor']] ?? ['monto' => 0.0, 'saldo' => 0.0];
-            $dif = max(abs($leido['monto'] - $t['monto']), abs($leido['saldo'] - $t['saldo']));
-            if ($dif <= 0.01) { continue; }
-            if ($dif <= self::TOLERANCIA_TOTAL) { $redondeos++; continue; }
-            $descuadres[] = [
-                'ambito' => 'proveedor',
-                'proveedor' => $t['proveedor'],
-                'sucursal' => '',
-                'leido_monto' => round($leido['monto'], 2),
-                'impreso_monto' => $t['monto'],
-                'diferencia' => round($dif, 2),
-            ];
+            $comparar(
+                $t,
+                $porProveedor[$t['proveedor']] ?? ['monto' => 0.0, 'saldo' => 0.0, 'mixta' => false],
+                'proveedor',
+                ''
+            );
         }
 
         // Cierre global: el saldo es la columna que importa y el reporte lo
@@ -474,13 +610,22 @@ class FacturasErpCsvParser
         return [
             'ok' => empty($descuadres),
             'verificados' => $verificados,
-            'exactos' => $verificados - $redondeos - count($descuadres),
+            'exactos' => $verificados - $redondeos - $noComparables - count($descuadres),
             'redondeos' => $redondeos,
+            'no_comparables' => $noComparables,
             'descuadres' => $descuadres,
             'saldo_leido' => $saldoLeido,
             'saldo_general_impreso' => $totalGeneralSaldo,
             'saldo_general_ok' => $saldoGeneralOk,
         ];
+    }
+
+    /** Si el símbolo de moneda del reporte es el colón. */
+    private static function enColones($moneda)
+    {
+        $moneda = trim((string) $moneda);
+        return $moneda === '' || $moneda === '¢' || $moneda === '₡'
+            || mb_strtoupper($moneda, 'UTF-8') === 'CRC';
     }
 
     // ------------------------------------------------------------------
@@ -539,8 +684,13 @@ class FacturasErpCsvParser
             : null;
     }
 
-    /** Solo el consecutivo electrónico de 20 dígitos cruza contra los XML. */
-    private static function numeroCorto($documento)
+    /**
+     * Solo el consecutivo electrónico de 20 dígitos cruza contra los XML.
+     * Es pública porque una factura rescatada de la bandeja de revisión tiene
+     * que calcularlo igual que una leída del archivo: si no, entraría sin
+     * número corto y nunca encontraría su comprobante.
+     */
+    public static function numeroCorto($documento)
     {
         return preg_match('/^\d{20}$/', (string) $documento)
             ? NumeroFactura::xmlOchoDigitos($documento)
@@ -571,10 +721,12 @@ class FacturasErpCsvParser
             'meta' => ['archivo' => $archivo, 'codificacion' => null, 'impreso_en' => null,
                        'rango_texto' => null, 'lineas' => 0, 'proveedores' => 0],
             'cuadre' => ['ok' => false, 'verificados' => 0, 'exactos' => 0, 'redondeos' => 0,
-                         'descuadres' => [], 'saldo_leido' => 0.0,
+                         'no_comparables' => 0, 'descuadres' => [], 'saldo_leido' => 0.0,
                          'saldo_general_impreso' => null, 'saldo_general_ok' => null],
             'errores' => $errores,
             'no_reconocidas' => [],
+            'revision' => [],
+            'totales' => ['sucursal' => [], 'proveedor' => [], 'general_saldo' => null],
         ];
     }
 }

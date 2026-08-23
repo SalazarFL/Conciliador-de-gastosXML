@@ -16,6 +16,8 @@ $cargas = is_array($cargas ?? null) ? $cargas : [];
 $ultimaCarga = $ultimaCarga ?? null;
 $incidenciasTotal = (int) ($incidenciasTotal ?? 0);
 $incidenciasAbiertas = (int) ($incidenciasAbiertas ?? 0);
+$revisionPendientes = (int) ($revisionPendientes ?? 0);
+$notasPorFactura = is_array($notasPorFactura ?? null) ? $notasPorFactura : [];
 $pagina = (int) ($pagina ?? 1);
 $totalPaginas = (int) ($totalPaginas ?? 1);
 $total = (int) ($total ?? 0);
@@ -115,6 +117,16 @@ function feNombreArchivo(input) {
                 <?= number_format($total) ?>
             </span>
         </div>
+        <?php if ($revisionPendientes > 0): ?>
+        <a href="<?= $baseUrl ?>/facturas-erp/revision" class="btn btn-outline btn-sm"
+           title="Líneas del reporte que no se pudieron leer y esperan que decidas si entran"
+           style="border-color:#f59e0b;color:#92400e;">
+            <i class="fas fa-inbox" style="margin-right:4px;color:#d97706;"></i>En revisión
+            <span class="badge" style="font-size:10px;padding:1px 6px;margin-left:4px;background:#fef3c7;color:#92400e;">
+                <?= number_format($revisionPendientes) ?>
+            </span>
+        </a>
+        <?php endif; ?>
         <a href="<?= $baseUrl ?>/facturas-erp/incidencias" class="btn btn-outline btn-sm"
            title="Problemas detectados al leer las cargas del reporte del ERP">
             <i class="fas fa-triangle-exclamation" style="margin-right:4px;<?= $incidenciasAbiertas > 0 ? 'color:var(--diff);' : '' ?>"></i>Incidencias
@@ -221,6 +233,12 @@ function feNombreArchivo(input) {
                     $saldo = (float) $f['saldo'];
                     $tieneSaldo = $saldo > 0.005;
                     $doc = (string) $f['documento'];
+                    // Las notas de crédito con saldo que corrigen ESTA factura.
+                    // Es el aviso que hay que ver antes de pagarla: si se paga
+                    // completa, la nota queda sin dónde descontarse.
+                    $notasFactura = $notasPorFactura[(int) $f['id']] ?? [];
+                    $saldoNotas = 0.0;
+                    foreach ($notasFactura as $nf) { $saldoNotas += (float) $nf['saldo']; }
                 ?>
                 <tr>
                     <td style="font-family:ui-monospace,monospace;font-size:11.5px;">
@@ -228,6 +246,18 @@ function feNombreArchivo(input) {
                             <?= htmlspecialchars($f['tipo']) ?>-<?= htmlspecialchars($doc) ?>
                         <?php else: ?>
                             <span class="muted" title="El reporte no imprime número para esta factura">sin número</span>
+                        <?php endif; ?>
+                        <?php if ($notasFactura): ?>
+                            <a href="<?= $baseUrl ?>/notas-credito?factura_erp_id=<?= (int) $f['id'] ?>"
+                               class="badge"
+                               style="display:inline-block;margin-top:4px;font-size:10px;padding:2px 7px;
+                                      background:#fef3c7;color:#92400e;border:1px solid #fcd34d;
+                                      text-decoration:none;font-family:inherit;white-space:nowrap;"
+                               title="Esta factura tiene <?= count($notasFactura) ?> nota(s) de crédito directa(s) sin aplicar por <?= number_format($saldoNotas, 2) ?>. Clic para verlas.">
+                                <i class="fas fa-file-circle-minus" style="margin-right:3px;"></i>
+                                Nota directa<?= count($notasFactura) > 1 ? ' ×' . count($notasFactura) : '' ?>
+                                · <?= number_format($saldoNotas, 2) ?>
+                            </a>
                         <?php endif; ?>
                     </td>
                     <td>

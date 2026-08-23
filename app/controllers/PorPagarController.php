@@ -344,6 +344,12 @@ class PorPagarController extends Controller
                 }
             }
 
+            // Este es el momento en que el aviso sirve: antes de pagar.
+            // Pagar completa una factura que tenía una nota de crédito sin
+            // aplicar deja la nota sin dónde descontarse, y eso hoy no se ve
+            // en ninguna parte hasta que ya pasó.
+            $avisoNotas = $this->avisarNotasDeCredito($datos['resolucion']['filas']);
+
             $this->json([
                 'ok' => true,
                 'archivo' => $datos['archivo'],
@@ -355,11 +361,82 @@ class PorPagarController extends Controller
                 'reasignadas' => $this->pagosQueSeVacian($datos['resolucion']['filas']),
                 'resumen' => $resumen,
                 'monto_resuelto' => round($montoResuelto, 2),
+                'notas_credito' => $avisoNotas,
                 'lineas' => array_slice($datos['resolucion']['filas'], 0, 1000),
                 'total_resultados' => count($datos['resolucion']['filas']),
             ]);
         } catch (Throwable $e) {
             $this->json(['ok' => false, 'message' => $e->getMessage()], 422);
+        }
+    }
+
+    /**
+     * Las facturas de este pago que traen una nota de crédito sin aplicar.
+     *
+     * No frena nada ni descuenta nada: el que aplica es el ERP. Lo que hace
+     * es poner el dato delante de quien decide, en el único momento en que
+     * todavía se puede hacer algo con él. Pagar la factura completa deja la
+     * nota colgando, y después ya no hay forma de darse cuenta.
+     *
+     * Va envuelto: es un aviso, y que falle no puede impedir cargar un pago.
+     */
+    private function avisarNotasDeCredito(array $filas)
+    {
+        $vacio = ['facturas' => 0, 'notas' => 0, 'saldo' => 0.0, 'detalle' => []];
+
+        try {
+            $ids = [];
+            $porId = [];
+            foreach ($filas as $fila) {
+                if (($fila['estado'] ?? '') === 'resuelta' && !empty($fila['erp']['id'])) {
+                    $ids[] = (int) $fila['erp']['id'];
+                    $porId[(int) $fila['erp']['id']] = $fila['erp'];
+                }
+            }
+            if (!$ids) {
+                return $vacio;
+            }
+
+            $porFactura = $this->loadModel('NotaCredito')->notasVivasDeFacturas($ids);
+            if (!$porFactura) {
+                return $vacio;
+            }
+
+            $detalle = [];
+            $totalNotas = 0;
+            $saldo = 0.0;
+            foreach ($porFactura as $facturaId => $notas) {
+                $suma = 0.0;
+                $documentos = [];
+                foreach ($notas as $nota) {
+                    $suma += (float) $nota['saldo'];
+                    $documentos[] = (string) $nota['documento'];
+                }
+                $totalNotas += count($notas);
+                $saldo += $suma;
+                $detalle[] = [
+                    'factura' => (string) ($porId[$facturaId]['documento'] ?? ''),
+                    'proveedor' => (string) ($porId[$facturaId]['proveedor_nombre'] ?? ''),
+                    'saldo_factura' => (float) ($porId[$facturaId]['saldo'] ?? 0),
+                    'notas' => $documentos,
+                    'saldo_notas' => round($suma, 2),
+                ];
+            }
+
+            // Primero las de más plata: si hay veinte, se miran las que
+            // importan.
+            usort($detalle, function ($a, $b) {
+                return $b['saldo_notas'] <=> $a['saldo_notas'];
+            });
+
+            return [
+                'facturas' => count($detalle),
+                'notas' => $totalNotas,
+                'saldo' => round($saldo, 2),
+                'detalle' => array_slice($detalle, 0, 50),
+            ];
+        } catch (Throwable $e) {
+            return $vacio;
         }
     }
 

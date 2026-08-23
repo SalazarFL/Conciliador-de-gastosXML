@@ -6,7 +6,13 @@
  * comillas, las comillas internas están duplicadas, usa Windows-1252 y las
  * posiciones cambian entre páginas. Por eso se detectan los campos por su
  * contenido y por el contexto Proveedor/Sucursal.
+ *
+ * Lo que no se puede leer no se tira: sale en 'revision' con sus celdas
+ * crudas para que alguien lo corrija a mano. Ver LineaRevision.
  */
+
+require_once __DIR__ . '/LineaRevision.php';
+
 class NotasCreditoCsvParser
 {
     public static function parse($filePath)
@@ -28,6 +34,7 @@ class NotasCreditoCsvParser
         $sucursal = '';
         $lineas = [];
         $errores = [];
+        $revision = [];
         $numeroFisico = 0;
         $pendiente = null;
         $primerosTextos = [];
@@ -94,7 +101,33 @@ class NotasCreditoCsvParser
                             $origen,
                             JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE
                         );
+                        $pendiente = null;
+                        continue;
                     }
+                }
+
+                // Una fila sin celda "NC-" ya no se tira sin más.
+                //
+                // Era el agujero más grande del importador: la regla es de
+                // forma, no de contenido, así que una nota perfectamente
+                // buena cuyo número viniera escrito "NC 4946" o "N/C- 4947"
+                // desaparecía sin error, sin contarse y sin salir en ninguna
+                // pantalla. El listado decía "1 nota leída" y las otras tres
+                // no habían existido nunca. Si la fila tiene pinta de dato
+                // —trae fecha y números— pasa a la bandeja de revisión; si es
+                // mobiliario del reporte (títulos, totales, encabezados) se
+                // sigue descartando, que para eso está.
+                if (self::pareceDato($nonEmpty)) {
+                    $revision[] = self::paraRevision(
+                        $numeroFisico,
+                        $row,
+                        $nonEmpty,
+                        'La fila tiene datos pero ninguna celda empieza con "NC-", '
+                            . 'que es como el importador reconoce una nota.',
+                        $proveedorCodigo,
+                        $proveedorNombre,
+                        $sucursal
+                    );
                 }
                 $pendiente = null;
                 continue;
@@ -156,11 +189,25 @@ class NotasCreditoCsvParser
                 ];
                 $pendiente = count($lineas) - 1;
             } catch (Throwable $e) {
+                // La fila SÍ es una nota (tiene su "NC-") pero le falta algo
+                // para poder leerla. Antes solo se contaba —"3 filas
+                // inválidas fueron omitidas"— y ahí moría: nadie podía saber
+                // cuáles eran ni recuperarlas. Ahora se cuenta y además se
+                // guarda entera, con lo que sí se le pudo leer ya puesto.
                 $errores[] = [
                     'fila' => $numeroFisico,
                     'documento' => trim((string) ($row[$documentIndex] ?? '')),
                     'motivo' => $e->getMessage(),
                 ];
+                $revision[] = self::paraRevision(
+                    $numeroFisico,
+                    $row,
+                    $nonEmpty,
+                    $e->getMessage(),
+                    $proveedorCodigo,
+                    $proveedorNombre,
+                    $sucursal
+                );
                 $pendiente = null;
             }
         }
@@ -188,6 +235,7 @@ class NotasCreditoCsvParser
             'periodo_hasta' => $periodoHasta,
             'lineas' => $lineas,
             'errores' => $errores,
+            'revision' => $revision,
             'estadisticas' => [
                 'total' => count($lineas),
                 'proveedores' => count($proveedores),
@@ -247,6 +295,96 @@ class NotasCreditoCsvParser
             }
         }
         return ['', ''];
+    }
+
+    /**
+     * Si una fila que no se pudo leer parece un dato o es mobiliario del
+     * reporte. Se pide fecha y algún número: los títulos, los encabezados de
+     * columna y los rótulos no tienen ninguna de las dos cosas, y los totales
+     * tienen números pero no fecha. Ante la duda se prefiere preguntar: una
+     * fila de más en la bandeja es una molestia, una fila de menos es plata
+     * que nadie sabe que falta.
+     */
+    private static function pareceDato(array $nonEmpty)
+    {
+        $primera = (string) reset($nonEmpty);
+        if (preg_match('/^(Notas de Cr|Del \d+ de |Todos los Proveedores|Documento|Fecha|Entrada|'
+            . 'Moneda|Monto|Saldo|Conversi|Total|Fin del|P.gina|Usuario|Impreso|Grupo )/iu', $primera)) {
+            return false;
+        }
+
+        $tieneFecha = false;
+        $tieneNumero = false;
+        foreach ($nonEmpty as $valor) {
+            if (preg_match('#^\d{1,2}/\d{1,2}/\d{4}$#', (string) $valor)) { $tieneFecha = true; }
+            if (self::isNumericValue($valor)) { $tieneNumero = true; }
+        }
+
+        return $tieneFecha && $tieneNumero;
+    }
+
+    /**
+     * Una fila para la bandeja de revisión: sus celdas crudas, lo que se le
+     * pudo deducir por la forma de cada dato y su firma, que es lo que
+     * permite reconocerla cuando el mismo reporte se vuelva a subir.
+     */
+    private static function paraRevision($fila, array $row, array $nonEmpty, $motivo,
+                                         $proveedorCodigo, $proveedorNombre, $sucursal)
+    {
+        $celdas = array_values($nonEmpty);
+
+        $campos = [
+            'proveedor_codigo' => (string) $proveedorCodigo,
+            'proveedor_nombre' => (string) $proveedorNombre,
+            'sucursal' => (string) $sucursal,
+            'documento' => '',
+            'fecha' => '',
+            'nc_proveedor' => '',
+            'fecha_nc_proveedor' => '',
+            'entrada_asociada' => '',
+            'moneda' => 'CRC',
+            'monto' => '',
+            'saldo' => '',
+            'monto_conversion' => '',
+        ];
+
+        $fechas = [];
+        $numeros = [];
+        foreach ($celdas as $valor) {
+            $valor = trim((string) $valor);
+            if ($valor === '') {
+                continue;
+            }
+            if (preg_match('#^\d{1,2}/\d{1,2}/\d{4}$#', $valor)) { $fechas[] = $valor; continue; }
+            if (self::isNumericValue($valor)) { $numeros[] = $valor; continue; }
+
+            $mayus = mb_strtoupper($valor, 'UTF-8');
+            if (in_array($mayus, ['¢', '₡', 'CRC', 'COLONES', '$', 'USD'], true) || strpos($mayus, '$(') === 0) {
+                $campos['moneda'] = self::normalizeCurrency($valor);
+                continue;
+            }
+            // El documento es lo primero que parece un número de nota: el
+            // "NC-" de siempre, o el número desnudo cuando el prefijo es el
+            // que vino mal escrito y por eso la fila cayó aquí.
+            if ($campos['documento'] === ''
+                && preg_match('/^(N\/?C[-\s]*)?[\dA-Z][\dA-Z-]*$/iu', $valor)) {
+                $campos['documento'] = $valor;
+            }
+        }
+
+        if (isset($fechas[0])) { $campos['fecha'] = $fechas[0]; }
+        if (isset($fechas[1])) { $campos['fecha_nc_proveedor'] = $fechas[1]; }
+        if (isset($numeros[0])) { $campos['monto'] = $numeros[0]; }
+        if (isset($numeros[1])) { $campos['saldo'] = $numeros[1]; }
+        if (isset($numeros[2])) { $campos['monto_conversion'] = $numeros[2]; }
+
+        return [
+            'fila_origen' => (int) $fila,
+            'motivo' => (string) $motivo,
+            'celdas' => $celdas,
+            'campos' => $campos,
+            'firma' => LineaRevision::firma('notas_credito', $celdas, (string) $proveedorCodigo),
+        ];
     }
 
     private static function findDocumentIndex(array $nonEmpty)

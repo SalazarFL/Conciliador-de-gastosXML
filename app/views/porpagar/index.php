@@ -188,6 +188,14 @@ function ppUpdateFileDisplay(input) {
         <div id="ppv-reasignadas" style="display:none;margin:7px 13px 0;padding:7px 9px;background:#fffbeb;
              border:1px solid #fde68a;border-radius:7px;color:#92400e;font-size:12px;line-height:1.5;
              flex-shrink:0;"></div>
+
+        <!-- Facturas de este pago que traen una nota de crédito sin aplicar.
+             Es el único momento en que el aviso sirve: después de pagar la
+             factura completa, la nota queda sin dónde descontarse y ya no hay
+             cómo enterarse. No bloquea la carga: es información para decidir. -->
+        <div id="ppv-notas" style="display:none;margin:7px 13px 0;padding:8px 10px;background:#eff6ff;
+             border:1px solid #bfdbfe;border-radius:7px;color:#1e40af;font-size:12px;line-height:1.55;
+             flex-shrink:0;max-height:150px;overflow:auto;"></div>
         <div style="overflow:auto;flex:1;">
             <table class="data-table" style="font-size:12.5px;">
                 <thead>
@@ -761,6 +769,28 @@ document.addEventListener('keydown', function (e) {
         } else {
             avisoMovidas.style.display = 'none';
             avisoMovidas.innerHTML = '';
+        }
+
+        // Notas de crédito sin aplicar sobre facturas de este pago. Informa,
+        // no bloquea: puede ser correcto pagar completo y dejar la nota para
+        // otra factura del proveedor. Lo que no puede pasar es no saberlo.
+        var avisoNotas = document.getElementById('ppv-notas');
+        var nc = r.notas_credito || {};
+        if (nc.facturas) {
+            avisoNotas.style.display = 'block';
+            avisoNotas.innerHTML =
+                '<div style="margin-bottom:5px;"><i class="fas fa-file-circle-minus"></i> <strong>'
+                + nc.facturas + ' factura' + (nc.facturas !== 1 ? 's de este pago tienen' : ' de este pago tiene')
+                + ' nota de crédito sin aplicar</strong> por ₡' + fmtMonto(nc.saldo || 0)
+                + '. Si se pagan completas, la nota queda para otra factura del proveedor.</div>'
+                + (nc.detalle || []).map(function (d) {
+                    return '<div style="padding-left:14px;">· <span style="font-family:ui-monospace,monospace;">'
+                        + esc(d.factura) + '</span> (' + esc(d.proveedor) + ') — nota '
+                        + esc(d.notas.join(', ')) + ' por ₡' + fmtMonto(d.saldo_notas) + '</div>';
+                }).join('');
+        } else {
+            avisoNotas.style.display = 'none';
+            avisoNotas.innerHTML = '';
         }
 
         btnImportar.disabled = problemas > 0 || (x.resuelta || 0) === 0;

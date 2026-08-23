@@ -146,6 +146,10 @@ $router->post('/facturas-erp/subir', 'FacturasErpController@subir');
 $router->get('/facturas-erp/incidencias', 'FacturasErpController@incidencias');
 $router->post('/facturas-erp/incidencias/descartar', 'FacturasErpController@descartarIncidencias');
 $router->post('/facturas-erp/incidencias/restaurar', 'FacturasErpController@restaurarIncidencias');
+$router->get('/facturas-erp/revision', 'FacturasErpController@revision');
+$router->post('/facturas-erp/revision/guardar', 'FacturasErpController@guardarRevision');
+$router->post('/facturas-erp/revision/descartar', 'FacturasErpController@descartarRevision');
+$router->post('/facturas-erp/revision/olvidar', 'FacturasErpController@olvidarRevision');
 $router->get('/facturas-erp/exportar', 'FacturasErpController@exportar');
 
 // --- RUTAS DE NOTAS DE CRÉDITO (listados por período) ---
@@ -158,6 +162,10 @@ $router->get('/notas-credito/historial/{id}', 'NotasCreditoController@historial'
 $router->get('/notas-credito/candidatas', 'NotasCreditoController@candidatas');
 $router->post('/notas-credito/vincular', 'NotasCreditoController@vincular');
 $router->post('/notas-credito/desvincular', 'NotasCreditoController@desvincular');
+$router->get('/notas-credito/revision', 'NotasCreditoController@revision');
+$router->post('/notas-credito/revision/guardar', 'NotasCreditoController@guardarRevision');
+$router->post('/notas-credito/revision/descartar', 'NotasCreditoController@descartarRevision');
+$router->post('/notas-credito/revision/olvidar', 'NotasCreditoController@olvidarRevision');
 
 // --- RUTAS DE DEVOLUCIONES (reportes PDF del ERP ↔ NC electrónicas) ---
 $router->get('/devoluciones', 'DevolucionesController@index');

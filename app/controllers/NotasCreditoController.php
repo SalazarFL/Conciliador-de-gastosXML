@@ -20,6 +20,9 @@ class NotasCreditoController extends Controller
         'documento', 'fecha', 'nc_proveedor', 'fecha_nc_proveedor',
         'entrada_asociada', 'moneda', 'monto', 'saldo', 'monto_conversion',
         'nc_xml', 'xml_total', 'diferencia',
+        // Situacion frente a la factura que corrige, y la entrada directa
+        // desde el renglon de una factura.
+        'aplicacion', 'factura_erp_id',
     ];
 
     public function __construct()
@@ -63,6 +66,7 @@ class NotasCreditoController extends Controller
             'proveedoresFiltro' => $listado
                 ? ProveedorCatalogo::opciones($modelo->proveedoresParaFiltro($listadoId))
                 : [],
+            'revisionPendientes' => $this->pendientesDeRevision(),
         ]);
     }
 
@@ -171,6 +175,7 @@ class NotasCreditoController extends Controller
                 'periodo_hasta' => $parsed['periodo_hasta'],
                 'estadisticas' => $parsed['estadisticas'],
                 'errores' => $parsed['errores'],
+                'revision' => count($parsed['revision']),
                 'impacto' => $impacto,
                 'duplicado' => $existing ? [
                     'id' => (int) ($existing['listado_id'] ?? 0),
@@ -181,6 +186,254 @@ class NotasCreditoController extends Controller
         } catch (Throwable $e) {
             $this->json(['ok' => false, 'message' => $e->getMessage()], 422);
         }
+    }
+
+    /** Qué se puede editar de una nota rescatada, y cómo se llama en pantalla. */
+    const CAMPOS_REVISION = [
+        'proveedor_codigo'   => ['Código de proveedor', 'texto'],
+        'proveedor_nombre'   => ['Nombre del proveedor', 'texto'],
+        'sucursal'           => ['Sucursal', 'texto'],
+        'documento'          => ['Documento', 'texto'],
+        'fecha'              => ['Fecha', 'fecha'],
+        'nc_proveedor'       => ['NC del proveedor', 'texto'],
+        'fecha_nc_proveedor' => ['Fecha NC proveedor', 'fecha'],
+        'entrada_asociada'   => ['Entrada asociada', 'texto'],
+        'moneda'             => ['Moneda', 'texto'],
+        'monto'              => ['Monto', 'importe'],
+        'saldo'              => ['Saldo', 'importe'],
+        'monto_conversion'   => ['Monto conversión', 'importe'],
+    ];
+
+    /**
+     * Las filas que la carga no supo leer, para corregirlas a mano.
+     *
+     * Hasta ahora, una fila cuyo número no empezara exactamente con "NC-"
+     * desaparecía sin error y sin contarse: el listado decía cuántas notas
+     * había leído y las demás no habían existido nunca.
+     */
+    public function revision()
+    {
+        $sociedad = $this->loadModel('Sociedad')->getActiva();
+        if (!$sociedad) {
+            $this->redirectWithMessage(
+                $this->url('/notas-credito'),
+                'Seleccioná una sociedad para ver sus filas en revisión.',
+                'warning'
+            );
+        }
+
+        $bandeja = $this->bandeja();
+        $this->render('notascredito.revision', [
+            'titulo' => 'Filas en revisión · Notas de crédito',
+            'modulo' => 'notas-credito',
+            'pendientes' => $bandeja->pendientes((int) $sociedad['id']),
+            'resueltas' => $bandeja->resueltas((int) $sociedad['id'], 50),
+            'memoria' => $bandeja->memoria((int) $sociedad['id']),
+            'campos' => self::CAMPOS_REVISION,
+        ]);
+    }
+
+    /** Guarda una fila corregida como una nota más del acumulado. */
+    public function guardarRevision()
+    {
+        if (!$this->isPost()) {
+            $this->redirect($this->url('/notas-credito/revision'));
+        }
+        $volver = $this->url('/notas-credito/revision');
+
+        try {
+            $sociedad = $this->loadModel('Sociedad')->getActiva();
+            if (!$sociedad) {
+                throw new Exception('No hay una sociedad activa.');
+            }
+            $bandeja = $this->bandeja();
+            $linea = $bandeja->buscar((int) $sociedad['id'], (int) $this->post('id', 0));
+            if (!$linea) {
+                throw new Exception('Esa fila ya no está en la bandeja.');
+            }
+            if ($linea['estado'] !== 'pendiente') {
+                throw new Exception('Esa fila ya fue resuelta.');
+            }
+
+            $campos = $this->camposDelFormulario(array_keys(self::CAMPOS_REVISION));
+            $campos['fila_origen'] = (int) $linea['fila_origen'];
+
+            $modelo = $this->loadModel('NotaCredito');
+            $r = $modelo->insertarDesdeRevision($campos, (int) $sociedad['id'], $linea['carga_id']);
+
+            $bandeja->marcarIncluida($linea['id'], $campos, $r['id'], $_SESSION['usuario_id'] ?? null);
+            $recordar = $this->post('recordar', '') !== '';
+            if ($recordar) {
+                $bandeja->recordar(
+                    (int) $sociedad['id'],
+                    $linea,
+                    'incluir',
+                    $campos,
+                    'Corregida a mano desde la bandeja de revisión.',
+                    $_SESSION['usuario_id'] ?? null
+                );
+            }
+
+            // La nota entra al acumulado como cualquier otra, así que le toca
+            // el mismo cruce contra los XML que a las que llegaron del CSV.
+            try {
+                NotasCreditoVerificador::verificarListado(
+                    (int) $r['listado_id'],
+                    $modelo,
+                    'rescate_revision',
+                    [(int) $r['id']]
+                );
+            } catch (Throwable $e) {
+                // El rescate ya está guardado; el cruce se rehace en la
+                // próxima carga.
+            }
+
+            $this->redirectWithMessage(
+                $volver,
+                'La fila entró al acumulado como una nota más.'
+                . ($recordar ? ' La próxima carga la va a corregir sola.' : ''),
+                'success'
+            );
+        } catch (Throwable $e) {
+            $this->redirectWithMessage($volver, 'No se pudo guardar: ' . $e->getMessage(), 'error');
+        }
+    }
+
+    /** Deja fuera una fila: no es una nota que deba entrar al acumulado. */
+    public function descartarRevision()
+    {
+        if (!$this->isPost()) {
+            $this->redirect($this->url('/notas-credito/revision'));
+        }
+        $volver = $this->url('/notas-credito/revision');
+
+        try {
+            $sociedad = $this->loadModel('Sociedad')->getActiva();
+            if (!$sociedad) {
+                throw new Exception('No hay una sociedad activa.');
+            }
+            $bandeja = $this->bandeja();
+            $linea = $bandeja->buscar((int) $sociedad['id'], (int) $this->post('id', 0));
+            if (!$linea) {
+                throw new Exception('Esa fila ya no está en la bandeja.');
+            }
+
+            $nota = (string) $this->post('nota', '');
+            $bandeja->marcarDescartada($linea['id'], $nota, $_SESSION['usuario_id'] ?? null);
+            $recordar = $this->post('recordar', '') !== '';
+            if ($recordar) {
+                $bandeja->recordar(
+                    (int) $sociedad['id'],
+                    $linea,
+                    'descartar',
+                    [],
+                    $nota,
+                    $_SESSION['usuario_id'] ?? null
+                );
+            }
+
+            $this->redirectWithMessage(
+                $volver,
+                'Fila descartada.' . ($recordar ? ' No va a volver a preguntarse.' : ''),
+                'success'
+            );
+        } catch (Throwable $e) {
+            $this->redirectWithMessage($volver, 'No se pudo descartar: ' . $e->getMessage(), 'error');
+        }
+    }
+
+    /** Olvida una decisión recordada: la fila vuelve a preguntarse. */
+    public function olvidarRevision()
+    {
+        if (!$this->isPost()) {
+            $this->redirect($this->url('/notas-credito/revision'));
+        }
+        $volver = $this->url('/notas-credito/revision');
+
+        try {
+            $sociedad = $this->loadModel('Sociedad')->getActiva();
+            if (!$sociedad) {
+                throw new Exception('No hay una sociedad activa.');
+            }
+            $this->bandeja()->olvidar((int) $sociedad['id'], (int) $this->post('memoria_id', 0));
+            $this->redirectWithMessage(
+                $volver,
+                'Decisión olvidada: la próxima carga vuelve a preguntar por esa fila.',
+                'success'
+            );
+        } catch (Throwable $e) {
+            $this->redirectWithMessage($volver, 'No se pudo olvidar: ' . $e->getMessage(), 'error');
+        }
+    }
+
+    /** La bandeja de filas en revisión de este módulo. */
+    private function bandeja()
+    {
+        require_once __DIR__ . '/../models/LineaEnRevision.php';
+        static $bandeja = null;
+        if ($bandeja === null) {
+            $bandeja = new LineaEnRevision('notas_credito');
+        }
+        return $bandeja;
+    }
+
+    /** Cuántas filas están esperando que alguien decida. */
+    private function pendientesDeRevision()
+    {
+        try {
+            $sociedad = $this->loadModel('Sociedad')->getActiva();
+            return $sociedad ? $this->bandeja()->contarPendientes((int) $sociedad['id']) : 0;
+        } catch (Throwable $e) {
+            // El aviso es un extra: que falte no puede tumbar el listado.
+            return 0;
+        }
+    }
+
+    /**
+     * Reparte las filas ilegibles del archivo y devuelve las que pueden
+     * entrar ya convertidas en notas.
+     */
+    private function repartirRevision(array $filas, $sociedadId)
+    {
+        if (!$filas) {
+            return ['lineas' => [], 'pendientes' => [], 'descartadas' => 0, 'memoria_ids' => []];
+        }
+
+        $reparto = $this->bandeja()->repartir($sociedadId, $filas);
+
+        $lineas = [];
+        $memoriaIds = [];
+        $pendientes = $reparto['pendientes'];
+
+        foreach ($reparto['corregidas'] as $fila) {
+            try {
+                $campos = $fila['campos'];
+                $campos['fila_origen'] = (int) ($fila['fila_origen'] ?? 0);
+                $lineas[] = NotaCredito::sanearDesdeRevision($campos);
+                $memoriaIds[] = $fila['memoria_id'] ?? 0;
+            } catch (Throwable $e) {
+                $fila['motivo'] = 'La corrección guardada ya no sirve para esta fila ('
+                    . $e->getMessage() . ') ' . $fila['motivo'];
+                $pendientes[] = $fila;
+            }
+        }
+
+        return [
+            'lineas' => $lineas,
+            'pendientes' => $pendientes,
+            'descartadas' => count($reparto['descartadas']),
+            'memoria_ids' => $memoriaIds,
+        ];
+    }
+
+    /** Los campos que llegan del formulario de revisión, sin nada de más. */
+    private function camposDelFormulario(array $permitidos)
+    {
+        $campos = [];
+        foreach ($permitidos as $campo) {
+            $campos[$campo] = trim((string) $this->post('campo_' . $campo, ''));
+        }
+        return $campos;
     }
 
     public function subir()
@@ -219,6 +472,13 @@ class NotasCreditoController extends Controller
                 throw new Exception('No fue posible conservar el CSV original.');
             }
 
+            // Las filas que el parser no supo leer se reparten antes de
+            // aplicar la foto: las que ya tienen corrección guardada entran
+            // con ella, las ya descartadas se descartan solas y el resto
+            // queda preguntando en la bandeja de revisión.
+            $reparto = $this->repartirRevision($parsed['revision'], (int) $sociedad['id']);
+            $parsed['lineas'] = array_merge($parsed['lineas'], $reparto['lineas']);
+
             $nombre = $this->buildListName($parsed);
             $resultado = $modelo->importarConsolidado($parsed['lineas'], [
                 'sociedad_id' => (int) $sociedad['id'],
@@ -230,7 +490,9 @@ class NotasCreditoController extends Controller
                 'archivo_ruta' => $permanentPath,
                 'archivo_hash' => $hash,
                 'filas_leidas' => count($parsed['lineas']),
-                'filas_invalidas' => count($parsed['errores']),
+                // Todas las que el archivo traía ilegibles, no solo las que
+                // llevaban "NC-": las otras ni siquiera se contaban.
+                'filas_invalidas' => count($parsed['revision']),
             ], $_SESSION['usuario_id'] ?? null);
             $guardado = true;
             $listadoId = (int) $resultado['listado_id'];
@@ -243,6 +505,14 @@ class NotasCreditoController extends Controller
                     $resultado['ids_verificar']
                 );
             }
+            // Con las notas nuevas adentro, se rehace el cruce contra las
+            // facturas del ERP: es lo que dice cuáles se pueden aplicar.
+            try {
+                $modelo->recalcularAplicacion((int) $sociedad['id']);
+            } catch (Throwable $e) {
+                // Información de apoyo: que falle no invalida la carga.
+            }
+
             $stats = $modelo->resumen($listadoId);
             $message = count($parsed['lineas']) . ' notas leídas: '
                 . $resultado['insertadas'] . ' nuevas, '
@@ -255,13 +525,37 @@ class NotasCreditoController extends Controller
             $message .= ' Verificación XML: ' . $stats['coincide'] . ' coinciden, '
                 . $stats['con_diferencia'] . ' con diferencia y '
                 . $stats['sin_respaldo'] . ' sin respaldo.';
-            if (!empty($parsed['errores'])) {
-                $message .= ' ' . count($parsed['errores']) . ' filas inválidas fueron omitidas.';
+
+            // Las filas ilegibles ya no se resumen en "N filas inválidas
+            // fueron omitidas", que era todo lo que se llegaba a saber de
+            // ellas. Ahora se dice qué pasó con cada grupo y las que quedan
+            // se pueden abrir, corregir y meter al acumulado.
+            $pendientes = $this->bandeja()->registrarPendientes(
+                (int) $sociedad['id'],
+                $reparto['pendientes'],
+                (int) ($resultado['carga_id'] ?? 0) ?: null,
+                $listadoId
+            );
+            $this->bandeja()->marcarMemoriaAplicada($reparto['memoria_ids']);
+
+            if ($reparto['lineas']) {
+                $message .= ' ' . count($reparto['lineas'])
+                    . ' fila(s) entraron con la corrección que ya habías guardado.';
             }
+            if ($reparto['descartadas'] > 0) {
+                $message .= ' ' . $reparto['descartadas']
+                    . ' fila(s) se descartaron solas porque ya lo habías decidido.';
+            }
+            if ($pendientes > 0) {
+                $message .= ' Atención: ' . $pendientes . ' fila(s) no se pudieron leer y quedaron '
+                    . 'esperando que decidas si entran.';
+            }
+
             $this->redirectWithMessage(
                 $this->url('/notas-credito?listado_id=' . $listadoId),
                 $message,
-                ($stats['con_diferencia'] + $stats['sin_respaldo']) > 0 ? 'warning' : 'success'
+                ($stats['con_diferencia'] + $stats['sin_respaldo']) > 0 || $pendientes > 0
+                    ? 'warning' : 'success'
             );
         } catch (Throwable $e) {
             $modelo->rollback();

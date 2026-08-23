@@ -13,6 +13,7 @@
 require_once __DIR__ . '/../models/Seguimiento.php';
 require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 require_once __DIR__ . '/../helpers/ClaseNotaCredito.php';
+require_once __DIR__ . '/../helpers/AplicacionNotaCredito.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 require_once __DIR__ . '/../helpers/NavegacionDocumentos.php';
 require_once __DIR__ . '/../helpers/EstadoArchivo.php';
@@ -32,7 +33,7 @@ class SeguimientoController extends Controller
         // se dejaron. 'contexto_id' no: no tiene control en pantalla, y
         // recordarlo dejaría la cola recortada sin que nada lo explique.
         $this->recordarFiltros('seguimiento', [
-            'vista', 'origen', 'tarea', 'marca', 'clase', 'responsable',
+            'vista', 'origen', 'tarea', 'marca', 'clase', 'aplicacion', 'responsable',
             'proveedor', 'sucursal', 'desde', 'hasta', 'monto_min',
             'condicion_saldo', 'q', 'col_documento', 'col_proveedor',
             'col_monto', 'col_saldo', 'col_respaldo', 'col_tarea', 'orden',
@@ -284,6 +285,7 @@ class SeguimientoController extends Controller
             'Saldo', 'Diferencia', 'Qué falta', 'XML', 'PDF', 'Estado', 'Puesto a mano',
             'Le tocaría', 'Responsable', 'Recordatorio', 'Motivo', 'Listado',
             'Consecutivo XML', 'Último movimiento',
+            'Nota de crédito en juego',
         ], ';', '"', '\\');
 
         foreach ($filas as $f) {
@@ -311,10 +313,44 @@ class SeguimientoController extends Controller
                 $f['contexto'],
                 $f['consecutivo'] ?: '',
                 $f['seguimiento_actualizado_en'] ?: '',
+                // Las dos caras de lo mismo: una nota dice contra qué factura
+                // se descuenta, una factura dice cuánta nota tiene esperando.
+                self::notaEnJuego($f),
             ], ';', '"', '\\');
         }
         fclose($salida);
         exit;
+    }
+
+    /**
+     * La nota de crédito en juego de un renglón, en una frase.
+     *
+     * Se mira desde el origen del renglón porque la pregunta es distinta a
+     * cada lado: de una nota interesa contra qué factura va, de una factura
+     * interesa cuánto tiene esperando sin aplicar.
+     */
+    private static function notaEnJuego(array $f)
+    {
+        if (($f['origen'] ?? '') === 'nota_credito') {
+            $estado = (string) ($f['aplicacion_estado'] ?? '');
+            if ($estado === '' || $estado === AplicacionNotaCredito::NO_APLICA) {
+                return '';
+            }
+            $texto = AplicacionNotaCredito::etiqueta($estado);
+            return !empty($f['aplicacion_factura_doc'])
+                ? $texto . ' (factura ' . $f['aplicacion_factura_doc'] . ')'
+                : $texto;
+        }
+
+        $cuantas = (int) ($f['notas_vivas'] ?? 0);
+        if ($cuantas <= 0) {
+            return '';
+        }
+        return sprintf(
+            '%d nota(s) sin aplicar por %s',
+            $cuantas,
+            number_format((float) ($f['notas_vivas_saldo'] ?? 0), 2, '.', '')
+        );
     }
 
     private function itemsDelPost()
