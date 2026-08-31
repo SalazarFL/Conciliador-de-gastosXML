@@ -1,11 +1,43 @@
 <?php
 require_once __DIR__ . '/../helpers/RecuperadorDocumentos.php';
+require_once __DIR__ . '/../helpers/FichaDocumento.php';
 
 class DocumentosController extends Controller
 {
     public function __construct() { $this->requireAuth(); }
     public function xml($id) { $this->servir((int) $id, 'xml'); }
     public function pdf($id) { $this->servir((int) $id, 'pdf'); }
+
+    /**
+     * La ficha de un comprobante en JSON, para el cuadro que se abre encima
+     * del listado (GET).
+     *
+     * Sirve igual a una factura y a una nota de crédito porque las dos son la
+     * misma fila: el visor no tiene por qué saber en qué módulo está parado.
+     * Las pantallas completas —/facturas/ver y /notas-xml/ver— siguen ahí y
+     * leen lo mismo; esto no las reemplaza, les ahorra el viaje.
+     */
+    public function ficha($id)
+    {
+        $id = (int) $id;
+        if ($id <= 0) {
+            $this->json(['ok' => false, 'message' => 'No se indicó ningún documento.'], 422);
+        }
+
+        try {
+            $fila = $this->loadModel('Factura')->getOneWithProvider($id);
+        } catch (Throwable $e) {
+            $this->registrarFallo('Ficha del documento ' . $id, $e);
+            $this->json(['ok' => false, 'message' => 'No se pudo leer este documento.'], 500);
+            return;
+        }
+
+        if (!$fila) {
+            $this->json(['ok' => false, 'message' => 'Este documento ya no está en el sistema.'], 404);
+        }
+
+        $this->json(['ok' => true, 'ficha' => FichaDocumento::de($fila, $this->url(''))]);
+    }
 
     /**
      * Vuelve a bajar del correo el respaldo de uno o varios documentos y lo
@@ -102,11 +134,23 @@ class DocumentosController extends Controller
             http_response_code(415);
             exit('Tipo de archivo no válido.');
         }
+        // Abrir ANTES de mandar cabeceras: si el archivo es un marcador de
+        // OneDrive, aquí se sabe y todavía se puede contestar con palabras en
+        // vez de con un documento vacío.
+        $manejador = RutaDocumento::abrirParaLeer($real);
+        if ($manejador === false) {
+            http_response_code(503);
+            header('Content-Type: text/plain; charset=utf-8');
+            echo 'Este ' . strtoupper($tipo) . ' no se puede abrir todavía. '
+                . RutaDocumento::porQueNoSeLee($real);
+            exit;
+        }
         header('X-Content-Type-Options: nosniff');
         header('Content-Type: ' . ($tipo === 'pdf' ? 'application/pdf' : 'application/xml; charset=utf-8'));
         header('Content-Length: ' . filesize($real));
         header('Content-Disposition: inline; filename="' . str_replace('"', '', basename($real)) . '"');
-        readfile($real);
+        fpassthru($manejador);
+        fclose($manejador);
         exit;
     }
 }

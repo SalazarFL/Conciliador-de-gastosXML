@@ -75,6 +75,10 @@ $router->get('/facturas/ver/{id}', 'FacturasController@ver');
 $router->get('/notas-xml', 'NotasXmlController@index');
 $router->post('/notas-xml/subir', 'NotasXmlController@subir');
 $router->get('/notas-xml/ver/{id}', 'NotasXmlController@ver');
+// La ficha del comprobante en JSON: el cuadro que se abre sobre el listado
+// en vez de mandar a otra pestaña (ver public/assets/js/app.js, visor de
+// ficha). Sirve a facturas y a notas de crédito, que son la misma tabla.
+$router->get('/documentos/ficha/{id}', 'DocumentosController@ficha');
 $router->get('/documentos/xml/{id}', 'DocumentosController@xml');
 $router->get('/documentos/pdf/{id}', 'DocumentosController@pdf');
 $router->post('/documentos/recuperar', 'DocumentosController@recuperar');
@@ -142,6 +146,7 @@ $router->post('/por-pagar/forzar', 'PorPagarController@forzar');
 
 // --- RUTAS DE FACTURAS ERP (reporte "Facturas por Proveedor", saldos) ---
 $router->get('/facturas-erp', 'FacturasErpController@index');
+$router->post('/facturas-erp/previa', 'FacturasErpController@previsualizar');
 $router->post('/facturas-erp/subir', 'FacturasErpController@subir');
 $router->get('/facturas-erp/incidencias', 'FacturasErpController@incidencias');
 $router->post('/facturas-erp/incidencias/descartar', 'FacturasErpController@descartarIncidencias');

@@ -3,6 +3,18 @@
  * Nexo Fiscal
  */
 
+/* Esta pantalla se está viendo DENTRO de una ventana del sistema: un marco
+ * abierto sobre otra pantalla desde un botón que antes mandaba a otra pestaña
+ * (ver el visor de ventanas, al final del archivo).
+ *
+ * Se marca en la primera línea que corre, y no al terminar de cargar, porque
+ * app.js se carga justo después de <body> y antes del menú lateral: cuando el
+ * CSS lo esconde, el menú todavía no se dibujó y no hay parpadeo.
+ */
+if (window.self !== window.top) {
+	document.documentElement.classList.add('en-ventana');
+}
+
 /* Diálogos visuales compartidos. Sustituyen alert/confirm del navegador para
  * que los mensajes tengan contexto, una acción clara y la identidad del sistema. */
 (function () {
@@ -204,6 +216,13 @@
 
 	document.addEventListener('keydown', function (event) {
 		if (!active || !ui) return;
+		/* Un diálogo abierto es siempre la capa de arriba: Escape y Tab son
+		 * suyos y no pueden llegar a lo que quedó debajo. Sin esto, cerrar una
+		 * confirmación con Escape cerraba también el cuadro o el panel sobre
+		 * el que se había abierto. */
+		if (event.key === 'Escape' || event.key === 'Tab') {
+			event.stopImmediatePropagation();
+		}
 		if (event.key === 'Escape') {
 			event.preventDefault();
 			finish(false);
@@ -602,10 +621,35 @@
 		proveedor.textContent = it.proveedor;
 		proveedor.title = it.proveedor;
 
+		/* La sucursal solo si el documento tiene una: sin ella el renglón
+		 * entero se va, en vez de dejar el icono solo. */
+		var sucursal = tarjeta.querySelector('[data-navdoc-sucursal]');
+		var nombreSucursal = String(it.sucursal || '').trim();
+		sucursal.hidden = nombreSucursal === '';
+		if (nombreSucursal !== '') {
+			sucursal.querySelector('[data-navdoc-sucursal-texto]').textContent = nombreSucursal;
+			sucursal.title = 'Sucursal: ' + nombreSucursal;
+		}
+
 		tarjeta.querySelector('[data-navdoc-fecha]').textContent = it.fecha || '—';
 		tarjeta.querySelector('[data-navdoc-monto]').textContent = '₡' +
 			Number(it.total).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-		tarjeta.querySelector('[data-navdoc-pos]').textContent = (idx + 1) + ' / ' + items.length;
+		/* El marcador de posición. Dos números sueltos no dicen de qué lista
+		 * hablan, así que el título lo deletrea: cuál de cuántos, y de dónde
+		 * salió esa lista. Si la lista de origen es más larga de lo que la
+		 * tarjeta se trae, se marca con un "+" en vez de dar el tope por
+		 * total: decir "12 / 300" de una cola de 412 sería mentir. */
+		var pos = tarjeta.querySelector('[data-navdoc-pos]');
+		var origen = tarjeta.dataset.navdocTitulo || '';
+		var totalOrigen = parseInt(tarjeta.dataset.navdocTotal, 10) || items.length;
+		var recortada = totalOrigen > items.length;
+		pos.textContent = (idx + 1) + ' / ' + items.length + (recortada ? '+' : '');
+		pos.title = 'Documento ' + (idx + 1) + ' de ' + items.length
+			+ (origen ? ' de ' + origen : '')
+			+ (recortada
+				? ' — la lista tiene ' + totalOrigen + '; las flechas llegan hasta '
+				  + items.length + ', el resto se sigue desde el módulo'
+				: '');
 
 		tarjeta.querySelector('[data-navdoc-prev]').disabled = idx === 0;
 		tarjeta.querySelector('[data-navdoc-next]').disabled = idx === items.length - 1;
@@ -619,6 +663,16 @@
 				window.location.pathname + '?' + tarjeta.dataset.navdocParams +
 				'&ctx_item=' + encodeURIComponent(it.id));
 		} catch (e) {}
+
+		/* Y los formularios de la pantalla siguen al documento visible. La
+		 * barra de filtros se envía por GET y lleva el contexto escondido
+		 * (partials/contexto-oculto.php); si mandara el documento con el que
+		 * se entró, buscar a mano después de avanzar con las flechas
+		 * devolvería la tarjeta al principio del recorrido. */
+		var ocultos = document.querySelectorAll('input[type="hidden"][name="ctx_item"]');
+		for (var i = 0; i < ocultos.length; i++) {
+			ocultos[i].value = it.id;
+		}
 
 		if (avisar) {
 			tarjeta.dispatchEvent(new CustomEvent('navdoc:cambia', { detail: it }));
@@ -839,3 +893,850 @@ document.addEventListener('DOMContentLoaded', function () {
 		});
 	});
 });
+
+
+/* ══════════════════════════════════════════════════════════════════════
+   SELECCIÓN POR RANGO CON SHIFT
+
+   Una lista con casillas y acciones en tanda invita a marcar veinte
+   renglones seguidos, y de a un clic eso son veinte clics con el riesgo de
+   saltarse uno sin notarlo. Shift es lo que todo el mundo prueba primero
+   —el correo, el explorador de archivos y las hojas de cálculo lo hacen—,
+   así que aquí hace lo mismo: marca desde la última casilla que se tocó
+   hasta esta.
+
+   Ctrl no necesita nada: en una lista de casillas, un clic suelto ya suma
+   o quita uno sin tocar los demás, que es justo lo que Ctrl hace en las
+   listas donde marcar uno desmarca el resto.
+
+   Vive acá y no dentro de una pantalla porque son tres las listas que
+   trabajan en tanda —la cola de seguimiento, la bandeja del correo y sus
+   incidencias— y el comportamiento tiene que ser el mismo en las tres.
+══════════════════════════════════════════════════════════════════════ */
+(function () {
+	'use strict';
+
+	/**
+	 * Enciende Shift + clic sobre las casillas de un contenedor.
+	 *
+	 * 	param {Element}  contenedor  La tabla o lista que las contiene.
+	 * 	param {string}   selector    Cómo se reconoce una casilla ('.chk-fila').
+	 * 	param {Function} [alCambiar] Se llama tras cada clic, para que quien
+	 *                               lleva la cuenta la rehaga. Las casillas del
+	 *                               tramo se marcan desde el código y eso NO
+	 *                               dispara su 'change': sin este aviso, la
+	 *                               barra de acciones diría "2 seleccionados"
+	 *                               con veinte marcados.
+	 * 	returns {{olvidarAncla: Function}|null}
+	 */
+	window.AppSeleccionRango = function (contenedor, selector, alCambiar) {
+		if (!contenedor) { return null; }
+
+		var ancla = null;
+
+		function casillas() {
+			return Array.prototype.slice.call(contenedor.querySelectorAll(selector));
+		}
+
+		function casillaDe(evento) {
+			return evento.target && evento.target.closest
+				? evento.target.closest(selector)
+				: null;
+		}
+
+		/* Para el navegador, Shift + clic significa "extendé la selección de
+		 * texto": sin esto media tabla queda pintada de azul en cada rango.
+		 * Cancelar el mousedown corta ese arrastre y no impide que la casilla
+		 * cambie —eso ocurre en el clic—; lo único que quita es el foco, que se
+		 * devuelve abajo para poder seguir con el teclado. */
+		contenedor.addEventListener('mousedown', function (evento) {
+			if (evento.shiftKey && casillaDe(evento)) { evento.preventDefault(); }
+		});
+
+		contenedor.addEventListener('click', function (evento) {
+			var casilla = casillaDe(evento);
+			if (!casilla) { return; }
+
+			var todas = casillas();
+			var i = todas.indexOf(casilla);
+			if (i < 0) { return; }
+
+			/* Cuando llega el clic, la casilla YA tiene su nuevo estado: ese es el
+			 * que se reparte por el tramo. Así Shift sobre una que se acaba de
+			 * marcar marca el tramo entero, y sobre una que se acaba de desmarcar
+			 * lo desmarca, que es lo que se espera de las dos. */
+			if (evento.shiftKey && ancla !== null && ancla < todas.length && ancla !== i) {
+				var desde = Math.min(ancla, i);
+				var hasta = Math.max(ancla, i);
+				for (var k = desde; k <= hasta; k++) {
+					todas[k].checked = casilla.checked;
+				}
+			}
+
+			/* El ancla es siempre la última casilla tocada, con Shift o sin él: así
+			 * un segundo Shift encadena desde donde quedó la vista en vez de volver
+			 * a un punto que quien está marcando ya no tiene presente. */
+			ancla = i;
+			casilla.focus();
+			if (typeof alCambiar === 'function') { alCambiar(); }
+		});
+
+		return {
+			/* Marcar o desmarcar todo de golpe deja el ancla sin sentido: el
+			 * siguiente Shift se mediría contra una casilla que nadie tocó. */
+			olvidarAncla: function () { ancla = null; }
+		};
+	};
+})();
+
+/* Visor de ficha: el documento se lee encima de donde se está.
+ *
+ * El ojito de los listados llevaba a /facturas/ver o /notas-xml/ver: otra
+ * pestaña, otro módulo, doce datos y volver. Cuando lo que se está haciendo es
+ * revisar treinta renglones contra el ERP, ese viaje se hace treinta veces y
+ * cada uno pierde el sitio en el que se iba.
+ *
+ * Así que el mismo dato se pide en JSON —/documentos/ficha/{id}, que arma
+ * FichaDocumento— y se pinta en un cuadro sobre la pantalla. Una sola vez acá
+ * para los seis sitios que lo enseñan; cada pantalla solo marca su enlace:
+ *
+ *   <a href="..." data-ficha="123"><i class="fas fa-eye"></i></a>
+ *
+ * El href se queda puesto a propósito: ctrl+clic, el botón central y un
+ * navegador sin JavaScript siguen abriendo la pantalla completa, que no
+ * desaparece. Esto le ahorra el viaje, no la reemplaza. */
+(function () {
+	'use strict';
+
+	var capa = null;
+	var partes = null;
+	var abierta = false;
+	var focoPrevio = null;
+	var fichas = {};
+	var pedido = 0;
+
+	function base() {
+		return document.body.dataset.base || '';
+	}
+
+	function esc(valor) {
+		return String(valor === null || valor === undefined ? '' : valor)
+			.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+	}
+
+	function crear() {
+		if (capa) { return partes; }
+
+		capa = document.createElement('div');
+		capa.className = 'ficha-capa';
+		capa.setAttribute('aria-hidden', 'true');
+		capa.innerHTML =
+			'<section class="ficha" role="dialog" aria-modal="true" aria-labelledby="ficha-numero" tabindex="-1">' +
+				'<header class="ficha-head">' +
+					'<div class="ficha-head-texto">' +
+						'<div class="ficha-tipo" data-ficha-tipo></div>' +
+						'<h2 class="ficha-numero" id="ficha-numero" data-ficha-numero></h2>' +
+					'</div>' +
+					'<span class="ficha-marca" data-ficha-marca hidden></span>' +
+					'<button type="button" class="ficha-cerrar" data-ficha-cerrar aria-label="Cerrar">' +
+						'<i class="fas fa-xmark"></i>' +
+					'</button>' +
+				'</header>' +
+				'<div class="ficha-cuerpo" data-ficha-cuerpo></div>' +
+				'<footer class="ficha-pie">' +
+					'<span class="ficha-registro" data-ficha-registro></span>' +
+					'<button type="button" class="btn btn-outline btn-sm" data-ficha-cerrar>Cerrar</button>' +
+				'</footer>' +
+			'</section>';
+		document.body.appendChild(capa);
+
+		partes = {
+			panel: capa.querySelector('.ficha'),
+			tipo: capa.querySelector('[data-ficha-tipo]'),
+			numero: capa.querySelector('[data-ficha-numero]'),
+			marca: capa.querySelector('[data-ficha-marca]'),
+			cuerpo: capa.querySelector('[data-ficha-cuerpo]'),
+			registro: capa.querySelector('[data-ficha-registro]')
+		};
+
+		capa.addEventListener('click', function (evento) {
+			if (evento.target === capa || (evento.target.closest && evento.target.closest('[data-ficha-cerrar]'))) {
+				cerrar();
+			}
+		});
+
+		return partes;
+	}
+
+	function abrir(id) {
+		crear();
+		if (!abierta) {
+			focoPrevio = document.activeElement;
+			abierta = true;
+			capa.classList.add('is-abierta');
+			capa.setAttribute('aria-hidden', 'false');
+			document.body.classList.add('ficha-abierta');
+		}
+		/* El foco entra al cuadro, no a su botón de cerrar: así el lector de
+		 * pantalla lee el documento y el primer Tab lleva a lo que se puede
+		 * hacer con él, sin dejar un aro dibujado sobre la ✕. */
+		partes.panel.focus();
+
+		/* Lo ya leído se vuelve a enseñar sin pedirlo: en una revisión se abre
+		 * el mismo documento varias veces, y esperar por algo que no cambió es
+		 * lo que hace que la gente prefiera la pestaña. */
+		if (fichas[id]) {
+			pedido++;
+			pintar(fichas[id]);
+			return;
+		}
+
+		var mio = ++pedido;
+		cargando();
+
+		fetch(base() + '/documentos/ficha/' + encodeURIComponent(id), {
+			headers: { 'Accept': 'application/json' }
+		})
+		.then(function (r) {
+			return r.json().catch(function () {
+				throw new Error('El servidor no contestó con la ficha del documento.');
+			});
+		})
+		.then(function (d) {
+			if (!d || !d.ok || !d.ficha) {
+				throw new Error((d && d.message) || 'No se pudo leer este documento.');
+			}
+			fichas[id] = d.ficha;
+			// Mientras llegaba pudo abrirse otra: manda la última que se pidió.
+			if (mio === pedido) { pintar(d.ficha); }
+		})
+		.catch(function (e) {
+			if (mio === pedido) { fallo(e.message, id); }
+		});
+	}
+
+	function cerrar() {
+		if (!abierta) { return; }
+		abierta = false;
+		pedido++;
+		capa.classList.remove('is-abierta');
+		capa.setAttribute('aria-hidden', 'true');
+		document.body.classList.remove('ficha-abierta');
+		if (focoPrevio && typeof focoPrevio.focus === 'function') { focoPrevio.focus(); }
+		focoPrevio = null;
+	}
+
+	function cabecera(tipo, numero, marca) {
+		partes.tipo.textContent = tipo;
+		partes.numero.textContent = numero;
+		if (marca) {
+			partes.marca.hidden = false;
+			partes.marca.className = 'ficha-marca is-' + marca.tono;
+			partes.marca.innerHTML = '<i class="fas ' + esc(marca.icono) + '"></i> ' + esc(marca.texto);
+		} else {
+			partes.marca.hidden = true;
+		}
+	}
+
+	function cargando() {
+		cabecera('Documento', 'Leyendo…', null);
+		partes.registro.textContent = '';
+		partes.cuerpo.innerHTML =
+			'<div class="ficha-espera"><i class="fas fa-circle-notch fa-spin"></i> Buscando el documento…</div>';
+	}
+
+	function fallo(mensaje, id) {
+		cabecera('Documento', 'No se pudo abrir', null);
+		partes.registro.textContent = '';
+		partes.cuerpo.innerHTML =
+			'<div class="ficha-fallo">' +
+				'<i class="fas fa-triangle-exclamation"></i>' +
+				'<div>' + esc(mensaje) +
+					'<div class="ficha-fallo-salida">' +
+						'<button type="button" class="btn btn-outline btn-sm" data-ficha-reintentar="' + Number(id) + '">' +
+							'<i class="fas fa-rotate-right"></i> Reintentar' +
+						'</button>' +
+					'</div>' +
+				'</div>' +
+			'</div>';
+	}
+
+	function pintar(f) {
+		cabecera(f.titulo, f.numero, f.estado && f.estado.resumen);
+		partes.registro.textContent = 'Registro interno #' + f.id;
+
+		var html = '<div class="ficha-cabeza">' +
+			'<div class="ficha-quien">' +
+				'<div class="ficha-et">Proveedor</div>' +
+				'<div class="ficha-proveedor">' + (f.proveedor ? esc(f.proveedor) : '<span class="ficha-vacio">—</span>') + '</div>' +
+				(f.cedula ? '<div class="ficha-cedula">Cédula ' + esc(f.cedula) + '</div>' : '') +
+			'</div>' +
+			'<div class="ficha-cuanto">' +
+				'<div class="ficha-et">Total</div>' +
+				'<div class="ficha-total">' + esc(f.simbolo) + esc(f.total) + '</div>' +
+				'<div class="ficha-desglose">Subtotal ' + esc(f.subtotal) +
+					' · IVA ' + esc(f.iva) + ' · ' + esc(f.moneda) + '</div>' +
+			'</div>' +
+		'</div>';
+
+		html += '<div class="ficha-datos">';
+		(f.campos || []).forEach(function (campo) {
+			html += '<div class="ficha-dato' + (campo.mono ? ' es-mono' : '') + '">' +
+				'<div class="ficha-et">' + esc(campo.etiqueta) + '</div>' +
+				'<div class="ficha-valor">' +
+					(campo.valor ? esc(campo.valor) : '<span class="ficha-vacio">—</span>') +
+					(campo.copiar
+						? '<button type="button" class="ficha-copiar" data-ficha-copiar="' + esc(campo.valor) + '"' +
+						  ' title="Copiar ' + esc(campo.etiqueta.toLowerCase()) + '">' +
+						  '<i class="fas fa-copy"></i></button>'
+						: '') +
+				'</div>' +
+			'</div>';
+		});
+		html += '</div>';
+
+		html += '<div class="ficha-archivos"><div class="ficha-et">Archivos</div>';
+		(f.archivos || []).forEach(function (archivo) {
+			html += '<div class="ficha-archivo' + (archivo.ok ? '' : ' es-ausente') + '">' +
+				'<i class="fas ' + esc(archivo.icono) + ' ficha-archivo-icono"></i>' +
+				'<span class="ficha-archivo-nombre" title="' + esc(archivo.nombre) + '">' +
+					(archivo.nombre ? esc(archivo.nombre) : '<span class="ficha-vacio">sin ' + esc(archivo.etiqueta) + '</span>') +
+				'</span>' +
+				(archivo.url
+					? '<a class="btn btn-outline btn-sm" href="' + esc(archivo.url) + '" target="_blank" rel="noopener"' +
+					  ' data-ventana="' + esc(archivo.etiqueta) + '" data-ventana-titulo="' + esc(f.numero) + '">' +
+					  '<i class="fas fa-up-right-from-square"></i> Abrir</a>'
+					: '<span class="ficha-archivo-estado">' + (archivo.nombre ? 'no está en la carpeta' : 'nunca llegó') + '</span>') +
+			'</div>';
+		});
+		/* El faltante y su arreglo, en el mismo sitio donde se descubre: es la
+		 * regla del resto del sistema (ver partials/marca-archivo.php). */
+		if (f.estado && f.estado.perdido) {
+			html += '<div class="ficha-perdido">' +
+				'<i class="fas fa-link-slash"></i>' +
+				'<span>Se archivó y ya no está en la carpeta compartida.</span>' +
+				(f.estado.recuperable
+					? '<button type="button" class="btn btn-primary btn-sm" data-recuperar-doc="' + Number(f.id) + '">' +
+					  '<i class="fas fa-cloud-arrow-down"></i> Volver a bajarlo del correo</button>'
+					: '<span class="ficha-archivo-estado">no se guardó de dónde bajarlo</span>') +
+			'</div>';
+		}
+		html += '</div>';
+
+		partes.cuerpo.innerHTML = html;
+		partes.cuerpo.scrollTop = 0;
+	}
+
+	/* Copiar la clave: son cincuenta dígitos que nadie transcribe a mano y que
+	 * es justo lo que se pega en el buscador del ERP. */
+	function copiar(boton) {
+		var texto = boton.dataset.fichaCopiar || '';
+		var listo = function () {
+			boton.classList.add('es-copiado');
+			boton.innerHTML = '<i class="fas fa-check"></i>';
+			setTimeout(function () {
+				boton.classList.remove('es-copiado');
+				boton.innerHTML = '<i class="fas fa-copy"></i>';
+			}, 1200);
+		};
+
+		if (navigator.clipboard && navigator.clipboard.writeText) {
+			navigator.clipboard.writeText(texto).then(listo, function () { aLaAntigua(texto, listo); });
+			return;
+		}
+		aLaAntigua(texto, listo);
+	}
+
+	/* Sin HTTPS el portapapeles moderno no existe, y esta aplicación corre en
+	 * http dentro de la red de la oficina. */
+	function aLaAntigua(texto, listo) {
+		var campo = document.createElement('textarea');
+		campo.value = texto;
+		campo.setAttribute('readonly', '');
+		campo.style.position = 'fixed';
+		campo.style.opacity = '0';
+		document.body.appendChild(campo);
+		campo.select();
+		try { document.execCommand('copy'); listo(); } catch (e) { /* se queda a la vista para copiarla a mano */ }
+		document.body.removeChild(campo);
+	}
+
+	document.addEventListener('click', function (evento) {
+		if (!evento.target.closest) { return; }
+
+		var copia = evento.target.closest('[data-ficha-copiar]');
+		if (copia) { evento.preventDefault(); copiar(copia); return; }
+
+		var reintento = evento.target.closest('[data-ficha-reintentar]');
+		if (reintento) {
+			evento.preventDefault();
+			abrir(Number(reintento.dataset.fichaReintentar));
+			return;
+		}
+
+		var disparo = evento.target.closest('[data-ficha]');
+		if (!disparo) { return; }
+		/* Lo que el navegador hace mejor se le deja: abrir aparte a propósito
+		 * —ctrl, ⌘, shift, botón central— sigue llevando a la pantalla
+		 * completa, que para eso el enlace conserva su href. */
+		if (evento.ctrlKey || evento.metaKey || evento.shiftKey || evento.altKey || evento.button !== 0) {
+			return;
+		}
+		var id = Number(disparo.dataset.ficha);
+		if (!(id > 0)) { return; }
+		evento.preventDefault();
+		abrir(id);
+	}, false);
+
+	document.addEventListener('keydown', function (evento) {
+		if (!abierta) { return; }
+		/* Desde la ficha se puede abrir una ventana —el XML, el PDF—, y
+		 * entonces la de arriba es ella: Escape la cierra a ella y deja el
+		 * cuadro donde estaba. */
+		if (document.querySelector('.ventana-capa.is-abierta')) { return; }
+		/* Misma regla que los diálogos: mientras el cuadro está abierto, estas
+		 * dos teclas son suyas. El expediente de Seguimiento también cierra
+		 * con Escape y se iba con la ficha si no se corta acá. */
+		if (evento.key === 'Escape' || evento.key === 'Tab') {
+			evento.stopImmediatePropagation();
+		}
+		if (evento.key === 'Escape') {
+			evento.preventDefault();
+			cerrar();
+			return;
+		}
+		if (evento.key !== 'Tab') { return; }
+		var enfocables = Array.prototype.filter.call(
+			partes.panel.querySelectorAll('a[href], button:not([disabled])'),
+			function (el) { return el.offsetParent !== null; }
+		);
+		if (!enfocables.length) { return; }
+		var primero = enfocables[0];
+		var ultimo = enfocables[enfocables.length - 1];
+		if (evento.shiftKey && document.activeElement === primero) {
+			evento.preventDefault();
+			ultimo.focus();
+		} else if (!evento.shiftKey && document.activeElement === ultimo) {
+			evento.preventDefault();
+			primero.focus();
+		}
+	});
+})();
+
+/* Visor de ventanas: otra pantalla del sistema, encima de la que se está usando.
+ *
+ * "Buscar en el correo", desde la cola de seguimiento o desde el pago semanal,
+ * abría otra pestaña en otro módulo. El trabajo es de ida y vuelta —mirar el
+ * renglón, ir a buscarlo, volver al siguiente— y con treinta renglones son
+ * treinta pestañas y treinta vueltas a encontrar dónde se iba.
+ *
+ * La ventana abre esa misma pantalla, entera y funcionando, en un marco grande
+ * encima de esta. No es una copia ni un resumen: es el módulo de verdad, con su
+ * buscador, sus botones y su tarjeta de "documento que se busca". Lo único que
+ * se le quita es el menú lateral y la barra de arriba, que ya están —y mandan—
+ * en la pantalla de abajo (ver `html.en-ventana` en styles.css).
+ *
+ * Cada pantalla solo marca su enlace, y el href se queda puesto para que
+ * ctrl+clic siga abriendo la pestaña de siempre:
+ *
+ *   <a href="/correo?buscar=123" data-ventana="Correo" data-ventana-titulo="FE 00012345">
+ *
+ *   data-ventana         qué se está abriendo; sale como rótulo pequeño
+ *   data-ventana-titulo  sobre qué; sale como título (opcional)
+ */
+(function () {
+	'use strict';
+
+	var capa = null;
+	var partes = null;
+	var abierta = false;
+	var focoPrevio = null;
+	var cerrando = false;
+
+	/*
+	 * Una ventana puede llevar a otra pantalla: desde los comprobantes XML se
+	 * pasa al correo. Antes eso abría una segunda ventana encima de la primera
+	 * —dos cabeceras, dos ✕, la de abajo tapada y sin usar—; ahora la misma
+	 * ventana se transforma, y estos dos guardan por dónde ha pasado para
+	 * poder volver.
+	 */
+	var paso = null;      // el escalón que se está viendo
+	var historia = [];    // los anteriores, en orden
+
+	function crear() {
+		if (capa) { return partes; }
+
+		capa = document.createElement('div');
+		capa.className = 'ventana-capa';
+		capa.setAttribute('aria-hidden', 'true');
+		capa.innerHTML =
+			'<section class="ventana" role="dialog" aria-modal="true" aria-labelledby="ventana-titulo" tabindex="-1">' +
+				'<header class="ventana-head">' +
+					'<button type="button" class="ventana-atras" data-ventana-atras hidden>' +
+						'<i class="fas fa-arrow-left"></i>' +
+					'</button>' +
+					'<div class="ventana-head-texto">' +
+						'<div class="ventana-tipo" data-ventana-tipo></div>' +
+						'<h2 class="ventana-titulo" id="ventana-titulo" data-ventana-rotulo></h2>' +
+					'</div>' +
+					'<button type="button" class="ventana-cerrar" data-ventana-cerrar aria-label="Cerrar">' +
+						'<i class="fas fa-xmark"></i>' +
+					'</button>' +
+				'</header>' +
+				'<div class="ventana-cuerpo">' +
+					'<iframe class="ventana-marco" data-ventana-marco title="Otra pantalla del sistema"></iframe>' +
+					'<div class="ventana-espera" data-ventana-espera>' +
+						'<i class="fas fa-circle-notch fa-spin"></i> Abriendo…' +
+					'</div>' +
+				'</div>' +
+			'</section>';
+		document.body.appendChild(capa);
+
+		partes = {
+			panel: capa.querySelector('.ventana'),
+			atras: capa.querySelector('[data-ventana-atras]'),
+			tipo: capa.querySelector('[data-ventana-tipo]'),
+			rotulo: capa.querySelector('[data-ventana-rotulo]'),
+			marco: capa.querySelector('[data-ventana-marco]'),
+			espera: capa.querySelector('[data-ventana-espera]')
+		};
+
+		partes.atras.addEventListener('click', volver);
+
+		capa.addEventListener('click', function (evento) {
+			if (evento.target === capa || (evento.target.closest && evento.target.closest('[data-ventana-cerrar]'))) {
+				cerrar();
+			}
+		});
+
+		// El marco avisa cuando termina de cargar; al cerrar lo mandamos a una
+		// página en blanco y ese aviso no cuenta.
+		partes.marco.addEventListener('load', function () {
+			if (cerrando) { return; }
+			partes.espera.hidden = true;
+			// Dónde quedó el marco, que no siempre es donde se lo mandó: dentro
+			// se busca, se pagina y se envían formularios. Volver tiene que
+			// traer de vuelta lo último que se estaba viendo en ese escalón.
+			try {
+				if (paso) { paso.url = partes.marco.contentWindow.location.href; }
+			} catch (e) {
+				// Otro origen dentro del marco: se queda la URL con la que se abrió.
+			}
+		});
+
+		return partes;
+	}
+
+	function abrir(url, tipo, titulo) {
+		crear();
+		historia = [];
+		paso = { url: url, tipo: tipo || '', titulo: titulo || '' };
+		rotular();
+		partes.espera.hidden = false;
+		cerrando = false;
+		partes.marco.src = url;
+
+		if (!abierta) {
+			focoPrevio = document.activeElement;
+			abierta = true;
+			capa.classList.add('is-abierta');
+			capa.setAttribute('aria-hidden', 'false');
+			document.body.classList.add('ventana-abierta');
+		}
+		partes.panel.focus();
+	}
+
+	/** La cabecera dice en qué escalón va la ventana y a cuál se vuelve. */
+	function rotular() {
+		var tipo = (paso && paso.tipo) || 'Nexo Fiscal';
+		var titulo = (paso && paso.titulo) || '';
+		partes.tipo.textContent = tipo;
+		partes.rotulo.textContent = titulo;
+		partes.marco.title = tipo + (titulo ? ' · ' + titulo : '');
+
+		var previo = historia.length ? historia[historia.length - 1] : null;
+		partes.atras.hidden = previo === null;
+		if (previo) {
+			partes.atras.title = 'Volver a ' + (previo.tipo || 'la pantalla anterior');
+			partes.atras.setAttribute('aria-label', partes.atras.title);
+		}
+	}
+
+	/**
+	 * Otro escalón dentro de la MISMA ventana: lo pidió un enlace de la
+	 * pantalla que está dentro del marco (ver el aviso al padre, más abajo).
+	 */
+	function escalon(tipo, titulo) {
+		if (paso) { historia.push(paso); }
+		paso = {
+			url: '',
+			tipo: tipo || (paso ? paso.tipo : ''),
+			titulo: titulo || (paso ? paso.titulo : '')
+		};
+		partes.espera.hidden = false;
+		rotular();
+	}
+
+	/** Y el camino de vuelta, un escalón cada vez. */
+	function volver() {
+		var previo = historia.pop();
+		if (!previo) { return; }
+		paso = previo;
+		cerrando = false;
+		partes.espera.hidden = false;
+		partes.marco.src = previo.url || 'about:blank';
+		rotular();
+	}
+
+	/**
+	 * ¿Lo que hubo dentro era una pantalla del sistema, o un archivo?
+	 *
+	 * Decide si al cerrar hay que releer esta pantalla. Dentro de un módulo se
+	 * importa, se descarta y se engancha —y entonces el renglón de abajo ya no
+	 * dice la verdad—; un XML o un PDF solo se miran y no cambian nada.
+	 */
+	function huboPantalla() {
+		try {
+			return !!(partes.marco.contentDocument
+				&& partes.marco.contentDocument.querySelector('.app-layout'));
+		} catch (e) {
+			return false;
+		}
+	}
+
+	function cerrar() {
+		if (!abierta) { return; }
+		var releer = huboPantalla();
+
+		abierta = false;
+		cerrando = true;
+		capa.classList.remove('is-abierta');
+		capa.setAttribute('aria-hidden', 'true');
+		document.body.classList.remove('ventana-abierta');
+		// A página en blanco: dentro puede haber quedado un módulo preguntando
+		// al servidor cada pocos segundos —el correo sincroniza solo—, y eso no
+		// puede seguir corriendo escondido detrás de la pantalla.
+		partes.marco.src = 'about:blank';
+		paso = null;
+		historia = [];
+
+		if (focoPrevio && typeof focoPrevio.focus === 'function') { focoPrevio.focus(); }
+		focoPrevio = null;
+
+		/* Y se relee la pantalla de abajo. Lo que se hace dentro de la ventana
+		 * —importar el comprobante que faltaba, descartarlo, engancharlo— es
+		 * justo lo que cambia el renglón desde el que se abrió: dejarlo como
+		 * estaba es enseñar un faltante que ya se resolvió. Misma razón por la
+		 * que repone el respaldo recarga en vez de repintar el renglón. */
+		if (releer) { window.location.reload(); }
+	}
+
+	document.addEventListener('click', function (evento) {
+		if (!evento.target.closest) { return; }
+		var disparo = evento.target.closest('[data-ventana]');
+		if (!disparo) { return; }
+		// Lo que el navegador hace mejor se le deja: abrir aparte a propósito
+		// sigue llevando a la pestaña de siempre.
+		if (evento.ctrlKey || evento.metaKey || evento.shiftKey || evento.altKey || evento.button !== 0) {
+			return;
+		}
+		var url = disparo.getAttribute('href') || disparo.dataset.ventanaUrl || '';
+		if (!url || url.charAt(0) === '#') { return; }
+		evento.preventDefault();
+
+		/*
+		 * Si esta pantalla ya se está viendo DENTRO de una ventana, lo pedido
+		 * no abre otra encima: esta misma se convierte en la nueva pantalla, y
+		 * la cabecera de arriba lo dice. La de antes queda a un clic, en la
+		 * flecha de volver.
+		 */
+		if (document.documentElement.classList.contains('en-ventana')) {
+			avisarAlPadre(disparo.dataset.ventana, disparo.dataset.ventanaTitulo);
+			window.location.href = url;
+			return;
+		}
+
+		abrir(url, disparo.dataset.ventana, disparo.dataset.ventanaTitulo);
+	}, false);
+
+	/** Desde dentro del marco: "me voy a otra pantalla, cambiá el rótulo". */
+	function avisarAlPadre(tipo, titulo) {
+		try {
+			window.parent.postMessage({
+				nexo: 'ventana:ir',
+				tipo: String(tipo || ''),
+				titulo: String(titulo || '')
+			}, window.location.origin);
+		} catch (e) {
+			// Sin padre al que avisar, el marco navega igual: se pierde el
+			// rótulo, no la pantalla.
+		}
+	}
+
+	/* Y del lado de la ventana, ese aviso. Se acepta solo del marco propio y
+	 * del mismo origen: es la única pantalla que tiene algo que decir aquí. */
+	window.addEventListener('message', function (evento) {
+		if (evento.origin !== window.location.origin) { return; }
+		var dato = evento.data;
+		if (!dato || dato.nexo !== 'ventana:ir') { return; }
+		if (!abierta || !partes || evento.source !== partes.marco.contentWindow) { return; }
+		escalon(dato.tipo, dato.titulo);
+	});
+
+	document.addEventListener('keydown', function (evento) {
+		if (!abierta || evento.key !== 'Escape') { return; }
+		evento.preventDefault();
+		evento.stopImmediatePropagation();
+		cerrar();
+	});
+})();
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * CUADROS QUE SE MUEVEN
+ *
+ * La ficha de un documento, la ventana de otro módulo y los avisos se
+ * arrastran por su cabecera, como una ventana de escritorio. Hacía falta
+ * porque el cuadro se abre justo encima del renglón del que habla: para
+ * comparar lo que dice con lo que hay debajo había que cerrarlo, mirar y
+ * volver a abrirlo. Por lo mismo se quitó el desenfoque del fondo: detrás hay
+ * una pantalla que se está usando, no un telón.
+ *
+ * Uno solo para los tres, y delegado en el documento: los tres cuadros se
+ * crean sobre la marcha y en momentos distintos, así que enganchar cada uno
+ * al nacer obligaría a acordarse de esto en tres sitios.
+ *
+ * El desplazamiento viaja en dos variables de CSS (--movido-x, --movido-y) y
+ * no en el transform entero: el transform es de la animación de entrada, y
+ * pisarlo desde aquí la anularía.
+ * ══════════════════════════════════════════════════════════════════════════ */
+(function () {
+	'use strict';
+
+	var ASAS = '.ficha-head, .ventana-head, .app-dialog-head';
+	var CUADROS = '.ficha, .ventana, .app-dialog';
+	var DENTRO_DEL_ASA = 'button, a, input, select, textarea, [contenteditable]';
+
+	/* Cuánto del cuadro tiene que quedar siempre a la vista. Sin un tope se
+	 * puede empujar entero fuera de la pantalla, y desde ahí no hay cómo
+	 * traerlo de vuelta ni cómo cerrarlo. */
+	var VISIBLE = 130;
+	var ALTO_DEL_ASA = 44;
+
+	var movimiento = null;
+	var seMovio = false;
+
+	function numero(valor) {
+		var n = parseFloat(valor);
+		return isNaN(n) ? 0 : n;
+	}
+
+	function entre(valor, minimo, maximo) {
+		return Math.max(minimo, Math.min(maximo, valor));
+	}
+
+	function asaDe(evento) {
+		var destino = evento.target;
+		if (!destino || !destino.closest) { return null; }
+		// Los botones de la cabecera —cerrar, volver— siguen siendo botones.
+		if (destino.closest(DENTRO_DEL_ASA)) { return null; }
+		return destino.closest(ASAS);
+	}
+
+	/** Devuelve el cuadro al centro, que es donde nace. */
+	function centrar(cuadro) {
+		cuadro.style.removeProperty('--movido-x');
+		cuadro.style.removeProperty('--movido-y');
+	}
+
+	document.addEventListener('pointerdown', function (evento) {
+		seMovio = false;
+		if (evento.button !== 0) { return; }
+
+		var asa = asaDe(evento);
+		var cuadro = asa && asa.closest(CUADROS);
+		if (!cuadro) { return; }
+
+		var caja = cuadro.getBoundingClientRect();
+		var estilo = getComputedStyle(cuadro);
+		movimiento = {
+			cuadro: cuadro,
+			punteroX: evento.clientX,
+			punteroY: evento.clientY,
+			// De dónde parte, que no tiene por qué ser el centro: el cuadro se
+			// queda donde se lo dejó la última vez.
+			baseX: numero(estilo.getPropertyValue('--movido-x')),
+			baseY: numero(estilo.getPropertyValue('--movido-y')),
+			izquierda: caja.left,
+			arriba: caja.top,
+			ancho: caja.width
+		};
+
+		cuadro.classList.add('se-esta-moviendo');
+		/* Sin capturar el puntero, en cuanto se cruza por encima del documento
+		 * que la ventana lleva dentro el arrastre se queda a medias: los
+		 * eventos pasan a ser del marco y aquí no llega ninguno. */
+		try { asa.setPointerCapture(evento.pointerId); } catch (e) {}
+	}, true);
+
+	document.addEventListener('pointermove', function (evento) {
+		if (!movimiento) { return; }
+		evento.preventDefault();
+
+		var m = movimiento;
+		var izquierda = entre(m.izquierda + (evento.clientX - m.punteroX),
+			VISIBLE - m.ancho, window.innerWidth - VISIBLE);
+		var arriba = entre(m.arriba + (evento.clientY - m.punteroY),
+			0, window.innerHeight - ALTO_DEL_ASA);
+
+		if (izquierda !== m.izquierda || arriba !== m.arriba) { seMovio = true; }
+
+		m.cuadro.style.setProperty('--movido-x', (m.baseX + izquierda - m.izquierda) + 'px');
+		m.cuadro.style.setProperty('--movido-y', (m.baseY + arriba - m.arriba) + 'px');
+	}, true);
+
+	function soltar() {
+		if (!movimiento) { return; }
+		movimiento.cuadro.classList.remove('se-esta-moviendo');
+		movimiento = null;
+	}
+	document.addEventListener('pointerup', soltar, true);
+	document.addEventListener('pointercancel', soltar, true);
+
+	/* Un arrastre que acaba sobre el fondo deja un clic cuyo destino es la
+	 * capa —el ancestro común de donde empezó y donde terminó—, y pulsar la
+	 * capa es lo que cierra el cuadro. Se traga ese clic, y solo ese: mover el
+	 * cuadro no puede cerrarlo.
+	 *
+	 * Se comprueba también en qué cayó, y no solo que se venga de un arrastre:
+	 * un clic puede nacer del teclado, sin puntero que lo anuncie, y tragarse
+	 * ese dejaría un botón muerto sin motivo. */
+	document.addEventListener('click', function (evento) {
+		if (!seMovio) { return; }
+		seMovio = false;
+		var destino = evento.target;
+		if (!destino || !destino.matches
+			|| !destino.matches('.ficha-capa, .ventana-capa, .app-dialog-layer')) {
+			return;
+		}
+		evento.stopPropagation();
+		evento.preventDefault();
+	}, true);
+
+	/* Doble clic en la cabecera: al centro otra vez. Es la salida para quien lo
+	 * apartó y ya no quiere ir a buscarlo con el ratón. */
+	document.addEventListener('dblclick', function (evento) {
+		var asa = asaDe(evento);
+		var cuadro = asa && asa.closest(CUADROS);
+		if (cuadro) { centrar(cuadro); }
+	});
+
+	/* Al cambiar de tamaño la ventana del navegador todo se recoloca, y un
+	 * cuadro apartado puede quedar fuera de la pantalla, donde ya no se
+	 * alcanza. Vuelven al centro, que siempre se alcanza. */
+	window.addEventListener('resize', function () {
+		var cuadros = document.querySelectorAll(CUADROS);
+		for (var i = 0; i < cuadros.length; i++) { centrar(cuadros[i]); }
+	});
+})();

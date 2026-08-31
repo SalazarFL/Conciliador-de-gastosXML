@@ -455,30 +455,9 @@ html, body {
   min-width: 0;
 }
 
-/* ══════════════════════════════
-   PAGE HEADER
-══════════════════════════════ */
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
-}
-
-.page-header h1 {
-  font-size: 19px;
-  font-weight: 800;
-  color: var(--navy);
-  margin-bottom: 3px;
-}
-
-.page-header p {
-  font-size: 12.5px;
-  color: var(--text-muted);
-  max-width: 560px;
-}
+/* El nombre de la pantalla lo pone la topbar, una sola vez. Acá vivía
+   .page-header, que lo repetía debajo; se retiró de las cinco vistas que lo
+   usaban y sus botones bajaron a la tarjeta sobre la que trabajan.  */
 
 /* ══════════════════════════════
    CARDS
@@ -647,7 +626,6 @@ body.app-dialog-open { overflow: hidden; }
   justify-content: center;
   padding: 14px;
   background: rgba(8,24,71,.56);
-  backdrop-filter: blur(3px);
   opacity: 0;
   visibility: hidden;
   transition: opacity .18s ease, visibility .18s ease;
@@ -668,11 +646,13 @@ body.app-dialog-open { overflow: hidden; }
   border: 1px solid rgba(205,217,238,.9);
   border-radius: 14px;
   box-shadow: 0 28px 70px rgba(8,24,71,.34);
-  transform: translateY(12px) scale(.985);
+  transform: translate(var(--movido-x, 0px), calc(var(--movido-y, 0px) + 12px)) scale(.985);
   transition: transform .18s ease;
 }
 
-.app-dialog-layer.open .app-dialog { transform: translateY(0) scale(1); }
+.app-dialog-layer.open .app-dialog {
+  transform: translate(var(--movido-x, 0px), var(--movido-y, 0px)) scale(1);
+}
 .app-dialog.is-warning { --dialog-accent: var(--gold-dark); --dialog-soft: var(--gold-pale); }
 .app-dialog.is-danger  { --dialog-accent: #B42318; --dialog-soft: #FEF0EE; }
 .app-dialog.is-success { --dialog-accent: var(--ok); --dialog-soft: var(--ok-bg); }
@@ -770,6 +750,536 @@ body.app-dialog-open { overflow: hidden; }
   .app-dialog-message { padding: 6px 14px 14px; }
   .app-dialog-actions { padding: 9px; }
   .app-dialog-actions .btn { flex: 1; }
+}
+
+/* ── Ficha del documento ───────────────────────────────────────────────────
+   El cuadro que abre el ojito de los listados, encima de donde se está, en
+   vez de mandar a otra pestaña. La arma el visor de app.js con lo que sirve
+   /documentos/ficha/{id}.
+
+   Va por debajo de .app-dialog-layer (z-index 3000) a propósito: si desde acá
+   se dispara una confirmación, la confirmación tiene que quedar arriba.       */
+body.ficha-abierta { overflow: hidden; }
+
+.ficha-capa {
+  position: fixed;
+  inset: 0;
+  z-index: 2900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(8,24,71,.56);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .18s ease, visibility .18s ease;
+}
+
+.ficha-capa.is-abierta { opacity: 1; visibility: visible; }
+
+.ficha {
+  width: min(100%, 640px);
+  max-height: min(92vh, 780px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--card);
+  border-radius: 15px;
+  box-shadow: 0 28px 70px rgba(8,24,71,.38);
+  transform: translate(var(--movido-x, 0px), calc(var(--movido-y, 0px) + 12px)) scale(.985);
+  transition: transform .18s ease;
+}
+
+.ficha-capa.is-abierta .ficha {
+  transform: translate(var(--movido-x, 0px), var(--movido-y, 0px)) scale(1);
+}
+
+/* El cuadro recibe el foco al abrirse para que el teclado y el lector de
+   pantalla entren en él; ese foco no se dibuja, el de sus botones sí. */
+.ficha:focus { outline: none; }
+
+/* ══════════════════════════════
+   CUADROS QUE SE MUEVEN
+   Se arrastran por la cabecera, como una ventana de escritorio. Hacía falta
+   porque el cuadro tapa justo el renglón del que habla: para comparar lo que
+   dice con lo que hay debajo había que cerrarlo, mirar y volver a abrirlo.
+   Por lo mismo se fue el desenfoque del fondo: detrás hay una pantalla que se
+   está usando, no un telón.
+
+   El comportamiento vive en app.js ("Cuadros que se mueven"). El sitio se
+   recuerda mientras la pantalla siga abierta; doble clic en la cabecera lo
+   devuelve al centro.
+══════════════════════════════ */
+.ficha-head,
+.ventana-head,
+.app-dialog-head {
+  cursor: move;
+  /* Con el dedo, arrastrar el asa mueve el cuadro y no desplaza la página. */
+  touch-action: none;
+  /* Arrastrar sin querer seleccionaba el número del documento de punta a
+     punta, y el cuadro se movía con el texto en azul detrás. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Mientras se mueve no hay animación que perseguir: con la transición puesta,
+   el cuadro llegaba tarde al puntero. */
+.se-esta-moviendo { transition: none !important; }
+
+/* Y el marco de la ventana deja pasar el puntero: si no, en cuanto se cruza
+   por encima del documento de dentro, el arrastre se queda a medias. */
+.se-esta-moviendo iframe { pointer-events: none; }
+
+/* ── Cabecera: de qué documento se trata y si está completo ── */
+.ficha-head,
+.ventana-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 14px 15px;
+  background: linear-gradient(135deg, var(--navy) 0%, var(--navy-mid) 100%);
+  border-bottom: 3px solid var(--gold);
+}
+
+.ficha-head-texto,
+.ventana-head-texto { min-width: 0; flex: 1 1 auto; }
+
+.ficha-tipo,
+.ventana-tipo {
+  color: var(--gold-light);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: .14em;
+  line-height: 1;
+  text-transform: uppercase;
+  margin-bottom: 5px;
+}
+
+.ficha-numero {
+  color: #fff;
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.15;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: .02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* El mismo vocabulario de marcas que los listados: que un documento se
+   describa de dos formas según la pantalla es lo que hace dudar de si son el
+   mismo. */
+.ficha-marca {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  background: var(--pend-bg);
+  color: var(--pend);
+}
+
+.ficha-marca.is-ok      { background: var(--ok-bg);   color: var(--ok); }
+.ficha-marca.is-aviso   { background: var(--warn-bg); color: var(--warn); }
+.ficha-marca.is-falta   { background: var(--miss-bg); color: var(--miss); }
+.ficha-marca.is-perdido { background: var(--miss-bg); color: var(--miss); }
+.ficha-marca[hidden]    { display: none; }
+
+.ficha-cerrar,
+.ventana-cerrar,
+.ventana-atras {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: rgba(255,255,255,.12);
+  color: #fff;
+  font-size: 15px;
+  cursor: pointer;
+  transition: background .15s ease;
+}
+
+.ficha-cerrar:hover,
+.ventana-cerrar:hover,
+.ventana-atras:hover { background: rgba(255,255,255,.26); }
+
+/* Solo aparece cuando la ventana ya pasó por otra pantalla. */
+.ventana-atras[hidden] { display: none !important; }
+
+/* ── Cuerpo ── */
+.ficha-cuerpo {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 15px;
+}
+
+.ficha-et {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  margin-bottom: 2px;
+}
+
+.ficha-vacio { color: var(--text-light); }
+
+/* De quién es y cuánto es: lo que se viene a ver. */
+.ficha-cabeza {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  padding: 12px 13px;
+  background: #F6F9FE;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+}
+
+.ficha-quien { flex: 1 1 240px; min-width: 0; }
+
+.ficha-proveedor {
+  font-size: 15.5px;
+  font-weight: 800;
+  color: var(--navy);
+  line-height: 1.25;
+  word-break: break-word;
+}
+
+.ficha-cedula {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.ficha-cuanto { flex: 0 0 auto; text-align: right; margin-left: auto; }
+
+.ficha-total {
+  font-size: 23px;
+  font-weight: 800;
+  color: var(--navy);
+  line-height: 1.1;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.ficha-desglose {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* Qué documento es. */
+.ficha-datos {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(195px, 1fr));
+  gap: 2px 14px;
+  margin-top: 13px;
+}
+
+.ficha-dato {
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border-light);
+  min-width: 0;
+}
+
+.ficha-valor {
+  color: var(--navy);
+  font-size: 13px;
+  word-break: break-word;
+  min-width: 0;
+}
+
+.ficha-dato.es-mono .ficha-valor {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+/* Pegado al final del dato y no al borde de la columna: con la clave, que
+   ocupa dos renglones, un botón alineado a la derecha queda a media página de
+   distancia de lo que copia. */
+.ficha-copiar {
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text-light);
+  cursor: pointer;
+  padding: 2px 3px;
+  border-radius: 5px;
+  font-size: 11px;
+  transition: color .15s ease, background .15s ease;
+}
+
+.ficha-copiar:hover { color: var(--navy-light); background: var(--border-light); }
+.ficha-copiar.es-copiado { color: var(--ok); }
+
+/* Dónde están sus archivos. */
+.ficha-archivos { margin-top: 14px; }
+
+.ficha-archivo {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  margin-top: 5px;
+  background: #F6F9FE;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+}
+
+.ficha-archivo.es-ausente { background: var(--bg); border-style: dashed; }
+
+.ficha-archivo-icono { flex: 0 0 15px; color: var(--navy-light); font-size: 13px; }
+.ficha-archivo.es-ausente .ficha-archivo-icono { color: var(--text-light); }
+
+.ficha-archivo-nombre {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--navy);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ficha-archivo-estado {
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* El faltante y su arreglo, en el mismo renglón donde se descubre. */
+.ficha-perdido {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  padding: 9px 11px;
+  margin-top: 7px;
+  background: var(--miss-bg);
+  border-radius: var(--radius);
+  color: var(--miss);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ficha-perdido .btn { margin-left: auto; }
+
+/* Esperando y fallando. */
+.ficha-espera,
+.ficha-fallo {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 34px 12px;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.ficha-fallo {
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 22px 4px;
+  color: var(--miss);
+}
+
+.ficha-fallo > i { font-size: 17px; margin-top: 1px; }
+.ficha-fallo-salida { margin-top: 10px; }
+
+/* ── Pie ── */
+.ficha-pie {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 13px;
+  background: #F8FAFD;
+  border-top: 1px solid var(--border-light);
+}
+
+.ficha-registro { font-size: 11px; color: var(--text-light); }
+
+@media (max-width: 560px) {
+  .ficha-capa { padding: 0; align-items: flex-end; }
+  .ficha { width: 100%; max-height: 94vh; border-radius: 15px 15px 0 0; }
+  .ficha-numero { font-size: 18px; }
+  /* La marca baja a su propia línea en vez de desaparecer: si el documento
+     perdió un archivo, eso hay que verlo también desde el teléfono. */
+  .ficha-head { flex-wrap: wrap; }
+  .ficha-head-texto { flex: 1 1 calc(100% - 41px); }
+  .ficha-marca { order: 3; }
+  .ficha-cuanto { text-align: left; margin-left: 0; }
+  .ficha-datos { grid-template-columns: 1fr; }
+  .ficha-perdido .btn { margin-left: 0; }
+}
+
+/* ── Ventana: otra pantalla del sistema, encima de esta ───────────────────
+   "Buscar en el correo" abría otra pestaña en otro módulo y había que volver
+   a mano. Ahora esa pantalla —la de verdad, entera y funcionando— se abre en
+   un marco grande sobre la que se está usando. Lo monta el visor de ventanas
+   de app.js a partir de un enlace marcado con data-ventana.
+
+   Va sobre la ficha (2900) y bajo los diálogos del sistema (3000): un cuadro
+   se abre encima de una ventana, y una confirmación encima de todo.          */
+body.ventana-abierta { overflow: hidden; }
+
+.ventana-capa {
+  position: fixed;
+  inset: 0;
+  z-index: 2950;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+  background: rgba(8,24,71,.62);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .18s ease, visibility .18s ease;
+}
+
+.ventana-capa.is-abierta { opacity: 1; visibility: visible; }
+
+.ventana {
+  width: min(100%, 1460px);
+  height: min(94vh, 1040px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--card);
+  border-radius: 15px;
+  box-shadow: 0 28px 70px rgba(8,24,71,.40);
+  transform: translate(var(--movido-x, 0px), calc(var(--movido-y, 0px) + 12px)) scale(.99);
+  transition: transform .18s ease;
+}
+
+.ventana-capa.is-abierta .ventana {
+  transform: translate(var(--movido-x, 0px), var(--movido-y, 0px));
+}
+.ventana:focus { outline: none; }
+
+.ventana-titulo {
+  color: #fff;
+  font-size: 17px;
+  font-weight: 800;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* El marco donde vive la otra pantalla. Fondo del sistema para que el hueco
+   entre que abre y que carga no sea un rectángulo blanco. */
+.ventana-cuerpo {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.ventana-marco {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.ventana-espera {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: 13px;
+  transition: opacity .2s ease;
+}
+
+.ventana-espera[hidden] { display: none; }
+
+@media (max-width: 700px) {
+  .ventana-capa { padding: 0; }
+  .ventana { width: 100%; height: 100%; border-radius: 0; }
+  .ventana-titulo { font-size: 15px; }
+}
+
+/* ── La pantalla que se ve DENTRO de una ventana ──────────────────────────
+   Es la misma pantalla de siempre, así que trae su menú lateral y su barra de
+   arriba: los dos ya están —y mandan— en la pantalla de abajo, y repetidos
+   dentro del marco solo roban la mitad del ancho. La marca la pone app.js
+   nada más cargar, antes de que el menú llegue a dibujarse.                  */
+html.en-ventana .sidebar,
+html.en-ventana .sidebar-toggle,
+html.en-ventana .topbar { display: none !important; }
+
+html.en-ventana .app-main { margin-left: 0; }
+html.en-ventana .page-content { padding: 11px 13px 16px; }
+
+/* ── "Este comprobante no está cargado" ───────────────────────────────────
+   La respuesta a la pregunta con la que se llegó al listado desde la cola de
+   seguimiento o el pago semanal. Va encima de la tabla porque el buscador
+   trae por coincidencia: debajo puede haber treinta renglones parecidos y
+   ninguno ser el que se buscaba. El marcado está en
+   app/views/partials/documento-no-esta.php.                                  */
+.doc-falta {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  flex-wrap: wrap;
+  margin: 9px 0 4px;
+  padding: 11px 13px;
+  background: var(--gold-pale);
+  border: 1px solid var(--gold-light);
+  border-left: 4px solid var(--gold);
+  border-radius: var(--radius);
+}
+
+.doc-falta-icono { flex: 0 0 auto; font-size: 19px; color: var(--gold-dark); }
+.doc-falta-texto { flex: 1 1 260px; min-width: 0; }
+
+.doc-falta-titulo {
+  font-size: 13.5px;
+  font-weight: 800;
+  color: var(--navy);
+  line-height: 1.25;
+}
+
+.doc-falta-detalle {
+  margin-top: 2px;
+  font-size: 12.5px;
+  color: #6b5423;
+  line-height: 1.45;
+}
+
+.doc-falta-detalle strong,
+.doc-falta-doc {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--navy);
+}
+
+.doc-falta-accion { flex: 0 0 auto; margin-left: auto; white-space: nowrap; }
+
+@media (max-width: 620px) {
+  .doc-falta-accion { margin-left: 0; width: 100%; justify-content: center; }
 }
 
 /* ══════════════════════════════
@@ -949,7 +1459,11 @@ table.data-table {
 /* campo ancho (búsqueda libre) */
 .filter-span-2 { grid-column: span 2; min-width: 220px; }
 
+/* Los botones de la barra. Ocupan dos columnas de la rejilla porque en una
+   sola no caben lado a lado: cuando la barra creció con los tramos de monto
+   y saldo, "Buscar" y "Limpiar" se apilaban uno encima del otro. */
 .filter-actions {
+  grid-column: span 2;
   display: flex;
   gap: 7px;
   align-items: center;
@@ -1029,6 +1543,27 @@ table.data-table {
   white-space: nowrap;
   margin: 2px 0;
 }
+/* La sucursal: mismo tono que el proveedor y más pequeña, para que el
+   número del documento siga siendo lo primero que se lee. Se esconde con el
+   atributo hidden, y por eso el display va repetido: sin esta regla el
+   display:flex de arriba le gana al hidden y el renglón vacío se ve igual. */
+.navdoc-sucursal {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin: 0 0 3px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.navdoc-sucursal[hidden] { display: none; }
+.navdoc-sucursal i { flex: none; font-size: 10px; color: var(--navy-light); }
+.navdoc-sucursal span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .navdoc-cifras span { font-size: 11.5px; color: var(--text-muted); }
 .navdoc-monto { font-weight: 700; color: var(--navy); font-size: 13px; white-space: nowrap; }
 .navdoc-pos { font-size: 12px; color: var(--text-muted); flex: 1; text-align: center; white-space: nowrap; }
@@ -1918,17 +2453,9 @@ table.data-table {
     min-height: 0;
   }
 
-  .conc-page .page-header {
-    align-items: stretch;
-  }
-
-  .conc-page-action {
-    width: 100%;
-  }
-
+  .conc-page-action,
   .conc-page-action .btn {
     width: 100%;
-    justify-content: center;
   }
 
   .conc-grid .card-header {
@@ -1985,7 +2512,6 @@ table.data-table {
 
 @media (max-width: 500px) {
   .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .page-header { flex-direction: column; }
   .topbar-right { display: none !important; }
 
   .conc-results-table {
@@ -2822,3 +3348,155 @@ body.correo-resizing * { pointer-events: none; }
   .cfg-row { grid-template-columns: minmax(0, 1fr); }
   .cfg-row-control { justify-content: flex-start; }
 }
+
+/* ══════════════════════════════
+   ¿DE QUÉ PROVEEDOR?
+   Ocupa el lugar del listado mientras nadie ha dicho qué quiere ver. No es un
+   adorno: mientras esto se ve, la consulta del listado no se ha ejecutado.
+   Marcado en app/views/partials/elegir-proveedor.php, regla en
+   app/helpers/AlcanceProveedor.php
+══════════════════════════════ */
+.elegir-prov {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 22px 20px;
+}
+
+.elegir-prov-icono {
+  flex: 0 0 auto;
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  background: var(--gold-pale);
+  color: var(--gold-dark);
+  font-size: 20px;
+}
+
+.elegir-prov-texto { flex: 1 1 300px; min-width: 0; }
+
+.elegir-prov-titulo {
+  margin: 0;
+  color: var(--navy);
+  font-size: 17px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.elegir-prov-detalle {
+  margin: 5px 0 0;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+  max-width: 62ch;
+}
+
+.elegir-prov-detalle strong { color: var(--navy); }
+.elegir-prov-detalle em { font-style: normal; font-weight: 700; color: var(--navy); }
+
+/* El desplegable y el botón, alineados por abajo: el desplegable trae una
+   etiqueta vacía encima y sin esto quedarían a distinta altura. */
+.elegir-prov-forma {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 9px;
+}
+
+.elegir-prov-forma > div { min-width: 230px; }
+.elegir-prov-forma .filter-label { min-height: 0; }
+.elegir-prov-forma .btn { white-space: nowrap; }
+
+@media (max-width: 720px) {
+  .elegir-prov-forma { width: 100%; }
+  .elegir-prov-forma > div { flex: 1 1 auto; min-width: 0; }
+}
+
+/* ══════════════════════════════
+   CONTEO DEL PAGO SEMANAL
+   Una línea fina bajo el título: cuántas van respaldadas, cuántas discrepan y
+   cuántas faltan. Aquí hubo una fila de cuatro tarjetas grandes que solo
+   contaban; esto contesta lo mismo sin ocupar una franja de la pantalla.
+   Marcado en app/views/porpagar/index.php
+══════════════════════════════ */
+.pp-conteo {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin: -4px 0 12px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.pp-conteo-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px 3px 7px;
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: var(--white);
+  color: var(--text-muted);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: border-color .15s ease, background .15s ease;
+}
+
+.pp-conteo-chip strong { color: var(--navy); font-weight: 800; }
+.pp-conteo-chip:hover { border-color: var(--navy-light); background: #F4F8FF; }
+
+/* El grupo que se está viendo: el borde lo dice sin cambiar de tamaño, para
+   que la línea no salte al filtrar. */
+.pp-conteo-chip.is-puesto {
+  border-color: var(--navy);
+  background: #EEF3FF;
+  box-shadow: inset 0 0 0 1px var(--navy);
+}
+
+.pp-conteo-punto {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: #94A3B8;
+}
+
+/* Los mismos tres colores del resto del sistema: que un estado se pinte de
+   dos formas según la pantalla es lo que hace dudar de si es el mismo. */
+.pp-conteo-chip.is-ok    .pp-conteo-punto { background: #16A34A; }
+.pp-conteo-chip.is-dif   .pp-conteo-punto { background: #DC2626; }
+.pp-conteo-chip.is-falta .pp-conteo-punto { background: #94A3B8; }
+
+.pp-conteo-total {
+  margin-left: auto;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 620px) {
+  .pp-conteo-total { margin-left: 0; }
+}
+
+/* ══════════════════════════════
+   BUSCAR POR IMPORTE (monto y saldo), compartido por todos los listados
+   Una caja por concepto: se escribe el importe que se tiene a mano y salen los
+   documentos que coinciden. Aquí hubo dos cajas, "desde" y "hasta", y estaban
+   de más: quien busca un pago tiene el número delante.
+   Marcado en app/views/partials/filtro-importe.php
+══════════════════════════════ */
+.importe-caja {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.importe-caja::placeholder { text-align: left; font-style: italic; opacity: .65; }
+
+/* Que el filtro está puesto se ve desde la etiqueta: dentro de una caja llena
+   de dígitos, un número más no salta a la vista. */
+.importe-puesto { color: var(--gold-dark); font-size: 15px; line-height: 0; vertical-align: middle; }
+
+.importe-ayuda { margin-top: 3px; font-size: 10.5px; color: var(--text-light); }
