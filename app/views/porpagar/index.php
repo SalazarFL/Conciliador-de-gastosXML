@@ -1064,6 +1064,20 @@ document.addEventListener('keydown', function (e) {
         <?php endif; ?>
     </div>
 
+    <style>
+    /*
+     * La sucursal, debajo del proveedor. Va en renglón propio y no pegada al
+     * nombre porque el nombre ya se come el ancho de la celda, y ahí la
+     * sucursal saldría siempre cortada. Mismo sitio y mismo tamaño que en
+     * Facturas del ERP y en Notas de crédito: es el mismo dato del mismo
+     * reporte, y leerlo en dos lugares distintos según la pantalla es lo que
+     * hace dudar de si es el mismo.
+     */
+    .pp-sucursal { font-size: 10.5px; color: var(--text-muted); margin-top: 3px;
+                   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pp-sucursal i { font-size: 9.5px; color: var(--navy-light); margin-right: 4px; }
+    </style>
+
     <div class="table-wrap">
         <table class="data-table" style="font-size:12.5px;">
             <thead>
@@ -1133,9 +1147,32 @@ document.addEventListener('keydown', function (e) {
                         title="<?= htmlspecialchars($linea['documento']) ?>">
                         <?= htmlspecialchars($linea['documento']) ?>
                     </td>
-                    <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
-                        title="<?= htmlspecialchars($linea['proveedor_nombre']) ?>">
-                        <?= htmlspecialchars($linea['proveedor_nombre']) ?>
+                    <td style="max-width:240px;">
+                        <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                             title="<?= htmlspecialchars($linea['proveedor_nombre']) ?>">
+                            <?= htmlspecialchars($linea['proveedor_nombre']) ?>
+                        </div>
+                        <?php
+                        /*
+                         * A qué sucursal llegó la factura —CEDI, BM Centro San
+                         * Vito—. La barra de arriba deja filtrar por ella desde
+                         * hace tiempo, pero el renglón no la decía: se podía
+                         * pedir "solo San Vito" y no se podía comprobar que lo
+                         * que salió fuera de San Vito. Un pago se arma sucursal
+                         * por sucursal, así que es un dato de la línea, no solo
+                         * un criterio de búsqueda.
+                         *
+                         * Solo cuando la hay: la trae el reporte del ERP y hay
+                         * facturas sin ella, y un icono con nada al lado no
+                         * informa de nada.
+                         */
+                        $ppSucursal = trim((string) ($linea['sucursal'] ?? ''));
+                        if ($ppSucursal !== ''):
+                        ?>
+                        <div class="pp-sucursal" title="Sucursal: <?= htmlspecialchars($ppSucursal) ?>">
+                            <i class="fas fa-store"></i><?= htmlspecialchars($ppSucursal) ?>
+                        </div>
+                        <?php endif; ?>
                     </td>
                     <?php
                     /*
