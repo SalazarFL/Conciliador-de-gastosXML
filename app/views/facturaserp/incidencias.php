@@ -53,12 +53,6 @@ foreach ($resumenTipos as $r) { if ($r['severidad'] === 'alerta') { $alertas += 
         </a>
     </div>
 
-    <p style="font-size:11.5px;color:var(--text-muted);margin:0 0 12px;">
-        Cada carga vuelve a revisar el archivo completo, así que una factura problemática deja
-        una incidencia por carga. Las de tipo <strong>alerta</strong> piden que alguien las mire;
-        las de <strong>aviso</strong> solo dejan constancia. Lo que descartes deja de verse
-        <strong>también en las cargas siguientes</strong>.
-    </p>
 
     <!-- Vigentes / descartadas -->
     <?php

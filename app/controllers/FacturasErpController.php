@@ -16,6 +16,8 @@
 
 require_once __DIR__ . '/../helpers/FacturasErpCsvParser.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
+require_once __DIR__ . '/../helpers/AlcanceProveedor.php';
+require_once __DIR__ . '/../helpers/BusquedaImporte.php';
 
 class FacturasErpController extends Controller
 {
@@ -25,7 +27,10 @@ class FacturasErpController extends Controller
     {
         $this->recordarFiltros('facturas_erp', [
             'q', 'proveedor', 'sucursal', 'origen', 'estado',
-            'desde', 'hasta', 'solo_saldo',
+            'desde', 'hasta', 'solo_saldo', 'monto', 'saldo',
+            // Lo elegido se recuerda: la pregunta sale la primera vez y
+            // después de Limpiar, no en cada visita.
+            AlcanceProveedor::PARAM,
         ]);
 
         $modelo = $this->loadModel('FacturaErp');
@@ -33,15 +38,33 @@ class FacturasErpController extends Controller
         $pagina = max(1, (int) $this->get('pagina', 1));
         $porPagina = 200;
 
-        $total = $modelo->contar($filtros);
-        $totalPaginas = max(1, (int) ceil($total / $porPagina));
-        $pagina = min($pagina, $totalPaginas);
+        /*
+         * Abrir la pantalla no es pedir las 5.196 facturas del ERP. Mientras
+         * no se diga de qué proveedor —o que se quieren todas— ni el conteo
+         * filtrado ni el listado ni la búsqueda de notas por factura llegan a
+         * ejecutarse.
+         */
+        $elegirProveedor = AlcanceProveedor::hayQuePreguntar($_GET, $filtros['proveedor'] ?? '');
+        $facturas = [];
+        $total = 0;
+        $totalPaginas = 1;
+        $totalDelArchivo = null;
 
-        $facturas = $modelo->listar($filtros, $porPagina, ($pagina - 1) * $porPagina);
+        if ($elegirProveedor) {
+            $totalDelArchivo = $modelo->contar([]);
+        } else {
+            $total = $modelo->contar($filtros);
+            $totalPaginas = max(1, (int) ceil($total / $porPagina));
+            $pagina = min($pagina, $totalPaginas);
+
+            $facturas = $modelo->listar($filtros, $porPagina, ($pagina - 1) * $porPagina);
+        }
 
         $this->render('facturaserp.index', [
             'titulo' => 'Facturas',
             'facturas' => $facturas,
+            'elegirProveedor' => $elegirProveedor,
+            'totalDelArchivo' => $totalDelArchivo,
             // Qué factura de esta página tiene una nota de crédito esperando.
             'notasPorFactura' => $this->notasDeLasFacturas($facturas),
             // El resumen de la pantalla (facturas, con saldo, proveedores) se
@@ -363,27 +386,186 @@ class FacturasErpController extends Controller
         return $q ? '?' . http_build_query($q) : '';
     }
 
-    public function subir()
+    /** Donde viven los CSV del ERP ya aplicados, y sus vistas previas. */
+    private function carpetaListados()
+    {
+        $config = require __DIR__ . '/../config/config.php';
+        return rtrim($config['uploads_path'], '/\\') . DIRECTORY_SEPARATOR . 'facturas_erp';
+    }
+
+    private function carpetaPrevias()
+    {
+        return $this->carpetaListados() . DIRECTORY_SEPARATOR . 'previas';
+    }
+
+    /**
+     * Vista previa (POST, JSON): dice qué haría la carga sin hacer nada.
+     *
+     * Facturas era el único listado que se aplicaba a ciegas. Notas de crédito
+     * y el pago semanal ya se miran antes de confirmar, y acá hacía más falta
+     * que en ninguno: este archivo mueve de una vez el saldo de miles de
+     * facturas, y hasta ahora la única forma de saber cuáles había movido era
+     * aplicarlo y leer el mensaje después.
+     *
+     * No escribe nada. El archivo queda en 'previas' con un token y confirmar
+     * lo consume desde ahí: se aplica exactamente el que se miró, no uno que
+     * se vuelve a subir y podría ser otro.
+     */
+    public function previsualizar()
     {
         if (!$this->isPost()) {
-            $this->redirect($this->url('/facturas-erp'));
+            $this->json(['ok' => false, 'message' => 'Método no permitido.'], 405);
         }
 
         require_once __DIR__ . '/../helpers/FileUploader.php';
         $config = require __DIR__ . '/../config/config.php';
-        $uploadDir = rtrim($config['uploads_path'], '/\\') . DIRECTORY_SEPARATOR . 'facturas_erp';
 
         try {
+            $sociedad = $this->loadModel('Sociedad')->getActiva();
+            if (!$sociedad) {
+                throw new Exception(
+                    'Selecciona una sociedad antes de cargar el listado del ERP: '
+                    . 'el reporte no indica a qué empresa pertenece.'
+                );
+            }
+
+            // Vistas previas que nadie confirmó (más de 6 horas): el archivo ya
+            // no le sirve a nadie y ocupa disco de la oficina.
+            foreach (glob($this->carpetaPrevias() . DIRECTORY_SEPARATOR . '*') ?: [] as $viejo) {
+                if (is_file($viejo) && filemtime($viejo) < time() - 21600) {
+                    @unlink($viejo);
+                }
+            }
+
             $archivo = FileUploader::uploadSingle(
                 'listado_file',
-                $uploadDir,
+                $this->carpetaPrevias(),
                 ['csv'],
                 $config['max_upload_size'] ?? 10485760
             );
 
             @set_time_limit(180);
             $resultado = FacturasErpCsvParser::parseArchivo($archivo['path']);
-            $resultado['meta']['archivo'] = $archivo['original_name'] ?? basename($archivo['path']);
+
+            // El mismo reparto que hará la carga —leer la memoria no escribe—,
+            // para que el conteo de la pantalla ya incluya las líneas que van a
+            // entrar rescatadas y no aparezcan de sorpresa después.
+            $reparto = $this->repartirRevision($resultado['revision'], (int) $sociedad['id']);
+            $resultado = FacturasErpCsvParser::conFacturasRescatadas($resultado, $reparto['facturas']);
+
+            $modelo = $this->loadModel('FacturaErp');
+            $impacto = $modelo->previsualizarImportacion(
+                (int) $sociedad['id'],
+                $resultado['facturas']
+            );
+            $repetida = $modelo->cargaDelMismoReporte(
+                (int) $sociedad['id'],
+                $resultado['meta']['impreso_en'] ?? ''
+            );
+
+            $cuadre = $resultado['cuadre'];
+            $this->json([
+                'ok' => true,
+                'token' => basename($archivo['path']),
+                'archivo' => $archivo['original_name'] ?? basename($archivo['path']),
+                'sociedad' => (string) $sociedad['nombre'],
+                'impreso_en' => $resultado['meta']['impreso_en'],
+                'rango_texto' => $resultado['meta']['rango_texto'],
+                'leidas' => count($resultado['facturas']),
+                'proveedores' => (int) $resultado['meta']['proveedores'],
+                'impacto' => $impacto,
+                // Si el reporte no cuadra contra sus propios totales, la carga
+                // se niega. Decirlo acá evita subir, esperar, y que el único
+                // resultado sea un error rojo.
+                'puede_cargar' => (bool) $resultado['ok'],
+                'errores' => $resultado['errores'],
+                'cuadre' => [
+                    'verificados' => (int) $cuadre['verificados'],
+                    'descuadres' => count($cuadre['descuadres']),
+                    'saldo_leido' => (float) $cuadre['saldo_leido'],
+                    'saldo_general_impreso' => $cuadre['saldo_general_impreso'],
+                    'saldo_general_ok' => $cuadre['saldo_general_ok'],
+                    'detalle' => array_map(function ($d) {
+                        return sprintf(
+                            'Proveedor %s%s: leído %s vs impreso %s',
+                            $d['proveedor'],
+                            $d['sucursal'] !== '' ? ' / ' . $d['sucursal'] : '',
+                            number_format($d['leido_monto'], 2),
+                            number_format($d['impreso_monto'], 2)
+                        );
+                    }, array_slice($cuadre['descuadres'], 0, 5)),
+                ],
+                'revision' => [
+                    'pendientes' => count($reparto['pendientes']),
+                    'rescatadas' => count($reparto['facturas']),
+                    'descartadas' => (int) $reparto['descartadas'],
+                ],
+                'repetida' => $repetida ? [
+                    'archivo' => (string) $repetida['archivo_origen'],
+                    'cuando' => (string) $repetida['creado_en'],
+                ] : null,
+            ]);
+        } catch (Throwable $e) {
+            $this->json(['ok' => false, 'message' => $e->getMessage()], 422);
+        }
+    }
+
+    /**
+     * El CSV que se va a aplicar: el que dejó guardado la vista previa, por su
+     * token.
+     *
+     * Acepta también un archivo subido de una, para que la ruta siga sirviendo
+     * si alguien la llama sin pasar por la pantalla. Devuelve siempre la ruta
+     * definitiva, ya fuera de 'previas'.
+     */
+    private function archivoAAplicar()
+    {
+        require_once __DIR__ . '/../helpers/FileUploader.php';
+        $config = require __DIR__ . '/../config/config.php';
+        $destino = $this->carpetaListados();
+
+        $token = basename(trim((string) $this->post('archivo_token', '')));
+        if ($token === '') {
+            $subido = FileUploader::uploadSingle(
+                'listado_file',
+                $destino,
+                ['csv'],
+                $config['max_upload_size'] ?? 10485760
+            );
+            return [
+                'path' => (string) $subido['path'],
+                'original_name' => (string) ($subido['original_name'] ?? basename($subido['path'])),
+            ];
+        }
+
+        $temporal = $this->carpetaPrevias() . DIRECTORY_SEPARATOR . $token;
+        if (!is_file($temporal)) {
+            throw new Exception('La vista previa expiró. Volvé a elegir el archivo.');
+        }
+        if (!is_dir($destino) && !mkdir($destino, 0777, true)) {
+            throw new Exception('No fue posible preparar la carpeta de listados.');
+        }
+        $definitivo = $destino . DIRECTORY_SEPARATOR . $token;
+        if (!rename($temporal, $definitivo)) {
+            throw new Exception('No fue posible conservar el CSV original.');
+        }
+
+        $nombre = basename(trim((string) $this->post('archivo_nombre', '')));
+        return ['path' => $definitivo, 'original_name' => $nombre !== '' ? $nombre : $token];
+    }
+
+    public function subir()
+    {
+        if (!$this->isPost()) {
+            $this->redirect($this->url('/facturas-erp'));
+        }
+
+        try {
+            $archivo = $this->archivoAAplicar();
+
+            @set_time_limit(180);
+            $resultado = FacturasErpCsvParser::parseArchivo($archivo['path']);
+            $resultado['meta']['archivo'] = $archivo['original_name'];
 
             // El reporte trae sus propios totales: si la lectura no los
             // reproduce, no se importa nada a medias.
@@ -673,6 +855,9 @@ class FacturasErpController extends Controller
             'desde' => $this->fecha($this->get('desde', '')),
             'hasta' => $this->fecha($this->get('hasta', '')),
             'solo_saldo' => $this->get('solo_saldo', '') !== '' ? 1 : 0,
+            // Los dos importes con los que se busca una factura del ERP.
+            'monto' => BusquedaImporte::numero($this->get('monto', '')),
+            'saldo' => BusquedaImporte::numero($this->get('saldo', '')),
         ];
     }
 

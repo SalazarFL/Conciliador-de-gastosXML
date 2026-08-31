@@ -25,6 +25,7 @@ $total = (int) ($total ?? 0);
 $filtros = array_replace([
     'texto' => '', 'proveedor' => '', 'sucursal' => '', 'origen' => '', 'estado' => '',
     'desde' => '', 'hasta' => '', 'solo_saldo' => 0,
+    'monto' => '', 'saldo' => '',
 ], is_array($filtros ?? null) ? $filtros : []);
 
 $queryFiltros = array_filter([
@@ -32,6 +33,9 @@ $queryFiltros = array_filter([
     'sucursal' => $filtros['sucursal'], 'origen' => $filtros['origen'], 'estado' => $filtros['estado'],
     'desde' => $filtros['desde'], 'hasta' => $filtros['hasta'],
     'solo_saldo' => $filtros['solo_saldo'] ? '1' : '',
+    // Los importes también viajan al exportar: lo que se baja tiene que ser
+    // lo que se está viendo.
+    'monto' => $filtros['monto'], 'saldo' => $filtros['saldo'],
 ], function ($v) { return $v !== '' && $v !== null; });
 
 $urlExportar = $baseUrl . '/facturas-erp/exportar?' . http_build_query($queryFiltros);
@@ -41,9 +45,18 @@ function feFecha($f)
     $ts = $f ? strtotime((string) $f) : false;
     return $ts !== false ? date('d/m/Y', $ts) : '—';
 }
-function feMonto($v)
+/**
+ * El importe con su símbolo pegado.
+ *
+ * Había una columna "Moneda" para un carácter, y las 5.000 facturas del
+ * listado dicen colones salvo un puñado. Con el símbolo en el número la
+ * columna sobra, y las pocas en dólares se distinguen mejor así que teniendo
+ * que mirar de reojo dos columnas más allá.
+ */
+function feMonto($v, $moneda = '')
 {
-    return number_format((float) $v, 2);
+    $simbolo = strpos((string) $moneda, '$') !== false ? '$' : '₡';
+    return $simbolo . number_format((float) $v, 2);
 }
 ?>
 
@@ -69,7 +82,13 @@ function feMonto($v)
         <?php endif; ?>
     </div>
 
-    <form method="POST" action="<?= $baseUrl ?>/facturas-erp/subir" enctype="multipart/form-data"
+    <?php /*
+     * El CSV se mira antes de aplicarse, como en Notas de crédito y en el pago
+     * semanal. Este archivo mueve de una vez el saldo de miles de facturas: el
+     * botón dice "Vista previa" y no "Cargar" porque hasta que no se confirma
+     * en el modal no se escribe nada.
+     */ ?>
+    <form method="POST" action="<?= $baseUrl ?>/facturas-erp/previa" enctype="multipart/form-data"
           id="fe-form-subir" style="display:flex;gap:9px;align-items:center;flex-wrap:wrap;">
         <input type="file" name="listado_file" id="fe-listado-file" accept=".csv" required
                style="display:none;" onchange="feNombreArchivo(this)">
@@ -79,23 +98,226 @@ function feMonto($v)
         <span id="fe-listado-nombre" style="font-size:12px;color:var(--text-muted);font-style:italic;">
             Ningún archivo seleccionado
         </span>
-        <button type="submit" class="btn btn-primary btn-sm">
-            <i class="fas fa-database" style="margin-right:4px;"></i>Cargar listado
+        <button type="submit" class="btn btn-primary btn-sm" id="fe-btn-previa">
+            <i class="fas fa-eye" style="margin-right:4px;"></i>Vista previa
         </button>
     </form>
-    <div style="font-size:11px;color:var(--text-muted);max-width:640px;margin-top:8px;">
-        <i class="fas fa-circle-info" style="margin-right:3px;color:var(--navy-light);"></i>
-        El reporte <strong>Facturas por Proveedor</strong> se puede volver a subir cuantas veces
-        haga falta: las facturas nuevas se agregan, las que cambiaron de saldo se actualizan y las
-        que siguen igual no se tocan.
+</div>
+
+<!-- ── Vista previa del listado: qué cambiaría si se aplica ── -->
+<div id="fe-previa-modal" role="dialog" aria-modal="true" aria-labelledby="fe-previa-titulo"
+     style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:1000;
+            align-items:center;justify-content:center;padding:12px;">
+    <div style="background:#fff;border-radius:10px;width:min(1000px,100%);max-height:88vh;
+                display:flex;flex-direction:column;overflow:hidden;">
+        <div style="padding:9px 13px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center;">
+            <i class="fas fa-eye" style="color:var(--gold);"></i>
+            <div style="min-width:0;">
+                <strong id="fe-previa-titulo">Vista previa del listado</strong>
+                <div id="fe-previa-meta" style="font-size:12px;color:var(--text-muted);"></div>
+            </div>
+            <button type="button" data-fe-previa-cerrar aria-label="Cerrar"
+                    style="margin-left:auto;background:none;border:0;font-size:24px;cursor:pointer;
+                           color:var(--text-muted);line-height:1;">&times;</button>
+        </div>
+
+        <div style="padding:10px 13px;overflow:auto;">
+            <div id="fe-previa-resumen" style="display:flex;gap:12px;flex-wrap:wrap;font-size:12px;margin-bottom:8px;"></div>
+            <div id="fe-previa-avisos"></div>
+
+            <?php /*
+             * La tabla no lista las 5.700 facturas del reporte: lista las que
+             * cambian de saldo, que es lo único que una carga hace de verdad.
+             * Las nuevas y las que quedan igual se cuentan arriba.
+             */ ?>
+            <div id="fe-previa-cambios-caja" style="display:none;">
+                <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;
+                            letter-spacing:.04em;margin:10px 0 4px;">
+                    Saldos que cambian <span id="fe-previa-cambios-n"></span>
+                </div>
+                <div style="overflow:auto;max-height:45vh;">
+                    <table class="table" style="min-width:760px;font-size:12.5px;">
+                        <thead><tr>
+                            <th>Proveedor</th><th>Documento</th>
+                            <th style="text-align:right;">Saldo actual</th>
+                            <th style="text-align:right;">Saldo del reporte</th>
+                            <th style="text-align:right;">Diferencia</th>
+                        </tr></thead>
+                        <tbody id="fe-previa-cuerpo"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div style="padding:9px 13px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:7px;">
+            <button type="button" class="btn btn-outline btn-sm" data-fe-previa-cerrar>Cancelar</button>
+            <form method="POST" action="<?= $baseUrl ?>/facturas-erp/subir" style="margin:0;">
+                <input type="hidden" name="archivo_token" id="fe-previa-token">
+                <input type="hidden" name="archivo_nombre" id="fe-previa-original">
+                <button class="btn btn-primary btn-sm" id="fe-previa-confirmar">
+                    <i class="fas fa-database" style="margin-right:4px;"></i>Aplicar listado
+                </button>
+            </form>
+        </div>
     </div>
 </div>
+
+<style>
+/* La segunda línea de una celda: lo que solo se escribe cuando pasa algo. */
+.fe-tabla .fe-sub{font-size:10.5px;color:var(--text-muted);margin-top:3px;
+                  display:flex;gap:5px;align-items:center;flex-wrap:wrap}
+.fe-tabla .fe-sub-der{justify-content:flex-end}
+.fe-tabla .fe-badge-mini{font-size:10px;padding:2px 7px;white-space:nowrap;font-family:inherit}
+/* Venció y todavía se debe. Sin saldo no se marca: no hay nada que correr. */
+.fe-tabla .fe-vencida{color:var(--miss);font-weight:700}
+.fe-tabla td{vertical-align:top}
+</style>
 
 <script>
 function feNombreArchivo(input) {
     document.getElementById('fe-listado-nombre').textContent =
         input.files.length ? input.files[0].name : 'Ningún archivo seleccionado';
 }
+</script>
+
+<script>
+// El CSV se lee sin escribir y el modal dice qué cambiaría. Confirmar reenvía
+// el archivo que quedó guardado, por su token: se aplica el mismo que se miró.
+(function () {
+    var form = document.getElementById('fe-form-subir');
+    var modal = document.getElementById('fe-previa-modal');
+    if (!form || !modal) { return; }
+
+    var btn = document.getElementById('fe-btn-previa');
+    var confirmar = document.getElementById('fe-previa-confirmar');
+
+    function esc(v) {
+        var d = document.createElement('div');
+        d.textContent = String(v == null ? '' : v);
+        return d.innerHTML;
+    }
+    function monto(v) {
+        return Number(v || 0).toLocaleString('en-US',
+            { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    function colones(v) { return '₡' + monto(v); }
+    function cerrar() { modal.style.display = 'none'; }
+
+    modal.addEventListener('click', function (e) {
+        if (e.target === modal || e.target.hasAttribute('data-fe-previa-cerrar')) { cerrar(); }
+    });
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && modal.style.display === 'flex') { cerrar(); }
+    });
+
+    function pintar(d) {
+        var imp = d.impacto || {};
+        var rev = d.revision || {};
+        var cua = d.cuadre || {};
+
+        document.getElementById('fe-previa-meta').textContent =
+            d.archivo + (d.impreso_en ? ' · impreso el ' + d.impreso_en : '') +
+            (d.sociedad ? ' · ' + d.sociedad : '');
+
+        document.getElementById('fe-previa-resumen').innerHTML =
+            '<span>Facturas leídas: <b>' + (d.leidas || 0) + '</b></span>' +
+            '<span>Proveedores: <b>' + (d.proveedores || 0) + '</b></span>' +
+            '<span>Nuevas: <b>' + (imp.nuevas || 0) + '</b></span>' +
+            '<span>Saldo cambia: <b>' + (imp.actualizadas || 0) + '</b></span>' +
+            '<span>Sin cambios: <b>' + (imp.sin_cambio || 0) + '</b></span>';
+
+        var avisos = '';
+
+        // Lo que impide aplicar va primero y apaga el botón: no tiene sentido
+        // leer el resto si la carga se va a negar igual.
+        if (!d.puede_cargar) {
+            avisos += '<div class="alert alert-danger" style="margin-bottom:10px;">' +
+                '<strong>Este archivo no se puede aplicar.</strong> ' +
+                esc((d.errores || []).join(' ')) + '</div>';
+        }
+        if (cua.descuadres) {
+            avisos += '<div class="alert alert-warning" style="margin-bottom:10px;">' +
+                cua.descuadres + ' total(es) impresos del reporte no cuadran con lo leído. ' +
+                'Se puede aplicar igual; quedan anotados en Incidencias.' +
+                '<div style="font-size:11.5px;margin-top:4px;">' +
+                (cua.detalle || []).map(function (t) { return esc(t); }).join('<br>') + '</div></div>';
+        } else if (cua.saldo_general_ok) {
+            avisos += '<div class="alert alert-success" style="margin-bottom:10px;">' +
+                'El saldo leído (' + colones(cua.saldo_leido) +
+                ') coincide con el Total General impreso del reporte.</div>';
+        }
+        if (d.repetida) {
+            avisos += '<div class="alert alert-info" style="margin-bottom:10px;">' +
+                'Este mismo reporte ya se cargó (' + esc(d.repetida.archivo) + ', ' +
+                esc(d.repetida.cuando) + '). Se puede aplicar de nuevo; las filas iguales no se tocan.</div>';
+        }
+        if (rev.pendientes) {
+            avisos += '<div class="alert alert-warning" style="margin-bottom:10px;">' +
+                rev.pendientes + ' línea(s) no se pudieron leer y van a quedar en revisión, ' +
+                'para que decidas si entran. Ninguna se descarta sola.</div>';
+        }
+        if (rev.rescatadas || rev.descartadas) {
+            avisos += '<div class="alert alert-info" style="margin-bottom:10px;">' +
+                (rev.rescatadas ? rev.rescatadas + ' línea(s) entran con la corrección que ya guardaste. ' : '') +
+                (rev.descartadas ? rev.descartadas + ' se descartan solas porque ya lo decidiste.' : '') +
+                '</div>';
+        }
+        // El dinero en movimiento, cuando lo hay: es la frase que dice si este
+        // archivo es la carga rutinaria de siempre o algo fuera de lo normal.
+        if (imp.actualizadas) {
+            avisos += '<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">' +
+                'Bajan ' + colones(imp.saldo_baja) + ' y suben ' + colones(imp.saldo_sube) +
+                (imp.nuevas ? ' · entran ' + colones(imp.saldo_nuevas) + ' en facturas nuevas' : '') +
+                '.</div>';
+        }
+        document.getElementById('fe-previa-avisos').innerHTML = avisos;
+
+        var cambios = imp.cambios || [];
+        var caja = document.getElementById('fe-previa-cambios-caja');
+        caja.style.display = cambios.length ? '' : 'none';
+        document.getElementById('fe-previa-cambios-n').textContent =
+            cambios.length < (imp.cambios_total || 0)
+                ? '(' + cambios.length + ' de ' + imp.cambios_total + ', los de mayor diferencia)'
+                : '(' + cambios.length + ')';
+        document.getElementById('fe-previa-cuerpo').innerHTML = cambios.map(function (c) {
+            var baja = Number(c.diferencia) < 0;
+            return '<tr><td>' + esc(c.proveedor_nombre) + '</td>' +
+                '<td>' + esc(c.documento) + '</td>' +
+                '<td style="text-align:right;">' + monto(c.anterior) + '</td>' +
+                '<td style="text-align:right;">' + monto(c.nuevo) + '</td>' +
+                '<td style="text-align:right;color:' + (baja ? 'var(--ok,#16a34a)' : 'var(--diff,#b45309)') + ';">' +
+                (baja ? '' : '+') + monto(c.diferencia) + '</td></tr>';
+        }).join('');
+
+        document.getElementById('fe-previa-token').value = d.token || '';
+        document.getElementById('fe-previa-original').value = d.archivo || '';
+        confirmar.disabled = !d.puede_cargar;
+        modal.style.display = 'flex';
+    }
+
+    form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin" style="margin-right:4px;"></i>Leyendo…';
+        fetch(form.action, { method: 'POST', body: new FormData(form), credentials: 'same-origin' })
+            .then(function (res) {
+                return res.json().catch(function () { return null; }).then(function (body) {
+                    if (!res.ok || !body || body.ok === false) {
+                        throw new Error((body && body.message) || ('Error HTTP ' + res.status));
+                    }
+                    return body;
+                });
+            })
+            .then(pintar)
+            .catch(function (err) {
+                AppDialog.alert(err.message, { title: 'No se pudo leer el listado', type: 'danger' });
+            })
+            .then(function () {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-eye" style="margin-right:4px;"></i>Vista previa';
+            });
+    });
+})();
 </script>
 
 <?php /*
@@ -106,6 +328,20 @@ function feNombreArchivo(input) {
  * La de Incidencias no era una cifra: era la única puerta a esa pantalla. Se
  * quedó, convertida en el botón que le corresponde, junto a Exportar.
  */ ?>
+
+<?php if ($elegirProveedor ?? false):
+/*
+ * Sin listado: el controlador no lo consultó. La barra de arriba —cargar el
+ * reporte, ver incidencias— se queda, que para eso no hace falta elegir.
+ */
+$elegirProv = [
+    'accion'   => $baseUrl . '/facturas-erp',
+    'opciones' => $proveedoresFiltro,
+    'cuantos'  => $totalDelArchivo ?? null,
+    'que'      => 'facturas del ERP',
+];
+include __DIR__ . '/../partials/elegir-proveedor.php';
+else: ?>
 
 <!-- ── Listado ── -->
 <div class="card">
@@ -189,6 +425,17 @@ function feNombreArchivo(input) {
             <label class="filter-label">Emitida hasta</label>
             <input type="date" name="hasta" class="form-control" value="<?= htmlspecialchars($filtros['hasta']) ?>">
         </div>
+        <?php
+        $filtroImporte = [
+            'nombre' => 'monto', 'etiqueta' => 'Monto',
+            'valor' => $filtros['monto'],
+        ]; include __DIR__ . '/../partials/filtro-importe.php';
+
+        $filtroImporte = [
+            'nombre' => 'saldo', 'etiqueta' => 'Saldo',
+            'valor' => $filtros['saldo'],
+        ]; include __DIR__ . '/../partials/filtro-importe.php';
+        ?>
         <div style="display:flex;align-items:flex-end;gap:8px;">
             <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;white-space:nowrap;">
                 <input type="checkbox" name="solo_saldo" value="1" <?= $filtros['solo_saldo'] ? 'checked' : '' ?>>
@@ -204,17 +451,32 @@ function feNombreArchivo(input) {
     </form>
 
     <div style="overflow-x:auto;">
-        <table class="data-table" style="font-size:12.5px;min-width:1250px;">
+        <table class="data-table fe-tabla" style="font-size:12.5px;min-width:820px;">
+            <?php /*
+             * Cuatro columnas, no diez. Las seis que se fueron no llevaban un
+             * dato que distinguiera una factura de otra, contado sobre las
+             * 5.000 del listado:
+             *
+             *   Compra    "Local" en el 100 %. Ahora solo sale la insignia
+             *             cuando NO lo es, que es cuando dice algo.
+             *   Moneda    Colones en el 100 % salvo un puñado. El símbolo se
+             *             fue pegado al importe.
+             *   Estado    "Pendiente" en el 91 %. Solo se marca el 9 % que ya
+             *             está asignado a una semana, con el nombre.
+             *   Sucursal  Dos valores en total; va bajo el proveedor.
+             *   Vence     Va bajo la fecha de emisión, que es de lo que habla.
+             *   Monto     El mismo número que el saldo en el 39,6 %. El saldo
+             *             manda —es el foco del módulo— y el monto aparece
+             *             debajo solo cuando no coinciden.
+             *
+             * La tabla pasó de 1.250 px a 820 px de ancho mínimo, y el nombre
+             * del proveedor dejó de partirse en dos renglones.
+             */ ?>
             <thead>
                 <tr>
                     <th>Documento</th>
                     <th>Proveedor</th>
-                    <th>Estado</th>
-                    <th>Sucursal</th>
                     <th>Fecha</th>
-                    <th>Vence</th>
-                    <th>Compra</th>
-                    <th class="center">Moneda</th>
                     <th class="right">Monto</th>
                     <th class="right">Saldo</th>
                 </tr>
@@ -222,7 +484,7 @@ function feNombreArchivo(input) {
             <tbody>
                 <?php if (!$facturas): ?>
                 <tr>
-                    <td colspan="10" class="muted" style="text-align:center;padding:18px;">
+                    <td colspan="5" class="muted" style="text-align:center;padding:18px;">
                         <?= $total === 0 && !$queryFiltros
                             ? 'Todavía no se ha cargado ningún listado. Subí el CSV del ERP para empezar.'
                             : 'Ninguna factura coincide con el filtro.' ?>
@@ -239,58 +501,116 @@ function feNombreArchivo(input) {
                     $notasFactura = $notasPorFactura[(int) $f['id']] ?? [];
                     $saldoNotas = 0.0;
                     foreach ($notasFactura as $nf) { $saldoNotas += (float) $nf['saldo']; }
+
+                    $asignada = ($f['estado'] ?? 'pendiente') === 'asignada_semana';
+                    // "Local" es el 100 % del listado: solo se marca lo que no lo es.
+                    $importada = trim((string) $f['origen']) !== '' && $f['origen'] !== 'Local';
+                    $montoAparte = abs((float) $f['monto'] - $saldo) >= 0.005;
+                    // Vencida solo cuenta si todavía se debe: sin saldo no hay nada que correr.
+                    $vencida = $tieneSaldo && !empty($f['fecha_vence'])
+                        && $f['fecha_vence'] < date('Y-m-d');
                 ?>
                 <tr>
-                    <td style="font-family:ui-monospace,monospace;font-size:11.5px;">
-                        <?php if ($doc !== ''): ?>
-                            <?= htmlspecialchars($f['tipo']) ?>-<?= htmlspecialchars($doc) ?>
-                        <?php else: ?>
-                            <span class="muted" title="El reporte no imprime número para esta factura">sin número</span>
-                        <?php endif; ?>
-                        <?php if ($notasFactura): ?>
+                    <td>
+                        <div style="font-family:ui-monospace,monospace;font-size:11.5px;font-weight:650;">
+                            <?php if ($doc !== ''): ?>
+                                <?= htmlspecialchars($f['tipo']) ?>-<?= htmlspecialchars($doc) ?>
+                            <?php else: ?>
+                                <span class="muted" title="El reporte no imprime número para esta factura">sin número</span>
+                            <?php endif; ?>
+                        </div>
+
+                        <?php // Lo que le pasa a esta factura, todo en una línea
+                              // y solo cuando le pasa algo. ?>
+                        <?php if ($notasFactura || $asignada || $importada): ?>
+                        <div class="fe-sub">
+                            <?php if ($asignada): ?>
+                            <span class="badge badge-ok fe-badge-mini"
+                                  title="Ya entró a un pago semanal: su saldo está reservado">
+                                <i class="fas fa-calendar-check" style="margin-right:3px;"></i>
+                                <?= htmlspecialchars((string) ($f['semana_nombre'] ?: 'Asignada a una semana')) ?>
+                            </span>
+                            <?php endif; ?>
+
+                            <?php /*
+                             * Compra "Local" en las 5.000 facturas del listado.
+                             * Escribirla en todas era decir siempre lo mismo;
+                             * la insignia sale solo cuando NO es local, que es
+                             * la que hay que ver.
+                             */
+                            if ($importada): ?>
+                            <span class="badge badge-default fe-badge-mini"
+                                  title="Compra que no es local">
+                                <?= htmlspecialchars($f['origen']) ?>
+                            </span>
+                            <?php endif; ?>
+
+                            <?php if ($notasFactura): ?>
                             <a href="<?= $baseUrl ?>/notas-credito?factura_erp_id=<?= (int) $f['id'] ?>"
-                               class="badge"
-                               style="display:inline-block;margin-top:4px;font-size:10px;padding:2px 7px;
-                                      background:#fef3c7;color:#92400e;border:1px solid #fcd34d;
-                                      text-decoration:none;font-family:inherit;white-space:nowrap;"
+                               data-ventana="Notas de crédito"
+                               data-ventana-titulo="<?= htmlspecialchars((string) $f['documento']) ?>"
+                               class="badge fe-badge-mini"
+                               style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d;
+                                      text-decoration:none;"
                                title="Esta factura tiene <?= count($notasFactura) ?> nota(s) de crédito directa(s) sin aplicar por <?= number_format($saldoNotas, 2) ?>. Clic para verlas.">
                                 <i class="fas fa-file-circle-minus" style="margin-right:3px;"></i>
                                 Nota directa<?= count($notasFactura) > 1 ? ' ×' . count($notasFactura) : '' ?>
-                                · <?= number_format($saldoNotas, 2) ?>
+                                · <?= feMonto($saldoNotas, $f['moneda']) ?>
                             </a>
+                            <?php endif; ?>
+                        </div>
                         <?php endif; ?>
                     </td>
+
                     <td>
                         <?= htmlspecialchars($f['proveedor_nombre']) ?>
-                        <div class="muted" style="font-size:10.5px;"><?= htmlspecialchars($f['proveedor_codigo']) ?></div>
+                        <div class="fe-sub">
+                            <?= htmlspecialchars($f['proveedor_codigo']) ?><?php
+                                if (trim((string) $f['sucursal']) !== ''): ?>
+                                · <?= htmlspecialchars($f['sucursal']) ?><?php endif; ?>
+                        </div>
                     </td>
+
                     <td style="white-space:nowrap;">
-                        <?php if (($f['estado'] ?? 'pendiente') === 'asignada_semana'): ?>
-                            <span class="badge badge-ok" style="font-size:10px;padding:2px 7px;">
-                                <i class="fas fa-calendar-check"></i> Asignada a una semana
-                            </span>
-                            <?php if (!empty($f['semana_nombre'])): ?>
-                            <div class="muted" style="font-size:10.5px;margin-top:3px;">
-                                <?= htmlspecialchars((string) $f['semana_nombre']) ?>
-                            </div>
-                            <?php endif; ?>
-                        <?php else: ?>
-                            <span class="badge badge-default" style="font-size:10px;padding:2px 7px;">Pendiente</span>
+                        <?= feFecha($f['fecha_emision']) ?>
+                        <?php /*
+                         * El vencimiento va debajo de la emisión, que es de lo
+                         * que habla. En el 92,9 % son los 30 días de siempre;
+                         * lo que hay que ver es el otro 7 %, y una factura
+                         * vencida con saldo se marca.
+                         */ ?>
+                        <?php if (!empty($f['fecha_vence'])): ?>
+                        <div class="fe-sub<?= $vencida ? ' fe-vencida' : '' ?>"
+                             title="<?= $vencida ? 'Venció y todavía tiene saldo' : 'Fecha de vencimiento' ?>">
+                            <?php if ($vencida): ?><i class="fas fa-triangle-exclamation"></i><?php endif; ?>
+                            vence <?= feFecha($f['fecha_vence']) ?>
+                        </div>
                         <?php endif; ?>
                     </td>
-                    <td><?= htmlspecialchars($f['sucursal'] !== '' ? $f['sucursal'] : '—') ?></td>
-                    <td><?= feFecha($f['fecha_emision']) ?></td>
-                    <td><?= feFecha($f['fecha_vence']) ?></td>
-                    <td>
-                        <span class="badge <?= $f['origen'] === 'Local' ? 'badge-navy' : 'badge-default' ?>"
-                              style="font-size:10px;padding:2px 7px;">
-                            <?= htmlspecialchars($f['origen']) ?>
-                        </span>
+
+                    <?php /*
+                     * Monto y saldo, cada uno en su columna. Antes mandaba el
+                     * saldo y el monto asomaba debajo solo cuando no
+                     * coincidían: para comparar dos facturas por lo que
+                     * costaron había que leer renglón por renglón cuál
+                     * mostraba el suyo y cuál no.
+                     */ ?>
+                    <td class="right" style="white-space:nowrap;">
+                        <?= feMonto($f['monto'], $f['moneda']) ?>
                     </td>
-                    <td class="center"><?= htmlspecialchars($f['moneda']) ?></td>
-                    <td class="right"><?= feMonto($f['monto']) ?></td>
-                    <td class="right" style="<?= $tieneSaldo ? 'font-weight:700;color:var(--warn);' : 'color:var(--text-muted);' ?>">
-                        <?= feMonto($saldo) ?>
+
+                    <td class="right" style="white-space:nowrap;">
+                        <span style="<?= $tieneSaldo ? 'font-weight:700;color:var(--warn);' : 'color:var(--text-muted);' ?>">
+                            <?= $tieneSaldo ? feMonto($saldo, $f['moneda']) : 'sin saldo' ?>
+                        </span>
+                        <?php /*
+                         * Que el saldo no sea el monto entero quiere decir que
+                         * ya se abonó algo. Con las dos columnas al lado eso
+                         * se ve solo, pero la marca lo dice sin restar.
+                         */ ?>
+                        <?php if ($montoAparte && $tieneSaldo): ?>
+                        <div class="fe-sub fe-sub-der" title="Ya tiene abonos: el saldo es menor que el monto">abonada</div>
+                        <?php endif; ?>
                     </td>
                 </tr>
                 <?php endforeach; ?>
@@ -315,6 +635,7 @@ function feNombreArchivo(input) {
     </div>
     <?php endif; ?>
 </div>
+<?php endif; // fin de "ya se eligió proveedor" ?>
 
 <?php if ($cargas): ?>
 <!-- ── Historial de cargas ── -->

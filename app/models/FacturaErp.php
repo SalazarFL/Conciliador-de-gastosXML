@@ -19,9 +19,11 @@
 
 require_once __DIR__ . '/../helpers/NumeroFactura.php';
 require_once __DIR__ . '/../helpers/EstadoArchivo.php';
+require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 require_once __DIR__ . '/../helpers/FacturasErpCsvParser.php';
 require_once __DIR__ . '/../helpers/LineaRevision.php';
 require_once __DIR__ . '/ProveedorCatalogo.php';
+require_once __DIR__ . '/../helpers/BusquedaImporte.php';
 
 class FacturaErp extends Model
 {
@@ -352,6 +354,116 @@ class FacturaErp extends Model
             'descuadres' => $descuadres,
             'incidencias' => count($incidencias),
         ];
+    }
+
+    /**
+     * Qué haría la carga, sin escribir nada.
+     *
+     * Repite la clasificación de importar() al pie de la letra —la misma
+     * consulta, la misma EPSILON_SALDO, el mismo orden de decisiones— porque
+     * una vista previa solo sirve si lo que promete es lo que después pasa.
+     * Si las dos reglas se separan, el número de la pantalla deja de ser el
+     * número real y es peor que no tener vista previa.
+     *
+     * Devuelve además los saldos que cambian, uno por uno: en este módulo esa
+     * es la información, no el conteo. Un reporte que mueve el saldo de
+     * cuarenta facturas y otro que mueve el de una son cargas muy distintas y
+     * hasta ahora se veían iguales hasta después de aplicarlas.
+     */
+    public function previsualizarImportacion($sociedadId, array $facturas, $topeCambios = 300)
+    {
+        $sociedadId = (int) $sociedadId;
+
+        $params = [];
+        $sql = 'SELECT clave, saldo FROM facturas_erp WHERE 1=1'
+            . ($sociedadId > 0 ? ' AND sociedad_id = ?' : '');
+        if ($sociedadId > 0) {
+            $params[] = $sociedadId;
+        }
+        $existentes = [];
+        foreach ($this->fetchAll($sql, $params) as $fila) {
+            $existentes[$fila['clave']] = (float) $fila['saldo'];
+        }
+
+        $nuevas = 0;
+        $sinCambio = 0;
+        $cambios = [];
+        $saldoNuevas = 0.0;
+        $saldoSube = 0.0;
+        $saldoBaja = 0.0;
+
+        foreach ($facturas as $f) {
+            $clave = (string) ($f['clave'] ?? '');
+            if ($clave === '') {
+                continue;
+            }
+            if (!isset($existentes[$clave])) {
+                $nuevas++;
+                $saldoNuevas += (float) $f['saldo'];
+                continue;
+            }
+            $anterior = $existentes[$clave];
+            $ahora = (float) $f['saldo'];
+            if (abs($anterior - $ahora) < self::EPSILON_SALDO) {
+                $sinCambio++;
+                continue;
+            }
+            $diferencia = $ahora - $anterior;
+            if ($diferencia > 0) {
+                $saldoSube += $diferencia;
+            } else {
+                $saldoBaja += -$diferencia;
+            }
+            $cambios[] = [
+                'proveedor_nombre' => (string) ($f['proveedor_nombre'] ?? ''),
+                'documento' => (string) ($f['documento'] ?? ''),
+                'moneda' => (string) ($f['moneda'] ?? ''),
+                'anterior' => round($anterior, 2),
+                'nuevo' => round($ahora, 2),
+                'diferencia' => round($diferencia, 2),
+            ];
+        }
+
+        // Los que más mueven van primero: si hay que cortar la lista, que lo
+        // que se pierda sea lo que menos importa.
+        usort($cambios, function ($a, $b) {
+            return abs($b['diferencia']) <=> abs($a['diferencia']);
+        });
+
+        return [
+            'nuevas' => $nuevas,
+            'actualizadas' => count($cambios),
+            'sin_cambio' => $sinCambio,
+            'saldo_nuevas' => round($saldoNuevas, 2),
+            'saldo_sube' => round($saldoSube, 2),
+            'saldo_baja' => round($saldoBaja, 2),
+            'cambios' => array_slice($cambios, 0, max(0, (int) $topeCambios)),
+            'cambios_total' => count($cambios),
+        ];
+    }
+
+    /**
+     * La carga anterior del mismo reporte, si la hay.
+     *
+     * Se reconoce por la fecha y hora de impresión que el ERP estampa en el
+     * encabezado: dos archivos con el mismo sello son el mismo reporte, se
+     * llamen como se llamen. Volver a aplicarlo no rompe nada —las filas
+     * iguales no se tocan— pero sí conviene saberlo antes de confirmar,
+     * porque casi siempre significa que se agarró el archivo equivocado.
+     */
+    public function cargaDelMismoReporte($sociedadId, $impresoEn)
+    {
+        $impresoEn = trim((string) $impresoEn);
+        if ($impresoEn === '') {
+            return null;
+        }
+        return $this->fetchOne(
+            'SELECT id, archivo_origen, creado_en, filas_leidas
+               FROM facturas_erp_cargas
+              WHERE impreso_en = ?' . ((int) $sociedadId > 0 ? ' AND sociedad_id = ?' : '') . '
+              ORDER BY id DESC LIMIT 1',
+            (int) $sociedadId > 0 ? [$impresoEn, (int) $sociedadId] : [$impresoEn]
+        ) ?: null;
     }
 
     /**
@@ -768,11 +880,19 @@ class FacturaErp extends Model
                 $params[] = $valor;
             }
         }
-        foreach ([['monto_desde', '>='], ['monto_hasta', '<=']] as $rango) {
-            $valor = $filtros[$rango[0]] ?? '';
-            if ($valor !== '' && $valor !== null && is_numeric($valor)) {
-                $where[] = 'COALESCE(e.saldo_pago, e.saldo) ' . $rango[1] . ' ?';
-                $params[] = (float) $valor;
+        /*
+         * Se busca por el importe que se tiene a mano. Monto y saldo van por
+         * separado, que no son lo mismo: el monto es lo que dice la factura y
+         * el saldo lo que queda por pagar de ella. Hasta hace poco había un
+         * solo filtro, llamado "monto", que en realidad miraba el saldo.
+         */
+        foreach ([
+            ['monto', 'e.monto'],
+            ['saldo', 'COALESCE(e.saldo_pago, e.saldo)'],
+        ] as [$cual, $columna]) {
+            $cond = BusquedaImporte::condicion($columna, $filtros[$cual] ?? '', $params);
+            if ($cond !== '') {
+                $where[] = $cond;
             }
         }
 
@@ -955,7 +1075,12 @@ class FacturaErp extends Model
             return ['estado' => 'sin_erp'];
         }
 
-        $candidatas = $this->candidatasParaXml($consecutivo, $numeroCorto);
+        $xml = $this->comprobanteParaEnganche($xmlId, $consecutivo, $numeroCorto, $total);
+
+        $candidatas = $this->candidatasParaXml(
+            $xml['consecutivo_completo'],
+            $xml['numero_factura_asistente']
+        );
         if (!$candidatas) {
             return ['estado' => 'sin_erp'];
         }
@@ -970,28 +1095,32 @@ class FacturaErp extends Model
             return ['estado' => 'ya_tomada'];
         }
 
-        // El consecutivo es único por emisor, no globalmente: si hay varias,
-        // el monto es lo único que las separa.
-        if (count($libres) > 1) {
-            $porMonto = array_values(array_filter($libres, function ($erp) use ($total) {
-                return abs((float) $erp['monto'] - (float) $total) <= 1.0;
-            }));
-            if (count($porMonto) !== 1) {
-                return ['estado' => 'ambigua', 'candidatas' => count($libres)];
+        $eleccion = self::elegirCandidata($xml, $libres);
+        if ($eleccion['erp'] === null) {
+            $salida = ['estado' => $eleccion['motivo']];
+            if ($eleccion['candidatas'] > 0) {
+                $salida['candidatas'] = $eleccion['candidatas'];
             }
-            $libres = $porMonto;
+            return $salida;
         }
 
-        $erp = $libres[0];
-        $diferencia = round((float) $erp['monto'] - (float) $total, 2);
+        $erp = $eleccion['erp'];
+        $diferencia = round((float) $erp['monto'] - (float) $xml['total'], 2);
         $estado = abs($diferencia) <= 1.0 ? 'respaldada' : 'con_diferencia';
 
         $this->execute(
             "UPDATE facturas_erp
                 SET factura_xml_id = ?, estado_respaldo = ?, diferencia = ?,
-                    score_numero = 100.0, score_proveedor = 100.0
+                    score_numero = ?, score_proveedor = ?
               WHERE id = ? AND match_manual = 0",
-            [$xmlId, $estado, $estado === 'con_diferencia' ? $diferencia : null, (int) $erp['id']]
+            [
+                $xmlId,
+                $estado,
+                $estado === 'con_diferencia' ? $diferencia : null,
+                $eleccion['score_numero'],
+                $eleccion['score_proveedor'],
+                (int) $erp['id'],
+            ]
         );
 
         // Si la factura ya estaba en un pago, el comprobante hereda su semana:
@@ -1146,6 +1275,175 @@ class FacturaErp extends Model
     }
 
     /**
+     * De las candidatas del ERP, cuál respalda de verdad a este comprobante.
+     *
+     * Vive aparte de `engancharXml` para poder revisarla con arrays, sin base:
+     * es la decisión donde se colaron los emparejamientos falsos y tiene que
+     * poder probarse entera.
+     *
+     * Tres reglas, de más fuerte a más débil:
+     *
+     *  1. **El consecutivo manda.** Son los 20 dígitos con los que Hacienda
+     *     identifica al comprobante. Si la línea del ERP trae uno y el XML
+     *     trae otro, no son el mismo documento y ningún parecido lo arregla.
+     *     Antes se caía a los últimos 8 dígitos y la línea
+     *     `00110191010000065118` (Pipasa, ₡90.950,31) terminaba respaldada
+     *     por `00100001010000065118` (Coopeagropal, ₡9.769.985,83): comparten
+     *     el "65118" final y nada más.
+     *  2. **La cédula veta.** Si el mapa sabe de quién es el código del ERP y
+     *     el emisor del XML es otro, se descarta. Es la misma guarda que ya
+     *     usaba la verificación del pago; esta vía nunca la había consultado.
+     *  3. **Sin consecutivo exacto, el monto acompaña.** El número corto lo
+     *     repiten muchos emisores: solo el monto al colón —o la cédula
+     *     confirmando el código— alcanza para afirmar que es la misma factura.
+     *
+     * Devuelve siempre las cuatro claves: `erp` (la elegida o null), `motivo`
+     * cuando no hay, `candidatas` para poder decir cuántas se miraron, y los
+     * dos scores, que ahora dicen la verdad en vez de un 100 fijo.
+     */
+    public static function elegirCandidata(array $xml, array $candidatas)
+    {
+        $consecutivoXml = preg_replace('/\D+/', '', (string) ($xml['consecutivo_completo'] ?? ''));
+        $xmlTraeConsecutivo = preg_match('/^\d{20}$/', $consecutivoXml)
+            && ltrim($consecutivoXml, '0') !== '';
+        $total = (float) ($xml['total'] ?? 0);
+        $proveedorIdXml = (int) ($xml['proveedor_id'] ?? 0);
+
+        // Regla 1: separar las que coinciden en el consecutivo de las que solo
+        // pueden compararse por el número corto. Una línea del ERP con
+        // consecutivo propio y distinto no es candidata de nada.
+        $exactas = [];
+        $porCorto = [];
+        foreach ($candidatas as $erp) {
+            $documento = preg_replace('/\D+/', '', (string) ($erp['documento'] ?? ''));
+            $erpTraeConsecutivo = (bool) preg_match('/^\d{20}$/', $documento);
+            if ($xmlTraeConsecutivo && $erpTraeConsecutivo) {
+                if ($documento === $consecutivoXml) {
+                    $exactas[] = $erp;
+                }
+                continue;
+            }
+            $porCorto[] = $erp;
+        }
+
+        $exacto = $exactas !== [];
+        $grupo = $exacto ? $exactas : $porCorto;
+
+        // Regla 2: la guarda de cédula, la misma que usa la verificación.
+        $grupo = array_values(array_filter($grupo, function ($erp) use ($proveedorIdXml) {
+            return self::veredictoCodigo($erp['proveedor_codigo'] ?? '', $proveedorIdXml) !== 'ajeno';
+        }));
+
+        // Regla 3: sin consecutivo exacto hace falta algo más que el número.
+        if (!$exacto) {
+            $grupo = array_values(array_filter($grupo, function ($erp) use ($total, $proveedorIdXml) {
+                if (self::veredictoCodigo($erp['proveedor_codigo'] ?? '', $proveedorIdXml) === 'propio') {
+                    return true;
+                }
+                return abs((float) ($erp['monto'] ?? 0) - $total) <= FacturaMatcher::TOLERANCIA_CRC;
+            }));
+        }
+
+        if (!$grupo) {
+            return ['erp' => null, 'motivo' => 'sin_erp', 'candidatas' => count($candidatas),
+                    'score_numero' => 0.0, 'score_proveedor' => 0.0];
+        }
+
+        // El consecutivo es único por emisor, no globalmente: si quedan varias,
+        // el monto es lo único que las separa.
+        if (count($grupo) > 1) {
+            $porMonto = array_values(array_filter($grupo, function ($erp) use ($total) {
+                return abs((float) ($erp['monto'] ?? 0) - $total) <= 1.0;
+            }));
+            if (count($porMonto) !== 1) {
+                return ['erp' => null, 'motivo' => 'ambigua', 'candidatas' => count($grupo),
+                        'score_numero' => 0.0, 'score_proveedor' => 0.0];
+            }
+            $grupo = $porMonto;
+        }
+
+        $erp = $grupo[0];
+        $confirmado = self::veredictoCodigo($erp['proveedor_codigo'] ?? '', $proveedorIdXml) === 'propio';
+
+        return [
+            'erp'             => $erp,
+            'motivo'          => '',
+            'candidatas'      => 0,
+            'score_numero'    => $exacto ? 100.0 : 60.0,
+            'score_proveedor' => $confirmado ? 100.0 : round(FacturaMatcher::similaridadTexto(
+                (string) ($erp['proveedor_nombre'] ?? ''),
+                (string) ($xml['proveedor_nombre'] ?? '')
+            ), 1),
+        ];
+    }
+
+    /**
+     * El veredicto del mapa de códigos, cargándolo solo si se puede.
+     *
+     * Igual que en PorPagarVerificador: este modelo también se usa desde
+     * utilidades y pruebas donde el mapa puede no existir todavía. Sin mapa la
+     * guarda no opina, que es lo mismo que hacía antes de existir.
+     */
+    private static function veredictoCodigo($codigo, $proveedorIdXml)
+    {
+        if (!class_exists('ProveedorCodigoErp')) {
+            $ruta = __DIR__ . '/ProveedorCodigoErp.php';
+            if (!class_exists('Model') || !is_file($ruta)) {
+                return 'desconocido';
+            }
+            require_once $ruta;
+        }
+        return ProveedorCodigoErp::veredicto($codigo, $proveedorIdXml);
+    }
+
+    /**
+     * Los datos del comprobante que la decisión necesita, leídos de la base y
+     * no de quien llama.
+     *
+     * El emisor es lo que la guarda de cédula compara y no viaja en los
+     * parámetros. Pedirlo aquí evita que una vía de llamada nueva se salte la
+     * guarda por olvidarse de pasarlo: si la fila está, manda ella. Cuando no
+     * está —utilidades, pruebas— se sigue con lo que se recibió, sin emisor,
+     * y la guarda simplemente no opina.
+     */
+    private function comprobanteParaEnganche($xmlId, $consecutivo, $numeroCorto, $total)
+    {
+        $base = [
+            'id'                       => (int) $xmlId,
+            'consecutivo_completo'     => (string) $consecutivo,
+            'numero_factura_asistente' => (string) $numeroCorto,
+            'total'                    => (float) $total,
+            'proveedor_id'             => 0,
+            'proveedor_nombre'         => '',
+        ];
+
+        try {
+            $fila = $this->fetchOne(
+                'SELECT x.consecutivo_completo, x.numero_factura_asistente, x.total,
+                        x.proveedor_id, p.razon_social AS proveedor_nombre
+                   FROM facturas_xml x
+                   LEFT JOIN proveedores p ON p.id = x.proveedor_id
+                  WHERE x.id = ? LIMIT 1',
+                [(int) $xmlId]
+            );
+        } catch (Throwable $e) {
+            $fila = null;
+        }
+        if (!is_array($fila)) {
+            return $base;
+        }
+
+        return [
+            'id'                       => (int) $xmlId,
+            'consecutivo_completo'     => (string) ($fila['consecutivo_completo'] ?? $consecutivo),
+            'numero_factura_asistente' => (string) ($fila['numero_factura_asistente'] ?? $numeroCorto),
+            'total'                    => (float) ($fila['total'] ?? $total),
+            'proveedor_id'             => (int) ($fila['proveedor_id'] ?? 0),
+            'proveedor_nombre'         => (string) ($fila['proveedor_nombre'] ?? ''),
+        ];
+    }
+
+    /**
      * ¿Qué factura del ERP corresponde a un XML recién importado?
      *
      * Es la vía por la que el correo dejó de pedir semana: se busca la factura
@@ -1183,7 +1481,8 @@ class FacturaErp extends Model
             $params[] = str_pad($corto, 8, '0', STR_PAD_LEFT);
         }
 
-        $sql = "SELECT e.id, e.documento, e.numero_corto, e.proveedor_nombre, e.monto, e.saldo,
+        $sql = "SELECT e.id, e.documento, e.numero_corto, e.proveedor_codigo, e.proveedor_nombre,
+                       e.monto, e.saldo,
                        e.semana_id, e.porpagar_listado_id, e.factura_xml_id
                   FROM facturas_erp e
                  WHERE e.tipo IN ('F','FE','FACT') AND (" . implode(' OR ', $condiciones) . ')'
@@ -1412,6 +1711,15 @@ class FacturaErp extends Model
             $cond[] = '(proveedor_nombre LIKE ? OR documento LIKE ? OR proveedor_codigo LIKE ?)';
             $like = '%' . str_replace(['%', '_'], ['\%', '\_'], (string) $f['texto']) . '%';
             array_push($params, $like, $like, $like);
+        }
+
+        // Monto y saldo por separado: lo que facturó el proveedor y lo que
+        // queda por pagarle no son la misma pregunta.
+        foreach (['monto' => 'monto', 'saldo' => 'saldo'] as $cual => $columna) {
+            $condImporte = BusquedaImporte::condicion($columna, $f[$cual] ?? '', $params);
+            if ($condImporte !== '') {
+                $cond[] = $condImporte;
+            }
         }
 
         return [$cond ? 'WHERE ' . implode(' AND ', $cond) : '', $params];
