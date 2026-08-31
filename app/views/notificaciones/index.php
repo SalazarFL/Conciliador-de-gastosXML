@@ -37,28 +37,20 @@ $jsAttr = function ($valor) {
 };
 ?>
 
-<div class="page-header" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
-    <div>
-        <h1 style="font-size:19px;font-weight:800;color:var(--navy);">Avisos</h1>
-        <p style="font-size:12px;color:var(--text-muted);margin-top:2px;">
-            Lo que el sistema no puede decidir solo. Son del equipo: si alguien resuelve uno, desaparece para todos.
-        </p>
-    </div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        <?php foreach ($pestanas as $clave => $etiqueta):
-            $activa = $estado === $clave; ?>
-        <a href="<?= $baseUrl ?>/avisos?estado=<?= $clave ?>"
-           class="btn <?= $activa ? 'btn-primary' : 'btn-outline' ?> btn-sm"
-           <?= $activa ? 'aria-current="page"' : '' ?>>
-            <?= $etiqueta ?>
-            <?php if ($clave === 'pendiente' && !empty($resumen['pendientes'])): ?>
-                <span style="background:#e53e3e;color:#fff;border-radius:999px;padding:0 5px;font-size:10px;margin-left:3px;">
-                    <?= (int) $resumen['pendientes'] ?>
-                </span>
-            <?php endif; ?>
-        </a>
-        <?php endforeach; ?>
-    </div>
+<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
+    <?php foreach ($pestanas as $clave => $etiqueta):
+        $activa = $estado === $clave; ?>
+    <a href="<?= $baseUrl ?>/avisos?estado=<?= $clave ?>"
+       class="btn <?= $activa ? 'btn-primary' : 'btn-outline' ?> btn-sm"
+       <?= $activa ? 'aria-current="page"' : '' ?>>
+        <?= $etiqueta ?>
+        <?php if ($clave === 'pendiente' && !empty($resumen['pendientes'])): ?>
+            <span style="background:#e53e3e;color:#fff;border-radius:999px;padding:0 5px;font-size:10px;margin-left:3px;">
+                <?= (int) $resumen['pendientes'] ?>
+            </span>
+        <?php endif; ?>
+    </a>
+    <?php endforeach; ?>
 </div>
 
 <?php if (!$avisos): ?>
@@ -117,6 +109,18 @@ $jsAttr = function ($valor) {
                 <a class="btn btn-outline btn-sm"
                    href="<?= $baseUrl ?>/seguimiento?vista=revision&q=<?= urlencode((string) $datos['documento']) ?>">
                     <i class="fas fa-list-check"></i> Ver en Seguimiento
+                </a>
+            </div>
+            <?php endif; ?>
+
+            <?php // El índice del buzón se pone al día abriendo Correo, así que
+                  // el aviso trae el atajo que lo intenta de una vez. El aviso
+                  // se retira solo cuando la cola llega a cero: no hay que
+                  // volver acá a marcarlo. ?>
+            <?php if (($aviso['tipo'] ?? '') === 'indice_correo'): ?>
+            <div style="margin-top:9px;">
+                <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/correo?sync=1">
+                    <i class="fas fa-rotate"></i> Actualizar el índice ahora
                 </a>
             </div>
             <?php endif; ?>

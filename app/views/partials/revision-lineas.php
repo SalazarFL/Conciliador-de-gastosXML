@@ -42,15 +42,6 @@ $fechaCorta = function ($valor) {
         </a>
     </div>
 
-    <p style="font-size:11.5px;color:var(--text-muted);margin:0 0 12px;line-height:1.6;">
-        Estas son las filas del reporte que el importador no pudo leer. Antes se descartaban sin
-        avisar: no se importaban, no se contaban y no había forma de saber que habían existido.
-        Ahora quedan acá con sus celdas tal como vinieron en el archivo. Corregí lo que haga falta
-        y <strong>Guardar e incluir</strong> la mete en <?= htmlspecialchars($destino) ?> como una
-        <?= htmlspecialchars($sustantivo) ?> más; <strong>Descartar</strong> la deja fuera.
-        Si marcás <strong>recordar</strong>, la decisión se aplica sola en las cargas siguientes.
-    </p>
-
     <?php if (!$pendientes): ?>
         <div style="padding:22px;text-align:center;color:var(--text-muted);font-size:12.5px;">
             <i class="fas fa-circle-check" style="font-size:20px;color:var(--ok,#16a34a);display:block;margin-bottom:8px;"></i>
@@ -145,10 +136,6 @@ $fechaCorta = function ($valor) {
             </span>
         </div>
     </div>
-    <p style="font-size:11.5px;color:var(--text-muted);margin:0 0 10px;">
-        Lo que ya decidiste una vez y se vuelve a aplicar solo en cada carga. Olvidar una decisión
-        hace que esa fila vuelva a preguntarse la próxima vez que subas el reporte.
-    </p>
     <div style="overflow-x:auto;">
     <table class="table" style="font-size:12px;">
         <thead>

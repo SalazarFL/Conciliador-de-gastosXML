@@ -74,6 +74,14 @@ foreach ($pageLabels as $seg => $label) {
     }
 }
 
+// Una vista puede decir su propio nombre y pisar el del módulo: es lo que
+// hacen las pantallas que no son la portada (ver Controller::render). Así el
+// título sigue estando una sola vez, arriba, y no hace falta un <h1> debajo
+// repitiendo lo mismo o corrigiéndolo.
+if (!empty($tituloPagina)) {
+    $currentLabel = (string) $tituloPagina;
+}
+
 // Sociedad activa: algunos controladores ya la cargan para su propia vista
 // (Home, Correo, Por-pagar); en las demás páginas se busca aquí para que
 // el nombre siempre aparezca en la topbar.
@@ -133,9 +141,8 @@ if (!isset($sociedadActiva)) {
                 <span class="nav-label">Pagos semanales</span>
             </a>
 
-            <a href="<?= $baseUrl ?>/notas-credito"
-               class="<?= navCoincide('notas-credito', $uriClean) || navCoincide('notas-xml', $uriClean) ? 'active' : '' ?>"
-               title="Notas de crédito y carga de comprobantes XML">
+            <a href="<?= $baseUrl ?>/notas-credito" class="<?= navActive('notas-credito', $uriClean) ?>"
+               title="Notas de crédito">
                 <span class="nav-icon"><i class="fas fa-file-circle-minus"></i></span>
                 <span class="nav-label">Notas de crédito</span>
             </a>
@@ -154,11 +161,30 @@ if (!isset($sociedadActiva)) {
                 <span class="nav-label">Correo</span>
             </a>
 
-            <a href="<?= $baseUrl ?>/facturas-erp"
-               class="<?= navCoincide('facturas-erp', $uriClean) || navCoincide('facturas', $uriClean) ? 'active' : '' ?>"
-               title="Las facturas de la empresa y la carga de sus comprobantes XML">
+            <a href="<?= $baseUrl ?>/facturas-erp" class="<?= navActive('facturas-erp', $uriClean) ?>"
+               title="Las facturas de la empresa">
                 <span class="nav-icon"><i class="fas fa-file-invoice-dollar"></i></span>
                 <span class="nav-label">Facturas</span>
+            </a>
+
+            <?php /*
+             * Las dos pantallas de carga de comprobantes tienen su propia
+             * sección. Antes se llegaba a ellas desde adentro de Facturas y de
+             * Notas de crédito, y por eso ambas entradas se marcaban activas a
+             * la vez: ahora cada módulo se marca solo por su propia ruta.
+             */ ?>
+            <div class="sidebar-section-label" style="margin-top:16px;">XML</div>
+
+            <a href="<?= $baseUrl ?>/facturas" class="<?= navActive('facturas', $uriClean) ?>"
+               title="Carga y consulta de los comprobantes XML de facturas">
+                <span class="nav-icon"><i class="fas fa-file-code"></i></span>
+                <span class="nav-label">Facturas XML</span>
+            </a>
+
+            <a href="<?= $baseUrl ?>/notas-xml" class="<?= navActive('notas-xml', $uriClean) ?>"
+               title="Carga y consulta de los comprobantes XML de notas de crédito">
+                <span class="nav-icon"><i class="fas fa-file-import"></i></span>
+                <span class="nav-label">Notas XML</span>
             </a>
 
             <div class="sidebar-section-label" style="margin-top:16px;">Administración</div>
@@ -231,6 +257,36 @@ if (!isset($sociedadActiva)) {
                        style="white-space:nowrap;"
                        <?= $actual ? 'aria-current="page"' : '' ?>>
                         <i class="fas <?= $icono ?>"></i> <?= $etiqueta ?>
+                    </a>
+                    <?php endforeach; ?>
+                </div>
+                <?php endif; ?>
+
+                <?php /*
+                 * El modo de Seguimiento, en el mismo sitio y por la misma
+                 * razón que el de Correo: no es un filtro dentro de la cola,
+                 * es de qué cola se está hablando. Sistema persigue lo que le
+                 * falta a los registros del ERP; Correo persigue lo contrario,
+                 * los comprobantes XML que todavía no están en el ERP.
+                 *
+                 * Cambiar de modo no arrastra los filtros: cada uno recuerda
+                 * los suyos, y un tipo de documento del otro modo vaciaría la
+                 * lista sin nada en pantalla que lo explicara.
+                 */
+                if (isset($modoSeguimiento) && strpos($uriClean, '/seguimiento') !== false): ?>
+                <div style="display:flex;align-items:center;gap:5px;padding-left:9px;
+                            border-left:1px solid var(--border-light);"
+                     title="Sistema: qué le falta a los registros del ERP. Correo: qué comprobantes XML no están todavía en el ERP.">
+                    <?php foreach ([
+                        'sistema' => ['fa-database',           'Sistema'],
+                        'correo'  => ['fa-envelope-open-text', 'Correo'],
+                    ] as $claveSeg => [$iconoSeg, $etiquetaSeg]):
+                        $actualSeg = $modoSeguimiento === $claveSeg; ?>
+                    <a href="<?= $baseUrl ?>/seguimiento?modo=<?= $claveSeg ?>"
+                       class="btn <?= $actualSeg ? 'btn-primary' : 'btn-outline' ?> btn-sm"
+                       style="white-space:nowrap;"
+                       <?= $actualSeg ? 'aria-current="page"' : '' ?>>
+                        <i class="fas <?= $iconoSeg ?>"></i> <?= $etiquetaSeg ?>
                     </a>
                     <?php endforeach; ?>
                 </div>

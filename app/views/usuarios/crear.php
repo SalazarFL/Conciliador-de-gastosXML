@@ -2,27 +2,20 @@
 $baseUrl = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 $old     = $old ?? [];
 $error   = $error ?? null;
-?>
 
-<div class="page-header">
-    <div>
-        <h1 style="font-size:20px;font-weight:800;color:var(--navy);">
-            <i class="fas fa-user-plus" style="color:var(--gold);margin-right:8px;"></i>Nuevo Usuario
-        </h1>
-        <p style="font-size:13px;color:var(--text-muted);margin-top:3px;">
-            Crea una nueva cuenta de acceso al sistema
-        </p>
-    </div>
-    <a href="<?= $baseUrl ?>/configuracion?ir=usuarios" class="btn btn-outline">
-        <i class="fas fa-arrow-left"></i> Volver
-    </a>
-</div>
+// Esta no es la portada del módulo, así que dice su propio nombre y la topbar
+// lo usa en vez de "Gestión de Usuarios" (ver Controller::render).
+$tituloPagina = 'Nuevo usuario';
+?>
 
 <div class="card" style="max-width:560px;">
     <div class="card-header">
-        <div class="card-title">
-            <i class="fas fa-id-card" style="margin-right:6px;color:var(--navy-light);"></i>Datos del Usuario
+        <div class="card-title" style="margin-right:auto;">
+            <i class="fas fa-user-plus" style="margin-right:6px;color:var(--gold);"></i>Datos del usuario
         </div>
+        <a href="<?= $baseUrl ?>/configuracion?ir=usuarios" class="btn btn-outline btn-sm">
+            <i class="fas fa-arrow-left"></i> Volver
+        </a>
     </div>
 
     <?php if ($error): ?>

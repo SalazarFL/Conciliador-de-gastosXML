@@ -43,17 +43,6 @@ if ($esAdmin) {
 $secciones[] = ['sistema', 'fa-desktop', 'Esta computadora', 'Estado de la instalación local'];
 ?>
 
-<div class="page-header">
-    <div>
-        <h1><i class="fas fa-gear" style="color:var(--gold);margin-right:8px;"></i>Configuración</h1>
-        <p>
-            Lo que vale para todo el sistema, en un solo lugar. Los cambios de esta pantalla
-            afectan a <strong>todos los módulos</strong>; los de <em>Archivo</em> y
-            <em>Automatización</em>, solo a esta computadora.
-        </p>
-    </div>
-</div>
-
 <div class="cfg-shell">
 
     <!-- ══ Índice ═══════════════════════════════════════════ -->

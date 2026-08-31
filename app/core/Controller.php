@@ -25,7 +25,18 @@ class Controller
         ob_start();
         include $viewFile;
         $content = ob_get_clean();
-        
+
+        // El nombre de la pantalla vive en la topbar y en ningún otro lado.
+        // La topbar sabe el del módulo por la URL, que alcanza para la portada
+        // de cada uno; las vistas que no son la portada —crear un usuario,
+        // editarlo— dicen el suyo acá y la topbar lo usa en su lugar. Se lee
+        // después de renderizar porque la vista corre antes que el layout, y
+        // se pasa por $data porque las variables de la vista no llegan solas
+        // al método que arma el layout.
+        if (isset($tituloPagina)) {
+            $data['tituloPagina'] = $tituloPagina;
+        }
+
         // Renderizar con layout si existe
         $this->renderWithLayout($content, $data);
     }

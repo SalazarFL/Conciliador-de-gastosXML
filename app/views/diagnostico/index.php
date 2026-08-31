@@ -39,10 +39,6 @@ foreach ($informe['revisiones'] as $r) {
             · <?= htmlspecialchars((string) $informe['generado_en'], ENT_QUOTES, 'UTF-8') ?>
             · <?= $cuenta['ok'] ?> correcto(s), <?= $cuenta['aviso'] ?> por atender, <?= $cuenta['error'] ?> con error
         </p>
-        <p style="margin:6px 0 0;color:var(--text-muted);font-size:12.5px;">
-            Si vas a pedir ayuda con un problema, manda una captura de esta página:
-            dice en qué computadora estás y qué le falta a esta instalación.
-        </p>
     </div>
 </div>
 
