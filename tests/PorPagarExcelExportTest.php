@@ -76,4 +76,28 @@ assertPorPagarExcel(strpos($tabla, "\$linea['saldo_pago']") !== false,
 assertPorPagarExcel(strpos($tabla, "\$linea['saldo_pago'] ?? \$linea['saldo']") !== false,
     'el saldo de la pantalla es el congelado al entrar al pago, no el de hoy');
 
+// La sucursal, en los dos sitios y por la misma razón: un pago se arma
+// sucursal por sucursal. En el Excel va en columna propia y no pegada al
+// nombre del proveedor, porque si va pegada no se puede filtrar por ella una
+// vez abierto el archivo, que es justo para lo que se baja.
+assertPorPagarExcel(strpos($metodo, "'Proveedor', 'Sucursal'") !== false,
+    'la exportación lleva la sucursal en su propia columna, junto al proveedor');
+assertPorPagarExcel(strpos($metodo, "\$linea['sucursal']") !== false,
+    'y la celda se llena con la sucursal de la línea');
+
+// El estado se pinta de color, y su índice de columna se corrió al meter la
+// sucursal. Si se quedara en el 8 colorearía la diferencia.
+assertPorPagarExcel(strpos($metodo, '$cellStyles[$ri][9]') !== false,
+    'el color del estado apunta a la columna del estado, no a la de al lado');
+
+$columnas = substr_count(substr($metodo, strpos($metodo, '$headers = ['),
+    strpos($metodo, ']', strpos($metodo, '$headers = [')) - strpos($metodo, '$headers = [')), ',') + 1;
+$anchosIni = strpos($metodo, '$anchos = [');
+$anchos = substr_count(substr($metodo, $anchosIni, strpos($metodo, ']', $anchosIni) - $anchosIni), ',') + 1;
+assertPorPagarExcel($columnas === $anchos,
+    "cada columna tiene su ancho ({$columnas} columnas, {$anchos} anchos)");
+
+assertPorPagarExcel(strpos($tabla, "\$linea['sucursal']") !== false,
+    'y el renglón de la pantalla también dice a qué sucursal llegó la factura');
+
 echo "OK: Exportación XLSX de facturas por pagar\n";

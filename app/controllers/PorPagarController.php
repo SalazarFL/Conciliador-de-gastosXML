@@ -1306,7 +1306,14 @@ class PorPagarController extends Controller
             }
 
             $lineas = $this->loadModel('FacturaErp')->getFacturasPago($listadoId, $this->filtrosListado());
-            $headers = ['Fecha', 'Documento', 'Proveedor', 'Monto ERP', 'Saldo', 'Número XML', 'Total XML', 'Diferencia', 'Estado'];
+            /*
+             * La sucursal va junto al proveedor, igual que en la pantalla: lo
+             * que se baja tiene que ser lo que se está viendo. Es además el
+             * dato por el que este archivo se agrupa una vez abierto —un pago
+             * se arma sucursal por sucursal—, así que en columna propia y no
+             * pegada al nombre, o no se podría filtrar en Excel.
+             */
+            $headers = ['Fecha', 'Documento', 'Proveedor', 'Sucursal', 'Monto ERP', 'Saldo', 'Número XML', 'Total XML', 'Diferencia', 'Estado'];
             $etiquetas = [
                 'respaldada' => 'Respaldada',
                 'con_diferencia' => 'Con diferencia',
@@ -1321,6 +1328,7 @@ class PorPagarController extends Controller
                     (string) ($linea['fecha_emision'] ?? ''),
                     (string) $linea['documento'],
                     (string) $linea['proveedor_nombre'],
+                    trim((string) ($linea['sucursal'] ?? '')),
                     round((float) $linea['monto'], 2),
                     round((float) $linea['saldo_pago'], 2),
                     $linea['xml_numero'] !== null ? NumeroFactura::xmlOchoDigitos($linea['xml_numero']) : '',
@@ -1328,14 +1336,14 @@ class PorPagarController extends Controller
                     $linea['diferencia'] !== null ? round((float) $linea['diferencia'], 2) : '',
                     $etiquetas[$estado] ?? $estado,
                 ];
-                $cellStyles[$ri][8] = $estado === 'respaldada' ? 3 : 2;
+                $cellStyles[$ri][9] = $estado === 'respaldada' ? 3 : 2;
             }
 
             $nombreBase = trim((string) ($listado['semana_nombre'] ?? $listado['nombre'] ?? $listadoId));
             $nombreBase = preg_replace('/[^A-Za-z0-9_-]+/', '_', $nombreBase);
             $nombreBase = trim((string) $nombreBase, '_') ?: (string) $listadoId;
             $nombreArchivo = 'por_pagar_' . $nombreBase . '_' . date('Ymd_His') . '.xlsx';
-            $anchos = [13, 24, 38, 16, 16, 22, 16, 16, 18];
+            $anchos = [13, 24, 38, 24, 16, 16, 22, 16, 16, 18];
 
             $tmpFile = XlsxWriter::generate($headers, $rows, 'Pagos semanales', $cellStyles, $anchos);
             XlsxWriter::send($tmpFile, $nombreArchivo);
