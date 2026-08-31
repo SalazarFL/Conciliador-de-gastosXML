@@ -146,6 +146,29 @@ verificaRuta(RutaDocumento::permiteEscritura('') === false,
 verificaRuta(RutaDocumento::permiteEscritura(__FILE__) === false,
     'un archivo no es una carpeta donde guardar documentos');
 
+// ── Leer de verdad, no solo comprobar que el archivo figura ───────────
+// El marcador de OneDrive de un archivo que solo está en la nube pasa
+// is_file() y hasta is_readable(), y después no suelta un byte. Aquí no se
+// puede fabricar uno, pero sí se fija que la puerta de entrada sea abrir el
+// archivo —lo único que distingue los dos casos— y no un stat.
+$archivoReal = tempnam(sys_get_temp_dir(), 'ruta');
+file_put_contents($archivoReal, 'contenido');
+$manejador = RutaDocumento::abrirParaLeer($archivoReal);
+verificaRuta(is_resource($manejador), 'un archivo con contenido se abre para leerlo');
+if (is_resource($manejador)) {
+    verificaRuta(stream_get_contents($manejador) === 'contenido',
+        'lo que se abre viene desde el primer byte');
+    fclose($manejador);
+}
+unlink($archivoReal);
+
+verificaRuta(RutaDocumento::abrirParaLeer($archivoReal) === false,
+    'un archivo que ya no está no devuelve manejador');
+verificaRuta(RutaDocumento::abrirParaLeer('') === false,
+    'una ruta vacía no devuelve manejador');
+verificaRuta(RutaDocumento::abrirParaLeer(sys_get_temp_dir()) === false,
+    'una carpeta no se sirve como si fuera un documento');
+
 RutaDocumento::olvidarRaiz();
 
 if ($fallos > 0) {

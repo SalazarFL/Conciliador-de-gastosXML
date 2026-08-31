@@ -114,6 +114,45 @@ class RutaDocumento
         return $absoluta !== '' && is_file($absoluta);
     }
 
+    /**
+     * Abre el archivo para leer su contenido de verdad.
+     *
+     * No basta con is_file(): de los documentos que solo tiene en la nube,
+     * OneDrive deja en el disco un marcador que existe, pesa lo que pesa el
+     * original y hasta contesta que sí a is_readable(). El contenido llega
+     * solo si Windows lo baja al abrirlo, y esa descarga se le niega a quien
+     * corre como servicio —Apache es LocalSystem, no la persona que
+     * sincroniza la carpeta—, así que fopen() falla con "Invalid argument".
+     *
+     * Sin esta comprobación, quien servía el archivo mandaba las cabeceras
+     * con el tamaño completo y después cero bytes: el navegador solo decía
+     * "error al cargar el documento PDF", sin pista de qué había pasado.
+     *
+     * Devuelve el manejador abierto —hay que cerrarlo— o false si el
+     * contenido no está disponible en esta máquina.
+     */
+    public static function abrirParaLeer($rutaAbsoluta)
+    {
+        $rutaAbsoluta = trim((string) $rutaAbsoluta);
+        if ($rutaAbsoluta === '' || !is_file($rutaAbsoluta)) {
+            return false;
+        }
+        return @fopen($rutaAbsoluta, 'rb');
+    }
+
+    /**
+     * Por qué no se puede leer un archivo que sí está en la carpeta, dicho
+     * para quien usa la aplicación y no administra el servidor.
+     */
+    public static function porQueNoSeLee($rutaAbsoluta)
+    {
+        return 'El archivo está en la carpeta compartida, pero OneDrive lo tiene solo en la nube '
+            . 'y el servidor no puede bajarlo: corre como servicio de Windows y esa descarga se le '
+            . 'niega. Abrí la carpeta compartida en el Explorador, clic derecho sobre ella y elegí '
+            . '"Conservar siempre en este dispositivo". Para este documento suelto alcanza con '
+            . 'abrirlo una vez desde el Explorador.';
+    }
+
     /** Ruta absoluta a una subcarpeta de trabajo dentro de la raíz. */
     public static function carpetaTrabajo($sub = '')
     {
