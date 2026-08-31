@@ -31,6 +31,7 @@ require_once __DIR__ . '/../helpers/EstadoArchivo.php';
 require_once __DIR__ . '/../helpers/AplicacionNotaCredito.php';
 require_once __DIR__ . '/Notificacion.php';
 require_once __DIR__ . '/ProveedorCatalogo.php';
+require_once __DIR__ . '/../helpers/BusquedaImporte.php';
 
 class Seguimiento extends Model
 {
@@ -39,10 +40,54 @@ class Seguimiento extends Model
     /** Rutas absolutas guardadas como relativas: el Model las rehidrata. */
     protected $camposRuta = ['ruta_xml', 'ruta_pdf'];
 
+    /**
+     * Los dos modos de la cola: la misma pantalla, dos preguntas inversas.
+     *
+     *   sistema  Arranca del ERP —facturas y notas del reporte— y pregunta
+     *            qué le falta a cada registro: su XML, su PDF, o que cuadre.
+     *            Es la cola de siempre.
+     *
+     *   correo   Arranca de los comprobantes XML ya cargados —los que
+     *            entraron por el correo y los que alguien subió a mano— y
+     *            pregunta lo contrario: cuáles de estos NO aparecen en el
+     *            sistema. Un XML sin registro en el ERP es plata que llegó
+     *            y que nadie registró, y hasta ahora no había dónde verla:
+     *            los listados de Facturas XML y Notas XML enseñan lo que
+     *            hay, no lo que falta del otro lado.
+     *
+     * Comparten toda la maquinaria —pestañas, marca a mano, responsable,
+     * recordatorio, bitácora, exportación— porque el trabajo es el mismo:
+     * perseguir documentos hasta que dejen de faltar.
+     */
+    public const MODOS = [
+        'sistema' => 'Sistema',
+        'correo'  => 'Correo',
+    ];
+
+    public const MODO_SISTEMA = 'sistema';
+    public const MODO_CORREO  = 'correo';
+
     public const ESTADOS = [
         'pendiente' => 'Pendientes',
         'revision'  => 'En revisión',
         'lista'     => 'Listas',
+        'cerrada'   => 'Cerradas',
+    ];
+
+    /**
+     * Las pestañas del modo Correo. Son tres y no cuatro: 'lista' no existe
+     * acá porque no hay grado intermedio —un comprobante está en el sistema
+     * o no está—, y meter una pestaña que nunca se llena sola sería ofrecer
+     * un casillero sin pregunta detrás.
+     *
+     * Las claves son las mismas que en Sistema a propósito: la marca a mano
+     * vive en la columna `estado` de la tabla, que es un ENUM, y dos juegos
+     * de nombres para las mismas tres casillas obligarían a traducir en cada
+     * lectura y en cada escritura.
+     */
+    public const ESTADOS_CORREO = [
+        'pendiente' => 'Sin vincular',
+        'revision'  => 'En seguimiento',
         'cerrada'   => 'Cerradas',
     ];
 
@@ -58,6 +103,108 @@ class Seguimiento extends Model
         'diferencia' => 'Diferencia de monto',
         'completo'   => 'Respaldo completo',
     ];
+
+    /**
+     * Lo que le falta a un comprobante en el modo Correo: una sola cosa.
+     *
+     * No se pregunta por el XML —el renglón ES el XML— ni por el monto: si
+     * el comprobante no está en el sistema no hay contra qué compararlo, y
+     * si está, la diferencia ya la persigue el modo Sistema desde el otro
+     * lado. Lo que falta el PDF se sigue viendo en su chip, pero no es
+     * tarea acá: un PDF ausente no impide registrar la factura en el ERP.
+     */
+    public const TAREAS_CORREO = [
+        'sin_sistema' => 'No está en el sistema',
+        'completo'    => 'Ya está en el sistema',
+    ];
+
+    /**
+     * De qué tabla sale cada renglón, por modo. Los cuatro valores conviven
+     * en la columna `origen` de `seguimiento`, así que la gestión de un modo
+     * no puede pisar la del otro aunque los id se repitan entre tablas.
+     */
+    public const ORIGENES = [
+        self::MODO_SISTEMA => [
+            'factura'      => 'Facturas',
+            'nota_credito' => 'Notas de crédito',
+        ],
+        self::MODO_CORREO => [
+            'xml_factura' => 'Facturas',
+            'xml_nota'    => 'Notas de crédito',
+        ],
+    ];
+
+    /**
+     * Cómo se ordena la cola. El primero es el de omisión.
+     *
+     * Vive acá y no en la vista porque el desplegable tiene que ofrecer
+     * exactamente lo que la consulta sabe hacer: una opción de más en la
+     * pantalla es un orden que en silencio cae en otro.
+     *
+     * Salió de aquí "Dinero en juego", que era el orden por omisión. La cola
+     * se trabaja por fecha —lo que entró esta semana—, no de mayor a menor
+     * importe: encabezar siempre con las mismas facturas grandes escondía al
+     * fondo lo recién llegado, que es lo que hay que registrar. El monto
+     * sigue en su columna, y "Monto desde" sigue acotando por él si llega
+     * por la URL.
+     */
+    public const ORDENES = [
+        'reciente'   => 'Más reciente',
+        'antiguedad' => 'Más antiguo',
+        'proveedor'  => 'Proveedor',
+        'movimiento' => 'Último movimiento',
+    ];
+
+    public const ORDEN_POR_OMISION = 'reciente';
+
+    /** Cómo llegó el comprobante, para acotar el modo Correo. */
+    public const LLEGADAS = [
+        'correo' => 'Llegaron por correo',
+        'carga'  => 'Subidos a mano',
+    ];
+
+    /** El modo pedido, o el de siempre si no se reconoce. */
+    public static function modo($valor)
+    {
+        $valor = trim((string) $valor);
+        return isset(self::MODOS[$valor]) ? $valor : self::MODO_SISTEMA;
+    }
+
+    /** Las pestañas de un modo. */
+    public static function estadosDe($modo)
+    {
+        return self::modo($modo) === self::MODO_CORREO ? self::ESTADOS_CORREO : self::ESTADOS;
+    }
+
+    /** El desplegable "qué falta" de un modo. */
+    public static function tareasDe($modo)
+    {
+        return self::modo($modo) === self::MODO_CORREO ? self::TAREAS_CORREO : self::TAREAS;
+    }
+
+    /** El desplegable "tipo de documento" de un modo. */
+    public static function origenesDe($modo)
+    {
+        return self::ORIGENES[self::modo($modo)];
+    }
+
+    /** El modo en el que está esta instancia. */
+    private $modo = self::MODO_SISTEMA;
+
+    /**
+     * Pone la cola en un modo. Devuelve $this para poder encadenarlo con el
+     * loadModel() del controlador, que no admite argumentos.
+     */
+    public function enModo($modo)
+    {
+        $this->modo = self::modo($modo);
+        return $this;
+    }
+
+    private function esCorreo()
+    {
+        return $this->modo === self::MODO_CORREO;
+    }
 
     /**
      * Las clases de nota que entran a la cola: todas menos 'ajuste'.
@@ -98,8 +245,17 @@ class Seguimiento extends Model
             return isset($get[$clave]) && !is_array($get[$clave]) ? (string) $get[$clave] : '';
         };
 
+        /*
+         * El modo va en los filtros y no aparte porque decide todo lo demás:
+         * qué pestañas hay, qué tipos de documento se ofrecen y qué significa
+         * "qué falta". Leerlo en dos sitios distintos daría una pantalla
+         * pintada en un modo y una consulta hecha en el otro.
+         */
+        $modo = self::modo($leer('modo'));
+        $esCorreo = $modo === self::MODO_CORREO;
+
         // Las pestañas son los estados; 'todo' es la única que no lo es.
-        $vistas = array_merge(array_keys(self::ESTADOS), ['todo']);
+        $vistas = array_merge(array_keys(self::estadosDe($modo)), ['todo']);
         $vista = $leer('vista');
         if (!isset($get['vista'])) {
             $vista = 'pendiente';
@@ -115,7 +271,13 @@ class Seguimiento extends Model
          * Se guarda como texto separado por comas: 'directa,costo'.
          */
         $origen = $leer('origen');
-        $clases = $origen === 'factura' ? [] : self::clasesPedidas($leer('clase'));
+        if (!isset(self::origenesDe($modo)[$origen])) {
+            $origen = '';
+        }
+        // La clase y la situación de la nota salen del reporte del ERP, no del
+        // XML: en el modo Correo no hay ninguna de las dos que preguntar.
+        $soloFacturas = $origen === 'factura' || $origen === 'xml_factura';
+        $clases = ($esCorreo || $soloFacturas) ? [] : self::clasesPedidas($leer('clase'));
 
         $marca = $leer('marca');
         $condicionSaldo = $leer('condicion_saldo');
@@ -131,7 +293,7 @@ class Seguimiento extends Model
          * en pantalla que lo explicara. 'con_nota' sí sobrevive, porque esa
          * pregunta también es sobre facturas.
          */
-        $aplicacion = $leer('aplicacion');
+        $aplicacion = $esCorreo ? '' : $leer('aplicacion');
         if ($aplicacion !== 'con_nota' && !isset(AplicacionNotaCredito::ESTADOS[$aplicacion])) {
             $aplicacion = '';
         }
@@ -139,29 +301,64 @@ class Seguimiento extends Model
             $aplicacion = '';
         }
 
+        // Cómo llegó el comprobante. Solo el modo Correo puede contestarlo:
+        // un registro del ERP no llegó por ningún lado, se digitó.
+        $llegada = $esCorreo ? $leer('llegada') : '';
+        if (!isset(self::LLEGADAS[$llegada])) {
+            $llegada = '';
+        }
+
+        $tarea = $leer('tarea');
+        if (!isset(self::tareasDe($modo)[$tarea])) {
+            $tarea = '';
+        }
+
+        /*
+         * El rango de fechas, enderezado si viene al revés.
+         *
+         * Con dos selectores de fecha en la barra es fácil poner el 31 en
+         * "desde" y el 1 en "hasta", y tal cual eso da una lista vacía sin
+         * nada en pantalla que lo explique: parece que no hay documentos de
+         * ese mes. Se entiende como lo que se quiso decir, que es lo mismo
+         * que hace el listado de Facturas XML.
+         */
+        $desde = self::fechaFiltro($leer('desde'));
+        $hasta = self::fechaFiltro($leer('hasta'));
+        if ($desde !== '' && $hasta !== '' && $desde > $hasta) {
+            [$desde, $hasta] = [$hasta, $desde];
+        }
+
+
         return [
+            'modo'        => $modo,
+            'llegada'     => $llegada,
             'aplicacion'  => $aplicacion,
             'vista'       => in_array($vista, $vistas, true) ? $vista : 'pendiente',
             'origen'      => $origen,
-            'tarea'       => $leer('tarea'),
+            'tarea'       => $tarea,
             'marca'       => in_array($marca, ['mano', 'auto', 'desajuste'], true) ? $marca : '',
             'clase'       => implode(',', $clases),
             'responsable' => $leer('responsable'),
             'proveedor'   => ProveedorCatalogo::normalizarClave($leer('proveedor')),
             'sucursal'    => trim($leer('sucursal')),
             'contexto_id' => (int) $leer('contexto_id'),
-            'desde'       => self::fechaFiltro($leer('desde')),
-            'hasta'       => self::fechaFiltro($leer('hasta')),
+            'desde'       => $desde,
+            'hasta'       => $hasta,
             'monto_min'   => trim($leer('monto_min')),
             'condicion_saldo' => in_array($condicionSaldo, ['activas', 'canceladas'], true) ? $condicionSaldo : '',
             'q'           => trim($leer('q')),
             'col_documento' => trim($leer('col_documento')),
             'col_proveedor' => trim($leer('col_proveedor')),
-            'col_monto'     => trim($leer('col_monto')),
-            'col_saldo'     => trim($leer('col_saldo')),
+            // Los dos importes con los que se busca un documento. Se limpian
+            // como en los demás listados: se copian y pegan de la pantalla,
+            // donde salen con símbolo y comas de millar.
+            'col_monto'     => BusquedaImporte::numero($leer('col_monto')),
+            'col_saldo'     => BusquedaImporte::numero($leer('col_saldo')),
             'col_respaldo'  => trim($leer('col_respaldo')),
             'col_tarea'     => trim($leer('col_tarea')),
-            'orden'       => $leer('orden') !== '' ? $leer('orden') : 'monto',
+            'orden'       => isset(self::ORDENES[$leer('orden')])
+                                ? $leer('orden')
+                                : self::ORDEN_POR_OMISION,
             'sociedad_id' => (int) $sociedadId,
         ];
     }
@@ -182,7 +379,11 @@ class Seguimiento extends Model
         try {
             $this->execute("CREATE TABLE IF NOT EXISTS seguimiento (
                 id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-                origen ENUM('nota_credito','factura') NOT NULL,
+                -- Los dos primeros son del modo Sistema (registros del ERP) y los
+                -- dos últimos del modo Correo (comprobantes XML). Conviven en la
+                -- misma tabla porque la gestión es la misma; lo que no pueden es
+                -- confundirse, y el origen es lo que los mantiene aparte.
+                origen ENUM('nota_credito','factura','xml_factura','xml_nota') NOT NULL,
                 referencia_id INT UNSIGNED NOT NULL,
                 -- NULL = sin marca a mano: manda el cálculo. Es lo que permite
                 -- anotar un renglón sin por eso congelarle el estado.
@@ -219,6 +420,7 @@ class Seguimiento extends Model
             $this->renombrarOrigenPagoSemanal();
             $this->migrarEstadosDeGestion();
             $this->agregarRecordatorio();
+            $this->admitirOrigenesDelCorreo();
         } catch (Throwable $e) {
             // database/migrations/004_seguimiento.sql cubre instalaciones sin DDL en runtime.
         }
@@ -327,6 +529,30 @@ class Seguimiento extends Model
         $this->execute("ALTER TABLE seguimiento MODIFY origen ENUM('nota_credito','factura') NOT NULL");
     }
 
+    /**
+     * Deja entrar a la tabla los renglones del modo Correo.
+     *
+     * La gestión de un comprobante XML se guarda en la misma tabla que la de
+     * un registro del ERP —es la misma marca, el mismo responsable, la misma
+     * bitácora— y solo el `origen` las distingue. Como es un ENUM, admitir el
+     * modo nuevo es ampliarlo; no hay que mover ninguna fila, porque las que
+     * ya están siguen apuntando a donde apuntaban.
+     */
+    private function admitirOrigenesDelCorreo()
+    {
+        $tipo = (string) $this->fetchColumn(
+            "SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'seguimiento'
+                AND COLUMN_NAME = 'origen'"
+        );
+        if ($tipo === '' || strpos($tipo, "'xml_factura'") !== false) {
+            return;
+        }
+
+        $this->execute("ALTER TABLE seguimiento MODIFY origen
+            ENUM('nota_credito','factura','xml_factura','xml_nota') NOT NULL");
+    }
+
     // ── La consulta que arma la cola ────────────────────────────────────────
 
     /**
@@ -337,8 +563,10 @@ class Seguimiento extends Model
      * para mostrar 50.
      *
      * `en_juego` es el dinero que hay detrás del renglón: la diferencia si la
-     * hay, el monto del documento si no. Es el orden por omisión, porque una
-     * diferencia de dos millones no puede quedar debajo de una de cien colones.
+     * hay, el monto del documento si no. Era el orden por omisión de la cola;
+     * hoy no ordena nada —se trabaja por fecha— y lo único que sigue usándolo
+     * es el filtro "Monto desde", que ya no tiene control en la barra pero se
+     * entiende si llega por la URL.
      *
      * El reporte de notas trae monto y saldo por separado. La factura del ERP
      * también, con una vuelta: cuando entra a un pago se le congela el saldo
@@ -347,6 +575,107 @@ class Seguimiento extends Model
      * respaldo siga faltando—.
      */
     private function sqlUnion()
+    {
+        return $this->esCorreo() ? $this->sqlUnionCorreo() : $this->sqlUnionSistema();
+    }
+
+    /**
+     * La cola del modo Correo: los comprobantes XML, mirados al revés.
+     *
+     * Las mismas columnas que la unión del sistema —para que el filtrado, el
+     * conteo, el orden y la vista sirvan sin bifurcarse— rellenando con NULL
+     * lo que un comprobante no tiene: no hay sucursal, ni clase, ni saldo
+     * propio, ni nota de crédito en juego. Y dos que solo existen acá:
+     *
+     *   sistema_doc  el documento del ERP al que está enganchado, si lo está.
+     *                Es lo único que el renglón viene a contestar, así que se
+     *                enseña en la fila y no solo se filtra.
+     *   llegada      si entró por el correo o lo subió alguien a mano.
+     *
+     * `saldo` es el del registro del ERP al que está enganchado, no el del
+     * comprobante: un XML no tiene saldo: dice cuánto se facturó, no cuánto
+     * queda por pagar. Sin enganche viene NULL, que la columna Saldo enseña
+     * como un guion —no es cero, es que todavía no hay contra qué mirarlo—.
+     *
+     * El enganche se resuelve una sola vez, contra una tabla derivada que se
+     * queda con el PRIMER registro de cada comprobante. Un JOIN directo no
+     * servía: nada impide que dos registros del ERP apunten al mismo
+     * comprobante —pasa cuando alguien carga dos veces el reporte y el
+     * emparejador acierta las dos— y ahí el renglón saldría duplicado en la
+     * cola. Agrupando primero, cada comprobante entra una vez y de ese
+     * enganche salen las tres cosas que hacen falta —si existe, con qué
+     * documento y con cuánto saldo— en vez de tres subconsultas correlacionadas.
+     */
+    private function sqlUnionCorreo()
+    {
+        $recuperable = EstadoArchivo::columnaRecuperable('x.');
+
+        // La única diferencia entre las dos mitades: de qué tabla del sistema
+        // cuelga el enganche. Una factura se registra en facturas_erp; una
+        // nota, como línea del reporte de notas de crédito.
+        $rama = static function ($origen, $tabla, $saldoSis, $tipoWhere) use ($recuperable) {
+            return "SELECT
+                '{$origen}' AS origen,
+                x.id AS referencia_id,
+                x.numero_factura_asistente AS documento,
+                NULL AS nc_proveedor,
+                NULL AS clase,
+                COALESCE(p.razon_social, '') AS proveedor,
+                '' AS proveedor_codigo,
+                p.rfc AS proveedor_cedula,
+                x.proveedor_id AS proveedor_id,
+                '' AS sucursal,
+                x.fecha_emision AS fecha,
+                x.moneda AS moneda,
+                x.total AS monto,
+                {$saldoSis} AS saldo,
+                NULL AS diferencia,
+                NULL AS motivo_match,
+                x.id AS factura_xml_id,
+                x.importacion_id AS contexto_id,
+                i.archivo_origen AS contexto,
+                x.sociedad_id AS sociedad_id,
+                x.ruta_xml AS ruta_xml,
+                x.ruta_pdf AS ruta_pdf,
+                x.estado_pdf AS estado_pdf,
+                {$recuperable} AS recuperable,
+                x.consecutivo_completo AS consecutivo,
+                CASE WHEN x.correo_cuenta_id IS NULL THEN 'carga' ELSE 'correo' END AS llegada,
+                sis.documento AS sistema_doc,
+                CASE WHEN sis.id IS NULL THEN 'sin_sistema' ELSE 'completo' END AS tarea,
+                x.total AS en_juego,
+                NULL AS aplicacion_estado,
+                NULL AS aplicacion_factura_id,
+                NULL AS aplicacion_factura_doc,
+                NULL AS aplicacion_factura_saldo,
+                0 AS notas_vivas,
+                0 AS notas_vivas_saldo
+              FROM facturas_xml x
+              LEFT JOIN proveedores p ON p.id = x.proveedor_id
+              LEFT JOIN importaciones i ON i.id = x.importacion_id
+              LEFT JOIN (SELECT factura_xml_id, MIN(id) AS id
+                           FROM {$tabla} WHERE factura_xml_id IS NOT NULL
+                          GROUP BY factura_xml_id) eng ON eng.factura_xml_id = x.id
+              LEFT JOIN {$tabla} sis ON sis.id = eng.id
+             WHERE {$tipoWhere}";
+        };
+
+        // tipo_documento en NULL es de antes de que la columna existiera, y
+        // entonces solo se cargaban facturas: se cuenta como FE, igual que en
+        // el listado de Facturas XML.
+        // Una factura del ERP que entró a un pago lleva su saldo congelado en
+        // `saldo_pago`, y ese es el que manda mientras el pago exista: es el
+        // mismo criterio con el que lo lee el modo Sistema. Las líneas del
+        // reporte de notas no tienen esa vuelta.
+        $fe = $rama('xml_factura', 'facturas_erp', 'COALESCE(sis.saldo_pago, sis.saldo)',
+            "(x.tipo_documento IS NULL OR x.tipo_documento = 'FE')");
+        $nc = $rama('xml_nota', 'notas_credito_lineas', 'sis.saldo',
+            "x.tipo_documento = 'NC'");
+
+        return "({$fe}) UNION ALL ({$nc})";
+    }
+
+    private function sqlUnionSistema()
     {
         $tarea = "CASE
                     WHEN %s = 'sin_respaldo' THEN 'falta_xml'
@@ -476,6 +805,18 @@ class Seguimiento extends Model
      */
     private function sqlCalculado()
     {
+        /*
+         * En el modo Correo la pregunta es una sola, así que el cálculo
+         * también: el comprobante está en el sistema o no está. Enganchado no
+         * hay nada que perseguir y se cierra solo; sin enganchar se queda en
+         * "Sin vincular" hasta que aparezca su registro o hasta que alguien
+         * lo mande a seguimiento a mano, que es la tercera pestaña y la única
+         * a la que no se llega sola.
+         */
+        if ($this->esCorreo()) {
+            return "CASE WHEN c.tarea = 'completo' THEN 'cerrada' ELSE 'pendiente' END";
+        }
+
         return "CASE
                   WHEN ABS(c.saldo) <= 0.005 THEN 'cerrada'
                   WHEN c.tarea <> 'completo'  THEN 'pendiente'
@@ -531,7 +872,7 @@ class Seguimiento extends Model
         }
 
         $vista = $f['vista'] ?? 'pendiente';
-        if (isset(self::ESTADOS[$vista])) {
+        if (isset(self::estadosDe($this->modo)[$vista])) {
             $where[] = $this->sqlEfectivo() . ' = ?';
             $params[] = $vista;
         }
@@ -548,13 +889,19 @@ class Seguimiento extends Model
             $where[] = 's.estado IS NOT NULL AND s.estado <> ' . $this->sqlCalculado();
         }
 
-        if (!empty($f['origen']) && isset(['nota_credito' => 1, 'factura' => 1][$f['origen']])) {
+        if (!empty($f['origen']) && isset(self::origenesDe($this->modo)[$f['origen']])) {
             $where[] = 'c.origen = ?';
             $params[] = $f['origen'];
         }
-        if (!empty($f['tarea']) && isset(self::TAREAS[$f['tarea']])) {
+        if (!empty($f['tarea']) && isset(self::tareasDe($this->modo)[$f['tarea']])) {
             $where[] = 'c.tarea = ?';
             $params[] = $f['tarea'];
+        }
+        // Cómo llegó el comprobante: solo existe en el modo Correo, donde el
+        // renglón es un archivo que entró por algún lado.
+        if ($this->esCorreo() && isset(self::LLEGADAS[$f['llegada'] ?? ''])) {
+            $where[] = 'c.llegada = ?';
+            $params[] = (string) $f['llegada'];
         }
         // Varias clases a la vez porque el trabajo se reparte por clase —una
         // directa se persigue distinto que una de costo— y mirarlas de a una
@@ -584,9 +931,17 @@ class Seguimiento extends Model
          * metía el documento de un proveedor dentro de la lista de otro. Esos
          * cruces se avisan por su lado, en la campana.
          */
+        /*
+         * En el modo Correo el proveedor es el EMISOR del comprobante, y eso
+         * el XML sí lo dice sin ambigüedad: trae su cédula. No se busca por
+         * código del ERP —un comprobante no tiene ninguno— ni hace falta caer
+         * al nombre escrito.
+         */
         $proveedor = ProveedorCatalogo::condicion(
             $f['proveedor'] ?? '',
-            ['codigo' => 'c.proveedor_codigo', 'nombre' => 'c.proveedor'],
+            $this->esCorreo()
+                ? ['proveedor_id' => 'c.proveedor_id', 'cedula' => 'c.proveedor_cedula']
+                : ['codigo' => 'c.proveedor_codigo', 'nombre' => 'c.proveedor'],
             $params
         );
         if ($proveedor !== '') {
@@ -631,6 +986,12 @@ class Seguimiento extends Model
             $where[] = '(c.proveedor LIKE ? OR c.sucursal LIKE ?)';
             array_push($params, $like, $like);
         }
+        /*
+         * Los dos importes. Se escribe el que se tiene a mano y salen los
+         * documentos cuyo monto o saldo coincide; se alcanzan desde la barra y
+         * desde la cabecera de la tabla, con el mismo parámetro, para que haya
+         * un solo filtro por concepto.
+         */
         foreach (['col_monto' => 'c.monto', 'col_saldo' => 'c.saldo'] as $clave => $columna) {
             $valor = preg_replace('/[₡$,\s]/u', '', (string) ($f[$clave] ?? ''));
             if ($valor !== '') {
@@ -648,7 +1009,7 @@ class Seguimiento extends Model
         } elseif ($respaldo === 'sin_pdf') {
             $where[] = "(c.ruta_pdf IS NULL OR c.ruta_pdf = '') AND COALESCE(c.estado_pdf, '') <> 'no_disponible_historico'";
         }
-        if (!empty($f['col_tarea']) && isset(self::TAREAS[$f['col_tarea']])) {
+        if (!empty($f['col_tarea']) && isset(self::tareasDe($this->modo)[$f['col_tarea']])) {
             $where[] = 'c.tarea = ?';
             $params[] = $f['col_tarea'];
         }
@@ -672,16 +1033,30 @@ class Seguimiento extends Model
         return [$where ? 'WHERE ' . implode(' AND ', $where) : '', $params];
     }
 
+    /**
+     * El ORDER BY de la cola, con un desempate que la hace recorrible.
+     *
+     * `fecha` es un DATE, así que ordenando por "más reciente" —que es el
+     * orden de omisión— empatan todas las filas del mismo día: 834 de los
+     * 11.336 comprobantes comparten además el monto. Sin un criterio único al
+     * final, MariaDB puede devolver esos empates en distinto orden en cada
+     * consulta, y como las páginas son consultas distintas, un renglón salía
+     * en dos páginas mientras otro no salía en ninguna.
+     *
+     * (origen, referencia_id) es único en la unión —la referencia es la clave
+     * primaria de su tabla, y el origen dice de qué tabla—, así que cerrar con
+     * los dos deja un orden total y las páginas dejan de moverse.
+     */
     private function ordenSql($orden)
     {
         $mapa = [
-            'monto'      => 'c.en_juego DESC, c.fecha DESC',
-            'antiguedad' => 'c.fecha ASC, c.en_juego DESC',
-            'reciente'   => 'c.fecha DESC, c.en_juego DESC',
-            'proveedor'  => 'c.proveedor ASC, c.en_juego DESC',
-            'movimiento' => 's.actualizado_en DESC, c.en_juego DESC',
+            'reciente'   => 'c.fecha DESC, c.referencia_id DESC',
+            'antiguedad' => 'c.fecha ASC, c.referencia_id ASC',
+            'proveedor'  => 'c.proveedor ASC, c.fecha DESC, c.referencia_id DESC',
+            'movimiento' => 's.actualizado_en DESC, c.fecha DESC, c.referencia_id DESC',
         ];
-        return $mapa[$orden] ?? $mapa['monto'];
+        $elegido = $mapa[$orden] ?? $mapa[self::ORDEN_POR_OMISION];
+        return $elegido . ', c.origen ASC';
     }
 
     public function cola(array $filtros, $pagina = 1, $porPagina = 50)
@@ -735,6 +1110,9 @@ class Seguimiento extends Model
         // El alias no se puede reusar dentro del mismo SELECT, así que la
         // expresión del estado efectivo se repite en cada cuenta.
         $e = $this->sqlEfectivo();
+        // La tarea que cuenta como "lo que falta" no se llama igual en los dos
+        // modos: en Sistema es no tener el XML; en Correo, no estar en el ERP.
+        $faltante = $this->esCorreo() ? 'sin_sistema' : 'falta_xml';
         $fila = $this->fetchOne(
             "SELECT
                 COUNT(*) total,
@@ -742,7 +1120,7 @@ class Seguimiento extends Model
                 SUM({$e} = 'revision')  revision,
                 SUM({$e} = 'lista')     lista,
                 SUM({$e} = 'cerrada')   cerrada,
-                SUM({$e} <> 'cerrada' AND c.tarea = 'falta_xml') falta_xml,
+                SUM({$e} <> 'cerrada' AND c.tarea = '{$faltante}') falta_xml,
                 SUM({$e} <> 'cerrada' AND c.tarea = 'falta_pdf') falta_pdf,
                 SUM({$e} <> 'cerrada' AND c.tarea = 'diferencia') casos_diferencia,
                 COALESCE(SUM(CASE WHEN {$e} <> 'cerrada' AND c.tarea = 'diferencia'
@@ -947,7 +1325,23 @@ class Seguimiento extends Model
      */
     private function documentosDe(array $filas)
     {
-        $porOrigen = ['factura' => [], 'nota_credito' => []];
+        /*
+         * Los cuatro orígenes a la vez y no los del modo: el reloj de los
+         * recordatorios es uno solo —la campana, que se pide en cada carga de
+         * página— y no sabe desde qué pantalla se puso cada uno. Un aviso sin
+         * nombre de documento diría "xml_factura|412", que no le sirve a nadie.
+         *
+         * Los dos del modo Correo salen de facturas_xml, que no guarda el
+         * nombre del proveedor sino su id, así que esas dos ramas llevan JOIN.
+         */
+        $tablas = [
+            'factura'      => ['facturas_erp', false],
+            'nota_credito' => ['notas_credito_lineas', false],
+            'xml_factura'  => ['facturas_xml', true],
+            'xml_nota'     => ['facturas_xml', true],
+        ];
+
+        $porOrigen = array_fill_keys(array_keys($tablas), []);
         foreach ($filas as $f) {
             if (isset($porOrigen[$f['origen']])) {
                 $porOrigen[$f['origen']][] = (int) $f['referencia_id'];
@@ -956,15 +1350,21 @@ class Seguimiento extends Model
 
         $partes = [];
         $params = [];
-        $tablas = ['factura' => 'facturas_erp', 'nota_credito' => 'notas_credito_lineas'];
-        foreach ($tablas as $origen => $tabla) {
+        foreach ($tablas as $origen => [$tabla, $esXml]) {
             if (!$porOrigen[$origen]) {
                 continue;
             }
             $huecos = implode(',', array_fill(0, count($porOrigen[$origen]), '?'));
-            $partes[] = "SELECT '{$origen}' AS origen, id AS referencia_id, documento,
-                                proveedor_nombre AS proveedor
-                           FROM {$tabla} WHERE id IN ({$huecos})";
+            $partes[] = $esXml
+                ? "SELECT '{$origen}' AS origen, d.id AS referencia_id,
+                          d.numero_factura_asistente AS documento,
+                          COALESCE(pr.razon_social, '') AS proveedor
+                     FROM {$tabla} d
+                     LEFT JOIN proveedores pr ON pr.id = d.proveedor_id
+                    WHERE d.id IN ({$huecos})"
+                : "SELECT '{$origen}' AS origen, id AS referencia_id, documento,
+                          proveedor_nombre AS proveedor
+                     FROM {$tabla} WHERE id IN ({$huecos})";
             $params = array_merge($params, $porOrigen[$origen]);
         }
         if (!$partes) {
@@ -1019,7 +1419,11 @@ class Seguimiento extends Model
 
         $tocaEstado = array_key_exists('estado', $cambio);
         $estado = $tocaEstado ? (string) $cambio['estado'] : '';
-        if ($tocaEstado && $estado !== self::SIN_MARCA && !isset(self::ESTADOS[$estado])) {
+        // Contra las pestañas del modo, no contra las cuatro: 'lista' no existe
+        // en Correo, y admitirlo dejaría renglones en una pestaña que esa
+        // pantalla no dibuja y de la que por lo tanto no se puede salir.
+        if ($tocaEstado && $estado !== self::SIN_MARCA
+            && !isset(self::estadosDe($this->modo)[$estado])) {
             throw new Exception('Estado de seguimiento no válido: ' . $estado);
         }
         // La bandeja de enredos no sirve de nada si no dice cuál es el enredo:
@@ -1134,7 +1538,13 @@ class Seguimiento extends Model
                 continue;
             }
             $ref = (int) $refCruda;
-            if ($ref <= 0 || !in_array($origen, ['nota_credito', 'factura'], true)) {
+            // Los cuatro orígenes, no los del modo: la selección viaja desde
+            // el navegador y validarla contra el modo obligaría a que esto
+            // dejara de ser estático. No hace falta: los valores son disjuntos
+            // y la clave única (origen, referencia_id) impide que la gestión
+            // de un comprobante caiga sobre la de un registro del ERP.
+            if ($ref <= 0 || !isset(self::ORIGENES[self::MODO_SISTEMA][$origen])
+                          && !isset(self::ORIGENES[self::MODO_CORREO][$origen])) {
                 continue;
             }
 

@@ -29,20 +29,33 @@ class SeguimientoController extends Controller
 
     public function index()
     {
+        /*
+         * El modo decide de qué va la pantalla entera —de los registros del
+         * ERP o de los comprobantes XML—, así que cada uno recuerda lo suyo.
+         * Con una sola memoria, volver del modo Correo dejaba el modo Sistema
+         * filtrado por un tipo de documento que allá no existe.
+         */
+        $modo = Seguimiento::modo($this->get('modo', ''));
+
         // La pestaña abierta, la barra y los filtros de columna vuelven como
         // se dejaron. 'contexto_id' no: no tiene control en pantalla, y
         // recordarlo dejaría la cola recortada sin que nada lo explique.
-        $this->recordarFiltros('seguimiento', [
-            'vista', 'origen', 'tarea', 'marca', 'clase', 'aplicacion', 'responsable',
-            'proveedor', 'sucursal', 'desde', 'hasta', 'monto_min',
+        // 'modo' tampoco: no es un filtro sino de qué trata la pantalla, y va
+        // en la URL como el de Correo.
+        // 'responsable' tampoco: salió de la barra con el campo que lo llenaba,
+        // y un valor guardado en la sesión dejaría la cola recortada al nombre
+        // de alguien sin que quede en pantalla el control para quitarlo.
+        $this->recordarFiltros('seguimiento:' . $modo, [
+            'vista', 'origen', 'tarea', 'marca', 'clase', 'aplicacion',
+            'proveedor', 'sucursal', 'llegada', 'desde', 'hasta', 'monto_min',
             'condicion_saldo', 'q', 'col_documento', 'col_proveedor',
             'col_monto', 'col_saldo', 'col_respaldo', 'col_tarea', 'orden',
         ]);
 
-        $modelo = $this->loadModel('Seguimiento');
+        $modelo = $this->loadModel('Seguimiento')->enModo($modo);
         $sociedad = $this->loadModel('Sociedad')->getActiva();
 
-        $filtros = $this->filtros($sociedad);
+        $filtros = $this->filtros($sociedad, $modo);
         $pagina = max(1, (int) $this->get('pagina', 1));
 
         $cola = $modelo->cola($filtros, $pagina, self::POR_PAGINA);
@@ -52,7 +65,7 @@ class SeguimientoController extends Controller
         $this->render('seguimiento/index', [
             'title' => 'Seguimiento - Nexo Fiscal',
             'sociedadActiva' => $sociedad,
-            'filas' => $this->decorar($cola['filas']),
+            'filas' => $this->decorar($cola['filas'], $modo),
             'paginacion' => [
                 'total' => $cola['total'],
                 'pagina' => $cola['pagina'],
@@ -61,11 +74,19 @@ class SeguimientoController extends Controller
             ],
             'resumen' => $resumen,
             'filtros' => $filtros,
-            'responsables' => $modelo->responsables(),
+            // El desplegable de responsables se retiró de la barra, así que ya
+            // no hace falta preguntar quiénes son: es una consulta menos por
+            // carga. `Seguimiento::responsables()` sigue ahí por si vuelve.
             'proveedoresFiltro' => ProveedorCatalogo::opciones($dimensiones['proveedores']),
             'sucursales' => $dimensiones['sucursales'],
-            'estados' => Seguimiento::ESTADOS,
-            'tareas' => Seguimiento::TAREAS,
+            // El selector de modo vive en el topbar, junto al título, igual
+            // que el de Correo: es de qué trata la pantalla, no un control
+            // más dentro de ella. El layout lo dibuja si ve esta variable.
+            'modoSeguimiento' => $modo,
+            'estados' => Seguimiento::estadosDe($modo),
+            'tareas' => Seguimiento::tareasDe($modo),
+            'origenes' => Seguimiento::origenesDe($modo),
+            'llegadas' => Seguimiento::LLEGADAS,
         ]);
     }
 
@@ -77,9 +98,15 @@ class SeguimientoController extends Controller
      * la misma consulta para poder recorrerla, y dos lecturas de $_GET que
      * se puedan desincronizar darían una lista distinta a la que se ve acá.
      */
-    private function filtros($sociedad)
+    private function filtros($sociedad, $modo = Seguimiento::MODO_SISTEMA)
     {
-        return Seguimiento::filtrosDesde($_GET, $sociedad ? (int) $sociedad['id'] : 0);
+        // El modo entra con los demás parámetros: filtrosDesde() lo lee de ahí
+        // para decidir qué pestañas y qué tipos de documento admite, y así una
+        // sola lectura decide la consulta y la pantalla.
+        return Seguimiento::filtrosDesde(
+            array_merge($_GET, ['modo' => $modo]),
+            $sociedad ? (int) $sociedad['id'] : 0
+        );
     }
 
     /**
@@ -93,6 +120,32 @@ class SeguimientoController extends Controller
     {
         $dias = (int) $valor;
         return in_array($dias, [1, 3, 7, 15, 30], true) ? $dias : 0;
+    }
+
+    /**
+     * Quién queda a cargo de un renglón, y cuándo se le pone nombre.
+     *
+     * El responsable no se teclea: es quien manda el documento a revisión, y
+     * eso ya lo sabe la sesión. Antes venía en el POST y había un campo para
+     * escribirlo, con dos problemas: había que escribir el propio nombre para
+     * decirle al sistema algo que ya sabía, y nada impedía poner el de otra
+     * persona —a mano o armando la petición—.
+     *
+     * Solo al entrar en revisión. En las demás pestañas no hay nadie
+     * persiguiendo nada, y sellar un nombre al cerrar un renglón diría que
+     * alguien lo tiene entre manos cuando ya no; en una anotación suelta,
+     * tampoco: comentar no es hacerse cargo.
+     *
+     * @return string|null El nombre a guardar, o null para no tocar la columna.
+     */
+    private static function responsableDe($estado, array $usuario)
+    {
+        if ((string) $estado !== Seguimiento::ESTADO_A_MANO) {
+            return null;
+        }
+        // Sin nombre en la sesión se guarda vacío, que el modelo convierte en
+        // NULL: mejor sin responsable que con uno inventado.
+        return trim((string) ($usuario['nombre'] ?? ''));
     }
 
     /**
@@ -125,8 +178,10 @@ class SeguimientoController extends Controller
      * rutas relativas a una carpeta sincronizada, y un documento puede estar
      * registrado pero todavía no haber bajado a esta computadora.
      */
-    private function decorar(array $filas)
+    private function decorar(array $filas, $modo = Seguimiento::MODO_SISTEMA)
     {
+        $esCorreo = Seguimiento::modo($modo) === Seguimiento::MODO_CORREO;
+
         foreach ($filas as &$fila) {
             // No es lo mismo no haber tenido nunca el comprobante que haberlo
             // tenido y haberlo perdido: lo primero se resuelve buscándolo, lo
@@ -139,7 +194,17 @@ class SeguimientoController extends Controller
             $fila['pdf_perdido'] = !$archivo['pdf_ok'] && trim((string) ($fila['ruta_pdf'] ?? '')) !== '';
             $fila['recuperable'] = $archivo['recuperable'];
             $fila['pdf_historico'] = ($fila['estado_pdf'] ?? '') === 'no_disponible_historico';
-            $this->decorarBusqueda($fila);
+            $this->decorarBusqueda($fila, $esCorreo);
+            /*
+             * En el modo Correo el renglón ES el comprobante, así que en vez
+             * de "buscar su electrónico" lo que hace falta es abrirlo: su
+             * ficha está en el listado del que salió, y una nota no vive en el
+             * listado de facturas.
+             */
+            $fila['ver_ruta'] = $esCorreo
+                ? (($fila['origen'] ?? '') === 'xml_nota' ? '/notas-xml/ver/' : '/facturas/ver/')
+                    . (int) $fila['referencia_id']
+                : '';
             // El recordatorio solo tiene sentido mientras el renglón siga en
             // revisión: en las demás pestañas no hay nada que esperar.
             $fila['vencido'] = !empty($fila['recordar_en'])
@@ -169,8 +234,21 @@ class SeguimientoController extends Controller
      * corriente— no hay número que buscar y se cae al nombre del proveedor,
      * acotado a los 15 días alrededor de su fecha.
      */
-    private function decorarBusqueda(array &$fila)
+    private function decorarBusqueda(array &$fila, $esCorreo = false)
     {
+        /*
+         * En el modo Correo no hay nada que buscar: el comprobante ya está
+         * cargado, es el renglón. Sin término, la pantalla no dibuja los dos
+         * botones de búsqueda, que es lo correcto —mandarían a buscar en el
+         * correo un XML que se está mirando—.
+         */
+        if ($esCorreo) {
+            $fila['busqueda'] = '';
+            $fila['busqueda_por'] = 'numero';
+            $fila['busqueda_fecha'] = '';
+            return;
+        }
+
         $fila['busqueda'] = NavegacionDocumentos::busquedaDe($fila);
         $fila['busqueda_fecha'] = '';
 
@@ -188,7 +266,7 @@ class SeguimientoController extends Controller
 
     // ── Acciones ────────────────────────────────────────────────────────────
 
-    /** Cambio de estado, responsable, fecha o motivo sobre uno o varios. */
+    /** Cambio de estado, recordatorio o motivo sobre uno o varios. */
     public function actualizar()
     {
         if (!$this->isPost()) {
@@ -201,14 +279,18 @@ class SeguimientoController extends Controller
                 throw new Exception('No se seleccionó ningún renglón.');
             }
 
+            $usuario = $this->usuario();
+
             $cambio = [];
             // Vacío = no tocar la marca (una anotación suelta). El valor
             // SIN_MARCA sí la toca: la borra y devuelve el renglón al cálculo.
             if (($estado = trim((string) $this->post('estado', ''))) !== '') {
                 $cambio['estado'] = $estado;
             }
-            if ($this->post('responsable', null) !== null) {
-                $cambio['responsable'] = trim((string) $this->post('responsable'));
+
+            $responsable = self::responsableDe($cambio['estado'] ?? '', $usuario);
+            if ($responsable !== null) {
+                $cambio['responsable'] = $responsable;
             }
             if ($this->post('recordar_cada', null) !== null) {
                 $cambio['recordar_cada'] = $this->frecuencia($this->post('recordar_cada'));
@@ -222,13 +304,16 @@ class SeguimientoController extends Controller
             $cambio['comentario'] = trim((string) $this->post('comentario', ''));
 
             if (!isset($cambio['estado']) && $cambio['comentario'] === ''
-                && !array_key_exists('responsable', $cambio)
                 && !array_key_exists('recordar_en', $cambio)
                 && !array_key_exists('motivo', $cambio)) {
                 throw new Exception('No hay ningún cambio que guardar.');
             }
 
-            $resultado = $this->loadModel('Seguimiento')->aplicar($items, $cambio, $this->usuario());
+            // El modo viaja con la tanda porque decide qué estados son válidos:
+            // 'lista' existe en Sistema y no en Correo.
+            $modelo = $this->loadModel('Seguimiento')
+                ->enModo(Seguimiento::modo($this->post('modo', '')));
+            $resultado = $modelo->aplicar($items, $cambio, $usuario);
             $this->json(['ok' => true] + $resultado);
         } catch (Throwable $e) {
             $this->json(['ok' => false, 'message' => $e->getMessage()], 422);
@@ -241,14 +326,15 @@ class SeguimientoController extends Controller
         try {
             $origen = (string) $this->get('origen', '');
             $ref = (int) $this->get('referencia_id', 0);
-            $modelo = $this->loadModel('Seguimiento');
+            $modo = Seguimiento::modo($this->get('modo', ''));
+            $modelo = $this->loadModel('Seguimiento')->enModo($modo);
 
             $fila = $modelo->uno($origen, $ref);
             if (!$fila) {
                 throw new Exception('El renglón no existe o ya no está en la cola.');
             }
 
-            $decoradas = $this->decorar([$fila]);
+            $decoradas = $this->decorar([$fila], $modo);
             // El estado del archivo ya está resuelto arriba; la ruta de una
             // carpeta del disco de la oficina no tiene por qué viajar al
             // navegador.
@@ -266,12 +352,17 @@ class SeguimientoController extends Controller
     /** La cola tal como se ve, en CSV, para trabajarla fuera o mandarla. */
     public function exportar()
     {
-        $modelo = $this->loadModel('Seguimiento');
+        $modo = Seguimiento::modo($this->get('modo', ''));
+        $modelo = $this->loadModel('Seguimiento')->enModo($modo);
         $sociedad = $this->loadModel('Sociedad')->getActiva();
-        $filtros = $this->filtros($sociedad);
+        $filtros = $this->filtros($sociedad, $modo);
 
         $cola = $modelo->cola($filtros, 1, 5000);
-        $filas = $this->decorar($cola['filas']);
+        $filas = $this->decorar($cola['filas'], $modo);
+
+        if ($modo === Seguimiento::MODO_CORREO) {
+            $this->exportarCorreo($filas);
+        }
 
         $nombre = 'seguimiento_' . date('Ymd_His') . '.csv';
         header('Content-Type: text/csv; charset=utf-8');
@@ -316,6 +407,64 @@ class SeguimientoController extends Controller
                 // Las dos caras de lo mismo: una nota dice contra qué factura
                 // se descuenta, una factura dice cuánta nota tiene esperando.
                 self::notaEnJuego($f),
+            ], ';', '"', '\\');
+        }
+        fclose($salida);
+        exit;
+    }
+
+    /**
+     * El mismo CSV para el modo Correo, con las columnas que sí tiene.
+     *
+     * No comparte cabecera con el de Sistema porque la mitad de aquella no
+     * aplica —saldo, diferencia, clase, listado, nota en juego— y bajarla en
+     * blanco haría creer que el dato existe y salió vacío. Lo que sí trae y
+     * el otro no es lo que este modo viene a contestar: contra qué registro
+     * del ERP está enganchado el comprobante, y cómo llegó.
+     */
+    private function exportarCorreo(array $filas)
+    {
+        $estados = Seguimiento::ESTADOS_CORREO;
+        $nombre = 'seguimiento_correo_' . date('Ymd_His') . '.csv';
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $nombre . '"');
+
+        $salida = fopen('php://output', 'w');
+        // BOM: sin él Excel en Windows abre los acentos rotos.
+        fwrite($salida, "\xEF\xBB\xBF");
+        fputcsv($salida, [
+            'Tipo', 'Número', 'Consecutivo', 'Proveedor', 'Fecha', 'Moneda', 'Monto',
+            'Saldo', 'En el sistema', 'Documento del sistema', 'Cómo llegó', 'XML', 'PDF',
+            'Estado', 'Puesto a mano', 'Le tocaría', 'Responsable', 'Recordatorio',
+            'Motivo', 'Importación', 'Último movimiento',
+        ], ';', '"', '\\');
+
+        foreach ($filas as $f) {
+            $enSistema = ($f['tarea'] ?? '') === 'completo';
+            fputcsv($salida, [
+                $f['origen'] === 'xml_nota' ? 'Nota de crédito' : 'Factura',
+                $f['documento'],
+                $f['consecutivo'] ?: '',
+                $f['proveedor'],
+                $f['fecha'],
+                $f['moneda'],
+                number_format((float) $f['monto'], 2, '.', ''),
+                // Vacío y cero no son lo mismo: sin enganche no hay saldo que
+                // mirar, y un 0,00 diría que ya se pagó.
+                $f['saldo'] === null ? '' : number_format((float) $f['saldo'], 2, '.', ''),
+                $enSistema ? 'Sí' : 'No',
+                $f['sistema_doc'] ?: '',
+                ($f['llegada'] ?? '') === 'correo' ? 'Correo' : 'Carga XML',
+                $f['xml_ok'] ? 'Sí' : 'No',
+                $f['pdf_ok'] ? 'Sí' : ($f['pdf_historico'] ? 'Histórico' : 'No'),
+                $estados[$f['seguimiento_estado']] ?? $f['seguimiento_estado'],
+                $f['estado_a_mano'] ? 'Sí' : '',
+                $f['desajustada'] ? ($estados[$f['estado_calculado']] ?? $f['estado_calculado']) : '',
+                $f['responsable'] ?: '',
+                $f['recordar_en'] ?: '',
+                $f['motivo'] ?: '',
+                $f['contexto'] ?: '',
+                $f['seguimiento_actualizado_en'] ?: '',
             ], ';', '"', '\\');
         }
         fclose($salida);
