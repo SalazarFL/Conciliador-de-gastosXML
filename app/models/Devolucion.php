@@ -6,6 +6,7 @@
  */
 
 require_once __DIR__ . '/ProveedorCatalogo.php';
+require_once __DIR__ . '/../helpers/BusquedaImporte.php';
 
 class Devolucion extends Model
 {
@@ -172,6 +173,13 @@ class Devolucion extends Model
             $where[] = '(d.numero LIKE ? OR d.numero_factura LIKE ?
                          OR d.proveedor_nombre_erp LIKE ? OR p.razon_social LIKE ?)';
             array_push($params, $like, $like, $like, $like);
+        }
+
+        // El importe. Una devolución no tiene saldo —no se paga, se espera una
+        // nota de crédito por ella— así que aquí solo hay monto.
+        $condMonto = BusquedaImporte::condicion('d.total', $filtros['monto'] ?? '', $params);
+        if ($condMonto !== '') {
+            $where[] = $condMonto;
         }
 
         // El reporte trae el código del ERP y, cuando se pudo resolver, el

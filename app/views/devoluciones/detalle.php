@@ -42,7 +42,7 @@ if (!empty($dev['advertencias'])) {
             <?= $badgeEstado((string) $dev['estado']) ?>
         </div>
         <div style="margin-left:auto;display:flex;gap:8px;">
-            <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/devoluciones/pdf/<?= (int) $dev['id'] ?>" target="_blank"><i class="fas fa-file-pdf"></i> PDF original</a>
+            <a class="btn btn-outline btn-sm" data-ventana="PDF del reporte" data-ventana-titulo="<?= htmlspecialchars((string) $dev['numero']) ?>" href="<?= $baseUrl ?>/devoluciones/pdf/<?= (int) $dev['id'] ?>" target="_blank"><i class="fas fa-file-pdf"></i> PDF original</a>
             <form method="post" action="<?= $baseUrl ?>/devoluciones/verificar/<?= (int) $dev['id'] ?>">
                 <button class="btn btn-outline btn-sm" type="submit"><i class="fas fa-rotate"></i> Re-verificar</button>
             </form>
@@ -66,7 +66,7 @@ if (!empty($dev['advertencias'])) {
             <span style="font-family:monospace;"><?= htmlspecialchars((string) $dev['numero_factura']) ?></span><br>
             <?php if (!empty($dev['factura_xml_id'])): ?>
                 <span class="badge badge-green">En base</span>
-                <a href="<?= $baseUrl ?>/facturas/ver/<?= (int) $dev['factura_xml_id'] ?>" style="font-size:12px;">ver factura</a>
+                <a href="<?= $baseUrl ?>/facturas/ver/<?= (int) $dev['factura_xml_id'] ?>" data-ficha="<?= (int) $dev['factura_xml_id'] ?>" style="font-size:12px;">ver factura</a>
             <?php else: ?>
                 <span class="badge" style="background:#fee2e2;color:#991b1b;">No importada</span>
             <?php endif; ?>
@@ -128,7 +128,7 @@ if (!empty($dev['advertencias'])) {
             </td>
             <td style="font-family:monospace;white-space:nowrap;">
                 <?php if (!empty($m['factura_xml_id'])): ?>
-                <a href="<?= $baseUrl ?>/notas-xml/ver/<?= (int) $m['factura_xml_id'] ?>"><?= htmlspecialchars((string) $m['nc_consecutivo']) ?></a>
+                <a href="<?= $baseUrl ?>/notas-xml/ver/<?= (int) $m['factura_xml_id'] ?>" data-ficha="<?= (int) $m['factura_xml_id'] ?>"><?= htmlspecialchars((string) $m['nc_consecutivo']) ?></a>
                 <?php else: ?>—<?php endif; ?>
             </td>
             <td style="white-space:nowrap;"><?= htmlspecialchars((string) ($m['nc_fecha'] ?? '—')) ?></td>

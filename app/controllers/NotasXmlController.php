@@ -2,6 +2,9 @@
 require_once __DIR__ . '/../helpers/XmlDocumentImporter.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 require_once __DIR__ . '/../helpers/NavegacionDocumentos.php';
+require_once __DIR__ . '/../helpers/BusquedaDocumento.php';
+require_once __DIR__ . '/../helpers/AlcanceProveedor.php';
+require_once __DIR__ . '/../helpers/BusquedaImporte.php';
 require_once __DIR__ . '/../helpers/EstadoArchivo.php';
 require_once __DIR__ . '/../helpers/Retorno.php';
 
@@ -11,7 +14,12 @@ class NotasXmlController extends Controller
 
     public function index()
     {
-        $this->recordarFiltros('notas_xml', ['desde', 'hasta', 'buscar', 'proveedor']);
+        // 'alcance' entra con los demás: así la pregunta de qué proveedor
+        // sale la primera vez y después de Limpiar, y no en cada visita.
+        $this->recordarFiltros('notas_xml', [
+            'desde', 'hasta', 'buscar', 'proveedor', AlcanceProveedor::PARAM,
+            'monto', 'saldo',
+        ]);
 
         /*
          * Tarjeta del documento que se está buscando: se llega acá con el botón
@@ -33,26 +41,65 @@ class NotasXmlController extends Controller
         $hasta = $this->fechaValida((string) $this->get('hasta', ''));
         $buscar = mb_substr(trim((string) $this->get('buscar', '')), 0, 100, 'UTF-8');
         $proveedor = ProveedorCatalogo::normalizarClave($this->get('proveedor', ''));
+        // Una nota se persigue por lo que rebaja tanto como por su número. El
+        // saldo es el de la línea del reporte con la que esté enganchada.
+        $importes = [
+            'monto' => BusquedaImporte::numero($this->get('monto', '')),
+            'saldo' => BusquedaImporte::numero($this->get('saldo', '')),
+        ];
         $page = max(1, (int) $this->get('pagina', 1));
         $perPage = 100;
         $modelo = $this->loadModel('Factura');
-        $total = $modelo->countNotasXml($desde, $hasta, $buscar, $proveedor);
-        $paginas = max(1, (int) ceil($total / $perPage));
-        $page = min($page, $paginas);
+
+        /*
+         * Nadie pidió las notas de todos los proveedores por el hecho de abrir
+         * la pantalla. Mientras no se elija, ni el conteo ni el listado se
+         * ejecutan: solo se pregunta cuántas hay, para poder decirlo.
+         */
+        $elegirProveedor = AlcanceProveedor::hayQuePreguntar($_GET, $proveedor);
+        $notas = [];
+        $total = 0;
+        $paginas = 1;
+        $totalDelArchivo = null;
+
+        if ($elegirProveedor) {
+            $totalDelArchivo = $modelo->countNotasXml('', '', '', '');
+        } else {
+            $total = $modelo->countNotasXml($desde, $hasta, $buscar, $proveedor, $importes);
+            $paginas = max(1, (int) ceil($total / $perPage));
+            $page = min($page, $paginas);
+            // Decoradas con lo que la columna no dice: si el archivo que su
+            // ruta promete sigue estando en la carpeta compartida.
+            $notas = EstadoArchivo::decorar(
+                $modelo->getNotasXml($desde, $hasta, $buscar, $proveedor, $page, $perPage, $importes)
+            );
+        }
+
+        // Igual que el listado de comprobantes: si se llegó buscando una nota
+        // concreta, la pantalla dice si está cargada o no.
+        $docBuscado = NavegacionDocumentos::documentoBuscado($navDoc, $buscar);
+        $docBuscadoCargado = null;
+        if ($docBuscado !== null && BusquedaDocumento::esNumero($docBuscado['busqueda'])) {
+            try {
+                $docBuscadoCargado = $modelo->existeNumeroXml($docBuscado['busqueda'], 'NC');
+            } catch (Throwable $e) {
+                // Sin respuesta no se afirma nada.
+            }
+        }
 
         $this->render('notasxml/index', [
             'title' => 'Notas de crédito · Carga XML - Nexo Fiscal',
-            // Decoradas con lo que la columna no dice: si el archivo que su
-            // ruta promete sigue estando en la carpeta compartida.
-            'notas' => EstadoArchivo::decorar(
-                $modelo->getNotasXml($desde, $hasta, $buscar, $proveedor, $page, $perPage)
-            ),
+            'notas' => $notas,
+            'elegirProveedor' => $elegirProveedor,
+            'totalDelArchivo' => $totalDelArchivo,
             'desde' => $desde, 'hasta' => $hasta, 'buscar' => $buscar,
             'proveedor' => $proveedor,
+            'importes' => $importes,
             'proveedoresFiltro' => ProveedorCatalogo::opciones($modelo->proveedoresParaFiltro('NC')),
             'pagina' => $page, 'paginas' => $paginas, 'total' => $total,
             'carpetaRaiz' => DocumentoArchivo::raizConfigurada(),
             'navDoc' => $navDoc,
+            'docBuscadoCargado' => $docBuscadoCargado,
         ]);
     }
 

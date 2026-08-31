@@ -6,12 +6,25 @@
 require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 require_once __DIR__ . '/../helpers/NavegacionDocumentos.php';
+require_once __DIR__ . '/../helpers/BusquedaDocumento.php';
+require_once __DIR__ . '/../helpers/AlcanceProveedor.php';
+require_once __DIR__ . '/../helpers/BusquedaImporte.php';
 require_once __DIR__ . '/../helpers/EstadoArchivo.php';
 require_once __DIR__ . '/../helpers/NumeroFactura.php';
 require_once __DIR__ . '/../helpers/Retorno.php';
 
 class FacturasController extends Controller
 {
+	/** Cuántas facturas XML se pintan por página del listado. */
+	const POR_PAGINA = 200;
+
+	/**
+	 * Y cuántas se alcanzan a revisar en el disco cuando se filtra por
+	 * respaldo, que es el único filtro que no sabe resolver SQL.
+	 * Ver listadoPorRespaldo().
+	 */
+	const MAX_REVISION_RESPALDO = 2000;
+
 	private $queueService;
 
 	public function __construct() { $this->requireAuth(); }
@@ -22,8 +35,16 @@ class FacturasController extends Controller
 		// volver de otro módulo la lista sale como se dejó.
 		$this->recordarFiltros('facturas', [
 			'q', 'proveedor', 'fecha_desde', 'fecha_hasta',
-			'monto_desde', 'monto_hasta', 'respaldo', 'alcance',
+			'monto', 'saldo',
+			// Que se haya pedido el listado entero se recuerda como cualquier
+			// otro filtro: por eso la pregunta sale la primera vez y después
+			// de Limpiar, y no en cada visita.
+			AlcanceProveedor::PARAM,
 		]);
+		// 'respaldo' no se recuerda: salió de la barra de filtros, y un valor
+		// guardado en la sesión dejaría el listado recortado sin que quede en
+		// pantalla el control con el que quitarlo. Sigue funcionando si llega
+		// por la URL, que es de una sola visita.
 
 
 		/*
@@ -45,56 +66,74 @@ class FacturasController extends Controller
 		$facturas          = [];
 		$historial         = [];
 		$importacionActiva = null;
-		$semanas           = [];
+		$totalDelArchivo   = null;
+		$paginacion        = [
+			'pagina' => 1, 'paginas' => 1, 'total' => 0,
+			'hay_siguiente' => false, 'revisados' => 0, 'truncado' => false,
+		];
 		$filtros           = $this->filtrosListado();
 
-		// El selector "Semana de trabajo" define lo que se muestra abajo:
-		// semana_id=N = las facturas de esa semana; 0 = "Sin semana".
-		// Sin parámetro se usa la última semana elegida (compartida entre
-		// módulos vía sesión); al llegar en la URL se recuerda para los demás.
-		$semanaFiltro = $this->semanaActiva();
-		if (isset($_GET['semana_id']) && $_GET['semana_id'] !== '') {
-			$semanaFiltro = max(0, (int) $_GET['semana_id']);
-			$this->setSemanaActiva($semanaFiltro);
-		}
+		/*
+		 * Acá se elegía la "semana de trabajo" y la lista salía recortada a
+		 * esa semana. Esta pantalla es el archivo de comprobantes XML, que no
+		 * se organiza por pago semanal: se muestra completo. Su columna
+		 * "Semana" también se fue del listado: la semana la pone el pago en el
+		 * que está su fila del ERP, y se mira desde ahí.
+		 */
+
+		/*
+		 * Antes de traer nada: quién abre esto desde el menú no ha pedido
+		 * ocho mil comprobantes, solo abrió la pantalla. Mientras no diga de
+		 * qué proveedor —o que los quiere todos— la consulta del listado NO
+		 * se ejecuta. Ahí está el ahorro; esconder la tabla no habría
+		 * servido de nada.
+		 */
+		$elegirProveedor = AlcanceProveedor::hayQuePreguntar($_GET, $filtros['proveedor'] ?? '');
 
 		try {
 			$facturaModel     = $this->loadModel('Factura');
 			$importacionModel = $this->loadModel('Importacion');
 
-			$historial = $importacionModel->getAllXmlPorDocumento('FE');
-			$semanas = $this->loadModel('Semana')->getAll();
+			if ($elegirProveedor) {
+				/*
+				 * Solo cuántos hay, para que la pregunta diga de qué tamaño
+				 * es lo que se estaría trayendo. Ni el listado, ni el
+				 * historial de importaciones, ni la comprobación en el disco
+				 * compartido de cada archivo llegan a ejecutarse.
+				 */
+				$totalDelArchivo = $facturaModel->contarConImportacion([]);
+			} else {
+				$historial = $importacionModel->getAllXmlPorDocumento('FE');
 
-			$importacionId = max(0, (int) ($_GET['importacion_id'] ?? 0));
-			$consulta = $filtros;
+				$importacionId = max(0, (int) ($_GET['importacion_id'] ?? 0));
+				$consulta = $filtros;
 
-			if ($importacionId > 0) {
-				$consulta['importacion_id'] = $importacionId;
-				$importacionActiva = $importacionModel->findById($importacionId);
-			} elseif (($filtros['alcance'] ?? '') !== 'todas') {
-				$consulta['semana_id'] = $semanaFiltro;
-			}
-
-			$facturas = $facturaModel->buscarConImportacion($consulta);
-			$respaldo = (string) ($filtros['respaldo'] ?? '');
-			// Se mira el disco, no solo la columna: la ruta puede estar guardada
-			// y el archivo haber desaparecido de la carpeta compartida.
-			$facturas = array_values(array_filter(
-				EstadoArchivo::decorar($facturas),
-				static function ($factura) use ($respaldo) {
-					$par = !empty($factura['archivo_xml_ok']) && !empty($factura['archivo_pdf_ok']);
-					if ($respaldo === 'con_par') {
-						return $par;
-					}
-					if ($respaldo === 'sin_par') {
-						return !$par;
-					}
-					if ($respaldo === 'perdido') {
-						return !empty($factura['archivo_perdido']);
-					}
-					return true;
+				// Sin recorte por semana: el listado es el archivo entero de
+				// comprobantes y se acota con los buscadores de la barra. Lo
+				// único que sigue acotándolo es haber llegado desde una
+				// importación concreta.
+				if ($importacionId > 0) {
+					$consulta['importacion_id'] = $importacionId;
+					$importacionActiva = $importacionModel->findById($importacionId);
 				}
-			));
+
+				/*
+				 * La página que se está mirando. Antes se pintaban las 500 más
+				 * recientes y a las demás no se llegaba más que acotando los
+				 * buscadores; ahora el listado se recorre entero con Anterior y
+				 * Siguiente, como el resto de los módulos. Un techo por página
+				 * sigue habiendo, y no es cosmético: por cada fila se le pregunta
+				 * al disco compartido si su XML y su PDF siguen ahí.
+				 */
+				$listado = $this->listadoPaginado(
+					$facturaModel,
+					$consulta,
+					(string) ($filtros['respaldo'] ?? ''),
+					max(1, (int) $this->get('pagina', 1))
+				);
+				$facturas = $listado['facturas'];
+				$paginacion = $listado['paginacion'];
+			}
 		} catch (Exception $e) {
 			$this->redirectWithMessage($this->url('/facturas'), 'No fue posible cargar facturas: ' . $e->getMessage(), 'warning');
 		}
@@ -108,17 +147,157 @@ class FacturasController extends Controller
 			// Sin catálogo el filtro queda vacío; la lista se sigue viendo.
 		}
 
+		/*
+		 * ¿Está cargado el comprobante que se vino a buscar?
+		 *
+		 * El buscador trae por coincidencia —quien busca 336 puede acordarse de
+		 * un pedazo del número—, así que entre los resultados pueden salir
+		 * treinta comprobantes y ninguno ser el que se buscaba. Esa es LA
+		 * pregunta del botón que trajo hasta acá, y se contesta encima de la
+		 * lista, no dejando que cada quien la deduzca de treinta renglones.
+		 */
+		$docBuscado = NavegacionDocumentos::documentoBuscado($navDoc, $filtros['q'] ?? '');
+		$docBuscadoCargado = null;
+		if ($docBuscado !== null && BusquedaDocumento::esNumero($docBuscado['busqueda'])) {
+			try {
+				$docBuscadoCargado = $this->loadModel('Factura')
+					->existeNumeroXml($docBuscado['busqueda'], 'FE');
+			} catch (Throwable $e) {
+				// Sin respuesta no se afirma nada: el aviso no se dibuja.
+			}
+		}
+
 		$this->render('facturas/index', [
 			'title'             => 'Facturas - Nexo Fiscal',
+			'elegirProveedor'   => $elegirProveedor,
+			'totalDelArchivo'   => $totalDelArchivo,
 			'facturas'          => $facturas,
 			'proveedoresFiltro' => $proveedoresFiltro,
 			'historial'         => $historial,
 			'importacionActiva' => $importacionActiva,
-			'semanas'           => $semanas,
-			'semanaFiltro'      => $semanaFiltro,
+			'paginacion'        => $paginacion,
 			'filtros'           => $filtros,
 			'navDoc'            => $navDoc,
+			'docBuscadoCargado' => $docBuscadoCargado,
 		]);
+	}
+
+	/**
+	 * Una página del listado de comprobantes, con lo que haga falta para
+	 * poder pasar a la siguiente.
+	 */
+	private function listadoPaginado($modelo, array $consulta, $respaldo, $pagina)
+	{
+		if ($respaldo !== '') {
+			return $this->listadoPorRespaldo($modelo, $consulta, $respaldo, $pagina);
+		}
+
+		$total = $modelo->contarConImportacion($consulta);
+		$paginas = max(1, (int) ceil($total / self::POR_PAGINA));
+		$pagina = min($pagina, $paginas);
+
+		$consulta['limite'] = self::POR_PAGINA;
+		$consulta['offset'] = ($pagina - 1) * self::POR_PAGINA;
+
+		return [
+			// Se mira el disco, no solo la columna: la ruta puede estar
+			// guardada y el archivo haber desaparecido de la carpeta
+			// compartida.
+			'facturas' => EstadoArchivo::decorar($modelo->buscarConImportacion($consulta)),
+			'paginacion' => [
+				'pagina' => $pagina,
+				'paginas' => $paginas,
+				'total' => $total,
+				'hay_siguiente' => $pagina < $paginas,
+				'revisados' => 0,
+				'truncado' => false,
+			],
+		];
+	}
+
+	/**
+	 * Lo mismo cuando se filtra por respaldo, que no es una columna sino el
+	 * disco compartido: si el XML y el PDF de una factura siguen ahí solo se
+	 * sabe preguntándoselo al disco, fila por fila. SQL no puede entonces
+	 * saltarse las que no pasan el filtro, así que la página se arma
+	 * recorriendo el listado por tandas hasta juntar las filas que toca
+	 * mostrar. Se revisan como mucho MAX_REVISION_RESPALDO comprobantes: más
+	 * allá la pantalla tardaría más de lo que nadie está esperando, y en ese
+	 * caso se dice hasta dónde se llegó para que se acote con los buscadores.
+	 */
+	private function listadoPorRespaldo($modelo, array $consulta, $respaldo, $pagina)
+	{
+		$desde = ($pagina - 1) * self::POR_PAGINA;
+		// Una de más: es lo que distingue "esta es la última" de "hay otra
+		// página detrás".
+		$necesarias = $desde + self::POR_PAGINA + 1;
+
+		$pasan = [];
+		$revisados = 0;
+		$agotado = false;
+
+		while (count($pasan) < $necesarias && $revisados < self::MAX_REVISION_RESPALDO) {
+			$consulta['limite'] = min(self::POR_PAGINA, self::MAX_REVISION_RESPALDO - $revisados);
+			$consulta['offset'] = $revisados;
+			$tanda = $modelo->buscarConImportacion($consulta);
+			$leidas = count($tanda);
+			$revisados += $leidas;
+
+			foreach (EstadoArchivo::decorar($tanda) as $factura) {
+				if ($this->cumpleRespaldo($factura, $respaldo)) {
+					$pasan[] = $factura;
+				}
+			}
+
+			if ($leidas < $consulta['limite']) {
+				$agotado = true;
+				break;
+			}
+		}
+
+		if ($agotado) {
+			// Se recorrió hasta el final: se sabe cuántas pasan el filtro y
+			// cuántas páginas son, igual que en cualquier otro listado.
+			$total = count($pasan);
+			$paginas = max(1, (int) ceil($total / self::POR_PAGINA));
+			$pagina = min($pagina, $paginas);
+			$desde = ($pagina - 1) * self::POR_PAGINA;
+			$haySiguiente = $pagina < $paginas;
+		} else {
+			// La revisión se cortó antes que el listado: cuántas hay en total
+			// no se sabe, solo si alcanza para una página más.
+			$total = null;
+			$paginas = 0;
+			$haySiguiente = count($pasan) > $desde + self::POR_PAGINA;
+		}
+
+		return [
+			'facturas' => array_slice($pasan, $desde, self::POR_PAGINA),
+			'paginacion' => [
+				'pagina' => $pagina,
+				'paginas' => $paginas,
+				'total' => $total,
+				'hay_siguiente' => $haySiguiente,
+				'revisados' => $revisados,
+				'truncado' => !$agotado && !$haySiguiente,
+			],
+		];
+	}
+
+	/** Si una factura pasa el filtro de respaldo, ya mirado el disco. */
+	private function cumpleRespaldo(array $factura, $respaldo)
+	{
+		$par = !empty($factura['archivo_xml_ok']) && !empty($factura['archivo_pdf_ok']);
+		if ($respaldo === 'con_par') {
+			return $par;
+		}
+		if ($respaldo === 'sin_par') {
+			return !$par;
+		}
+		if ($respaldo === 'perdido') {
+			return !empty($factura['archivo_perdido']);
+		}
+		return true;
 	}
 
 	/** Normaliza los buscadores de la tabla de Facturas XML. */
@@ -134,31 +313,23 @@ class FacturasController extends Controller
 			$hasta = $tmp;
 		}
 
-		$montoDesde = trim((string) $this->get('monto_desde', ''));
-		$montoHasta = trim((string) $this->get('monto_hasta', ''));
-		$montoDesde = is_numeric($montoDesde) && (float) $montoDesde >= 0 ? $montoDesde : '';
-		$montoHasta = is_numeric($montoHasta) && (float) $montoHasta >= 0 ? $montoHasta : '';
-		if ($montoDesde !== '' && $montoHasta !== '' && (float) $montoDesde > (float) $montoHasta) {
-			$tmp = $montoDesde;
-			$montoDesde = $montoHasta;
-			$montoHasta = $tmp;
-		}
+		// Los dos importes con los que se busca un comprobante: lo que dice
+		// él y lo que queda por pagar del documento del ERP enganchado.
+		$monto = BusquedaImporte::numero($this->get('monto', ''));
+		$saldo = BusquedaImporte::numero($this->get('saldo', ''));
 
 		$respaldo = strtolower(trim((string) $this->get('respaldo', '')));
 		if (!in_array($respaldo, ['', 'con_par', 'sin_par', 'perdido'], true)) {
 			$respaldo = '';
 		}
-		$alcance = strtolower(trim((string) $this->get('alcance', ''))) === 'todas' ? 'todas' : '';
-
 		return [
 			'q' => $q,
 			'proveedor' => $proveedor,
 			'fecha_desde' => $desde,
 			'fecha_hasta' => $hasta,
-			'monto_desde' => $montoDesde,
-			'monto_hasta' => $montoHasta,
+			'monto' => $monto,
+			'saldo' => $saldo,
 			'respaldo' => $respaldo,
-			'alcance' => $alcance,
 		];
 	}
 
@@ -401,9 +572,9 @@ class FacturasController extends Controller
 			$todosFallaron = $exitosos === 0 && $duplicados === 0;
 			$tipo = $todosFallaron ? 'error' : ($hayProblemas ? 'warning' : 'success');
 
-			// Volver a la vista de la semana elegida (ahí quedan las subidas)
+			// De vuelta al listado, donde ya están las que acaban de entrar.
 			$this->redirectWithMessage(
-				$this->url('/facturas' . (!empty($semanaId) ? '?semana_id=' . (int) $semanaId : '')),
+				$this->url('/facturas'),
 				implode(' | ', $partes),
 				$tipo,
 				[

@@ -3,12 +3,19 @@ $baseUrl           = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 $facturas          = $facturas ?? [];
 $historial         = $historial ?? [];
 $importacionActiva = $importacionActiva ?? null;
-$semanas           = is_array($semanas ?? null) ? $semanas : [];
+$paginacion        = array_merge([
+    'pagina' => 1, 'paginas' => 1, 'total' => 0,
+    'hay_siguiente' => false, 'revisados' => 0, 'truncado' => false,
+], is_array($paginacion ?? null) ? $paginacion : []);
+$pagina            = max(1, (int) $paginacion['pagina']);
+// 0 páginas = no se sabe cuántas hay: pasa solo con el filtro de respaldo,
+// que se resuelve en el disco y no en la base.
+$totalPaginas      = (int) $paginacion['paginas'];
+$totalFacturas     = $paginacion['total'] === null ? null : (int) $paginacion['total'];
 $proveedoresFiltro = is_array($proveedoresFiltro ?? null) ? $proveedoresFiltro : [];
-$semanaFiltro      = (int) ($semanaFiltro ?? 0);
 $filtros           = array_merge([
     'q' => '', 'proveedor' => '', 'fecha_desde' => '', 'fecha_hasta' => '',
-    'monto_desde' => '', 'monto_hasta' => '', 'respaldo' => '', 'alcance' => '',
+    'monto' => '', 'saldo' => '', 'respaldo' => '',
 ], is_array($filtros ?? null) ? $filtros : []);
 $filtrosActivos = 0;
 foreach ($filtros as $valorFiltro) {
@@ -18,53 +25,43 @@ $hayFiltros = $filtrosActivos > 0;
 // 'limpiar' es lo que le dice al servidor que olvide los filtros guardados
 // de esta pantalla: sin él, entrar sin criterios significa "devolvéme los
 // que tenía puestos".
+require_once __DIR__ . '/../../helpers/NavegacionDocumentos.php';
+
+// El documento que se vino a persiguiendo no se suelta por nada que se haga
+// en esta pantalla: ni al limpiar los filtros, ni al pasar de página, ni al
+// escribir un criterio a mano. Los tres son GET, y en un GET lo que no viaja
+// desaparece.
+$contextoDoc = NavegacionDocumentos::contextoDeLaUrl($_GET);
+
 $parametrosLimpiar = $importacionActiva
     ? ['importacion_id' => (int) $importacionActiva['id'], 'limpiar' => 1]
-    : ['semana_id' => $semanaFiltro, 'limpiar' => 1];
-$urlLimpiarFiltros = $baseUrl . '/facturas?' . http_build_query($parametrosLimpiar);
+    : ['limpiar' => 1];
+// Limpiar borra los buscadores, no la persecución: la tarjeta se queda.
+$urlLimpiarFiltros = $baseUrl . '/facturas?'
+                   . http_build_query(array_merge($parametrosLimpiar, $contextoDoc));
+
+// Anterior y Siguiente llevan puestos los buscadores y el contexto con el que
+// se entró: cambiar de página no puede cambiar lo que se está mirando.
+$queryPagina = array_filter($filtros, function ($v) { return (string) $v !== ''; });
+if ($importacionActiva) {
+    $queryPagina['importacion_id'] = (int) $importacionActiva['id'];
+}
+$queryPagina = array_merge($queryPagina, $contextoDoc);
+$urlPagina = function ($p) use ($baseUrl, $queryPagina) {
+    return $baseUrl . '/facturas?' . http_build_query(array_merge($queryPagina, ['pagina' => $p]));
+};
 ?>
 
 <!-- CARGA DE FACTURAS XML -->
 
-<!-- Semana de trabajo + acceso a la carga -->
-<div class="card" style="margin-bottom:10px;">
-    <div class="card-header">
-        <div>
-            <div class="card-title">
-                <i class="fas fa-calendar-week" style="margin-right:6px;color:var(--navy-light);"></i>Semana de trabajo
-            </div>
-        </div>
-        <a href="<?= $baseUrl ?>/facturas-erp" class="btn btn-outline btn-sm" style="margin-left:auto;">
-            <i class="fas fa-arrow-left" style="margin-right:4px;"></i>Volver a Facturas
-        </a>
-    </div>
-
-    <div style="padding:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <!-- Este selector NO es un formulario de carga: filtra la lista de
-             abajo. Vivía dentro del formulario de subida y se fue con él, pero
-             la lista lo sigue necesitando. -->
-        <select id="semana_id" class="form-control" style="max-width:300px;font-size:13px;"
-                onchange="semanaCambio(this)">
-            <option value="" <?= $semanaFiltro === 0 ? 'selected' : '' ?>>— Sin semana —</option>
-            <?php foreach (($semanas ?? []) as $sem): ?>
-            <option value="<?= (int) $sem['id'] ?>" <?= $semanaFiltro === (int) $sem['id'] ? 'selected' : '' ?>>
-                <?= htmlspecialchars($sem['nombre']) ?>
-            </option>
-            <?php endforeach; ?>
-        </select>
-
-        <?php if (!empty($facturas)): ?>
-        <span class="badge badge-navy" style="font-size:11px;padding:3px 9px;">
-            <i class="fas fa-layer-group"></i>
-            <?= count($facturas) ?> factura<?= count($facturas) !== 1 ? 's' : '' ?>
-            <?php if ($importacionActiva): ?>
-            <span style="font-weight:400;opacity:.75;margin-left:4px;">— <?= htmlspecialchars($importacionActiva['archivo_origen']) ?></span>
-            <?php endif; ?>
-        </span>
-        <?php endif; ?>
-
-    </div>
-</div>
+<?php /*
+ * Acá arriba estaba la tarjeta "Semana de trabajo": un selector de semana que
+ * decidía qué facturas se listaban abajo. Esta pantalla dejó de mirarse por
+ * semana de pago —es el archivo de comprobantes XML, completo— así que la
+ * lista sale entera y se acota con los buscadores de la barra. La columna
+ * "Semana" también se fue: la semana no es del comprobante sino del pago en
+ * el que está su fila del ERP, y se mira desde ahí o en el detalle.
+ */ ?>
 
 <?php /*
  * La subida de comprobantes, acá y no en una pantalla aparte: los XML que
@@ -165,7 +162,7 @@ $urlLimpiarFiltros = $baseUrl . '/facturas?' . http_build_query($parametrosLimpi
     function pintar(e) {
         var s = (e && e.stats) || {};
         conteo.textContent = 'Importadas: ' + (s.importado || 0) +
-            ' - Ya en esta semana: ' + (s.duplicado || 0) +
+            ' - Ya existían: ' + (s.duplicado || 0) +
             ' - Errores: ' + (s.error || 0) + ' - Pendientes: ' + (s.pendiente || 0);
     }
 
@@ -264,28 +261,11 @@ $urlLimpiarFiltros = $baseUrl . '/facturas?' . http_build_query($parametrosLimpi
         })
         .catch(function (err) {
             decir('Error: ' + err.message);
-            detalle.textContent = 'Podés reintentar: solo se bloquean las facturas que ya estén en la semana seleccionada.';
+            detalle.textContent = 'Podés reintentar: solo se bloquean las facturas que ya estaban cargadas.';
             boton.disabled = false;
         });
     });
 })();
-</script>
-
-<script>
-// El selector "Semana de trabajo" controla la lista de abajo: al cambiar
-// se recarga mostrando las facturas de esa opción ("Sin semana" = las no
-// asignadas). "Nueva semana" solo abre el campo del nombre, sin recargar.
-function semanaCambio(sel) {
-    // "Sin semana" navega con semana_id=0 explícito para que se recuerde
-    // como selección (y no se confunda con una llegada sin parámetro).
-    var base = '<?= $baseUrl ?>/facturas';
-    var params = new URLSearchParams(window.location.search);
-    params.set('semana_id', sel.value === '' ? '0' : sel.value);
-    params.delete('importacion_id');
-    params.delete('limpiar');
-    params.delete('alcance');
-    window.location.href = base + '?' + params.toString();
-}
 </script>
 
 <?php
@@ -295,6 +275,20 @@ function semanaCambio(sel) {
  */
 include __DIR__ . '/../partials/tarjeta-documento.php';
 ?>
+
+<?php if ($elegirProveedor ?? false):
+/*
+ * Nadie ha dicho todavía qué quiere ver, así que aquí no hay listado: el
+ * controlador ni siquiera lo consultó. En su lugar va la pregunta.
+ */
+$elegirProv = [
+    'accion'   => $baseUrl . '/facturas',
+    'opciones' => $proveedoresFiltro,
+    'cuantos'  => $totalDelArchivo ?? null,
+    'que'      => 'comprobantes',
+];
+include __DIR__ . '/../partials/elegir-proveedor.php';
+else: ?>
 
 <!-- Facturas Importadas -->
 <div class="card">
@@ -314,13 +308,27 @@ include __DIR__ . '/../partials/tarjeta-documento.php';
     <form method="get" action="<?= $baseUrl ?>/facturas" class="filter-bar">
         <?php if ($importacionActiva): ?>
         <input type="hidden" name="importacion_id" value="<?= (int) $importacionActiva['id'] ?>">
-        <?php else: ?>
-        <input type="hidden" name="semana_id" value="<?= $semanaFiltro ?>">
         <?php endif; ?>
+        <?php // Buscar a mano no puede borrar la tarjeta del documento que se
+              // vino persiguiendo: se busca a mano justamente para dar con él.
+              include __DIR__ . '/../partials/contexto-oculto.php'; ?>
         <?php
-        // Proveedor primero; después el número y qué archivos tiene, que es
-        // lo que se viene a mirar aquí. Los rangos de monto salieron de la
-        // barra: se busca un comprobante, no un tramo de importes.
+        // Los mismos cuatro buscadores que Notas de crédito XML, en el mismo
+        // orden: proveedor, texto libre y el rango de fechas. Las dos listas
+        // son el mismo archivo de comprobantes visto por tipo de documento,
+        // así que se buscan igual y no hay que reaprender la barra al pasar
+        // de una a la otra.
+        //
+        // Salió de aquí el desplegable "Respaldo" (con par / sin par /
+        // archivo perdido). Lo que ese filtro señalaba se sigue viendo en el
+        // renglón —la columna PDF marca lo pendiente y lo perdido— y el
+        // controlador lo sigue entendiendo si llega por la URL; lo que ya no
+        // hay es un control en la barra.
+        //
+        // La búsqueda por importe sí volvió, y por una razón concreta: cuando
+        // lo que se tiene del comprobante es el monto —porque se está
+        // cuadrando contra un pago— el número no ayuda, y sin esto no quedaba
+        // más que recorrer ocho mil renglones con la vista.
         $provFiltro = [
             'valor'    => $filtros['proveedor'],
             'opciones' => $proveedoresFiltro,
@@ -330,7 +338,7 @@ include __DIR__ . '/../partials/tarjeta-documento.php';
             <label class="filter-label">Buscar</label>
             <input type="search" class="form-control" name="q"
                    value="<?= htmlspecialchars((string) $filtros['q']) ?>"
-                   placeholder="Número, clave, proveedor o archivo">
+                   placeholder="Consecutivo, número o proveedor">
         </div>
         <div>
             <label class="filter-label">Fecha desde</label>
@@ -342,24 +350,19 @@ include __DIR__ . '/../partials/tarjeta-documento.php';
             <input type="date" class="form-control" name="fecha_hasta"
                    value="<?= htmlspecialchars((string) $filtros['fecha_hasta']) ?>">
         </div>
-        <div>
-            <label class="filter-label">Respaldo</label>
-            <select class="form-control" name="respaldo" onchange="this.form.submit()">
-                <option value="">Todos</option>
-                <option value="con_par" <?= $filtros['respaldo'] === 'con_par' ? 'selected' : '' ?>>Con XML y PDF</option>
-                <option value="sin_par" <?= $filtros['respaldo'] === 'sin_par' ? 'selected' : '' ?>>Sin par completo</option>
-                <option value="perdido" <?= $filtros['respaldo'] === 'perdido' ? 'selected' : '' ?>>Archivo perdido</option>
-            </select>
-        </div>
-        <?php if (!$importacionActiva): ?>
-        <div>
-            <label class="filter-label">Alcance</label>
-            <select class="form-control" name="alcance" onchange="this.form.submit()">
-                <option value="">Semana seleccionada</option>
-                <option value="todas" <?= $filtros['alcance'] === 'todas' ? 'selected' : '' ?>>Todas las semanas</option>
-            </select>
-        </div>
-        <?php endif; ?>
+        <?php
+        $filtroImporte = [
+            'nombre' => 'monto', 'etiqueta' => 'Monto',
+            'valor' => $filtros['monto'],
+        ]; include __DIR__ . '/../partials/filtro-importe.php';
+
+        $filtroImporte = [
+            'nombre' => 'saldo', 'etiqueta' => 'Saldo',
+            'valor' => $filtros['saldo'],
+        ]; include __DIR__ . '/../partials/filtro-importe.php';
+        ?>
+        <?php // "Alcance" (semana seleccionada / todas las semanas) se fue con
+              // el selector de semana: ya no hay una semana que acotar. ?>
         <div class="filter-actions">
             <button type="submit" class="btn btn-primary btn-sm"><i class="fas fa-search"></i> Buscar</button>
             <?php if ($hayFiltros): ?>
@@ -371,30 +374,83 @@ include __DIR__ . '/../partials/tarjeta-documento.php';
     <div class="filter-results">
         <i class="fas fa-filter" style="color:var(--navy-light);"></i>
         Mostrando <strong><?= count($facturas) ?></strong> factura<?= count($facturas) !== 1 ? 's' : '' ?>
+        <?php if ($totalFacturas !== null && $totalFacturas > count($facturas)): ?>
+        de <strong><?= $totalFacturas ?></strong>
+        <?php endif; ?>
         <?= $hayFiltros ? 'con los filtros seleccionados' : 'en esta vista' ?>
         <?php if ($hayFiltros): ?>
         <span class="badge badge-navy" style="font-size:10px;"><?= $filtrosActivos ?> filtro<?= $filtrosActivos === 1 ? '' : 's' ?></span>
         <?php endif; ?>
+        <?php if ($pagina > 1 || $totalPaginas > 1): ?>
+        <span style="margin-left:8px;color:var(--text-muted);">
+            — página <?= $pagina ?><?= $totalPaginas > 1 ? ' de ' . $totalPaginas : '' ?>
+        </span>
+        <?php endif; ?>
+        <?php /*
+         * El filtro de respaldo no lo resuelve la base: hay que preguntarle al
+         * disco compartido por el XML y el PDF de cada comprobante, así que se
+         * revisa hasta donde alcanza. Si se cortó ahí, se dice; callarlo haría
+         * pasar por "no hay más" a un listado que sigue.
+         */ ?>
+        <?php if (!empty($paginacion['truncado'])): ?>
+        <span style="margin-left:8px;color:var(--text-muted);">
+            — se revisaron los <?= (int) $paginacion['revisados'] ?> comprobantes más recientes; hay más.
+            Acotá con los buscadores para llegar a los demás.
+        </span>
+        <?php endif; ?>
     </div>
+
+    <?php /*
+     * ¿Está el comprobante que se vino a buscar? Va encima de la lista y no
+     * en su hueco vacío: el buscador trae por coincidencia, así que abajo
+     * puede haber treinta renglones y ninguno ser el que se buscaba.
+     */
+    $docNoEsta = [
+        'navDoc'        => $navDoc ?? null,
+        'termino'       => $filtros['q'] ?? '',
+        'cargado'       => $docBuscadoCargado ?? null,
+        'hayResultados' => !empty($facturas),
+    ];
+    include __DIR__ . '/../partials/documento-no-esta.php';
+    ?>
 
     <div class="table-wrap">
         <table class="data-table">
+            <?php /*
+             * Las mismas once columnas, en el mismo orden, que el listado de
+             * Notas de crédito XML: son el mismo archivo de comprobantes
+             * electrónicos mirado por tipo de documento, y hasta ahora cada
+             * pantalla enseñaba un recorte distinto del mismo renglón.
+             *
+             * Lo que entró: el consecutivo de veinte dígitos —que es lo que
+             * se teclea cuando se busca un comprobante contra el ERP—, la
+             * moneda, el subtotal y de dónde salió el documento.
+             *
+             * Lo que salió: "Semana", que es del pago semanal y no del
+             * comprobante, y la marca "Respaldo", que decía a la vez del XML
+             * y del PDF. El XML ahora lo dice su propio botón —si está, se
+             * puede abrir—, y la columna PDF habla solo del PDF.
+             */ ?>
             <thead>
                 <tr>
                     <th>Fecha</th>
-                    <th>Número Factura</th>
                     <th>Proveedor</th>
-                    <th class="center">Semana</th>
+                    <th>Consecutivo</th>
+                    <th>Número</th>
+                    <th>Moneda</th>
+                    <th class="right">Subtotal</th>
                     <th class="right">IVA</th>
-                    <th class="right">Monto</th>
-                    <th class="center">Respaldo</th>
-                    <th class="center">Acciones</th>
+                    <th class="right">Total</th>
+                    <th class="right">Saldo</th>
+                    <th>PDF</th>
+                    <th>Origen</th>
+                    <th></th>
                 </tr>
             </thead>
             <tbody>
                 <?php if (empty($facturas)): ?>
                     <tr class="empty-row">
-                        <td colspan="8">
+                        <td colspan="12">
                             <i class="fas fa-inbox" style="font-size:28px;color:var(--border);display:block;margin-bottom:8px;"></i>
                             <?= $hayFiltros ? 'No se encontraron facturas con estos filtros.' : 'No hay facturas importadas todavía.' ?><br>
                             <span style="font-size:12px;"><?= $hayFiltros ? 'Cambia o limpia los criterios de búsqueda.' : 'Usa el formulario de arriba para subir archivos XML.' ?></span>
@@ -404,22 +460,37 @@ include __DIR__ . '/../partials/tarjeta-documento.php';
                     <?php foreach ($facturas as $f): ?>
                     <tr>
                         <td class="muted"><?= htmlspecialchars($f['fecha_emision'] ?? '—') ?></td>
+                        <td><?= htmlspecialchars($f['proveedor_nombre'] ?? 'Sin proveedor') ?></td>
+                        <td style="font-family:monospace;white-space:nowrap;"><?= htmlspecialchars((string) ($f['consecutivo_completo'] ?? '—')) ?></td>
                         <td>
                             <span style="font-weight:700;color:var(--navy);">
-                                <?= htmlspecialchars($f['numero_factura_asistente'] ?? $f['consecutivo_completo'] ?? '—') ?>
+                                <?= htmlspecialchars((string) ($f['numero_factura_asistente'] ?? $f['consecutivo_completo'] ?? '—')) ?>
                             </span>
                         </td>
-                        <td><?= htmlspecialchars($f['proveedor_nombre'] ?? 'Sin proveedor') ?></td>
-                        <td class="center" style="white-space:nowrap;">
-                            <?php if (!empty($f['semana_nombre'])): ?>
-                            <span class="badge badge-navy" style="font-size:10px;padding:2px 8px;"><?= htmlspecialchars($f['semana_nombre']) ?></span>
-                            <?php else: ?>
-                            <span style="color:#cbd5e1;">—</span>
-                            <?php endif; ?>
-                        </td>
-                        <td class="right muted"><?= number_format((float)($f['iva'] ?? 0), 2) ?></td>
+                        <td><?= htmlspecialchars((string) ($f['moneda'] ?? '')) ?></td>
+                        <td class="right"><?= number_format((float)($f['subtotal'] ?? 0), 2) ?></td>
+                        <td class="right"><?= number_format((float)($f['iva'] ?? 0), 2) ?></td>
                         <td class="right" style="font-weight:700;"><?= number_format((float)($f['total'] ?? 0), 2) ?></td>
-                        <td class="center">
+                    <?php /*
+                     * El saldo no es del comprobante: un XML dice cuánto se
+                     * facturó, no cuánto queda por pagar. Sale del registro
+                     * del ERP con el que esté enganchado, y cuando no lo está
+                     * se dice con palabras: un cero ahí sería mentira.
+                     */
+                    $saldoErp = $f['saldo_erp'] ?? null;
+                    $hayEnganche = $saldoErp !== null;
+                    $debeAlgo = $hayEnganche && (float) $saldoErp > 0.005;
+                    $docErp = trim((string) ($f['documento_erp'] ?? ''));
+                    ?>
+                    <td class="right" style="white-space:nowrap;<?= $debeAlgo ? '' : 'color:var(--text-muted);' ?>"
+                        title="<?= $hayEnganche
+                            ? 'Saldo de ' . htmlspecialchars($docErp) . ', el documento del ERP con el que está enganchado'
+                            : 'Este comprobante todavía no está enganchado a ningún documento del ERP' ?>">
+                        <?php if (!$hayEnganche): ?>sin enganche
+                        <?php elseif ($debeAlgo): ?><?= number_format((float) $saldoErp, 2) ?>
+                        <?php else: ?>sin saldo<?php endif; ?>
+                    </td>
+                        <td style="white-space:nowrap;">
                             <?php if (!empty($f['archivo_perdido'])): ?>
                             <?php
                             // Se archivó y desapareció de la carpeta compartida.
@@ -432,21 +503,41 @@ include __DIR__ . '/../partials/tarjeta-documento.php';
                             ]];
                             include __DIR__ . '/../partials/marca-archivo.php';
                             ?>
-                            <?php elseif (!empty($f['archivo_xml_ok']) && !empty($f['archivo_pdf_ok'])): ?>
-                            <span class="badge badge-green"><i class="fas fa-check-circle"></i> XML + PDF</span>
-                            <?php elseif (empty($f['archivo_xml_ok']) && empty($f['archivo_pdf_ok'])): ?>
-                            <span class="badge" style="background:#fee2e2;color:#991b1b;"><i class="fas fa-triangle-exclamation"></i> Sin archivos</span>
-                            <?php elseif (empty($f['archivo_xml_ok'])): ?>
-                            <span class="badge" style="background:#fef3c7;color:#92400e;"><i class="fas fa-file-circle-xmark"></i> Falta XML</span>
+                            <?php elseif (!empty($f['archivo_pdf_ok'])): ?>
+                            <span class="badge badge-green">Disponible</span>
                             <?php else: ?>
-                            <span class="badge" style="background:#fef3c7;color:#92400e;"><i class="fas fa-file-pdf"></i> Falta PDF</span>
+                            <span class="badge" style="background:#fef3c7;color:#92400e;">Pendiente</span>
                             <?php endif; ?>
                         </td>
-                        <td class="center">
+                        <td><?= !empty($f['correo_cuenta_id']) ? 'Correo' : 'Carga XML' ?></td>
+                        <td style="white-space:nowrap;">
+                            <?php /*
+                             * data-ficha: el detalle se abre en un cuadro
+                             * sobre esta misma pantalla (visor de app.js) en
+                             * vez de mandar a otro módulo. El href se queda
+                             * para ctrl+clic y para un navegador sin JS.
+                             */ ?>
                             <a href="<?= $baseUrl ?>/facturas/ver/<?= (int)$f['id'] ?>"
-                               class="btn btn-outline btn-sm" title="Ver detalle">
+                               data-ficha="<?= (int)$f['id'] ?>"
+                               class="btn btn-outline btn-sm" title="Ver la ficha del documento">
                                 <i class="fas fa-eye"></i>
                             </a>
+                            <?php if (!empty($f['archivo_xml_ok'])): ?>
+                            <a href="<?= $baseUrl ?>/documentos/xml/<?= (int)$f['id'] ?>"
+                               data-ventana="XML"
+                               data-ventana-titulo="<?= htmlspecialchars(NumeroFactura::xmlOchoDigitos((string) ($f['numero_factura_asistente'] ?? ''))) ?>"
+                               class="btn btn-outline btn-sm" target="_blank" title="Ver XML">
+                                <i class="fas fa-code"></i>
+                            </a>
+                            <?php endif; ?>
+                            <?php if (!empty($f['archivo_pdf_ok'])): ?>
+                            <a href="<?= $baseUrl ?>/documentos/pdf/<?= (int)$f['id'] ?>"
+                               data-ventana="PDF"
+                               data-ventana-titulo="<?= htmlspecialchars(NumeroFactura::xmlOchoDigitos((string) ($f['numero_factura_asistente'] ?? ''))) ?>"
+                               class="btn btn-outline btn-sm" target="_blank" title="Ver PDF">
+                                <i class="fas fa-file-pdf"></i>
+                            </a>
+                            <?php endif; ?>
                         </td>
                     </tr>
                     <?php endforeach; ?>
@@ -454,7 +545,27 @@ include __DIR__ . '/../partials/tarjeta-documento.php';
             </tbody>
         </table>
     </div>
+
+    <?php /*
+     * Anterior y Siguiente, como en el resto de los listados. Con el filtro de
+     * respaldo puede no saberse cuántas páginas hay —eso costaría revisar el
+     * archivo entero en el disco—, y entonces solo se dice en cuál se está y
+     * si hay otra detrás.
+     */ ?>
+    <?php if ($pagina > 1 || !empty($paginacion['hay_siguiente'])): ?>
+    <div style="display:flex;gap:8px;align-items:center;justify-content:center;margin-top:16px;font-size:12px;">
+        <?php if ($pagina > 1): ?>
+            <a href="<?= htmlspecialchars($urlPagina($pagina - 1)) ?>" class="btn btn-outline btn-sm">Anterior</a>
+        <?php endif; ?>
+        <span class="muted">Página <?= $pagina ?><?= $totalPaginas > 1 ? ' de ' . $totalPaginas : '' ?></span>
+        <?php if (!empty($paginacion['hay_siguiente'])): ?>
+            <a href="<?= htmlspecialchars($urlPagina($pagina + 1)) ?>" class="btn btn-outline btn-sm">Siguiente</a>
+        <?php endif; ?>
+    </div>
+    <?php endif; ?>
 </div>
+
+<?php endif; // fin de "ya se eligió proveedor" ?>
 
 <!--
   Aquí estaba el lápiz para asignar o cambiar la semana de una factura a mano.

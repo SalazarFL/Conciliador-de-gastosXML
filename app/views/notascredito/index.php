@@ -4,6 +4,7 @@
 require_once __DIR__ . '/../../helpers/ClaseNotaCredito.php';
 // La situación de cada nota frente a su factura: etiquetas y colores.
 require_once __DIR__ . '/../../helpers/AplicacionNotaCredito.php';
+require_once __DIR__ . '/../../helpers/AlcanceProveedor.php';
 
 $baseUrl = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 $listados = is_array($listados ?? null) ? $listados : [];
@@ -12,9 +13,13 @@ $lineas = is_array($lineas ?? null) ? $lineas : [];
 $resumen = is_array($resumen ?? null) ? $resumen : [];
 $filtros = is_array($filtros ?? null) ? $filtros : [];
 $filtrosActivos = 0;
-foreach ($filtros as $valorFiltro) {
+foreach ($filtros as $claveFiltro => $valorFiltro) {
+    // 'alcance' no es un filtro: es la respuesta a "¿de qué proveedor?", y
+    // contarla hacía que pedir el listado entero dijera "1 filtro".
+    if ($claveFiltro === AlcanceProveedor::PARAM) { continue; }
     if ((string) $valorFiltro !== '') { $filtrosActivos++; }
 }
+unset($claveFiltro, $valorFiltro);
 $opciones = is_array($opciones ?? null) ? $opciones : ['sucursales' => []];
 $proveedoresFiltro = is_array($proveedoresFiltro ?? null) ? $proveedoresFiltro : [];
 $paginacion = is_array($paginacion ?? null) ? $paginacion : ['page' => 1, 'pages' => 1, 'total' => 0];
@@ -25,6 +30,28 @@ function ncFecha($value) {
 }
 function ncMonto($value, $moneda = 'CRC') {
     return ($moneda === 'USD' ? '$' : '₡') . number_format((float) $value, 2, '.', ',');
+}
+/**
+ * Si el XML está a nombre del mismo proveedor que la nota.
+ *
+ * Se compara por los primeros doce caracteres útiles porque los dos nombres
+ * salen de sitios distintos —el reporte del ERP y el comprobante de Hacienda—
+ * y difieren en la forma societaria, los puntos y los acentos: "CENTRO TEXTIL
+ * JOSE BEFELER S.A." contra "Centro Textil Jose Befeler Sociedad Anónima" es
+ * el mismo proveedor y ninguna comparación literal lo diría.
+ *
+ * Tiene un gemelo en JavaScript (ncMismoProveedor, más abajo) porque esta
+ * tabla se repinta en vivo al filtrar; las dos aplican la misma regla.
+ */
+function ncMismoProveedor($nota, $xml) {
+    $clave = static function ($texto) {
+        $texto = mb_strtoupper(trim((string) $texto), 'UTF-8');
+        return mb_substr((string) preg_replace('/[^A-Z0-9]/u', '', $texto), 0, 12);
+    };
+    $a = $clave($nota);
+    $b = $clave($xml);
+    // Sin nombre no hay nada que contradecir: no se avisa de lo que no se sabe.
+    return $b === '' || $a === $b;
 }
 function ncQuery(array $changes = []) {
     $current = $_GET;
@@ -38,13 +65,51 @@ function ncQuery(array $changes = []) {
 
 <style>
 .nc-table-wrap{overflow:auto;max-height:68vh;border:1px solid var(--border);border-radius:9px}
-.nc-table{min-width:1650px}.nc-table thead th{position:sticky;z-index:3}.nc-table .nc-head-labels th{top:0}.nc-table .nc-search-row th{top:29px;padding:3px;background:#f8fafc;z-index:4}
-.nc-table .nc-search-row input,.nc-table .nc-search-row select{width:100%;min-width:78px;height:24px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;padding:2px 5px;font-size:10px;color:var(--navy);outline:none}
-.nc-table .nc-search-row input:focus,.nc-table .nc-search-row select:focus{border-color:var(--gold);box-shadow:0 0 0 2px rgba(212,160,23,.14)}
-.nc-table .nc-search-row .nc-search-wide{min-width:145px}.nc-table td{vertical-align:top}
+.nc-table{min-width:1120px}.nc-table thead th{position:sticky;top:0;z-index:3}.nc-table td{vertical-align:top}
+/* El encabezado y sus filtros, en una sola fila.  Antes eran dos —los rótulos
+   arriba y las casillas abajo— y la de abajo se pegaba a 29 px medidos a ojo:
+   en cuanto un rótulo ocupaba dos líneas, una fila tapaba a la otra. Ahora el
+   rótulo es el nombre del propio campo, así que no hay medida que adivinar. */
+.nc-head th{vertical-align:bottom;background:#f3f7fb;padding:9px 10px 10px;white-space:normal;border-bottom:2px solid var(--border)}
+.nc-filtros{display:grid;grid-template-columns:repeat(2,minmax(96px,1fr));gap:7px 8px}
+.nc-filtros.nc-una{grid-template-columns:minmax(96px,1fr)}
+.nc-filtros.nc-fechas{grid-template-columns:repeat(2,minmax(108px,1fr))}
+.nc-f{display:flex;flex-direction:column;gap:3px;min-width:0}
+.nc-f.nc-ancho{grid-column:1/-1}
+/* El rótulo de la columna es el del primer campo; los demás dicen qué dato
+   buscan, que antes solo se leía dentro de la casilla y se iba al escribir. */
+.nc-f>span,.nc-col-title{display:block;font-size:9.5px;line-height:13px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nc-f>span.nc-ttl,.nc-col-title{font-size:10.5px;font-weight:800;color:var(--navy)}
+.nc-f input,.nc-f select{width:100%;min-width:0;height:26px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;padding:0 6px;font-family:inherit;font-size:11px;font-weight:600;letter-spacing:0;text-transform:none;color:var(--navy);outline:none}
+.nc-f input:hover,.nc-f select:hover{border-color:#94a3b8}
+.nc-f input:focus,.nc-f select:focus{border-color:var(--navy);box-shadow:0 0 0 2px rgba(212,160,23,.18)}
+.nc-f input.nc-num{text-align:right}
+.nc-f input[type=date]{padding-right:2px}
+.nc-f input[type=date]::-webkit-calendar-picker-indicator{opacity:.5;padding:0;margin:0}
+/* La casilla con algo puesto se marca sola: el filtro aplicado se ve de lejos */
+.nc-f .nc-lleno{border-color:var(--gold);background:#fffdf5}
+.nc-clear-col{margin-top:7px;display:inline-flex;align-items:center;gap:5px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;padding:4px 8px;font-family:inherit;font-size:9.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--navy);cursor:pointer}
+.nc-clear-col:hover{border-color:var(--gold);background:#fffdf5}
+/* El display de arriba le gana al hidden del navegador: hay que repetirlo. */
+.nc-clear-col[hidden]{display:none}
+/* La columna guarda el lugar del botón para que la tabla no salte al mostrarlo */
+.nc-head th:last-child{min-width:134px}
 .nc-doc{max-width:230px;overflow-wrap:anywhere;font-weight:650;color:var(--navy)}
 .nc-provider{max-width:245px;white-space:normal}.nc-reason{font-size:10.5px;color:#64748b;max-width:190px;white-space:normal;margin-top:4px}
-.nc-detail-btn{margin-top:6px;white-space:nowrap}
+/* La insignia de estado hace de botón: mismo aspecto, y se puede apretar. */
+.nc-estado-btn{cursor:pointer;font-family:inherit;border:0;white-space:nowrap}
+.nc-estado-btn:hover{filter:brightness(.94)}
+.nc-estado-btn:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+
+/* La segunda línea de una celda: fecha, saldo, total del XML, insignias */
+.nc-sub{font-size:10.5px;color:#64748b;margin-top:3px;display:flex;gap:5px;align-items:center;flex-wrap:wrap;font-weight:400}
+.nc-sub-der{justify-content:flex-end}
+.nc-dif{color:#dc2626;font-weight:800}
+.nc-badge-mini{font-size:9.5px;padding:1px 6px;white-space:nowrap}
+/* El XML a nombre de otro proveedor: antes se escribía siempre y por eso no
+   se notaba; ahora solo sale cuando no coincide, y sale marcado. */
+.nc-otro-proveedor{color:#92400e;font-weight:700}
+
 .nc-detail-context{padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:#f8fafc;margin-bottom:10px}
 .nc-detail-context strong{display:block;color:var(--navy);font-size:13px;overflow-wrap:anywhere}
 .nc-detail-context span{display:block;color:var(--text-muted);font-size:11px;margin-top:3px;overflow-wrap:anywhere}
@@ -83,8 +148,7 @@ function ncQuery(array $changes = []) {
         <div class="alert alert-warning">Debes registrar y activar una sociedad desde Inicio antes de cargar un listado.</div>
     <?php else: ?>
         <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">
-            Sociedad: <strong style="color:var(--navy);"><?= htmlspecialchars($sociedadActiva['nombre']) ?></strong>.
-            Cada reporte CSV actualiza saldos y agrega los documentos que todavía no existen.
+            Sociedad: <strong style="color:var(--navy);"><?= htmlspecialchars($sociedadActiva['nombre']) ?></strong>
         </div>
         <?php /*
          * El CSV se sube acá y no en una pantalla aparte: lo que el archivo
@@ -104,9 +168,6 @@ function ncQuery(array $changes = []) {
                 <i class="fas fa-eye" style="margin-right:4px;"></i>Vista previa
             </button>
         </form>
-        <div style="font-size:12px;color:var(--text-muted);margin-top:8px;">
-            La vista previa indica cuántas notas son nuevas, cuántos saldos cambian y cuántas filas quedarán intactas.
-        </div>
     <?php endif; ?>
 </div>
 
@@ -116,7 +177,22 @@ function ncQuery(array $changes = []) {
  * Estado lleva a cada grupo. El total sigue vivo donde sirve: en "N de M
  * notas conservadas", que además se actualiza con cada búsqueda.
  */ ?>
-<?php if ($listado): ?>
+<?php if ($listado && ($elegirProveedor ?? false)):
+/*
+ * Sin líneas: el controlador no las pidió. Esta pantalla no pagina —las manda
+ * todas de una vez— así que es la que más gana con preguntar antes.
+ */
+$elegirProv = [
+    'accion'   => $baseUrl . '/notas-credito',
+    'opciones' => $proveedoresFiltro,
+    'cuantos'  => $totalDelArchivo ?? null,
+    'que'      => 'líneas de nota',
+    // El listado que se está mirando tiene que sobrevivir a la pregunta.
+    'ocultos'  => ['listado_id' => (int) $listado['id']],
+];
+include __DIR__ . '/../partials/elegir-proveedor.php';
+?>
+<?php elseif ($listado): ?>
 <div class="card">
     <?php /*
      * Encabezado al modo de Facturas: el título, debajo de qué carga viene lo
@@ -200,6 +276,26 @@ function ncQuery(array $changes = []) {
                 <option value="sin_saldo" <?= ($filtros['condicion_saldo'] ?? '') === 'sin_saldo' ? 'selected' : '' ?>>Sin saldo</option>
             </select>
         </div>
+        <?php
+        /*
+         * Los dos importes. Son los MISMOS parámetros que los buscadores de la
+         * cabecera de la tabla —'monto' y 'saldo'— a propósito: así hay un
+         * solo filtro por concepto, se alcance desde la barra o desde la
+         * columna, y los dos enseñan lo que está puesto.
+         *
+         * El desplegable "Saldo" de al lado dice si la nota tiene saldo o no;
+         * este dice cuánto, que es otra pregunta.
+         */
+        $filtroImporte = [
+            'nombre' => 'monto', 'etiqueta' => 'Monto de la nota',
+            'valor' => $filtros['monto'] ?? '',
+        ]; include __DIR__ . '/../partials/filtro-importe.php';
+
+        $filtroImporte = [
+            'nombre' => 'saldo', 'etiqueta' => 'Saldo de la nota',
+            'valor' => $filtros['saldo'] ?? '',
+        ]; include __DIR__ . '/../partials/filtro-importe.php';
+        ?>
         <?php /*
          * Por dónde se entra a "qué puedo aplicar hoy". El estado sale de
          * cruzar el saldo de la nota con el de la factura que corrige, así
@@ -231,7 +327,7 @@ function ncQuery(array $changes = []) {
         <span>
             Mostrando <strong id="nc-result-count"><?= count($lineas) ?></strong> de
             <strong id="nc-list-total"><?= (int) ($resumen['total'] ?? 0) ?></strong> notas conservadas.
-            La búsqueda se aplica al acumulado completo. Desplázate horizontalmente para ver todas las columnas.
+            La búsqueda se aplica al acumulado completo.
         </span>
         <?php if ($filtrosActivos): ?>
         <span class="badge badge-navy" style="font-size:10px;"><?= $filtrosActivos ?> filtro<?= $filtrosActivos === 1 ? '' : 's' ?></span>
@@ -240,12 +336,32 @@ function ncQuery(array $changes = []) {
     <div class="nc-table-wrap">
         <table class="data-table nc-table">
             <thead>
-                <tr class="nc-head-labels">
-                    <th>Estado</th><th>Proveedor</th><th>Sucursal</th>
-                    <th>Documento</th><th>Fecha</th><th>NC Proveedor</th><th>Fecha NC proveedor</th>
-                    <th class="right">Monto</th><th class="right">Saldo</th>
-                    <th>NC XML</th><th class="right">Total XML</th><th class="right">Diferencia</th><th>Acciones</th>
-                </tr>
+                <?php /*
+                 * Seis columnas, no trece. Las siete que se fueron estaban
+                 * vacías o repetidas, contado sobre las 2.613 notas del
+                 * acumulado:
+                 *
+                 *   Sucursal            Nunca vacía, pero con dos valores en
+                 *                       total. Una columna entera para eso; va
+                 *                       bajo el proveedor.
+                 *   NC Proveedor        Vacía en el 63,7 %.  ┐ las dos cuelgan
+                 *   Fecha NC proveedor  Vacía en el 63,7 %.  ┘ del documento.
+                 *   Saldo               Volvió: en el 49,8 % repite el monto,
+                 *                       pero el otro 50 % es lo que decide qué
+                 *                       nota se puede aplicar, y colgando del
+                 *                       monto no se podía comparar de un
+                 *                       vistazo entre renglones.
+                 *   Total XML           Vacía en el 80,1 %.  ┐ las dos cuelgan
+                 *   Diferencia          Vacía en el 98,8 %.  ┘ del XML.
+                 *   Acciones            El botón "Ver detalles" estaba en las
+                 *                       2.613 filas; ahora es la propia
+                 *                       insignia de estado, que se puede
+                 *                       apretar. Vincular y desvincular se
+                 *                       quedan, en su columna.
+                 *
+                 * La tabla pasó de 1.650 px de ancho mínimo a 1.120: deja de
+                 * hacer falta correrla de lado para leer un renglón.
+                 */ ?>
                 <?php
                 /*
                  * Los filtros de columna se escriben con su valor puesto: la
@@ -258,36 +374,105 @@ function ncQuery(array $changes = []) {
                     return htmlspecialchars((string) ($filtros[$clave] ?? ''));
                 };
                 ?>
-                <tr class="nc-search-row">
+                <?php /*
+                 * Ninguna búsqueda se perdió al juntar columnas: cada casilla
+                 * está en la celda del dato que busca, y ahora lleva su rótulo
+                 * arriba en vez de adentro, donde se iba al escribir.
+                 */ ?>
+                <tr class="nc-head">
                     <th>
-                        <select data-nc-filter="col_estado" aria-label="Buscar por estado">
-                            <?php foreach ([
-                                ''               => 'Todos',
-                                'coincide'       => 'Coincide',
-                                'con_diferencia' => 'Con diferencia',
-                                'sin_respaldo'   => 'Sin respaldo',
-                            ] as $ncEstadoValor => $ncEstadoTexto): ?>
-                            <option value="<?= $ncEstadoValor ?>"<?= ($filtros['col_estado'] ?? '') === $ncEstadoValor ? ' selected' : '' ?>><?= $ncEstadoTexto ?></option>
-                            <?php endforeach; ?>
-                        </select>
+                        <div class="nc-filtros nc-una">
+                            <label class="nc-f">
+                                <span class="nc-ttl">Estado</span>
+                                <select data-nc-filter="col_estado">
+                                    <?php foreach ([
+                                        ''               => 'Todos',
+                                        'coincide'       => 'Coincide',
+                                        'con_diferencia' => 'Con diferencia',
+                                        'sin_respaldo'   => 'Sin respaldo',
+                                    ] as $ncEstadoValor => $ncEstadoTexto): ?>
+                                    <option value="<?= $ncEstadoValor ?>"<?= ($filtros['col_estado'] ?? '') === $ncEstadoValor ? ' selected' : '' ?>><?= $ncEstadoTexto ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </label>
+                        </div>
                     </th>
-                    <th><input class="nc-search-wide" data-nc-filter="proveedor_nombre" value="<?= $ncCol('proveedor_nombre') ?>" placeholder="Buscar" aria-label="Buscar proveedor"></th>
-                    <th><input data-nc-filter="sucursal_texto" value="<?= $ncCol('sucursal_texto') ?>" placeholder="Buscar" aria-label="Buscar sucursal"></th>
-                    <th><input class="nc-search-wide" data-nc-filter="documento" value="<?= $ncCol('documento') ?>" placeholder="Buscar" aria-label="Buscar documento"></th>
-                    <th><input type="date" data-nc-filter="fecha" value="<?= $ncCol('fecha') ?>" aria-label="Buscar fecha"></th>
-                    <th><input data-nc-filter="nc_proveedor" value="<?= $ncCol('nc_proveedor') ?>" placeholder="Buscar" aria-label="Buscar NC proveedor"></th>
-                    <th><input type="date" data-nc-filter="fecha_nc_proveedor" value="<?= $ncCol('fecha_nc_proveedor') ?>" aria-label="Buscar fecha NC proveedor"></th>
-                    <th><input data-nc-filter="monto" value="<?= $ncCol('monto') ?>" placeholder="Buscar" inputmode="decimal" aria-label="Buscar monto"></th>
-                    <th><input data-nc-filter="saldo" value="<?= $ncCol('saldo') ?>" placeholder="Buscar" inputmode="decimal" aria-label="Buscar saldo"></th>
-                    <th><input data-nc-filter="nc_xml" value="<?= $ncCol('nc_xml') ?>" placeholder="Buscar" aria-label="Buscar NC XML"></th>
-                    <th><input data-nc-filter="xml_total" value="<?= $ncCol('xml_total') ?>" placeholder="Buscar" inputmode="decimal" aria-label="Buscar total XML"></th>
-                    <th><input data-nc-filter="diferencia" value="<?= $ncCol('diferencia') ?>" placeholder="Buscar" inputmode="decimal" aria-label="Buscar diferencia"></th>
-                    <th></th>
+                    <th>
+                        <div class="nc-filtros">
+                            <label class="nc-f">
+                                <span class="nc-ttl">Proveedor</span>
+                                <input data-nc-filter="proveedor_nombre" value="<?= $ncCol('proveedor_nombre') ?>" aria-label="Buscar proveedor">
+                            </label>
+                            <label class="nc-f">
+                                <span>Sucursal</span>
+                                <input data-nc-filter="sucursal_texto" value="<?= $ncCol('sucursal_texto') ?>" aria-label="Buscar sucursal">
+                            </label>
+                        </div>
+                    </th>
+                    <th>
+                        <div class="nc-filtros nc-fechas">
+                            <label class="nc-f">
+                                <span class="nc-ttl">Documento</span>
+                                <input data-nc-filter="documento" value="<?= $ncCol('documento') ?>" aria-label="Buscar documento">
+                            </label>
+                            <label class="nc-f">
+                                <span>Fecha</span>
+                                <input type="date" data-nc-filter="fecha" value="<?= $ncCol('fecha') ?>" aria-label="Buscar fecha">
+                            </label>
+                            <label class="nc-f">
+                                <span>NC del proveedor</span>
+                                <input data-nc-filter="nc_proveedor" value="<?= $ncCol('nc_proveedor') ?>" aria-label="Buscar NC proveedor">
+                            </label>
+                            <label class="nc-f">
+                                <span>Fecha NC</span>
+                                <input type="date" data-nc-filter="fecha_nc_proveedor" value="<?= $ncCol('fecha_nc_proveedor') ?>" aria-label="Buscar fecha NC proveedor">
+                            </label>
+                        </div>
+                    </th>
+                    <th class="right">
+                        <div class="nc-filtros nc-una">
+                            <label class="nc-f">
+                                <span class="nc-ttl">Monto</span>
+                                <input class="nc-num" data-nc-filter="monto" value="<?= $ncCol('monto') ?>" inputmode="decimal" aria-label="Buscar monto">
+                            </label>
+                        </div>
+                    </th>
+                    <th class="right">
+                        <div class="nc-filtros nc-una">
+                            <label class="nc-f">
+                                <span class="nc-ttl">Saldo</span>
+                                <input class="nc-num" data-nc-filter="saldo" value="<?= $ncCol('saldo') ?>" inputmode="decimal" aria-label="Buscar saldo">
+                            </label>
+                        </div>
+                    </th>
+                    <th>
+                        <div class="nc-filtros">
+                            <label class="nc-f nc-ancho">
+                                <span class="nc-ttl">NC XML</span>
+                                <input data-nc-filter="nc_xml" value="<?= $ncCol('nc_xml') ?>" aria-label="Buscar NC XML">
+                            </label>
+                            <label class="nc-f">
+                                <span>Total XML</span>
+                                <input class="nc-num" data-nc-filter="xml_total" value="<?= $ncCol('xml_total') ?>" inputmode="decimal" aria-label="Buscar total XML">
+                            </label>
+                            <label class="nc-f">
+                                <span>Diferencia</span>
+                                <input class="nc-num" data-nc-filter="diferencia" value="<?= $ncCol('diferencia') ?>" inputmode="decimal" aria-label="Buscar diferencia">
+                            </label>
+                        </div>
+                    </th>
+                    <th>
+                        <span class="nc-col-title">Acciones</span>
+                        <?php // El botón sale solo cuando hay algo escrito arriba. ?>
+                        <button type="button" class="nc-clear-col" id="nc-limpiar-col" hidden>
+                            <i class="fas fa-eraser"></i> Limpiar columnas
+                        </button>
+                    </th>
                 </tr>
             </thead>
             <tbody id="nc-lines-body">
             <?php if (empty($lineas)): ?>
-                <tr><td colspan="13" style="text-align:center;padding:18px;color:var(--text-muted);">No hay notas con estos filtros.</td></tr>
+                <tr><td colspan="7" style="text-align:center;padding:18px;color:var(--text-muted);">No hay notas con estos filtros.</td></tr>
             <?php endif; ?>
             <?php foreach ($lineas as $row): ?>
                 <?php
@@ -296,57 +481,126 @@ function ncQuery(array $changes = []) {
                 $motivoMatch = trim((string) ($row['motivo_match'] ?? ''));
                 $tieneDetalle = !empty($row['match_manual']) || $motivoMatch !== '';
                 ?>
+                <?php
+                $ncSaldoAparte = abs((float) $row['monto'] - (float) $row['saldo']) >= 0.005;
+                $ncSinSaldo = abs((float) $row['saldo']) < 0.005;
+                $ncDif = $row['diferencia'] !== null && $row['diferencia'] !== ''
+                    ? (float) $row['diferencia'] : null;
+                ?>
                 <tr>
                     <td>
-                        <span class="badge <?= $badge ?>"><?= $label ?></span>
+                        <?php /*
+                         * La insignia es el botón. "Ver detalles" estaba debajo
+                         * de las 2.613 filas, siempre, así que no distinguía
+                         * ninguna: era una segunda línea en cada renglón para
+                         * repetir que se puede abrir lo que ya se ve.
+                         */ ?>
                         <?php if ($tieneDetalle): ?>
-                        <div>
-                            <button type="button" class="btn btn-outline btn-sm nc-detail-btn"
-                                    data-estado="<?= htmlspecialchars($label, ENT_QUOTES, 'UTF-8') ?>"
-                                    data-documento="<?= htmlspecialchars((string) $row['documento'], ENT_QUOTES, 'UTF-8') ?>"
-                                    data-proveedor="<?= htmlspecialchars((string) $row['proveedor_nombre'], ENT_QUOTES, 'UTF-8') ?>"
-                                    data-motivo="<?= htmlspecialchars($motivoMatch, ENT_QUOTES, 'UTF-8') ?>"
-                                    data-manual="<?= !empty($row['match_manual']) ? '1' : '0' ?>"
-                                    aria-haspopup="dialog" aria-controls="nc-detail-modal">
-                                <i class="fas fa-circle-info"></i> Ver detalles
-                            </button>
-                        </div>
+                        <button type="button" class="badge <?= $badge ?> nc-estado-btn nc-detail-btn"
+                                data-estado="<?= htmlspecialchars($label, ENT_QUOTES, 'UTF-8') ?>"
+                                data-documento="<?= htmlspecialchars((string) $row['documento'], ENT_QUOTES, 'UTF-8') ?>"
+                                data-proveedor="<?= htmlspecialchars((string) $row['proveedor_nombre'], ENT_QUOTES, 'UTF-8') ?>"
+                                data-motivo="<?= htmlspecialchars($motivoMatch, ENT_QUOTES, 'UTF-8') ?>"
+                                data-manual="<?= !empty($row['match_manual']) ? '1' : '0' ?>"
+                                title="Ver por qué quedó así"
+                                aria-haspopup="dialog" aria-controls="nc-detail-modal">
+                            <?= $label ?><i class="fas fa-circle-info" style="margin-left:5px;opacity:.7;"></i>
+                        </button>
+                        <?php else: ?>
+                        <span class="badge <?= $badge ?>"><?= $label ?></span>
                         <?php endif; ?>
                     </td>
-                    <td class="nc-provider"><?= htmlspecialchars($row['proveedor_nombre']) ?></td>
-                    <td><?= htmlspecialchars($row['sucursal'] ?: '—') ?></td>
+
+                    <td class="nc-provider">
+                        <?= htmlspecialchars($row['proveedor_nombre']) ?>
+                        <?php if (trim((string) $row['sucursal']) !== ''): ?>
+                        <div class="nc-reason"><?= htmlspecialchars($row['sucursal']) ?></div>
+                        <?php endif; ?>
+                    </td>
+
                     <td class="nc-doc">
                         <?= htmlspecialchars($row['documento']) ?>
-                        <?php
-                        $apl = (string) ($row['estado_aplicacion'] ?? 'no_aplica');
-                        $colorApl = AplicacionNotaCredito::color($apl);
-                        if ($colorApl !== 'neutro'):
-                            $estiloApl = $colorApl === 'ok'
-                                ? 'background:#dcfce7;color:#166534;border:1px solid #86efac;'
-                                : 'background:#fef3c7;color:#92400e;border:1px solid #fcd34d;';
-                        ?>
-                        <div>
-                            <span class="badge" style="font-size:9.5px;padding:1px 6px;margin-top:3px;<?= $estiloApl ?>">
-                                <?= htmlspecialchars(AplicacionNotaCredito::etiqueta($apl)) ?>
-                                <?php if (!empty($row['factura_erp_documento'])): ?>
-                                    · factura <?= htmlspecialchars((string) $row['factura_erp_documento']) ?>
-                                <?php endif; ?>
+                        <div class="nc-sub">
+                            <?= ncFecha($row['fecha']) ?>
+                            <?php /*
+                             * El número de la factura solo se escribe si no está
+                             * ya dentro del documento de la nota. En 915 de las
+                             * 939 con insignia sí lo está —el consecutivo va
+                             * embebido en el número de la nota— y repetirlo
+                             * alargaba la insignia al doble para no decir nada.
+                             * En las otras 24 sí hace falta, y ahí sale.
+                             */
+                            $apl = (string) ($row['estado_aplicacion'] ?? 'no_aplica');
+                            $colorApl = AplicacionNotaCredito::color($apl);
+                            if ($colorApl !== 'neutro'):
+                                $estiloApl = $colorApl === 'ok'
+                                    ? 'background:#dcfce7;color:#166534;border:1px solid #86efac;'
+                                    : 'background:#fef3c7;color:#92400e;border:1px solid #fcd34d;';
+                                $facApl = (string) ($row['factura_erp_documento'] ?? '');
+                                $facAparte = $facApl !== ''
+                                    && strpos((string) $row['documento'], $facApl) === false;
+                            ?>
+                            <span class="badge nc-badge-mini" style="<?= $estiloApl ?>"
+                                  <?= $facApl !== '' ? 'title="Su factura: ' . htmlspecialchars($facApl, ENT_QUOTES, 'UTF-8') . '"' : '' ?>>
+                                <?= htmlspecialchars(AplicacionNotaCredito::etiqueta($apl)) ?><?php
+                                    if ($facAparte): ?> · factura <?= htmlspecialchars($facApl) ?><?php endif; ?>
                             </span>
+                            <?php endif; ?>
+
+                            <?php // El número propio del proveedor: falta en 2 de cada 3. ?>
+                            <?php if (trim((string) $row['nc_proveedor']) !== ''): ?>
+                            <span title="Número de nota del proveedor">
+                                · NC prov. <?= htmlspecialchars($row['nc_proveedor']) ?><?php
+                                    if (!empty($row['fecha_nc_proveedor'])): ?> (<?= ncFecha($row['fecha_nc_proveedor']) ?>)<?php endif; ?>
+                            </span>
+                            <?php endif; ?>
                         </div>
-                        <?php endif; ?>
                     </td>
-                    <td><?= ncFecha($row['fecha']) ?></td>
-                    <td class="nc-doc"><?= htmlspecialchars($row['nc_proveedor'] ?: '—') ?></td>
-                    <td><?= ncFecha($row['fecha_nc_proveedor']) ?></td>
-                    <td class="right"><?= ncMonto($row['monto'], $row['moneda']) ?></td>
-                    <td class="right"><?= ncMonto($row['saldo'], $row['moneda']) ?></td>
+
+                    <td class="right" style="white-space:nowrap;">
+                        <?= ncMonto($row['monto'], $row['moneda']) ?>
+                    </td>
+
+                    <?php /*
+                     * El saldo en su propia columna. Estuvo colgando del monto
+                     * y solo cuando eran distintos, porque en la mitad de las
+                     * notas repite el mismo número; puesto aparte se puede
+                     * comparar de arriba abajo, que es lo que se hace al
+                     * decidir qué nota aplicar.
+                     */ ?>
+                    <td class="right" style="white-space:nowrap;<?= $ncSinSaldo ? 'color:var(--text-muted);' : '' ?>"
+                        title="<?= $ncSinSaldo ? 'La nota ya se aplicó entera' : 'Lo que queda por aplicar de esta nota' ?>">
+                        <?= $ncSinSaldo ? 'sin saldo' : ncMonto($row['saldo'], $row['moneda']) ?>
+                    </td>
+
                     <td>
                         <?php if (!empty($row['factura_xml_id'])): ?>
                             <a href="<?= $baseUrl ?>/notas-xml/ver/<?= (int) $row['factura_xml_id'] ?>" target="_blank" rel="noopener"
-                               class="nc-doc" title="Abrir visualización del XML">
+                               data-ficha="<?= (int) $row['factura_xml_id'] ?>"
+                               class="nc-doc" title="Ver la ficha de esta nota">
                                 <?= htmlspecialchars($row['xml_numero'] ?: $row['xml_consecutivo']) ?>
                             </a>
-                            <div class="nc-reason"><?= htmlspecialchars($row['xml_proveedor'] ?: '') ?></div>
+                            <div class="nc-sub">
+                                <?= $row['xml_total'] !== null ? ncMonto($row['xml_total'], $row['moneda']) : '—' ?>
+                                <?php if ($ncDif !== null && abs($ncDif) > 0.005): ?>
+                                <span class="nc-dif">· dif. <?= ncMonto($row['diferencia'], $row['moneda']) ?></span>
+                                <?php endif; ?>
+                            </div>
+                            <?php /*
+                             * El nombre del proveedor del XML se escribía
+                             * siempre, y en 451 de 521 era el mismo de la nota,
+                             * dos columnas a la izquierda. Al enseñarlo solo
+                             * cuando NO coincide deja de ser ruido y pasa a ser
+                             * lo que de verdad es: la señal de que el
+                             * emparejamiento puede estar equivocado.
+                             */
+                            if (!ncMismoProveedor($row['proveedor_nombre'], $row['xml_proveedor'] ?? '')): ?>
+                            <div class="nc-reason nc-otro-proveedor"
+                                 title="El XML está a nombre de otro proveedor: conviene revisar el emparejamiento">
+                                <i class="fas fa-triangle-exclamation"></i>
+                                <?= htmlspecialchars((string) ($row['xml_proveedor'] ?: 'sin proveedor')) ?>
+                            </div>
+                            <?php endif; ?>
                             <?php
                             // El XML está vinculado, pero su archivo puede
                             // haber desaparecido de la carpeta compartida: el
@@ -360,10 +614,7 @@ function ncQuery(array $changes = []) {
                             ?>
                         <?php else: ?>—<?php endif; ?>
                     </td>
-                    <td class="right"><?= $row['xml_total'] !== null ? ncMonto($row['xml_total'], $row['moneda']) : '—' ?></td>
-                    <td class="right" style="<?= $row['estado'] === 'con_diferencia' ? 'color:#dc2626;font-weight:800;' : '' ?>">
-                        <?= $row['diferencia'] !== null ? ncMonto($row['diferencia'], $row['moneda']) : '—' ?>
-                    </td>
+
                     <td>
                         <div class="nc-actions">
                             <button type="button" class="btn btn-outline btn-sm nc-link-btn"
@@ -650,21 +901,41 @@ function ncQuery(array $changes = []) {
         var estado = String(row.estado || 'sin_respaldo');
         var badge = estado === 'coincide' ? 'badge-ok' : (estado === 'con_diferencia' ? 'badge-diff' : 'badge-miss');
         var label = estado === 'coincide' ? 'Coincide' : (estado === 'con_diferencia' ? 'Con diferencia' : 'Sin respaldo');
+        // La insignia ES el boton: "Ver detalles" salia debajo de las 2.613
+        // filas, asi que no distinguia ninguna y costaba una linea en cada una.
         var estadoHtml = '<span class="badge '+badge+'">'+label+'</span>';
         if (Number(row.match_manual || 0) > 0 || row.motivo_match) {
-            estadoHtml += '<div><button type="button" class="btn btn-outline btn-sm nc-detail-btn"' +
+            estadoHtml = '<button type="button" class="badge '+badge+' nc-estado-btn nc-detail-btn"' +
                 ' data-estado="'+esc(label)+'" data-documento="'+esc(row.documento || '')+'"' +
                 ' data-proveedor="'+esc(row.proveedor_nombre || '')+'" data-motivo="'+esc(row.motivo_match || '')+'"' +
-                ' data-manual="'+(Number(row.match_manual || 0) > 0 ? '1' : '0')+'" aria-haspopup="dialog" aria-controls="nc-detail-modal">' +
-                '<i class="fas fa-circle-info"></i> Ver detalles</button></div>';
+                ' data-manual="'+(Number(row.match_manual || 0) > 0 ? '1' : '0')+'"' +
+                ' title="Ver por que quedo asi" aria-haspopup="dialog" aria-controls="nc-detail-modal">' +
+                label + '<i class="fas fa-circle-info" style="margin-left:5px;opacity:.7;"></i></button>';
         }
 
         var tieneXml = Number(row.factura_xml_id || 0) > 0;
         var xmlHtml = '—';
         if (tieneXml) {
-            xmlHtml = '<a href="'+BASE+'/notas-xml/ver/'+Number(row.factura_xml_id)+'" target="_blank" rel="noopener" class="nc-doc" title="Abrir visualización del XML">' +
+            var totalXmlTxt = row.xml_total !== null && row.xml_total !== ''
+                ? money(row.xml_total, row.moneda) : '—';
+            var difNum = row.diferencia !== null && row.diferencia !== '' ? Number(row.diferencia) : null;
+
+            xmlHtml = '<a href="'+BASE+'/notas-xml/ver/'+Number(row.factura_xml_id)+'" target="_blank" rel="noopener"'
+                + ' data-ficha="'+Number(row.factura_xml_id)+'" class="nc-doc" title="Ver la ficha de esta nota">' +
                 esc(row.xml_numero || row.xml_consecutivo || '')+'</a>' +
-                '<div class="nc-reason">'+esc(row.xml_proveedor || '')+'</div>';
+                '<div class="nc-sub">' + totalXmlTxt +
+                (difNum !== null && Math.abs(difNum) > 0.005
+                    ? '<span class="nc-dif">· dif. '+money(row.diferencia, row.moneda)+'</span>' : '') +
+                '</div>';
+
+            // El nombre del proveedor del XML solo cuando NO es el de la nota:
+            // así deja de ser ruido y pasa a ser el aviso de que el
+            // emparejamiento puede estar equivocado. Misma regla que ncMismoProveedor().
+            if (!mismoProveedor(row.proveedor_nombre, row.xml_proveedor)) {
+                xmlHtml += '<div class="nc-reason nc-otro-proveedor" title="El XML está a nombre de otro proveedor: conviene revisar el emparejamiento">' +
+                    '<i class="fas fa-triangle-exclamation"></i> ' +
+                    esc(row.xml_proveedor || 'sin proveedor') + '</div>';
+            }
             // El mismo aviso que pinta el servidor: el XML está vinculado pero
             // su archivo ya no está donde la base dice. Filtrar en vivo no
             // puede hacer desaparecer un problema.
@@ -679,22 +950,28 @@ function ncQuery(array $changes = []) {
                         : '') + '</div>';
             }
         }
-        var totalXml = row.xml_total !== null && row.xml_total !== '' ? money(row.xml_total, row.moneda) : '—';
-        var diferencia = row.diferencia !== null && row.diferencia !== '' ? money(row.diferencia, row.moneda) : '—';
-        var diffStyle = estado === 'con_diferencia' ? ' style="color:#dc2626;font-weight:800;"' : '';
+        /* El saldo va en su propia columna, igual que en el pintado del
+         * servidor: si aquí se dejara colgando del monto, la tabla cambiaría
+         * de forma en cuanto alguien escribiera en un filtro. */
+        var sinSaldo = Math.abs(Number(row.saldo)) < 0.005;
+        var saldoHtml = '<td class="right" style="white-space:nowrap;' +
+            (sinSaldo ? 'color:var(--text-muted);' : '') + '">' +
+            (sinSaldo ? 'sin saldo' : money(row.saldo, row.moneda)) + '</td>';
+
+        var subDoc = '<div class="nc-sub">' + dateEs(row.fecha) + aplicacionHtml(row) +
+            (row.nc_proveedor
+                ? '<span title="Número de nota del proveedor">· NC prov. '+esc(row.nc_proveedor) +
+                  (row.fecha_nc_proveedor ? ' ('+dateEs(row.fecha_nc_proveedor)+')' : '') + '</span>'
+                : '') + '</div>';
 
         return '<tr>'+
             '<td>'+estadoHtml+'</td>'+
-            '<td class="nc-provider">'+esc(row.proveedor_nombre || '')+'</td>'+
-            '<td>'+esc(row.sucursal || '—')+'</td>'+
-            '<td class="nc-doc">'+esc(row.documento || '')+aplicacionHtml(row)+'</td>'+
-            '<td>'+dateEs(row.fecha)+'</td>'+
-            '<td class="nc-doc">'+esc(row.nc_proveedor || '—')+'</td>'+
-            '<td>'+dateEs(row.fecha_nc_proveedor)+'</td>'+
-            '<td class="right">'+money(row.monto, row.moneda)+'</td>'+
-            '<td class="right">'+money(row.saldo, row.moneda)+'</td>'+
-            '<td>'+xmlHtml+'</td><td class="right">'+totalXml+'</td>'+
-            '<td class="right"'+diffStyle+'>'+diferencia+'</td>'+
+            '<td class="nc-provider">'+esc(row.proveedor_nombre || '')+
+                (row.sucursal ? '<div class="nc-reason">'+esc(row.sucursal)+'</div>' : '')+'</td>'+
+            '<td class="nc-doc">'+esc(row.documento || '')+subDoc+'</td>'+
+            '<td class="right" style="white-space:nowrap;">'+money(row.monto, row.moneda)+'</td>'+
+            saldoHtml+
+            '<td>'+xmlHtml+'</td>'+
             '<td><div class="nc-actions">'+
                 '<button type="button" class="btn btn-outline btn-sm nc-link-btn" data-linea="'+Number(row.id)+'">' +
                 '<i class="fas fa-link"></i> '+(tieneXml ? 'Cambiar' : 'Vincular XML')+'</button>'+
@@ -721,17 +998,29 @@ function ncQuery(array $changes = []) {
     function aplicacionHtml(row) {
         var info = APLICACION[row.estado_aplicacion];
         if (!info || info.color === 'neutro') { return ''; }
-        var extra = row.factura_erp_documento
-            ? ' · factura ' + esc(String(row.factura_erp_documento))
-            : '';
-        return '<div><span class="badge" style="font-size:9.5px;padding:1px 6px;margin-top:3px;' +
-               APLICACION_COLOR[info.color] + '">' + esc(info.etiqueta) + extra + '</span></div>';
+        // El número de la factura solo si no está ya dentro del documento de la
+        // nota, que es donde vive en 915 de los 939 casos. Misma regla que el
+        // servidor; en el title está siempre.
+        var fac = row.factura_erp_documento ? String(row.factura_erp_documento) : '';
+        var aparte = fac !== '' && String(row.documento || '').indexOf(fac) === -1;
+        return '<span class="badge nc-badge-mini" style="' + APLICACION_COLOR[info.color] + '"' +
+               (fac !== '' ? ' title="Su factura: '+esc(fac)+'"' : '') + '>' +
+               esc(info.etiqueta) + (aparte ? ' · factura ' + esc(fac) : '') + '</span>';
+    }
+
+    /** El gemelo de ncMismoProveedor() de PHP: la misma regla, la misma tabla. */
+    function mismoProveedor(nota, xml) {
+        function clave(t) {
+            return String(t == null ? '' : t).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
+        }
+        var b = clave(xml);
+        return b === '' || clave(nota) === b;
     }
 
     function renderLines(rows) {
         if (!linesBody) return;
         if (!rows.length) {
-            linesBody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:18px;color:#64748b;">No hay notas con estos filtros.</td></tr>';
+            linesBody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:18px;color:#64748b;">No hay notas con estos filtros.</td></tr>';
             return;
         }
         linesBody.innerHTML = rows.map(lineRow).join('');
@@ -828,6 +1117,32 @@ function ncQuery(array $changes = []) {
             if (saved !== null) input.value = saved;
         });
 
+        /*
+         * Qué columnas están filtrando, a la vista: la casilla con algo puesto
+         * queda marcada y el botón de limpiar aparece solo si hay alguna. Antes
+         * un filtro heredado del enlace pasaba inadvertido y la lista parecía
+         * incompleta sin motivo.
+         */
+        var clearColumns = document.getElementById('nc-limpiar-col');
+        function markColumnFilters() {
+            var activos = 0;
+            columnFilters.forEach(function (input) {
+                var lleno = String(input.value || '').trim() !== '';
+                input.classList.toggle('nc-lleno', lleno);
+                if (lleno) activos++;
+            });
+            if (clearColumns) clearColumns.hidden = activos === 0;
+        }
+        markColumnFilters();
+
+        if (clearColumns) {
+            clearColumns.addEventListener('click', function () {
+                columnFilters.forEach(function (input) { input.value = ''; });
+                markColumnFilters();
+                scheduleLiveSearch(true);
+            });
+        }
+
         function filterParams() {
             var params = new URLSearchParams(new FormData(filterForm));
             params.delete('page');
@@ -858,7 +1173,7 @@ function ncQuery(array $changes = []) {
                 })
                 .catch(function (error) {
                     if (error.name === 'AbortError') return;
-                    linesBody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:18px;color:#dc2626;">'+esc(error.message)+'</td></tr>';
+                    linesBody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:18px;color:#dc2626;">'+esc(error.message)+'</td></tr>';
                     if (resultCount) resultCount.textContent = '0';
                 });
         }
@@ -880,6 +1195,7 @@ function ncQuery(array $changes = []) {
         });
         columnFilters.forEach(function (input) {
             input.addEventListener(input.tagName === 'SELECT' || input.type === 'date' ? 'change' : 'input', function () {
+                markColumnFilters();
                 scheduleLiveSearch(input.tagName === 'SELECT' || input.type === 'date');
             });
         });

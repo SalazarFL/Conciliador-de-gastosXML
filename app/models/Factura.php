@@ -5,6 +5,8 @@
  */
 
 require_once __DIR__ . '/../helpers/NumeroFactura.php';
+require_once __DIR__ . '/../helpers/BusquedaDocumento.php';
+require_once __DIR__ . '/../helpers/BusquedaImporte.php';
 require_once __DIR__ . '/ProveedorCatalogo.php';
 
 class Factura extends Model
@@ -34,14 +36,105 @@ class Factura extends Model
     }
 
     /**
+     * El registro del ERP con el que está enganchado cada comprobante.
+     *
+     * Vive aparte porque lo necesitan el listado —para enseñar el saldo— y el
+     * conteo —para que buscar por saldo cuente lo mismo que lista—. Si solo
+     * lo llevara uno de los dos, la paginación diría "200 de 8.519" sobre una
+     * búsqueda que devuelve doce.
+     *
+     * Se resuelve contra una tabla derivada que se queda con el PRIMER
+     * registro de cada comprobante. Un JOIN directo no servía: nada impide que
+     * dos filas del ERP apunten al mismo XML —pasa cuando se carga dos veces
+     * el reporte y el emparejador acierta las dos— y ahí el comprobante
+     * saldría duplicado. Es el mismo arreglo que usa la cola de seguimiento.
+     */
+    private function joinEnganche($tabla)
+    {
+        return "LEFT JOIN (SELECT factura_xml_id, MIN(id) AS id
+                             FROM {$tabla} WHERE factura_xml_id IS NOT NULL
+                            GROUP BY factura_xml_id) eng ON eng.factura_xml_id = f.id
+                LEFT JOIN {$tabla} erp ON erp.id = eng.id";
+    }
+
+    /**
      * Consulta de Facturas XML con filtros combinables.
      * La existencia física del par XML/PDF se valida en el controlador,
      * porque SQL solo conoce las rutas registradas.
      */
     public function buscarConImportacion(array $filtros = [])
     {
-        $where = ["(f.tipo_documento IS NULL OR f.tipo_documento = 'FE')"];
         $params = [];
+        $where = $this->condicionesListado($filtros, $params);
+
+        /*
+         * El saldo no es del comprobante: un XML dice cuánto se facturó, no
+         * cuánto queda por pagar. Sale del registro del ERP al que esté
+         * enganchado, y viene NULL cuando no lo está —que es una respuesta,
+         * no un cero—.
+         */
+        $sql = "SELECT f.*, p.razon_social as proveedor_nombre, i.archivo_origen as archivo_importacion, i.fecha_importacion,
+                       s.nombre as semana_nombre,
+                       COALESCE(erp.saldo_pago, erp.saldo) AS saldo_erp,
+                       erp.documento AS documento_erp
+                FROM {$this->table} f
+                LEFT JOIN proveedores p ON f.proveedor_id = p.id
+                LEFT JOIN importaciones i ON f.importacion_id = i.id
+                LEFT JOIN semanas s ON f.semana_id = s.id
+                " . $this->joinEnganche('facturas_erp') . "
+                WHERE {$where}
+                ORDER BY f.fecha_emision DESC, f.id DESC";
+
+        /*
+         * La tanda que se va a mostrar, no el archivo entero. Por cada fila se
+         * le pregunta al disco compartido si su XML y su PDF siguen ahí, y eso
+         * sobre miles de comprobantes deja la pantalla colgada: quien llama
+         * pide el `limite` y el `offset` de la página que está mirando.
+         */
+        $limite = (int) ($filtros['limite'] ?? 0);
+        if ($limite > 0) {
+            $sql .= ' LIMIT ' . $limite;
+            $offset = max(0, (int) ($filtros['offset'] ?? 0));
+            if ($offset > 0) {
+                $sql .= ' OFFSET ' . $offset;
+            }
+        }
+
+        return $this->fetchAll($sql, $params);
+    }
+
+    /**
+     * Cuántos comprobantes cumplen esos mismos criterios.
+     *
+     * Es lo que le falta a la pantalla para decir cuántos hay y hasta dónde
+     * llega el "Siguiente". No entra el filtro de respaldo: si el archivo
+     * sigue en el disco no lo sabe SQL, eso lo mira quien arma el listado.
+     */
+    public function contarConImportacion(array $filtros = [])
+    {
+        $params = [];
+        $where = $this->condicionesListado($filtros, $params);
+
+        // El mismo enganche que el listado: si no, buscar por saldo contaría
+        // sobre una consulta distinta de la que se está viendo.
+        return (int) $this->fetchColumn(
+            "SELECT COUNT(*)
+               FROM {$this->table} f
+               LEFT JOIN proveedores p ON f.proveedor_id = p.id
+               " . $this->joinEnganche('facturas_erp') . "
+              WHERE {$where}",
+            $params
+        );
+    }
+
+    /**
+     * El WHERE del listado, compartido por la consulta y por el conteo:
+     * contar con criterios distintos a los que se muestran daría páginas
+     * prometidas que al abrirlas están vacías.
+     */
+    private function condicionesListado(array $filtros, array &$params)
+    {
+        $where = ["(f.tipo_documento IS NULL OR f.tipo_documento = 'FE')"];
         $this->filtrarPorSociedad($where, $params, 'f.');
 
         if (array_key_exists('semana_id', $filtros)
@@ -59,17 +152,26 @@ class Factura extends Model
             $params[] = (int) $filtros['importacion_id'];
         }
 
-        $buscar = trim((string) ($filtros['q'] ?? ''));
-        if ($buscar !== '') {
-            $like = '%' . $buscar . '%';
-            $where[] = '(f.numero_factura_asistente LIKE ?
-                         OR f.consecutivo_completo LIKE ?
-                         OR f.clave LIKE ?
-                         OR p.razon_social LIKE ?
-                         OR p.rfc LIKE ?
-                         OR f.archivo_xml LIKE ?
-                         OR f.archivo_pdf LIKE ?)';
-            array_push($params, $like, $like, $like, $like, $like, $like, $like);
+        /*
+         * Un número se busca como número y un nombre como texto. Buscar los
+         * tres dígitos de la factura 336 dentro de la clave —cincuenta
+         * dígitos— traía 124 comprobantes que no eran, y la pantalla decía
+         * "124 facturas" cuando la respuesta era "ninguna". Ver
+         * app/helpers/BusquedaDocumento.php.
+         */
+        $condicionBusqueda = BusquedaDocumento::condicion(
+            $filtros['q'] ?? '',
+            [
+                'numero' => 'f.numero_factura_asistente',
+                'consecutivo' => 'f.consecutivo_completo',
+                'clave' => 'f.clave',
+                'cedula' => 'p.rfc',
+                'texto' => ['p.razon_social', 'f.archivo_xml', 'f.archivo_pdf'],
+            ],
+            $params
+        );
+        if ($condicionBusqueda !== '') {
+            $where[] = $condicionBusqueda;
         }
 
         // Por el emisor del comprobante: la cédula del XML es la identidad,
@@ -91,27 +193,49 @@ class Factura extends Model
             $where[] = 'f.fecha_emision <= ?';
             $params[] = (string) $filtros['fecha_hasta'];
         }
-        if (isset($filtros['monto_desde']) && $filtros['monto_desde'] !== '') {
-            $where[] = 'f.total >= ?';
-            $params[] = (float) $filtros['monto_desde'];
+        // El importe del comprobante, buscado por coincidencia.
+        $condMonto = BusquedaImporte::condicion('f.total', $filtros['monto'] ?? '', $params);
+        if ($condMonto !== '') {
+            $where[] = $condMonto;
         }
-        if (isset($filtros['monto_hasta']) && $filtros['monto_hasta'] !== '') {
-            $where[] = 'f.total <= ?';
-            $params[] = (float) $filtros['monto_hasta'];
+        // Y el saldo, que no es del comprobante sino del registro del ERP con
+        // el que esté enganchado. Sin enganche no hay saldo y la fila no puede
+        // coincidir con nada, que es lo correcto.
+        $condSaldo = BusquedaImporte::condicion(
+            'COALESCE(erp.saldo_pago, erp.saldo)', $filtros['saldo'] ?? '', $params
+        );
+        if ($condSaldo !== '') {
+            $where[] = $condSaldo;
         }
 
-        $sql = "SELECT f.*, p.razon_social as proveedor_nombre, i.archivo_origen as archivo_importacion, i.fecha_importacion,
-                       s.nombre as semana_nombre
-                FROM {$this->table} f
-                LEFT JOIN proveedores p ON f.proveedor_id = p.id
-                LEFT JOIN importaciones i ON f.importacion_id = i.id
-                LEFT JOIN semanas s ON f.semana_id = s.id
-                WHERE " . implode(' AND ', $where) . "
-                ORDER BY f.fecha_emision DESC, f.id DESC";
-
-        return $this->fetchAll($sql, $params);
+        return implode(' AND ', $where);
     }
     
+    /**
+     * ¿Está cargado el comprobante con este número corto?
+     *
+     * Es la pregunta del botón "Buscarlo entre los XML cargados": se llega al
+     * listado buscando UNO, y entre las coincidencias del buscador puede no
+     * estar. Se pregunta por el número normalizado a ocho dígitos, que es como
+     * se guarda, y contra un índice: cuesta lo mismo que no preguntarlo.
+     */
+    public function existeNumeroXml($numero, $tipo = 'FE')
+    {
+        $numero = NumeroFactura::xmlOchoDigitos($numero);
+        if ($numero === '') {
+            return false;
+        }
+        $params = [$numero];
+        $deTipo = strtoupper((string) $tipo) === 'NC'
+            ? "tipo_documento = 'NC'"
+            : "(tipo_documento IS NULL OR tipo_documento = 'FE')";
+        $sql = "SELECT 1 FROM {$this->table}
+                WHERE numero_factura_asistente = ? AND {$deTipo}"
+             . $this->condicionSociedad('', $params) . ' LIMIT 1';
+
+        return (bool) $this->fetchColumn($sql, $params);
+    }
+
     /**
      * Buscar factura por UUID
      */
@@ -361,31 +485,42 @@ class Factura extends Model
         return $this->fetchAll($sql, $params) ?: [];
     }
 
-    public function getNotasXml($desde = '', $hasta = '', $buscar = '', $proveedor = '', $page = 1, $perPage = 100)
+    public function getNotasXml($desde = '', $hasta = '', $buscar = '', $proveedor = '', $page = 1, $perPage = 100, array $importes = [])
     {
-        [$where, $params] = $this->condicionesNotasXml($desde, $hasta, $buscar, $proveedor);
+        [$where, $params] = $this->condicionesNotasXml($desde, $hasta, $buscar, $proveedor, $importes);
         $limit = max(1, min(500, (int) $perPage));
         $offset = (max(1, (int) $page) - 1) * $limit;
-        $sql = "SELECT f.*, p.razon_social AS proveedor_nombre, i.archivo_origen AS archivo_importacion
+        // El saldo sale de la línea del reporte de notas a la que esté
+        // enganchada, con el mismo cuidado que en el listado de comprobantes.
+        $sql = "SELECT f.*, p.razon_social AS proveedor_nombre, i.archivo_origen AS archivo_importacion,
+                       erp.saldo AS saldo_erp, erp.documento AS documento_erp
                 FROM {$this->table} f
                 LEFT JOIN proveedores p ON p.id = f.proveedor_id
                 LEFT JOIN importaciones i ON i.id = f.importacion_id
+                " . $this->joinEnganche('notas_credito_lineas') . "
                 WHERE " . implode(' AND ', $where) . "
                 ORDER BY f.fecha_emision DESC, f.id DESC LIMIT {$limit} OFFSET {$offset}";
         return $this->fetchAll($sql, $params) ?: [];
     }
 
-    public function countNotasXml($desde = '', $hasta = '', $buscar = '', $proveedor = '')
+    public function countNotasXml($desde = '', $hasta = '', $buscar = '', $proveedor = '', array $importes = [])
     {
-        [$where, $params] = $this->condicionesNotasXml($desde, $hasta, $buscar, $proveedor);
+        [$where, $params] = $this->condicionesNotasXml($desde, $hasta, $buscar, $proveedor, $importes);
+        // El mismo enganche que el listado, por lo mismo que en comprobantes.
         $sql = "SELECT COUNT(*) FROM {$this->table} f
                 LEFT JOIN proveedores p ON p.id = f.proveedor_id
+                " . $this->joinEnganche('notas_credito_lineas') . "
                 WHERE " . implode(' AND ', $where);
         return (int) $this->fetchColumn($sql, $params);
     }
 
     /** Las condiciones de la lista de notas XML, una sola vez para listar y contar. */
-    private function condicionesNotasXml($desde, $hasta, $buscar, $proveedor)
+    /**
+     * @param array $importes ['monto' => , 'saldo' => ] tal como se escribieron
+     *                        en la barra. Va al final y con valor por defecto
+     *                        para no obligar a quien solo cuenta a pasarlos.
+     */
+    private function condicionesNotasXml($desde, $hasta, $buscar, $proveedor, array $importes = [])
     {
         $where = ["f.tipo_documento = 'NC'"];
         $params = [];
@@ -398,10 +533,33 @@ class Factura extends Model
             $where[] = 'f.fecha_emision <= ?';
             $params[] = $hasta;
         }
-        if ($buscar !== '') {
-            $where[] = '(f.consecutivo_completo LIKE ? OR f.numero_factura_asistente LIKE ? OR p.razon_social LIKE ?)';
-            $like = '%' . $buscar . '%';
-            array_push($params, $like, $like, $like);
+        // Una nota se persigue tanto por su número como por lo que rebaja,
+        // sobre todo cuando se está cuadrando un pago. El saldo es el de la
+        // línea del reporte con la que esté enganchada.
+        foreach ([
+            ['monto', 'f.total'],
+            ['saldo', 'erp.saldo'],
+        ] as [$cual, $columna]) {
+            $cond = BusquedaImporte::condicion($columna, $importes[$cual] ?? '', $params);
+            if ($cond !== '') {
+                $where[] = $cond;
+            }
+        }
+        // Mismo criterio que el listado de comprobantes: el botón "Buscarlo
+        // entre los XML cargados" manda acá cuando el documento es una nota.
+        $condicionBusqueda = BusquedaDocumento::condicion(
+            $buscar,
+            [
+                'numero' => 'f.numero_factura_asistente',
+                'consecutivo' => 'f.consecutivo_completo',
+                'clave' => 'f.clave',
+                'cedula' => 'p.rfc',
+                'texto' => ['p.razon_social'],
+            ],
+            $params
+        );
+        if ($condicionBusqueda !== '') {
+            $where[] = $condicionBusqueda;
         }
         $condicionProveedor = ProveedorCatalogo::condicion(
             $proveedor,

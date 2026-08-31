@@ -2,10 +2,20 @@
 $baseUrl = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 $notas = $notas ?? [];
 $proveedoresFiltro = is_array($proveedoresFiltro ?? null) ? $proveedoresFiltro : [];
-$queryBase = http_build_query(array_filter([
+require_once __DIR__ . '/../../helpers/NavegacionDocumentos.php';
+
+// El documento que se vino persiguiendo sobrevive a lo que se haga aquí:
+// pasar de página, limpiar o filtrar a mano son GET, y en un GET lo que no
+// viaja desaparece —y con él la tarjeta.
+$contextoDoc = NavegacionDocumentos::contextoDeLaUrl($_GET);
+$queryBase = http_build_query(array_merge(array_filter([
     'desde' => $desde ?? '', 'hasta' => $hasta ?? '',
     'buscar' => $buscar ?? '', 'proveedor' => $proveedor ?? '',
-], 'strlen'));
+    'monto' => $importes['monto'] ?? '', 'saldo' => $importes['saldo'] ?? '',
+], 'strlen'), $contextoDoc));
+// Limpiar borra los buscadores, no la persecución.
+$urlLimpiarNotas = $baseUrl . '/notas-xml?'
+                 . http_build_query(array_merge(['limpiar' => 1], $contextoDoc));
 $filtrosActivos = 0;
 foreach ([$desde ?? '', $hasta ?? '', $buscar ?? '', $proveedor ?? ''] as $valorFiltro) {
     if ((string) $valorFiltro !== '') { $filtrosActivos++; }
@@ -58,9 +68,25 @@ foreach ([$desde ?? '', $hasta ?? '', $buscar ?? '', $proveedor ?? ''] as $valor
 include __DIR__ . '/../partials/tarjeta-documento.php';
 ?>
 
+<?php if ($elegirProveedor ?? false):
+/*
+ * Todavía no hay listado que enseñar: el controlador no lo consultó. Va la
+ * pregunta en su lugar. La carga de XML de arriba sigue estando, que para
+ * subir archivos no hace falta elegir a nadie.
+ */
+$elegirProv = [
+    'accion'   => $baseUrl . '/notas-xml',
+    'opciones' => $proveedoresFiltro,
+    'cuantos'  => $totalDelArchivo ?? null,
+    'que'      => 'notas de crédito electrónicas',
+];
+include __DIR__ . '/../partials/elegir-proveedor.php';
+else: ?>
 <div class="card">
     <div class="card-header"><div class="card-title">Documentos <span class="badge badge-navy"><?= (int) ($total ?? 0) ?></span></div></div>
     <form method="get" action="<?= $baseUrl ?>/notas-xml" class="filter-bar">
+        <?php // Igual que en Comprobantes XML: filtrar a mano no borra la tarjeta.
+              include __DIR__ . '/../partials/contexto-oculto.php'; ?>
         <?php $provFiltro = [
             'valor'    => $proveedor ?? '',
             'opciones' => $proveedoresFiltro,
@@ -77,10 +103,21 @@ include __DIR__ . '/../partials/tarjeta-documento.php';
             <label class="filter-label">Fecha hasta</label>
             <input class="form-control" type="date" name="hasta" value="<?= htmlspecialchars($hasta ?? '') ?>">
         </div>
+        <?php
+        $filtroImporte = [
+            'nombre' => 'monto', 'etiqueta' => 'Monto',
+            'valor' => $importes['monto'] ?? '',
+        ]; include __DIR__ . '/../partials/filtro-importe.php';
+
+        $filtroImporte = [
+            'nombre' => 'saldo', 'etiqueta' => 'Saldo',
+            'valor' => $importes['saldo'] ?? '',
+        ]; include __DIR__ . '/../partials/filtro-importe.php';
+        ?>
         <div class="filter-actions">
             <button class="btn btn-primary btn-sm" type="submit"><i class="fas fa-search"></i> Buscar</button>
             <?php if ($filtrosActivos): ?>
-            <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/notas-xml?limpiar=1"><i class="fas fa-broom"></i> Limpiar</a>
+            <a class="btn btn-outline btn-sm" href="<?= htmlspecialchars($urlLimpiarNotas) ?>"><i class="fas fa-broom"></i> Limpiar</a>
             <?php endif; ?>
         </div>
     </form>
@@ -91,15 +128,43 @@ include __DIR__ . '/../partials/tarjeta-documento.php';
         <span class="badge badge-navy" style="font-size:10px;"><?= $filtrosActivos ?> filtro<?= $filtrosActivos === 1 ? '' : 's' ?></span>
         <?php endif; ?>
     </div>
+    <?php // Mismo aviso que el listado de comprobantes, por la misma razón.
+    $docNoEsta = [
+        'navDoc'        => $navDoc ?? null,
+        'termino'       => $buscar ?? '',
+        'cargado'       => $docBuscadoCargado ?? null,
+        'hayResultados' => !empty($notas),
+    ];
+    include __DIR__ . '/../partials/documento-no-esta.php';
+    ?>
     <div style="overflow-x:auto;margin-top:8px;"><table class="data-table">
-        <thead><tr><th>Fecha</th><th>Proveedor</th><th>Consecutivo</th><th>Número</th><th>Moneda</th><th class="right">Subtotal</th><th class="right">IVA</th><th class="right">Total</th><th>PDF</th><th>Origen</th><th></th></tr></thead>
+        <thead><tr><th>Fecha</th><th>Proveedor</th><th>Consecutivo</th><th>Número</th><th>Moneda</th><th class="right">Subtotal</th><th class="right">IVA</th><th class="right">Total</th><th class="right">Saldo</th><th>PDF</th><th>Origen</th><th></th></tr></thead>
         <tbody>
-        <?php if (empty($notas)): ?><tr><td colspan="11" style="text-align:center;padding:18px;color:var(--text-muted);">No hay notas XML para este rango.</td></tr><?php endif; ?>
+        <?php if (empty($notas)): ?><tr><td colspan="12" style="text-align:center;padding:18px;color:var(--text-muted);">No hay notas XML para este rango.</td></tr><?php endif; ?>
         <?php foreach ($notas as $n): ?>
         <tr>
             <td><?= htmlspecialchars($n['fecha_emision']) ?></td><td><?= htmlspecialchars($n['proveedor_nombre'] ?? '—') ?></td>
             <td style="font-family:monospace;white-space:nowrap;"><?= htmlspecialchars($n['consecutivo_completo']) ?></td><td><strong><?= htmlspecialchars($n['numero_factura_asistente']) ?></strong></td>
             <td><?= htmlspecialchars($n['moneda']) ?></td><td class="right"><?= number_format((float)$n['subtotal'],2) ?></td><td class="right"><?= number_format((float)$n['iva'],2) ?></td><td class="right"><strong><?= number_format((float)$n['total'],2) ?></strong></td>
+                    <?php /*
+                     * El saldo no es del comprobante: un XML dice cuánto se
+                     * facturó, no cuánto queda por pagar. Sale del registro
+                     * del ERP con el que esté enganchado, y cuando no lo está
+                     * se dice con palabras: un cero ahí sería mentira.
+                     */
+                    $saldoErp = $n['saldo_erp'] ?? null;
+                    $hayEnganche = $saldoErp !== null;
+                    $debeAlgo = $hayEnganche && (float) $saldoErp > 0.005;
+                    $docErp = trim((string) ($n['documento_erp'] ?? ''));
+                    ?>
+                    <td class="right" style="white-space:nowrap;<?= $debeAlgo ? '' : 'color:var(--text-muted);' ?>"
+                        title="<?= $hayEnganche
+                            ? 'Saldo de ' . htmlspecialchars($docErp) . ', el documento del ERP con el que está enganchado'
+                            : 'Este comprobante todavía no está enganchado a ningún documento del ERP' ?>">
+                        <?php if (!$hayEnganche): ?>sin enganche
+                        <?php elseif ($debeAlgo): ?><?= number_format((float) $saldoErp, 2) ?>
+                        <?php else: ?>sin saldo<?php endif; ?>
+                    </td>
             <td style="white-space:nowrap;">
                 <?php if (!empty($n['archivo_perdido'])): ?>
                 <?php
@@ -116,7 +181,7 @@ include __DIR__ . '/../partials/tarjeta-documento.php';
                 <?php else: ?><span class="badge" style="background:#fef3c7;color:#92400e;">Pendiente</span><?php endif; ?>
             </td>
             <td><?= !empty($n['correo_cuenta_id']) ? 'Correo' : 'Carga XML' ?></td>
-            <td style="white-space:nowrap;"><a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/notas-xml/ver/<?= (int)$n['id'] ?>" title="Detalle"><i class="fas fa-eye"></i></a> <?php if (!empty($n['archivo_xml_ok'])): ?><a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/documentos/xml/<?= (int)$n['id'] ?>" target="_blank" title="Ver XML"><i class="fas fa-code"></i></a><?php endif; ?><?php if (!empty($n['archivo_pdf_ok'])): ?> <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/documentos/pdf/<?= (int)$n['id'] ?>" target="_blank" title="Ver PDF"><i class="fas fa-file-pdf"></i></a><?php endif; ?></td>
+            <td style="white-space:nowrap;"><a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/notas-xml/ver/<?= (int)$n['id'] ?>" data-ficha="<?= (int)$n['id'] ?>" title="Ver la ficha del documento"><i class="fas fa-eye"></i></a> <?php if (!empty($n['archivo_xml_ok'])): ?><a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/documentos/xml/<?= (int)$n['id'] ?>" target="_blank" data-ventana="XML" data-ventana-titulo="<?= htmlspecialchars((string) $n['numero_factura_asistente']) ?>" title="Ver XML"><i class="fas fa-code"></i></a><?php endif; ?><?php if (!empty($n['archivo_pdf_ok'])): ?> <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/documentos/pdf/<?= (int)$n['id'] ?>" target="_blank" data-ventana="PDF" data-ventana-titulo="<?= htmlspecialchars((string) $n['numero_factura_asistente']) ?>" title="Ver PDF"><i class="fas fa-file-pdf"></i></a><?php endif; ?></td>
         </tr>
         <?php endforeach; ?>
         </tbody>
@@ -125,6 +190,7 @@ include __DIR__ . '/../partials/tarjeta-documento.php';
         <?php if ($pagina > 1): ?><a class="btn btn-outline btn-sm" href="?<?= $queryBase ?>&pagina=<?= $pagina-1 ?>">← Anterior</a><?php endif; ?><span style="font-size:12px;">Página <?= (int)$pagina ?> de <?= (int)$paginas ?></span><?php if ($pagina < $paginas): ?><a class="btn btn-outline btn-sm" href="?<?= $queryBase ?>&pagina=<?= $pagina+1 ?>">Siguiente →</a><?php endif; ?>
     </div><?php endif; ?>
 </div>
+<?php endif; // fin de "ya se eligió proveedor" ?>
 
 <script>
 /* La tarjeta del documento que se busca. Pintarla y avanzar lo hace app.js;

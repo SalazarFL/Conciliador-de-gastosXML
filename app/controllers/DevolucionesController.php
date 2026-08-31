@@ -2,6 +2,7 @@
 require_once __DIR__ . '/../helpers/DevolucionImporter.php';
 require_once __DIR__ . '/../helpers/DevolucionVerificador.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
+require_once __DIR__ . '/../helpers/BusquedaImporte.php';
 
 class DevolucionesController extends Controller
 {
@@ -12,7 +13,9 @@ class DevolucionesController extends Controller
 
     public function index()
     {
-        $this->recordarFiltros('devoluciones', ['tipo', 'estado', 'proveedor', 'q']);
+        $this->recordarFiltros('devoluciones', [
+            'tipo', 'estado', 'proveedor', 'q', 'monto',
+        ]);
 
         $modelo = $this->loadModel('Devolucion');
         $sociedad = $this->loadModel('Sociedad')->getActiva();
@@ -23,6 +26,7 @@ class DevolucionesController extends Controller
             'estado' => trim((string) $this->get('estado', '')),
             'proveedor' => ProveedorCatalogo::normalizarClave($this->get('proveedor', '')),
             'q' => trim((string) $this->get('q', '')),
+            'monto' => BusquedaImporte::numero($this->get('monto', '')),
         ];
 
         $this->render('devoluciones/index', [
@@ -291,10 +295,21 @@ class DevolucionesController extends Controller
         if ($dev === null || empty($dev['ruta_pdf']) || !is_file($dev['ruta_pdf'])) {
             $this->redirectWithMessage($this->url('/devoluciones'), 'El PDF de la devolución no está disponible.', 'error');
         }
+        // Abrir antes de las cabeceras: un marcador de OneDrive pasa is_file()
+        // y después no suelta un solo byte (ver RutaDocumento::abrirParaLeer).
+        $manejador = RutaDocumento::abrirParaLeer($dev['ruta_pdf']);
+        if ($manejador === false) {
+            $this->redirectWithMessage(
+                $this->url('/devoluciones'),
+                'El PDF de la devolución no se puede abrir todavía. ' . RutaDocumento::porQueNoSeLee($dev['ruta_pdf']),
+                'error'
+            );
+        }
         header('Content-Type: application/pdf');
         header('Content-Disposition: inline; filename="' . basename((string) $dev['archivo_pdf']) . '"');
         header('Content-Length: ' . filesize($dev['ruta_pdf']));
-        readfile($dev['ruta_pdf']);
+        fpassthru($manejador);
+        fclose($manejador);
         exit;
     }
 

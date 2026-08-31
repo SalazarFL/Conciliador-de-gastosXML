@@ -4,6 +4,8 @@ require_once __DIR__ . '/../helpers/NotasCreditoVerificador.php';
 require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 require_once __DIR__ . '/../helpers/ClaseNotaCredito.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
+require_once __DIR__ . '/../helpers/AlcanceProveedor.php';
+require_once __DIR__ . '/../helpers/BusquedaImporte.php';
 require_once __DIR__ . '/../helpers/EstadoArchivo.php';
 
 class NotasCreditoController extends Controller
@@ -15,6 +17,9 @@ class NotasCreditoController extends Controller
      * 'listado_id' no está: elige QUÉ listado se ve, no cómo se filtra.
      */
     private const CLAVES_FILTRO = [
+        // Lo elegido se recuerda: la pregunta sale la primera vez y después
+        // de Limpiar, no en cada visita.
+        AlcanceProveedor::PARAM,
         'q', 'estado', 'condicion_saldo', 'condicion_nc_proveedor', 'proveedor', 'sucursal', 'clase',
         'col_estado', 'proveedor_codigo', 'proveedor_nombre', 'sucursal_texto',
         'documento', 'fecha', 'nc_proveedor', 'fecha_nc_proveedor',
@@ -46,7 +51,17 @@ class NotasCreditoController extends Controller
 
         $listado = $listadoId > 0 ? $modelo->getListado($listadoId) : null;
         $filters = $this->filtrosLineas();
-        $rows = $this->conEstadoDeArchivo($listado ? $modelo->getLineasFiltradas($listadoId, $filters) : []);
+
+        /*
+         * Esta pantalla manda TODAS sus líneas de una vez —no pagina— y eso
+         * eran casi siete megabytes de HTML cada vez que se abría. Mientras
+         * no se diga de qué proveedor, o que se quieren todas, no se piden.
+         */
+        $elegirProveedor = AlcanceProveedor::hayQuePreguntar($_GET, $filters['proveedor'] ?? '');
+        $resumen = $listado ? $modelo->resumen($listadoId) : [];
+        $rows = ($elegirProveedor || !$listado)
+            ? []
+            : $this->conEstadoDeArchivo($modelo->getLineasFiltradas($listadoId, $filters));
 
         $this->render('notascredito/index', [
             'title' => 'Notas de crédito - Nexo Fiscal',
@@ -54,13 +69,17 @@ class NotasCreditoController extends Controller
             'listados' => $listados,
             'listado' => $listado,
             'lineas' => $rows,
+            'elegirProveedor' => $elegirProveedor,
+            // El resumen ya cuenta las líneas del listado: no hace falta otra
+            // consulta solo para decir de qué tamaño es lo que se pide.
+            'totalDelArchivo' => $resumen['total'] ?? null,
             'paginacion' => [
                 'total' => count($rows),
                 'page' => 1,
                 'pages' => 1,
                 'per_page' => count($rows),
             ],
-            'resumen' => $listado ? $modelo->resumen($listadoId) : [],
+            'resumen' => $resumen,
             'filtros' => $filters,
             'opciones' => $listado ? $modelo->opcionesFiltros($listadoId) : ['sucursales' => []],
             'proveedoresFiltro' => $listado
@@ -129,6 +148,12 @@ class NotasCreditoController extends Controller
         // que existen. Se normaliza acá para que lo que se recuerda y lo que
         // viaja en los enlaces sea siempre la misma cadena.
         $filters['clase'] = implode(',', ClaseNotaCredito::clasesPedidas($filters['clase']));
+
+        // Los importes se limpian igual que en los demás listados: aceptan el
+        // símbolo y las comas de millar, porque se copian de la pantalla.
+        foreach (['monto', 'saldo'] as $cual) {
+            $filters[$cual] = BusquedaImporte::numero($filters[$cual]);
+        }
         return $filters;
     }
 

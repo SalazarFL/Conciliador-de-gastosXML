@@ -87,6 +87,14 @@ $labelTipo = function ($tipo) {
             <label class="filter-label">Buscar</label>
             <input type="search" class="form-control" name="q" value="<?= htmlspecialchars($filtros['q']) ?>" placeholder="Número, factura o proveedor">
         </div>
+        <?php /*
+         * Una devolución no tiene saldo —no se paga, se espera una nota de
+         * crédito por ella— así que aquí solo hay caja de monto.
+         */
+        $filtroImporte = [
+            'nombre' => 'monto', 'etiqueta' => 'Monto',
+            'valor' => $filtros['monto'] ?? '',
+        ]; include __DIR__ . '/../partials/filtro-importe.php'; ?>
         <div>
             <label class="filter-label">Tipo de documento</label>
             <select class="form-control" name="tipo">
@@ -105,18 +113,28 @@ $labelTipo = function ($tipo) {
     <div style="overflow-x:auto;margin-top:8px;"><table class="data-table">
         <thead><tr>
             <th>Fecha</th><th>Tipo</th><th>N°</th><th>Proveedor</th><th>Factura (boleta)</th>
+            <th class="right">Monto</th>
             <th class="right">NC esperadas</th><th>Vínculos</th><th>Estado</th><th></th>
         </tr></thead>
         <tbody>
         <?php if (empty($devoluciones)): ?>
-        <tr><td colspan="9" style="text-align:center;padding:18px;color:var(--text-muted);">No hay reportes importados con estos filtros.</td></tr>
+        <tr><td colspan="10" style="text-align:center;padding:18px;color:var(--text-muted);">No hay reportes importados con estos filtros.</td></tr>
         <?php endif; ?>
         <?php foreach ($devoluciones as $d): ?>
         <?php
+            /*
+             * El total de la devolución sale a su propia columna: estaba
+             * amontonado con las dos cifras de "NC esperadas" y no se podía
+             * comparar entre renglones, que es para lo que sirve un monto.
+             *
+             * Aquí no hay columna de saldo: una devolución no se paga, se
+             * espera una nota de crédito por ella. Lo que haría de saldo es
+             * justamente "NC esperadas".
+             */
+            $montoDevolucion = (float) $d['total'];
             $montos = [];
             if ((float) $d['nc_esperada_cantidad'] > 0) { $montos[] = 'Cant: ' . number_format((float) $d['nc_esperada_cantidad'], 2); }
             if ((float) $d['nc_esperada_costo'] > 0) { $montos[] = 'Costo: ' . number_format((float) $d['nc_esperada_costo'], 2); }
-            if ((float) $d['total'] > 0) { $montos[] = number_format((float) $d['total'], 2); }
         ?>
         <tr>
             <td style="white-space:nowrap;"><?= htmlspecialchars((string) $d['fecha']) ?></td>
@@ -124,6 +142,9 @@ $labelTipo = function ($tipo) {
             <td><strong><?= htmlspecialchars((string) $d['numero']) ?></strong></td>
             <td><?= htmlspecialchars((string) ($d['proveedor_local'] ?: $d['proveedor_nombre_erp'] ?: '—')) ?></td>
             <td style="font-family:monospace;white-space:nowrap;"><?= htmlspecialchars((string) ($d['numero_factura'] ?: '—')) ?></td>
+            <td class="right" style="white-space:nowrap;<?= $montoDevolucion > 0 ? '' : 'color:var(--text-muted);' ?>">
+                <?= $montoDevolucion > 0 ? number_format($montoDevolucion, 2) : '—' ?>
+            </td>
             <td class="right" style="white-space:nowrap;"><?= $montos ? implode('<br>', $montos) : '—' ?></td>
             <td style="white-space:nowrap;">
                 <?php if ((int) $d['matches_confirmados'] > 0): ?><span class="badge badge-green"><?= (int) $d['matches_confirmados'] ?> ✓</span><?php endif; ?>
@@ -131,8 +152,21 @@ $labelTipo = function ($tipo) {
             </td>
             <td><?= $badgeEstado((string) $d['estado']) ?></td>
             <td style="white-space:nowrap;">
-                <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/devoluciones/detalle/<?= (int) $d['id'] ?>" title="Detalle"><i class="fas fa-eye"></i></a>
-                <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/devoluciones/pdf/<?= (int) $d['id'] ?>" target="_blank" title="Ver PDF original"><i class="fas fa-file-pdf"></i></a>
+                <?php /*
+                 * El detalle de una devolución no es una ficha que se lee: es
+                 * la pantalla donde se vincula, se confirma y se descarta. Se
+                 * abre entera en un marco sobre el listado —así funciona igual
+                 * que siempre— y al cerrarla el listado se relee, porque lo
+                 * que se hizo dentro cambió los renglones de aquí.
+                 */ ?>
+                <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/devoluciones/detalle/<?= (int) $d['id'] ?>"
+                   data-ventana="Devolución"
+                   data-ventana-titulo="<?= htmlspecialchars((string) $d['numero']) ?>"
+                   title="Detalle"><i class="fas fa-eye"></i></a>
+                <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/devoluciones/pdf/<?= (int) $d['id'] ?>" target="_blank"
+                   data-ventana="PDF del reporte"
+                   data-ventana-titulo="<?= htmlspecialchars((string) $d['numero']) ?>"
+                   title="Ver PDF original"><i class="fas fa-file-pdf"></i></a>
             </td>
         </tr>
         <?php endforeach; ?>
