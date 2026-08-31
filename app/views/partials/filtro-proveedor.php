@@ -27,6 +27,11 @@ $provCfg = array_merge([
     'valor'      => '',
     'opciones'   => [],
     'etiqueta'   => 'Proveedor',
+    // Qué dice el botón cuando no hay ninguno elegido. En una barra de
+    // filtros, no elegir significa "todos"; en la pantalla que pregunta de
+    // quién se quiere el listado no significa eso, y decirlo ahí contradecía
+    // al botón de al lado.
+    'vacio'      => 'Todos los proveedores',
     'ancho'      => true,
     'autosubmit' => true,
 ], is_array($provFiltro ?? null) ? $provFiltro : []);
@@ -99,7 +104,7 @@ $provOpcionHtml = static function (array $opcion, $elegida) {
                 aria-haspopup="listbox" aria-expanded="false" data-prov-boton>
             <span class="prov-picker-elegido" data-prov-etiqueta>
                 <?php if ($provSeleccionada === null): ?>
-                Todos los proveedores
+                <?= htmlspecialchars((string) $provCfg['vacio']) ?>
                 <?php else: ?>
                     <?php if ($provSeleccionada['codigos']): ?>
                     <span class="prov-cod"><?= htmlspecialchars(implode(', ', $provSeleccionada['codigos'])) ?></span>
