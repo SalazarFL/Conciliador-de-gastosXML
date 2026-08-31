@@ -12,7 +12,7 @@ $semanaFiltro   = (int) ($semanaFiltro ?? 0);
 $sinCoincidencia = (int) ($sinCoincidencia ?? 0);
 $filtros = array_replace([
     'q' => '', 'proveedor' => '', 'sucursal' => '', 'estado' => '', 'vinculo' => '',
-    'fecha_desde' => '', 'fecha_hasta' => '', 'monto_desde' => '', 'monto_hasta' => '',
+    'fecha_desde' => '', 'fecha_hasta' => '', 'monto' => '', 'saldo' => '',
 ], is_array($filtros ?? null) ? $filtros : []);
 $filtrosQuery = array_filter($filtros, function ($valor) { return $valor !== '' && $valor !== null; });
 $filtrosActivos = count($filtrosQuery);
@@ -34,6 +34,19 @@ $urlExportar = $baseUrl . '/por-pagar/exportar?' . http_build_query(array_merge(
     $filtrosQuery
 ));
 $queryRetornoFiltros = http_build_query(array_merge($contextoListado, $filtrosQuery));
+
+/*
+ * El contexto que se lleva la tarjeta de "buscar en correo": el pago Y los
+ * filtros con los que se está mirando el checklist. Sin los filtros, las
+ * flechas de la tarjeta recorrían el pago entero —incluidas las facturas que
+ * ya tienen respaldo— y el "3 / 200" no correspondía a ninguna lista que
+ * nadie estuviera viendo. Mismo prefijo ctx_f_ que usa la cola de
+ * seguimiento; lo lee NavegacionDocumentos.
+ */
+$ctxTarjeta = 'ctx=pago&ctx_lista=' . (int) ($listado['id'] ?? 0);
+foreach ($filtrosQuery as $nombreCtx => $valorCtx) {
+    $ctxTarjeta .= '&' . http_build_query(['ctx_f_' . $nombreCtx => $valorCtx]);
+}
 $carpetaPagoActiva = '';
 foreach ($semanas as $semanaItem) {
     if ((int) $semanaItem['id'] === $semanaFiltro) {
@@ -921,6 +934,53 @@ document.addEventListener('keydown', function (e) {
         </form>
     </div>
 
+    <?php
+    /*
+     * El conteo del pago, en una línea.
+     *
+     * Acá hubo una fila de cuatro tarjetas grandes que solo contaban, y se
+     * fue por eso. Vuelve pequeño porque la pregunta que contesta sí importa
+     * al abrir un pago —cuánto falta por respaldar— y responderla contando
+     * renglones a mano no es razonable con cuatrocientas facturas.
+     *
+     * Cada grupo es un enlace al mismo filtro "Estado" de la barra: decir
+     * "33 sin respaldo" y no dejar llegar a esas 33 sería dejar el trabajo a
+     * medias. El que está aplicado se marca, y volver a pulsarlo lo quita.
+     */
+    $ppGrupos = [
+        ['respaldada',     'con respaldo',    $respaldadas,   'is-ok'],
+        ['con_diferencia', 'con diferencia',  $conDiferencia, 'is-dif'],
+        ['sin_respaldo',   'sin respaldo',    $sinRespaldo,   'is-falta'],
+    ];
+    $ppMontoTotal = (float) ($resumen['respaldada_monto'] ?? 0)
+                  + (float) ($resumen['con_diferencia_monto'] ?? 0)
+                  + (float) ($resumen['sin_respaldo_monto'] ?? 0);
+    $ppUrlEstado = function ($estado) use ($baseUrl, $filtros, $listado, $semanaFiltro) {
+        $q = array_filter($filtros, function ($v) { return (string) $v !== ''; });
+        // Pulsar el que ya está puesto lo quita: es la forma de volver a
+        // verlas todas sin ir a buscar el desplegable.
+        $q['estado'] = ((string) ($filtros['estado'] ?? '') === $estado) ? '' : $estado;
+        $q['listado_id'] = (int) $listado['id'];
+        $q['semana_id'] = (int) $semanaFiltro;
+        return $baseUrl . '/por-pagar?' . http_build_query(array_filter(
+            $q, function ($v) { return (string) $v !== ''; }
+        ));
+    };
+    ?>
+    <div class="pp-conteo">
+        <?php foreach ($ppGrupos as [$ppEstado, $ppNombre, $ppCuantas, $ppClase]): ?>
+        <a class="pp-conteo-chip <?= $ppClase ?><?= (string) ($filtros['estado'] ?? '') === $ppEstado ? ' is-puesto' : '' ?>"
+           href="<?= htmlspecialchars($ppUrlEstado($ppEstado)) ?>"
+           title="<?= $ppNombre ?>: ₡<?= number_format((float) ($resumen[$ppEstado . '_monto'] ?? 0), 2) ?>&#10;Pulsa para ver solo estas">
+            <span class="pp-conteo-punto"></span><strong><?= number_format($ppCuantas) ?></strong> <?= $ppNombre ?>
+        </a>
+        <?php endforeach; ?>
+        <span class="pp-conteo-total">
+            <?= number_format($totalLineas) ?> factura<?= $totalLineas === 1 ? '' : 's' ?>
+            · ₡<?= number_format($ppMontoTotal, 2) ?>
+        </span>
+    </div>
+
     <form method="GET" action="<?= $baseUrl ?>/por-pagar" class="filter-bar">
         <input type="hidden" name="semana_id" value="<?= (int) $semanaFiltro ?>">
         <input type="hidden" name="listado_id" value="<?= (int) $listado['id'] ?>">
@@ -960,6 +1020,23 @@ document.addEventListener('keydown', function (e) {
                 <?php endforeach; ?>
             </select>
         </div>
+        <?php
+        /*
+         * Los dos importes con los que se persigue un pago: lo que dice la
+         * factura y lo que queda por pagarle. Se escribe el que se tiene a
+         * mano —del estado de cuenta, del correo del proveedor— y sale su
+         * renglón, en vez de recorrer el checklist entero con la vista.
+         */
+        $filtroImporte = [
+            'nombre' => 'monto', 'etiqueta' => 'Monto de la factura',
+            'valor' => $filtros['monto'],
+        ]; include __DIR__ . '/../partials/filtro-importe.php';
+
+        $filtroImporte = [
+            'nombre' => 'saldo', 'etiqueta' => 'Saldo por pagar',
+            'valor' => $filtros['saldo'],
+        ]; include __DIR__ . '/../partials/filtro-importe.php';
+        ?>
         <div>
             <label class="filter-label">Estado</label>
             <select name="estado" class="form-control" onchange="this.form.submit()">
@@ -996,6 +1073,7 @@ document.addEventListener('keydown', function (e) {
                     <th>Documento ERP</th>
                     <th>Proveedor</th>
                     <th class="right">Monto</th>
+                    <th class="right">Saldo</th>
                     <th>Factura XML</th>
                     <th class="right">Diferencia</th>
                     <th class="center" style="width:155px;">Acciones</th>
@@ -1061,21 +1139,31 @@ document.addEventListener('keydown', function (e) {
                     </td>
                     <?php
                     /*
-                     * El monto de la factura, no su saldo.
+                     * Monto y saldo, uno al lado del otro.
                      *
-                     * El checklist se recorre comparando contra el comprobante:
-                     * al lado están el total del XML y la diferencia, y esa
-                     * diferencia es monto − total XML. Con el saldo en medio la
-                     * fila no cerraba —tres números de los que solo dos se
-                     * relacionaban—, y el saldo además baja a cero al pagar, así
-                     * que la columna se vaciaba justo cuando había que archivar
-                     * el pago.
+                     * El monto es el que cierra la fila: la diferencia de más
+                     * allá es monto − total del XML, y por eso va primero. El
+                     * saldo estuvo fuera un tiempo porque en medio de esos dos
+                     * números la fila no se leía —tres cifras de las que solo
+                     * dos se relacionaban—; puestos en columnas propias y
+                     * seguidas eso ya no pasa, y tener a la vista lo que se
+                     * debe es justamente lo que se viene a mirar a un pago.
                      *
-                     * El saldo no se pierde: sale en la exportación a Excel, que
-                     * es donde se mira el dinero que se debe.
+                     * Es el saldo con el que la factura entró al pago
+                     * (`saldo_pago`) y no el vivo: el vivo baja a cero al
+                     * pagarla, y entonces la columna se vaciaba justo cuando
+                     * había que archivar el pago.
                      */
                     ?>
                     <td class="right" style="white-space:nowrap;"><?= number_format((float) $linea['monto'], 2) ?></td>
+                    <?php
+                    $ppSaldo = (float) ($linea['saldo_pago'] ?? $linea['saldo'] ?? 0);
+                    $ppDebe = $ppSaldo > 0.005;
+                    ?>
+                    <td class="right" style="white-space:nowrap;<?= $ppDebe ? '' : 'color:var(--text-muted);' ?>"
+                        title="<?= $ppDebe ? 'Saldo con el que entró a este pago' : 'Ya no queda saldo por pagar' ?>">
+                        <?= $ppDebe ? number_format($ppSaldo, 2) : '—' ?>
+                    </td>
                     <td style="white-space:nowrap;">
                         <?php if (!empty($linea['factura_xml_id'])): ?>
                         <?php if (!empty($linea['match_manual'])): ?>
@@ -1100,13 +1188,21 @@ document.addEventListener('keydown', function (e) {
                     </td>
                     <td class="center" style="white-space:nowrap;">
                         <?php if ($linea['estado'] === 'sin_respaldo'): ?>
-                        <a href="<?= $baseUrl ?>/correo?buscar=<?= urlencode((string) $linea['numero_busqueda']) ?>&ctx=pago&ctx_lista=<?= (int) $listado['id'] ?>&ctx_item=<?= (int) $linea['id'] ?>"
+                        <?php /*
+                         * El correo se abre en un marco sobre esta pantalla:
+                         * el checklist del pago se revisa de arriba abajo y
+                         * cada búsqueda en otra pestaña costaba perder el sitio.
+                         */ ?>
+                        <a href="<?= $baseUrl ?>/correo?buscar=<?= urlencode((string) $linea['numero_busqueda']) ?>&<?= $ctxTarjeta ?>&ctx_item=<?= (int) $linea['id'] ?>"
+                           data-ventana="Correo"
+                           data-ventana-titulo="<?= htmlspecialchars((string) $linea['numero_busqueda']) ?>"
                            class="btn btn-outline btn-sm" title="Buscar esta factura en el correo">
                             <i class="fas fa-envelope-open-text"></i> Buscar en correo
                         </a>
                         <?php elseif (!empty($linea['factura_xml_id'])): ?>
                         <a href="<?= $baseUrl ?>/facturas/ver/<?= (int) $linea['factura_xml_id'] ?>"
-                           class="btn btn-outline btn-sm" title="Ver la factura XML">
+                           data-ficha="<?= (int) $linea['factura_xml_id'] ?>"
+                           class="btn btn-outline btn-sm" title="Ver la ficha de la factura XML">
                             <i class="fas fa-eye"></i>
                         </a>
                         <?php endif; ?>
@@ -1140,7 +1236,7 @@ document.addEventListener('keydown', function (e) {
                 <?php endforeach; ?>
                 <?php else: ?>
                 <tr>
-                    <td colspan="8" style="padding:18px;text-align:center;color:var(--text-muted);">
+                    <td colspan="9" style="padding:18px;text-align:center;color:var(--text-muted);">
                         <i class="fas fa-search" style="font-size:20px;color:#cbd5e1;display:block;margin-bottom:7px;"></i>
                         No se encontraron facturas con los filtros seleccionados.
                         <a href="<?= htmlspecialchars($urlLimpiarFiltros) ?>" style="margin-left:4px;">Limpiar filtros</a>

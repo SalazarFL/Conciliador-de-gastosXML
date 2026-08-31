@@ -23,6 +23,7 @@ require_once __DIR__ . '/../helpers/NumeroFactura.php';
 require_once __DIR__ . '/../helpers/EstadoArchivo.php';
 require_once __DIR__ . '/../helpers/PagoSemanalResolutor.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
+require_once __DIR__ . '/../helpers/BusquedaImporte.php';
 
 class PorPagarController extends Controller
 {
@@ -34,7 +35,7 @@ class PorPagarController extends Controller
         // que son el contexto y se eligen arriba.
         $this->recordarFiltros('por_pagar', [
             'q', 'proveedor', 'sucursal', 'estado', 'vinculo',
-            'fecha_desde', 'fecha_hasta', 'monto_desde', 'monto_hasta',
+            'fecha_desde', 'fecha_hasta', 'monto', 'saldo',
         ]);
 
         $modelo = $this->loadModel('PorPagar');
@@ -139,13 +140,10 @@ class PorPagarController extends Controller
             $tmp = $desde; $desde = $hasta; $hasta = $tmp;
         }
 
-        $montoDesde = trim((string) $this->get('monto_desde', ''));
-        $montoHasta = trim((string) $this->get('monto_hasta', ''));
-        $montoDesde = is_numeric($montoDesde) && (float) $montoDesde >= 0 ? $montoDesde : '';
-        $montoHasta = is_numeric($montoHasta) && (float) $montoHasta >= 0 ? $montoHasta : '';
-        if ($montoDesde !== '' && $montoHasta !== '' && (float) $montoDesde > (float) $montoHasta) {
-            $tmp = $montoDesde; $montoDesde = $montoHasta; $montoHasta = $tmp;
-        }
+        // Monto y saldo son dos preguntas distintas: cuánto facturó el
+        // proveedor y cuánto queda por pagarle.
+        $monto = BusquedaImporte::numero($this->get('monto', ''));
+        $saldo = BusquedaImporte::numero($this->get('saldo', ''));
 
         return [
             'q' => $q,
@@ -155,8 +153,8 @@ class PorPagarController extends Controller
             'vinculo' => $vinculo,
             'fecha_desde' => $desde,
             'fecha_hasta' => $hasta,
-            'monto_desde' => $montoDesde,
-            'monto_hasta' => $montoHasta,
+            'monto' => $monto,
+            'saldo' => $saldo,
         ];
     }
 

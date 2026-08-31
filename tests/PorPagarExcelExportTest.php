@@ -44,14 +44,13 @@ assertPorPagarExcel(strpos($metodo, "'.xlsx'") !== false, 'la descarga usa exten
 assertPorPagarExcel(strpos($metodo, 'text/csv') === false && strpos($metodo, 'fputcsv') === false,
     'la exportación ya no genera CSV');
 
-// Monto y saldo son dos cosas y cada una vive donde sirve.
+// Monto y saldo son dos cosas, y ahora las dos están en los dos sitios.
 //
-// En pantalla manda el MONTO de la factura: el checklist se recorre comparando
-// contra el comprobante, y la diferencia que sale al lado es monto − total XML.
-// El saldo ahí no cierra con nada y encima baja a cero al pagar, justo cuando
-// hay que archivar el pago.
-//
-// En el Excel van los dos: esa hoja se abre para mirar el dinero que se debe.
+// El monto va primero en pantalla porque es el que cierra la fila: la
+// diferencia que sale al lado es monto − total del XML. El saldo estuvo fuera
+// un tiempo —en medio de esos dos números la fila no se leía— y volvió en
+// columna propia, que es donde no estorba: mirar lo que se debe es justamente
+// para lo que se abre un pago.
 assertPorPagarExcel(strpos($metodo, "'Monto ERP', 'Saldo'") !== false,
     'la exportación conserva las dos columnas: el monto de la factura y su saldo');
 assertPorPagarExcel(strpos($metodo, "\$linea['saldo_pago']") !== false,
@@ -68,7 +67,13 @@ $finTabla = strpos($vista, '</tbody>', $inicioTabla);
 $tabla = substr($vista, $inicioTabla, $finTabla - $inicioTabla);
 assertPorPagarExcel(strpos($tabla, "number_format((float) \$linea['monto'], 2)") !== false,
     'y la celda pinta el monto');
-assertPorPagarExcel(strpos($tabla, "\$linea['saldo_pago']") === false,
-    'el saldo ya no se cuela en el renglón del checklist');
+assertPorPagarExcel(strpos($tabla, "\$linea['saldo_pago']") !== false,
+    'y el saldo tiene su propia columna al lado');
+
+// El de la pantalla es el mismo que el del Excel: el congelado al entrar al
+// pago. El saldo vivo baja a cero al pagar y vaciaría la columna justo cuando
+// hay que archivar el pago.
+assertPorPagarExcel(strpos($tabla, "\$linea['saldo_pago'] ?? \$linea['saldo']") !== false,
+    'el saldo de la pantalla es el congelado al entrar al pago, no el de hoy');
 
 echo "OK: Exportación XLSX de facturas por pagar\n";

@@ -47,8 +47,8 @@ $modelo->getFacturasPago(12, [
     'vinculo' => 'manual',
     'fecha_desde' => '2026-07-01',
     'fecha_hasta' => '2026-07-31',
-    'monto_desde' => '1000',
-    'monto_hasta' => '90000',
+    'monto' => '90000',
+    'saldo' => '45000',
 ]);
 
 $sql = $modelo->sql;
@@ -86,11 +86,25 @@ assertPorPagarBuscador(strpos($sql, 'e.fecha_emision >= ?') !== false
     && strpos($sql, 'e.fecha_emision <= ?') !== false,
     'las fechas son las de emisión de la factura del ERP');
 
-// El importe filtra por el saldo del pago, no por el saldo vivo: si no, una
-// factura ya pagada (saldo 0) desaparecería del checklist de su propia semana.
-assertPorPagarBuscador(strpos($sql, 'COALESCE(e.saldo_pago, e.saldo) >= ?') !== false
-    && strpos($sql, 'COALESCE(e.saldo_pago, e.saldo) <= ?') !== false,
-    'el importe filtra por el saldo con que la factura entró al pago');
+/*
+ * Se busca por el importe que se tiene a mano, y monto y saldo son dos
+ * columnas distintas. Esa es la corrección: hasta hace poco había un solo
+ * filtro llamado "monto" que en realidad miraba el saldo, así que buscar una
+ * factura por lo que dice dejaba fuera las que ya estaban medio pagadas.
+ */
+assertPorPagarBuscador(strpos($sql, 'CAST(e.monto AS CHAR) LIKE ?') !== false,
+    'el importe se busca dentro del monto de la factura');
+
+// El saldo sigue siendo el del pago y no el vivo: si no, una factura ya
+// pagada (saldo 0) desaparecería del checklist de su propia semana.
+assertPorPagarBuscador(strpos($sql, 'CAST(COALESCE(e.saldo_pago, e.saldo) AS CHAR) LIKE ?') !== false,
+    'y el saldo se busca sobre el que la factura tenía al entrar al pago');
+
+// Cada uno con su propio valor: es lo que se rompería si alguien volviera a
+// apuntar los dos buscadores a la misma columna.
+assertPorPagarBuscador(in_array('%90000%', $modelo->params, true)
+    && in_array('%45000%', $modelo->params, true),
+    'los dos importes llegan a la consulta, sin pisarse');
 
 assertPorPagarBuscador($modelo->params === [
     12,
@@ -98,7 +112,9 @@ assertPorPagarBuscador($modelo->params === [
     '__PRUEBA_JOP__',
     'con_diferencia',
     '2026-07-01', '2026-07-31',
-    1000.0, 90000.0,
+    // Primero el monto y después el saldo, en el orden en que se arman: es lo
+    // que hay que respetar para que cada ? reciba su valor.
+    '%90000%', '%45000%',
 ], 'los parámetros llegan en el orden de las condiciones');
 
 // ── Sin filtros ──────────────────────────────────────────────────
@@ -109,7 +125,14 @@ assertPorPagarBuscador(strpos($limpio->sql, 'LIKE') === false, 'sin texto no se 
 
 // ── Un filtro inválido no se cuela ───────────────────────────────
 $raro = new PorPagarBuscadoresFalso();
-$raro->getFacturasPago(12, ['estado' => 'inventado', 'vinculo' => 'raro', 'monto_desde' => 'x']);
+$raro->getFacturasPago(12, [
+    'estado' => 'inventado', 'vinculo' => 'raro',
+    // Un importe que no es un número no filtra: buscarlo dentro de la columna
+    // no encontraría nada y además dejaría basura en la consulta.
+    'monto' => 'x', 'saldo' => '%',
+]);
 assertPorPagarBuscador($raro->params === [12], 'los valores que no existen se ignoran, no se pasan al SQL');
+assertPorPagarBuscador(strpos($raro->sql, 'CAST(') === false,
+    'y sin importe válido no se arma ninguna comparación de importe');
 
 echo "OK: buscadores del checklist del pago semanal\n";
