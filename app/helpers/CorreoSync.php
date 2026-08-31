@@ -328,7 +328,133 @@ class CorreoSync
 
         $stats['segundos'] = round(microtime(true) - $inicio, 1);
 
+        self::anotarRezago($stats, $config);
+
         return $stats;
+    }
+
+    /**
+     * La campana, cuando el índice del buzón se queda atrás.
+     *
+     * Por qué en la campana y no en la pantalla de Correo: mientras queden
+     * correos sin completar, buscar un número de factura no lo resuelve el
+     * índice y hay que ir hasta el servidor de correo, que tarda. Eso se
+     * sufre buscando, no mirando el módulo de correo, así que el aviso tiene
+     * que estar donde se trabaja y no solo para quien tuviera esa pantalla
+     * abierta en el momento justo.
+     *
+     * Solo se avisa de lo que nadie está resolviendo: una tanda que se da por
+     * COMPLETADA con correos todavía en la cola es una cola que dejó de
+     * avanzar —el buzón no contesta por esos mensajes—. Mientras la
+     * sincronización progresa, o mientras le quedan tandas por delante, no
+     * hay nada que decir: se pondrá al día sola.
+     *
+     * El aviso se retira solo en cuanto la cola llega a cero. Nadie tiene que
+     * ir a marcarlo como resuelto: no es una decisión, es un estado.
+     */
+    /**
+     * Qué toca hacer con el aviso, leída una tanda: 'cerrar', 'avisar', 'nada'.
+     *
+     * La regla es la que decide si la campana sirve o se vuelve ruido:
+     *
+     *  - Sin cola, se cierra. El índice contesta las búsquedas y no hay nada
+     *    que contar, se hubiera terminado la vuelta por las carpetas o no.
+     *  - Con cola y la tanda a medias, nada. Es una sincronización avanzando:
+     *    la construcción inicial de un buzón grande son decenas de tandas y
+     *    avisar de cada una sería avisar de que el sistema funciona.
+     *  - Con cola y la tanda dada por COMPLETADA, se avisa. Completar con
+     *    cola significa que no se resolvió ni un correo y que tampoco se
+     *    acabó el tiempo: la cola dejó de avanzar sola.
+     */
+    public static function decisionRezago(array $stats)
+    {
+        if ((int) ($stats['metadatos_pendientes'] ?? 0) === 0) {
+            return 'cerrar';
+        }
+        return empty($stats['completado']) ? 'nada' : 'avisar';
+    }
+
+    private static function anotarRezago(array $stats, array $config)
+    {
+        $firma = self::firmaRezago($config);
+        $decision = self::decisionRezago($stats);
+        if ($firma === '' || $decision === 'nada') {
+            return;
+        }
+
+        try {
+            require_once __DIR__ . '/../models/Notificacion.php';
+            $avisos = new Notificacion();
+
+            if ($decision === 'cerrar') {
+                $avisos->cerrarPorFirma($firma);
+                $avisos->cerrarPorFirma(self::firmaFallo($config));
+                return;
+            }
+
+            $pendientes = (int) $stats['metadatos_pendientes'];
+
+            $avisos->avisar([
+                'tipo'      => 'indice_correo',
+                'severidad' => 'media',
+                'titulo'    => 'El índice del buzón se quedó atrás',
+                'detalle'   => 'Faltan ' . number_format($pendientes, 0, ',', '.')
+                             . ' correos por completar y la actualización dejó de avanzar. '
+                             . 'Mientras tanto, buscar un número de factura tiene que ir hasta '
+                             . 'el servidor de correo y tarda. Suele arreglarse abriendo Correo '
+                             . 'o esperando a la tarea programada; si el número no baja, revisá '
+                             . 'que la tarea esté corriendo.',
+                'firma'     => $firma,
+                'ref_tabla' => 'correo_indice',
+                'ref_clave' => (string) (int) ($config['cuenta_id'] ?? 0),
+                'datos'     => [
+                    'cuenta_id'   => (int) ($config['cuenta_id'] ?? 0),
+                    'pendientes'  => $pendientes,
+                ],
+            ]);
+        } catch (Throwable $e) {
+            // Un aviso jamás puede tumbar la sincronización que lo generó.
+        }
+    }
+
+    /**
+     * Lo mismo cuando la actualización ni siquiera pudo correr. Lo llaman
+     * los dos disparadores desde su catch: el error se veía en la pantalla
+     * de Correo y solo mientras alguien la tuviera abierta.
+     */
+    public static function anotarFallo($mensaje, array $config)
+    {
+        $firma = self::firmaFallo($config);
+        if ($firma === '') {
+            return;
+        }
+
+        try {
+            require_once __DIR__ . '/../models/Notificacion.php';
+            (new Notificacion())->avisar([
+                'tipo'      => 'indice_correo',
+                'severidad' => 'alta',
+                'titulo'    => 'No se pudo actualizar el índice del buzón',
+                'detalle'   => mb_substr(trim((string) $mensaje), 0, 400, 'UTF-8'),
+                'firma'     => $firma,
+                'ref_tabla' => 'correo_indice',
+                'ref_clave' => (string) (int) ($config['cuenta_id'] ?? 0),
+                'datos'     => ['cuenta_id' => (int) ($config['cuenta_id'] ?? 0)],
+            ]);
+        } catch (Throwable $e) {
+            // Igual que arriba: el aviso es lo prescindible.
+        }
+    }
+
+    /** Un aviso por cuenta de correo: cada buzón tiene su propio índice. */
+    private static function firmaRezago(array $config)
+    {
+        return 'indice_correo|rezago|' . (int) ($config['cuenta_id'] ?? 0);
+    }
+
+    private static function firmaFallo(array $config)
+    {
+        return 'indice_correo|fallo|' . (int) ($config['cuenta_id'] ?? 0);
     }
 
     /** Separa encabezados que quedan en el índice de los vencidos. */

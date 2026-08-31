@@ -473,8 +473,13 @@ class MailFetcher
      * Devuelve ['total' => coincidencias, 'correos' => [...]]; cada correo:
      *   ['uid', 'clave', 'carpeta', 'carpeta_nombre', 'asunto', 'remitente', 'cc',
      *    'fecha', 'procesado'] — del más reciente al más viejo, máx $limite.
+     *
+     * $limiteSegundos (0 = sin tope) corta el recorrido entre carpetas y
+     * devuelve 'parcial' => true con cuántas se alcanzaron a revisar. Es lo
+     * que separa "no está en el buzón" de "no se llegó a mirar entero", que
+     * para quien busca una factura no son lo mismo.
      */
-    public function listarMensajes($limite = 500, $texto = '', $ambito = 'asunto_remitente', $carpetaFiltro = '', $offset = 0)
+    public function listarMensajes($limite = 500, $texto = '', $ambito = 'asunto_remitente', $carpetaFiltro = '', $offset = 0, $limiteSegundos = 0)
     {
         if (!$this->stream) {
             $this->conectar();
@@ -536,6 +541,7 @@ class MailFetcher
         $limite = max(1, (int) $limite);
         $offset = max(0, (int) $offset);
         $maxOverview = max($limite + $offset, 1500);
+        $limiteSegundos = max(0, (int) $limiteSegundos);
 
         // Puede llegar una carpeta, o una lista de carpetas candidatas (quien
         // llama ya descartó las que no pueden tener nada). Vacío = todo el buzón.
@@ -549,10 +555,29 @@ class MailFetcher
             $carpetas = $carpetaFiltro !== '' ? [$carpetaFiltro] : $this->carpetasABuscar();
         }
 
+        /*
+         * Un tope de tiempo, cuando quien llama lo pone. Una búsqueda TEXT
+         * sobre decenas de miles de correos la resuelve el servidor IMAP a su
+         * ritmo, carpeta por carpeta, y sin tope la pantalla se queda esperando
+         * lo que haga falta. Se mira ENTRE carpetas: cortar a mitad de una
+         * daría un resultado a medias sin saber de dónde falta.
+         */
+        $vence = $limiteSegundos > 0 ? microtime(true) + $limiteSegundos : 0.0;
+        $revisadas = 0;
+        $parcial = false;
+
         foreach ($carpetas as $carpeta) {
+            // Al menos una carpeta se revisa siempre: un presupuesto ya
+            // agotado al llegar no puede devolver una búsqueda vacía.
+            if ($vence > 0.0 && $revisadas > 0 && microtime(true) >= $vence) {
+                $parcial = true;
+                break;
+            }
+
             if (!$this->abrirCarpeta($carpeta)) {
                 continue;
             }
+            $revisadas++;
 
             if ($texto !== '') {
                 $grupos = [];
@@ -626,6 +651,11 @@ class MailFetcher
         return [
             'total'   => $totalCoincidencias,
             'correos' => $correos,
+            // Con qué se quedó quien pregunta: si el tope de tiempo cortó el
+            // recorrido, "sin resultados" no significa "no está en el buzón".
+            'parcial'            => $parcial,
+            'carpetas_revisadas' => $revisadas,
+            'carpetas_totales'   => count($carpetas),
         ];
     }
 

@@ -211,7 +211,6 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                     <i class="fas fa-download"></i> <span id="sel-count">0</span>
                 </button>
             </div>
-            <div id="sync-info" style="font-size:11.5px;color:var(--text-muted);"></div>
         </div>
         <div class="correo-panel-body" id="lista-correos">
             <div class="correo-vacio-panel" id="lista-vacia">
@@ -371,6 +370,8 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                         <td class="center">
                             <?php if ($fila['estado'] === 'importada' && !empty($fila['importacion_id'])): ?>
                             <a href="<?= $baseUrl ?>/facturas?importacion_id=<?= (int) $fila['importacion_id'] ?>"
+                               data-ventana="Comprobantes XML"
+                               data-ventana-titulo="<?= htmlspecialchars((string) ($fila['numero_corto'] ?? '')) ?>"
                                class="btn btn-outline btn-sm" title="Ver la importación">
                                 <i class="fas fa-eye"></i>
                             </a>
@@ -551,6 +552,8 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     // decir, ninguno— y se leía como "no hay nada", no como "estoy buscando".
     var buscando = false;
     var colaIndice = 0; // correos a los que el índice aún no les leyó el adjunto
+    var ultimoAlcance = null; // hasta dónde llegó la última búsqueda
+    var buscandoBuzonCompleto = false; // la que corre es el recorrido largo
     var carpetaActiva = 'INBOX';
     var carpetaNombreActiva = 'Entrada';
     var carpetasDatos = Array.isArray(CARPETAS_INICIALES) ? CARPETAS_INICIALES : [];
@@ -570,6 +573,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
     // Cuenta de correo con la que se trabaja: viaja en cada petición
     var CUENTA_ID = <?= (int) $cuentaActivaId ?>;
+    var SYNC_FORZAR = <?= !empty($forzarSync) ? "true" : "false" ?>;
     var CLAVE_CARPETAS = 'correoCarpetasAbiertas_' + CUENTA_ID;
 
     function postJson(url, data) {
@@ -1107,6 +1111,62 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         listaEl.appendChild(pager);
     }
 
+    /*
+     * Hasta dónde llegó la última búsqueda, para poder decirlo cuando no
+     * aparece nada. "Sin resultados" a secas obliga a adivinar si el correo
+     * no llegó o si simplemente no se miró donde estaba.
+     */
+    function pintarAlcanceBusqueda(contenedor) {
+        var alcance = ultimoAlcance;
+        if (!alcance || correos.length) { return; }
+
+        var detalle = [];
+        if (alcance.fechaDesde && alcance.fechaHasta) {
+            detalle.push('Se buscó en el índice completo y en el buzón entre '
+                + fechaCortaISO(alcance.fechaDesde) + ' y ' + fechaCortaISO(alcance.fechaHasta)
+                + ', que es el mes de la factura.');
+        } else if (alcance.respaldoBuzon) {
+            detalle.push('Se buscó en el índice y se le preguntó al buzón por el número.');
+        } else {
+            detalle.push('Se buscó en el índice del buzón.');
+        }
+        if (alcance.respaldoParcial) {
+            detalle.push('El recorrido del buzón se cortó por tiempo antes de terminar.');
+        }
+        if (alcance.pendientes > 0) {
+            detalle.push('Al índice todavía le faltan '
+                + Number(alcance.pendientes).toLocaleString('es-CR')
+                + ' correos por leerles el adjunto.');
+        }
+
+        var nota = document.createElement('div');
+        nota.style.cssText = 'font-size:11px;margin-top:8px;line-height:1.6;max-width:420px;';
+        nota.textContent = detalle.join(' ');
+        contenedor.appendChild(nota);
+
+        if (!alcance.buzonCompletoPendiente) { return; }
+
+        // Lo que falta por mirar, ofrecido en vez de hecho: recorrer todas las
+        // carpetas sin filtro de fecha son minutos de espera, y quien busca es
+        // quien sabe si este número los vale.
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-outline btn-sm';
+        btn.style.marginTop = '10px';
+        btn.innerHTML = '<i class="fas fa-magnifying-glass-plus" style="margin-right:6px;"></i>'
+            + 'Buscar en todo el buzón';
+        btn.title = 'Recorre todas las carpetas sin filtro de fecha, adjuntos incluidos. Puede tardar varios minutos.';
+        btn.addEventListener('click', function () {
+            cargarCorreos(Object.assign({}, ultimoAlcance.contexto || {}, { buzonCompleto: true }));
+        });
+        contenedor.appendChild(btn);
+    }
+
+    /** 'YYYY-MM-DD' → 'dd/mm', que es como se lee una fecha de un vistazo. */
+    function fechaCortaISO(iso) {
+        return String(iso).substring(8, 10) + '/' + String(iso).substring(5, 7);
+    }
+
     // ── Render de la lista ──
     function renderCorreos() {
         if (buscando) {
@@ -1116,15 +1176,23 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             var icoEspera = document.createElement('i');
             icoEspera.className = 'fas fa-magnifying-glass fa-fade';
             esperando.appendChild(icoEspera);
-            esperando.appendChild(document.createTextNode('Buscando en el buzón…'));
-            if (colaIndice > 0) {
-                var nota = document.createElement('div');
-                nota.style.cssText = 'font-size:11px;margin-top:6px;';
+            esperando.appendChild(document.createTextNode(buscandoBuzonCompleto
+                ? 'Recorriendo todo el buzón…'
+                : 'Buscando en el buzón…'));
+            var nota = document.createElement('div');
+            nota.style.cssText = 'font-size:11px;margin-top:6px;line-height:1.6;max-width:420px;';
+            if (buscandoBuzonCompleto) {
+                // Se pidió a propósito: lo que toca es decir cuánto puede durar.
+                nota.textContent = 'Todas las carpetas, sin filtro de fecha y mirando dentro de'
+                    + ' cada correo. Puede tardar varios minutos.';
+            } else if (colaIndice > 0) {
                 // Decir por qué tarda: el número puede estar solo en el nombre
                 // del adjunto, y esos todavía no están en el índice.
                 nota.textContent = 'Al índice le faltan '
                     + colaIndice.toLocaleString('es-CR')
                     + ' correos, así que hay que preguntarle al buzón. Puede tardar un minuto.';
+            }
+            if (nota.textContent !== '') {
                 esperando.appendChild(nota);
             }
             listaEl.appendChild(esperando);
@@ -1144,6 +1212,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             vacio.appendChild(document.createTextNode(correos.length
                 ? 'Ninguno de los correos cargados coincide — pulsa Enter para buscar en el buzón'
                 : 'Sin resultados: prueba otro término o rango'));
+            pintarAlcanceBusqueda(vacio);
             listaEl.appendChild(vacio);
         }
 
@@ -1424,6 +1493,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         btnCargar.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
         elResumen.style.display = 'none';
         buscando = true;
+        buscandoBuzonCompleto = !!opts.buzonCompleto;
         renderCorreos();
 
         postJson(BASE + '/correo/listar', {
@@ -1434,7 +1504,9 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             pagina: paginaSolicitada,
             origen_busqueda: esTarjeta ? 'tarjeta' : 'bandeja',
             fecha_referencia: esTarjeta ? (opts.fechaReferencia || '') : '',
-            numero_contexto: esTarjeta ? (opts.numeroContexto || '') : ''
+            numero_contexto: esTarjeta ? (opts.numeroContexto || '') : '',
+            // Solo cuando se pidió a propósito desde el panel de sin resultados.
+            buzon_completo: opts.buzonCompleto ? 1 : 0
         })
             .then(function (r) {
                 buscando = false;
@@ -1464,13 +1536,29 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                 // El número no estaba en el índice y hubo que preguntarle al
                 // buzón: eso es lo que se tardó. Decirlo evita que parezca
                 // que la aplicación se colgó sin razón.
-                if (r.respaldo_buzon) {
+                if (r.respaldo_buzon && correos.length) {
                     mesNota += ' · encontrados en el buzón'
                         + (r.pendientes_indice
                             ? ', faltan ' + Number(r.pendientes_indice).toLocaleString('es-CR')
                               + ' correos por indexar'
                             : '');
                 }
+                if (r.respaldo_parcial && correos.length) {
+                    mesNota += ' · el buzón no se recorrió entero';
+                }
+
+                // Con qué quedarse si no apareció nada: dónde se miró y qué
+                // queda por mirar. Lo pinta el panel de "sin resultados".
+                colaIndice = Number(r.pendientes_indice || 0);
+                ultimoAlcance = {
+                    fechaDesde: r.fecha_desde || '',
+                    fechaHasta: r.fecha_hasta || '',
+                    respaldoBuzon: !!r.respaldo_buzon,
+                    respaldoParcial: !!r.respaldo_parcial,
+                    buzonCompletoPendiente: !!r.buzon_completo_pendiente,
+                    pendientes: colaIndice,
+                    contexto: contextoBusquedaActivo
+                };
                 seleccion = {};
                 cbVisibles.checked = false;
                 renderCorreos();
@@ -1494,6 +1582,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             })
             .then(function () {
                 buscando = false;
+                buscandoBuzonCompleto = false;
                 btnCargar.disabled = false;
                 btnCargar.innerHTML = '<i class="fas fa-magnifying-glass"></i>';
             });
@@ -1549,7 +1638,13 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     // completar los datos de los correos) y se repite hasta terminar; la
     // construcción inicial con miles de correos toma varias tandas.
     // Solo se auto-ejecuta si la última revisión fue hace más de 10 minutos.
-    var syncInfo = document.getElementById('sync-info');
+    //
+    // No pinta nada, y es a propósito: esto es mantenimiento, no algo que
+    // haya que quedarse mirando. Antes ocupaba una tira debajo del buscador
+    // que en su mayoría decía cosas que nadie tenía que atender. Lo único
+    // que importa —que el índice se quedó atrás y por eso las búsquedas
+    // tardan— lo deja el servidor en la campana de Avisos, y el panel de
+    // "sin resultados" lo repite donde se siente.
     var syncEnCurso = false;
     var SYNC_CADA_MS = 10 * 60 * 1000;
     var SYNC_MAX_TANDAS = 60;
@@ -1574,174 +1669,110 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         try { localStorage.setItem(SYNC_CLAVE_TS, String(ts)); } catch (e) {}
     }
 
-    function syncNum(n) { return Number(n || 0).toLocaleString('es-CR'); }
+    /*
+     * La única señal de sincronización que quedó en la pantalla, y solo
+     * cuando se pidió a propósito desde el aviso de la campana. El resto del
+     * tiempo esto no se ve: es mantenimiento, no algo que haya que mirar.
+     * Pero un botón "Actualizar el índice ahora" que no contesta nada se lee
+     * como un botón roto, así que mientras corre lo dice, y se va al terminar.
+     */
+    var syncLinea = null;
+    function syncDecirTemporal(texto, terminado) {
+        var caja = document.querySelector('.correo-buscador');
+        if (!caja) return;
 
-    function syncHaceCuanto(ts) {
-        var min = Math.round((Date.now() - ts) / 60000);
-        if (min < 1) return 'hace un momento';
-        if (min < 60) return 'hace ' + min + (min === 1 ? ' minuto' : ' minutos');
-        var horas = Math.round(min / 60);
-        return 'hace ' + horas + (horas === 1 ? ' hora' : ' horas');
-    }
+        if (!syncLinea) {
+            syncLinea = document.createElement('div');
+            syncLinea.style.cssText = 'font-size:11.5px;color:var(--text-muted);'
+                + 'display:flex;align-items:center;gap:5px;';
+            caja.appendChild(syncLinea);
+        }
+        syncLinea.innerHTML = '<i class="fas '
+            + (terminado ? 'fa-circle-check' : 'fa-rotate fa-spin')
+            + '" style="width:11px;text-align:center;"></i>';
+        syncLinea.appendChild(document.createTextNode(texto));
 
-    // Armazón fijo (título, porcentaje, barra y detalle) para que el texto no
-    // salte de lugar entre tanda y tanda.
-    var syncUI = null;
-    function syncArmar() {
-        if (syncUI) return syncUI;
-        syncInfo.innerHTML =
-            '<div style="display:flex;align-items:center;gap:5px;">'
-          +   '<i class="sync-icono" style="width:11px;text-align:center;"></i>'
-          +   '<span class="sync-titulo" style="font-weight:600;"></span>'
-          +   '<span class="sync-derecha" style="margin-left:auto;white-space:nowrap;"></span>'
-          + '</div>'
-          + '<div class="sync-barra" style="background:#e2e8f0;border-radius:6px;height:5px;overflow:hidden;margin-top:3px;">'
-          +   '<div class="sync-barra-fill" style="background:linear-gradient(90deg,#0c2461,#1e3a8a);height:100%;width:0%;transition:width .3s;"></div>'
-          + '</div>'
-          + '<div class="sync-detalle" style="margin-top:2px;"></div>';
-        syncUI = {
-            icono:   syncInfo.querySelector('.sync-icono'),
-            titulo:  syncInfo.querySelector('.sync-titulo'),
-            derecha: syncInfo.querySelector('.sync-derecha'),
-            barra:   syncInfo.querySelector('.sync-barra'),
-            fill:    syncInfo.querySelector('.sync-barra-fill'),
-            detalle: syncInfo.querySelector('.sync-detalle')
-        };
-        return syncUI;
-    }
-
-    /** Trabajando: qué se está haciendo, cuánto falta y barra de avance. */
-    function syncPintarAvance(titulo, pct, detalle) {
-        if (!syncInfo) return;
-        var ui = syncArmar();
-        pct = Math.max(0, Math.min(100, Math.round(pct)));
-        ui.icono.className = 'sync-icono fas fa-rotate fa-spin';
-        ui.icono.style.color = 'var(--navy-light)';
-        ui.titulo.textContent = titulo;
-        ui.titulo.style.color = 'var(--navy)';
-        ui.derecha.textContent = pct + ' %';
-        ui.derecha.style.color = 'var(--navy)';
-        ui.derecha.style.fontWeight = '700';
-        ui.barra.style.display = '';
-        ui.fill.style.width = pct + '%';
-        ui.detalle.textContent = detalle || '';
-    }
-
-    /** En reposo: una línea, sin barra, con el enlace para revisar a mano. */
-    function syncPintarReposo(icono, color, titulo, detalle) {
-        if (!syncInfo) return;
-        var ui = syncArmar();
-        ui.icono.className = 'sync-icono fas ' + icono;
-        ui.icono.style.color = color;
-        ui.titulo.textContent = titulo;
-        ui.titulo.style.color = color;
-        ui.barra.style.display = 'none';
-        ui.detalle.textContent = detalle || '';
-
-        ui.derecha.textContent = '';
-        ui.derecha.style.fontWeight = '600';
-        var a = document.createElement('a');
-        a.href = '#';
-        a.textContent = '↻ actualizar';
-        a.style.color = 'var(--navy-light)';
-        a.addEventListener('click', function (e) { e.preventDefault(); sincronizarIndice(true); });
-        ui.derecha.appendChild(a);
+        if (!terminado) return;
+        setTimeout(function () {
+            if (syncLinea && syncLinea.parentNode) {
+                syncLinea.parentNode.removeChild(syncLinea);
+            }
+            syncLinea = null;
+        }, 6000);
     }
 
     function sincronizarIndice(forzar) {
-        if (!syncInfo || syncEnCurso) return;
+        if (syncEnCurso) return;
 
         if (!forzar) {
             var ts = syncMarcaLeer();
-            if (ts && Date.now() - ts < SYNC_CADA_MS) {
-                syncPintarReposo('fa-circle-check', 'var(--text-muted)',
-                    'Índice del buzón', 'revisado ' + syncHaceCuanto(ts));
-                return;
-            }
+            if (ts && Date.now() - ts < SYNC_CADA_MS) return;
         }
 
         syncEnCurso = true;
-        var acumNuevos = 0;
         var tandas = 0;
-        var metaCola = 0; // mayor cola de correos vista: da un % honesto
+        // Solo se le cuenta a quien lo pidió; la actualización de rutina es
+        // muda porque nadie tiene que hacer nada con ella.
+        var decir = forzar
+            ? syncDecirTemporal
+            : function () {};
+
+        decir('Actualizando el índice del buzón…', false);
 
         function paso() {
             return postJson(BASE + '/correo/sincronizar', {}).then(function (r) {
                 var s = r.stats || {};
-                var indexados = syncNum(r.total_indexados);
-                acumNuevos += s.nuevos || 0;
                 tandas++;
+
+                // Mientras la cola no baje a cero, buscar un número puede
+                // tener que ir hasta el buzón. El panel de búsqueda lo usa
+                // para explicar la espera y el "sin resultados".
+                colaIndice = s.metadatos_pendientes || 0;
 
                 if (s.en_curso) {
                     // Otro usuario (o la tarea automática) tiene tomado el
                     // buzón: se reintenta en un minuto, no en cada visita.
                     syncMarcaGuardar(60 * 1000);
-                    syncPintarReposo('fa-hourglass-half', 'var(--text-muted)',
-                        'Índice del buzón: ' + indexados + ' correos',
-                        'hay otra actualización en curso; esta sigue en un momento');
+                    decir('Ya hay otra actualización en curso; esa la termina.', true);
                     return;
                 }
 
                 syncMarcaGuardar();
 
-                var restantes = s.restantes || 0;
-                var totalCarpetas = s.carpetas_totales || 0;
-                var cola = s.metadatos_pendientes || 0;
-                // Lo sabe también la búsqueda: mientras la cola no baje a
-                // cero, buscar un número puede tener que ir hasta el buzón.
-                colaIndice = cola;
-                var colaInicio = cola + (s.metadatos_resueltos || 0);
-                if (colaInicio > metaCola) metaCola = colaInicio;
-
                 if (!r.completado && tandas < SYNC_MAX_TANDAS) {
-                    if (restantes > 0 && totalCarpetas > 0) {
-                        // Fase 1: recorrer las carpetas del buzón.
-                        syncPintarAvance(
-                            'Revisando carpetas del buzón',
-                            (totalCarpetas - restantes) * 100 / totalCarpetas,
-                            'faltan ' + restantes + ' de ' + totalCarpetas + ' carpetas'
-                                + ' · ' + indexados + ' correos en el índice'
-                        );
-                    } else {
-                        // Fase 2: adjuntos, CC y Responder a de cada correo.
-                        syncPintarAvance(
-                            'Completando los datos de los correos',
-                            metaCola > 0 ? (metaCola - cola) * 100 / metaCola : 0,
-                            'faltan ' + syncNum(cola) + ' de ' + syncNum(metaCola) + ' correos'
-                        );
+                    if (colaIndice > 0) {
+                        decir('Completando los datos de '
+                            + colaIndice.toLocaleString('es-CR') + ' correos…', false);
                     }
                     return paso();
                 }
 
-                if (!r.completado && cola > 0) {
-                    // Tope de tandas alcanzado con rezago: decirlo tal cual,
-                    // la tarea programada (o la próxima visita) lo continuará.
+                if (!r.completado && colaIndice > 0) {
+                    // Tope de tandas con rezago: la tarea programada —o la
+                    // próxima visita— lo sigue. Si dejó de avanzar del todo,
+                    // el servidor ya lo anotó en la campana.
                     syncMarcaGuardar(60 * 1000);
-                    syncPintarReposo('fa-circle-pause', 'var(--text-muted)',
-                        'Índice del buzón: ' + indexados + ' correos',
-                        'faltan ' + syncNum(cola) + ' correos por completar; sigue en segundo plano');
+                    decir('Quedan ' + colaIndice.toLocaleString('es-CR')
+                        + ' correos por completar; sigue en segundo plano.', true);
                     return;
                 }
 
-                syncPintarReposo('fa-circle-check', '#166534',
-                    'Índice del buzón al día: ' + indexados + ' correos',
-                    acumNuevos ? 'se agregaron ' + syncNum(acumNuevos) + ' correos nuevos'
-                               : 'revisado hace un momento');
+                decir('Índice del buzón al día.', true);
             });
         }
 
-        syncPintarAvance('Revisando carpetas del buzón', 0, 'conectando con el buzón…');
         paso()
             .catch(function (err) {
-                syncPintarReposo('fa-triangle-exclamation', '#b45309',
-                    'No se pudo actualizar el índice',
-                    String(err.message).substring(0, 90));
+                // El fallo queda anotado en la campana desde el servidor. Acá
+                // solo se adelanta el próximo intento.
+                syncMarcaGuardar(60 * 1000);
+                decir('No se pudo actualizar: ' + String(err.message).substring(0, 80), true);
             })
             .then(function () { syncEnCurso = false; });
     }
 
     if (btnCargar && !btnCargar.disabled) {
-        setTimeout(function () { sincronizarIndice(false); }, 300);
+        setTimeout(function () { sincronizarIndice(SYNC_FORZAR); }, 300);
     }
 
     if (inputBuscar) {

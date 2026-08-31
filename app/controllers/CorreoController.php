@@ -29,6 +29,18 @@ class CorreoController extends Controller
         'CV', 'LLC', 'GMBH', 'AG',
     ];
 
+    /*
+     * Lo que puede tardar preguntarle al buzón por un número que el índice
+     * todavía no tiene. Son presupuestos, no plazos: el recorrido se corta
+     * entre carpetas y se dice que quedó a medias.
+     *
+     * El primero es el respaldo acotado por fecha, que sale solo mientras el
+     * índice va rezagado. El segundo es el buzón entero sin filtro de fecha,
+     * que ya no sale solo: lo pide quien busca, sabiendo lo que cuesta.
+     */
+    private const RESPALDO_SEGUNDOS = 25;
+    private const RESPALDO_BUZON_SEGUNDOS = 120;
+
     private $configLocalCache = null;
 
     public function __construct()
@@ -202,6 +214,9 @@ class CorreoController extends Controller
                 ? trim((string) $this->get('fecha', ''))
                 : '',
             'abrirCorreoUid'  => max(0, (int) $this->get('abrir_uid', 0)),
+            // Llega desde el aviso de la campana: "el índice se quedó atrás"
+            // sin un botón que lo intente ahora sería solo una queja.
+            'forzarSync'      => !empty($this->get('sync', 0)),
             'abrirCorreoCarpeta' => mb_substr(trim((string) $this->get('abrir_carpeta', '')), 0, 255, 'UTF-8'),
             'navDoc'          => $navDoc,
             'bandeja'         => $bandeja,
@@ -242,6 +257,18 @@ class CorreoController extends Controller
         // bandeja no recibe ni hereda este contexto.
         $origenBusqueda = strtolower(trim((string) $this->post('origen_busqueda', 'bandeja')));
         $esBusquedaTarjeta = $origenBusqueda === 'tarjeta';
+
+        /*
+         * "Buscar en todo el buzón": lo manda el botón que aparece cuando la
+         * búsqueda cercana no encontró nada. Recorre todas las carpetas sin
+         * filtro de fecha preguntándole al servidor de correo por el número
+         * dentro de cada mensaje, adjuntos incluidos. Es lo más lento que
+         * hace este módulo, y por eso se pide a propósito.
+         */
+        $buzonCompleto = !empty($this->post('buzon_completo', 0));
+        if ($buzonCompleto) {
+            @set_time_limit(self::RESPALDO_BUZON_SEGUNDOS + 60);
+        }
         $fechaDesdeTarjeta = '';
         $fechaHastaTarjeta = '';
         if ($esBusquedaTarjeta) {
@@ -294,6 +321,11 @@ class CorreoController extends Controller
         $mesProbado = '';
         $respaldoBuzon = false;
         $pendientesIndice = 0;
+        // El recorrido del buzón se cortó por tiempo: "sin resultados" pasa a
+        // ser "hasta donde se miró, no está".
+        $respaldoParcial = false;
+        // Queda por mirar el buzón entero, y no se hizo porque nadie lo pidió.
+        $buzonCompletoPendiente = false;
         $rangoTarjetaAplicado = false;
         $rangoTarjetaProbado = $esBusquedaTarjeta
             && $fechaDesdeTarjeta !== '' && $fechaHastaTarjeta !== '';
@@ -438,53 +470,86 @@ class CorreoController extends Controller
 
             $respaldoAcotado = $rangoTarjetaProbado || $mes !== '' || (int) $config['dias_atras'] > 0;
             $pendientesIndice = $indice->contarPendientesAdjuntos();
-            if ($ambito === 'asunto_remitente' && $terminoObjetivo !== '' && !$coincidenciaLocalObjetivo
-                && $respaldoAcotado
-                && $pendientesIndice > 0) {
-                // Búsqueda TEXT contra el buzón, carpeta por carpeta: es la
-                // que tarda un minuto. Solo se llega aquí cuando el número no
-                // está en el índice, y eso pasa mientras queden adjuntos sin
-                // leer. Se avisa en la respuesta para poder explicarlo.
+
+            /*
+             * Preguntarle al buzón, no al índice. Pasa por sí solo mientras al
+             * índice le falten adjuntos por leer —el número puede vivir solo
+             * en el nombre de un XML— y siempre que se pida el buzón entero a
+             * propósito, que es la única forma de llegar al cuerpo del correo.
+             */
+            if ($ambito === 'asunto_remitente' && $terminoObjetivo !== ''
+                && ($buzonCompleto
+                    || (!$coincidenciaLocalObjetivo && $respaldoAcotado && $pendientesIndice > 0))) {
+                // Búsqueda TEXT contra el buzón, carpeta por carpeta: la
+                // resuelve el servidor de correo y es la parte lenta. Va
+                // acotada por fecha y con presupuesto de tiempo, y se avisa
+                // en la respuesta de hasta dónde se llegó.
                 $respaldoBuzon = true;
-                $configMime = $config;
-                if ($rangoTarjetaProbado) {
-                    $configMime['dias_atras'] = 0;
-                    $configMime['fecha_desde'] = $fechaDesdeTarjeta;
-                    // MailFetcher usa BEFORE (límite exclusivo).
-                    $configMime['fecha_hasta'] = date(
-                        'Y-m-d',
-                        strtotime($fechaHastaTarjeta . ' +1 day')
+
+                /*
+                 * El buzón entero, sin filtro de fecha y en todas las
+                 * carpetas: un TEXT contra decenas de miles de correos que se
+                 * mide en minutos. Es lo que antes salía solo y terminaba,
+                 * después de la espera, diciendo "sin resultados". Ahora lo
+                 * pide quien busca, desde el panel que le dice qué falta por
+                 * mirar; el presupuesto de tiempo lo corta si se pasa.
+                 */
+                $barrerBuzonEntero = function () use (
+                    $config, $terminoObjetivo, $porPagina, $offset, $indice, &$respaldoParcial
+                ) {
+                    $configTodo = $config;
+                    $configTodo['dias_atras'] = 0;
+                    unset($configTodo['fecha_desde'], $configTodo['fecha_hasta']);
+                    $encontrados = $this->buscarNumeroEnMime(
+                        $configTodo, $terminoObjetivo, '',
+                        $porPagina, $offset, $indice, self::RESPALDO_BUZON_SEGUNDOS
                     );
-                } elseif ($mes !== '') {
-                    $inicioMes = strtotime($mes . '-01 00:00:00');
-                    $configMime['dias_atras'] = 0;
-                    $configMime['fecha_desde'] = date('Y-m-d', $inicioMes);
-                    $configMime['fecha_hasta'] = date('Y-m-d', strtotime('+1 month', $inicioMes));
-                }
+                    $respaldoParcial = $respaldoParcial || !empty($encontrados['parcial']);
+                    return $encontrados;
+                };
 
-                $listaMime = $this->buscarNumeroEnMime(
-                    $configMime, $terminoObjetivo, $carpeta,
-                    $porPagina, $offset, $indice
-                );
-
-                // La tarjeta terminó primero toda la búsqueda cercana. Si
-                // no hubo nada, ahora sí amplía tanto el índice como IMAP a
-                // todas las fechas, sin reutilizar filtros de la bandeja.
                 $mimeAmplio = false;
-                if ($rangoTarjetaProbado && (int) $listaMime['total'] === 0) {
-                    $lista = $buscarLocal();
-                    if ((int) $lista['total'] === 0) {
-                        $configMimeTodo = $config;
-                        $configMimeTodo['dias_atras'] = 0;
-                        unset($configMimeTodo['fecha_desde'], $configMimeTodo['fecha_hasta']);
-                        $listaMime = $this->buscarNumeroEnMime(
-                            $configMimeTodo, $terminoObjetivo, '',
-                            $porPagina, $offset, $indice
-                        );
-                    } else {
-                        $listaMime = ['total' => 0, 'correos' => []];
+                if ($buzonCompleto) {
+                    // Se pidió el buzón entero: la búsqueda acotada por fecha
+                    // es un pedazo de esta, así que no se hace antes. El
+                    // índice sí se vuelve a mirar sin el rango de la tarjeta.
+                    if ($rangoTarjetaProbado) {
+                        $lista = $buscarLocal();
+                        $mimeAmplio = true;
                     }
-                    $mimeAmplio = true;
+                    $listaMime = $barrerBuzonEntero();
+                } else {
+                    // El respaldo de siempre, acotado a las fechas en las que
+                    // esa factura pudo llegar.
+                    $configMime = $config;
+                    if ($rangoTarjetaProbado) {
+                        $configMime['dias_atras'] = 0;
+                        $configMime['fecha_desde'] = $fechaDesdeTarjeta;
+                        // MailFetcher usa BEFORE (límite exclusivo).
+                        $configMime['fecha_hasta'] = date(
+                            'Y-m-d',
+                            strtotime($fechaHastaTarjeta . ' +1 day')
+                        );
+                    } elseif ($mes !== '') {
+                        $inicioMes = strtotime($mes . '-01 00:00:00');
+                        $configMime['dias_atras'] = 0;
+                        $configMime['fecha_desde'] = date('Y-m-d', $inicioMes);
+                        $configMime['fecha_hasta'] = date('Y-m-d', strtotime('+1 month', $inicioMes));
+                    }
+
+                    $listaMime = $this->buscarNumeroEnMime(
+                        $configMime, $terminoObjetivo, $carpeta,
+                        $porPagina, $offset, $indice, self::RESPALDO_SEGUNDOS
+                    );
+                    $respaldoParcial = !empty($listaMime['parcial']);
+
+                    // La tarjeta agota primero lo cercano a la fecha de la
+                    // factura —índice y buzón— antes de mirar más lejos.
+                    if ($rangoTarjetaProbado && (int) $listaMime['total'] === 0) {
+                        $lista = $buscarLocal();
+                        $listaMime = ['total' => 0, 'correos' => []];
+                        $mimeAmplio = true;
+                    }
                 }
 
                 // Si el respaldo encontró algo en el mes prioritario, no se
@@ -530,6 +595,18 @@ class CorreoController extends Controller
                 $lista['total'] = max(count($lista['correos']), (int) $lista['total'] - $eliminados);
             }
 
+            /*
+             * No apareció. Lo único que queda por levantar es el buzón entero
+             * —todas las carpetas, sin filtro de fecha y mirando dentro de
+             * cada correo—, y se ofrece en vez de hacerlo: cuesta minutos y
+             * casi siempre termina confirmando que el correo no llegó. Antes
+             * salía solo, y esa espera terminaba en "sin resultados" sin que
+             * nadie hubiera decidido pagarla.
+             */
+            if (!$buzonCompleto && $terminoObjetivo !== '' && (int) $lista['total'] === 0) {
+                $buzonCompletoPendiente = true;
+            }
+
             $fuente = 'indice';
             $ultimaSync = $indice->ultimaSync();
         }
@@ -558,6 +635,13 @@ class CorreoController extends Controller
             // todavía no tiene los nombres de los adjuntos: explica la espera.
             'respaldo_buzon' => $respaldoBuzon,
             'pendientes_indice' => $pendientesIndice,
+            // El recorrido del buzón se quedó a medias por tiempo: lo que
+            // sigue sin aparecer puede estar en lo que no se alcanzó a mirar.
+            'respaldo_parcial' => $respaldoParcial,
+            // Falta el buzón entero, y está ahí para pedirlo: es lo que la
+            // pantalla ofrece en vez de hacer esperar minutos por las dudas.
+            'buzon_completo_pendiente' => $buzonCompletoPendiente,
+            'buzon_completo' => $buzonCompleto,
             'ultima_sync' => $ultimaSync,
             'correos' => $lista['correos'],
         ]);
@@ -605,8 +689,14 @@ class CorreoController extends Controller
         }
     }
 
-    /** Busca un número en encabezados/cuerpo MIME e hidrata sus adjuntos. */
-    private function buscarNumeroEnMime(array $config, $numero, $carpeta, $limite, $offset, $indice)
+    /**
+     * Busca un número en encabezados/cuerpo MIME e hidrata sus adjuntos.
+     *
+     * $segundos es el presupuesto: esta búsqueda la resuelve el servidor de
+     * correo carpeta por carpeta y sobre un buzón grande no termina en un
+     * tiempo que nadie esté dispuesto a esperar mirando una pantalla.
+     */
+    private function buscarNumeroEnMime(array $config, $numero, $carpeta, $limite, $offset, $indice, $segundos = 0)
     {
         $fetcher = new MailFetcher($config);
         try {
@@ -616,7 +706,8 @@ class CorreoController extends Controller
                 (string) $numero,
                 'texto_mime',
                 $carpeta !== '' ? (string) $carpeta : $this->carpetasCandidatas($fetcher, $indice, $config),
-                (int) $offset
+                (int) $offset,
+                (int) $segundos
             );
 
             // Completar inmediatamente el índice de las coincidencias para
@@ -642,7 +733,7 @@ class CorreoController extends Controller
         } catch (Throwable $e) {
             // El índice local sigue siendo utilizable si IMAP falla o el
             // servidor no soporta la búsqueda TEXT.
-            return ['total' => 0, 'correos' => []];
+            return ['total' => 0, 'correos' => [], 'parcial' => false];
         } finally {
             $fetcher->cerrar();
         }
@@ -736,6 +827,10 @@ class CorreoController extends Controller
                 'ultima_sync' => $indice->ultimaSync(),
             ]);
         } catch (Throwable $e) {
+            // El módulo de correo dejó de tener dónde enseñar esto: va a la
+            // campana, que es donde se mira aunque nadie tenga Correo abierto.
+            require_once __DIR__ . '/../helpers/CorreoSync.php';
+            CorreoSync::anotarFallo($e->getMessage(), $config);
             $this->json(['ok' => false, 'message' => $e->getMessage()], 500);
         }
     }
@@ -757,12 +852,20 @@ class CorreoController extends Controller
 
         $lock = CorreoSync::adquirirLock();
         if ($lock === null) {
-            // Otro usuario o el cron ya están sincronizando: no se duplica
-            // la conexión. completado=true corta el ciclo de tandas del JS.
+            /*
+             * Otro usuario o el cron ya están sincronizando: no se duplica la
+             * conexión. completado=true corta el ciclo de tandas del JS.
+             *
+             * La cola sí se cuenta —es una consulta al índice, no al buzón—
+             * porque de ella depende que la búsqueda tenga que ir hasta el
+             * servidor de correo. Devolver cero mientras hay rezago dejaba a
+             * la pantalla sin poder explicar por qué la búsqueda tardaba.
+             */
             return [
                 'carpetas' => 0, 'nuevos' => 0, 'reindexadas' => 0, 'restantes' => 0,
                 'carpetas_totales' => 0, 'carpetas_por_revisar' => 0,
-                'metadatos_resueltos' => 0, 'metadatos_pendientes' => 0,
+                'metadatos_resueltos' => 0,
+                'metadatos_pendientes' => $indice->contarPendientesAdjuntos(),
                 'adjuntos' => 0, 'cc' => 0, 'completado' => true, 'en_curso' => true, 'segundos' => 0,
             ];
         }

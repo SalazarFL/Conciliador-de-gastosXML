@@ -172,6 +172,9 @@ try {
                 $acc['stats']['completado'] = false;
                 $resumenCuentas[$id] = $acc['stats'];
                 registrar($rutaLog, 'Cuenta "' . $acc['stats']['nombre'] . '": ERROR ' . $e->getMessage());
+                // Y en la campana: el log de la tarea programada no lo lee
+                // nadie hasta que algo ya se rompió.
+                CorreoSync::anotarFallo($e->getMessage(), $acc['config']);
                 $acc['fetcher']->cerrar();
                 unset($cola[$id]);
             }
