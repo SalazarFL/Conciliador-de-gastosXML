@@ -18,6 +18,21 @@ require_once __DIR__ . '/../helpers/PaqueteDocumentos.php';
 
 class CorreoController extends Controller
 {
+    /**
+     * Hasta dónde mira la primera vuelta de una búsqueda de texto.
+     *
+     * Buscar texto libre no lo resuelve ningún índice —"un pedacito de texto
+     * en algún lugar del renglón" obliga a leerlos todos— así que ese
+     * recorrido crece con el buzón: hoy son 138 mil correos y con 42 buzones
+     * serán casi dos millones.
+     *
+     * Medio año cubre de sobra lo que se persigue en un ciclo de pago semanal
+     * y es la cuarta parte del índice. Si el documento es más viejo, la
+     * segunda vuelta lo encuentra igual; lo único que se paga es buscar dos
+     * veces de vez en cuando, nunca una respuesta equivocada.
+     */
+    private const DIAS_BUSQUEDA_RECIENTE = 180;
+
     // Misma lista del renombrador FE_ de conciliación: sufijos societarios
     // que se quitan del nombre del proveedor al armar el nombre del archivo
     private const SUFIJOS_SOCIETARIOS = [
@@ -381,12 +396,29 @@ class CorreoController extends Controller
             $usarIndiceNumero = $ambito === 'asunto_remitente'
                 && strlen($terminoObjetivo) >= 4 && strlen($terminoObjetivo) <= 20;
 
+            /**
+             * @param int|null $diasFiltro Cuántos días atrás mirar como mucho.
+             *        null = lo que tenga puesto la cuenta, que es lo de
+             *        siempre. Nunca amplía el límite de la cuenta: si la
+             *        cuenta mira 60 días, pedir 180 sigue mirando 60. Este
+             *        parámetro acota, no autoriza.
+             */
             $buscarLocal = function ($mesFiltro = '', $permitirFallbackTexto = true,
-                                    $fechaDesdeFiltro = '', $fechaHastaFiltro = '') use ($indice, $usarIndiceNumero, $terminoObjetivo, $texto, $ambito, $config, $carpeta, $porPagina, $offset) {
+                                    $fechaDesdeFiltro = '', $fechaHastaFiltro = '',
+                                    $diasFiltro = null) use ($indice, $usarIndiceNumero, $terminoObjetivo, $texto, $ambito, $config, $carpeta, $porPagina, $offset) {
+                $diasCuenta = (int) $config['dias_atras'];
+                if ($diasFiltro === null) {
+                    $dias = $diasCuenta;
+                } elseif ($diasCuenta <= 0) {
+                    // La cuenta no acota: manda la ventana pedida.
+                    $dias = (int) $diasFiltro;
+                } else {
+                    $dias = min($diasCuenta, (int) $diasFiltro);
+                }
                 if ($usarIndiceNumero) {
                     $resultado = $indice->buscarPorNumero(
                         $terminoObjetivo,
-                        (int) $config['dias_atras'],
+                        $dias,
                         $porPagina,
                         $mesFiltro,
                         $carpeta,
@@ -401,7 +433,7 @@ class CorreoController extends Controller
                 return $indice->buscar(
                     $texto,
                     $ambito,
-                    (int) $config['dias_atras'],
+                    $dias,
                     $porPagina,
                     $mesFiltro,
                     $carpeta,
@@ -431,10 +463,30 @@ class CorreoController extends Controller
                 }
             }
             if (!$rangoTarjetaProbado && !$rangoTarjetaAplicado && $mesAplicado === '') {
-                // La tarjeta sin resultados cercanos amplía automáticamente
-                // a todo el buzón. La bandeja llega aquí desde el inicio y
-                // conserva sus filtros de días/carpeta/ámbito.
-                $lista = $buscarLocal();
+                /*
+                 * La tarjeta sin resultados cercanos amplía automáticamente
+                 * a todo el buzón. La bandeja llega aquí desde el inicio y
+                 * conserva sus filtros de días/carpeta/ámbito.
+                 *
+                 * Pero primero medio año, y solo después el índice entero. Una
+                 * búsqueda de texto sin fecha tiene que recorrer todos los
+                 * renglones —no hay índice que resuelva "un pedacito de texto
+                 * en algún lugar del renglón"— y ese recorrido crece con el
+                 * buzón: con 42 buzones son casi dos millones de correos.
+                 *
+                 * Medio año cubre de sobra lo que se persigue en un ciclo de
+                 * pago semanal, y es una cuarta parte del índice. Cuando el
+                 * documento es más viejo, la segunda vuelta lo encuentra
+                 * igual: nunca se contesta "no está" por haber mirado poco,
+                 * solo se paga dos veces de vez en cuando.
+                 */
+                $diasCuenta = (int) $config['dias_atras'];
+                $laVentanaAcota = $diasCuenta <= 0 || $diasCuenta > self::DIAS_BUSQUEDA_RECIENTE;
+
+                $lista = $buscarLocal('', true, '', '', self::DIAS_BUSQUEDA_RECIENTE);
+                if ($laVentanaAcota && (int) $lista['total'] === 0) {
+                    $lista = $buscarLocal();
+                }
             }
 
             // Mientras queden nombres de adjuntos pendientes, una búsqueda
