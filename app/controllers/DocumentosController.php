@@ -147,7 +147,7 @@ class DocumentosController extends Controller
         }
         header('X-Content-Type-Options: nosniff');
         header('Content-Type: ' . ($tipo === 'pdf' ? 'application/pdf' : 'application/xml; charset=utf-8'));
-        header('Content-Length: ' . filesize($real));
+        header('Content-Length: ' . RutaDocumento::tamano($real));
         header('Content-Disposition: inline; filename="' . str_replace('"', '', basename($real)) . '"');
         fpassthru($manejador);
         fclose($manejador);

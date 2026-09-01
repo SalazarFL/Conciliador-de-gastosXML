@@ -17,6 +17,7 @@
  * los archivos y mandarlos.
  */
 require_once __DIR__ . '/DocumentoArchivo.php';
+require_once __DIR__ . '/RutaDocumento.php';
 
 class PaqueteDocumentos
 {
@@ -43,20 +44,41 @@ class PaqueteDocumentos
         $resumen = ['documentos' => 0, 'xml' => 0, 'pdf' => 0, 'sin_xml' => 0, 'sin_pdf' => 0];
         $usados = [];
 
+        /*
+         * Un ZIP necesita archivos de verdad, no un chorro de bytes: por eso
+         * acá se pide rutaLocal() y no abrir(). Con los documentos en el disco
+         * es la ruta misma y no cuesta nada; si algún día viven en SharePoint,
+         * el almacén los baja a un temporal y soltarLocal() los limpia. Los
+         * temporales no se pueden soltar hasta después de cerrar el ZIP,
+         * porque addFile() no lee el archivo hasta ese momento.
+         */
+        $locales = [];
+        $agregar = function ($ruta, $nombreEnZip) use ($zip, &$locales) {
+            $ruta = trim((string) $ruta);
+            if ($ruta === '') {
+                return false;
+            }
+            $local = RutaDocumento::rutaLocal($ruta);
+            if ($local === null) {
+                return false;
+            }
+            $locales[] = $local;
+
+            return $zip->addFile($local, $nombreEnZip);
+        };
+
         foreach ($filas as $fila) {
             $base = self::baseUnica($fila, $usados);
             $entro = false;
 
-            $rutaXml = trim((string) ($fila['archivo_xml'] ?? ''));
-            if ($rutaXml !== '' && is_file($rutaXml) && $zip->addFile($rutaXml, $base . '.xml')) {
+            if ($agregar($fila['archivo_xml'] ?? '', $base . '.xml')) {
                 $resumen['xml']++;
                 $entro = true;
             } else {
                 $resumen['sin_xml']++;
             }
 
-            $rutaPdf = trim((string) ($fila['archivo_pdf'] ?? ''));
-            if ($rutaPdf !== '' && is_file($rutaPdf) && $zip->addFile($rutaPdf, $base . '.pdf')) {
+            if ($agregar($fila['archivo_pdf'] ?? '', $base . '.pdf')) {
                 $resumen['pdf']++;
                 $entro = true;
             } else {
@@ -68,16 +90,28 @@ class PaqueteDocumentos
             }
         }
 
+        // Después de cerrar el ZIP —no antes—: hasta ese momento addFile() no
+        // ha leído nada del disco.
+        $soltarTodos = function () use (&$locales) {
+            foreach ($locales as $local) {
+                RutaDocumento::soltarLocal($local);
+            }
+            $locales = [];
+        };
+
         if ($resumen['xml'] + $resumen['pdf'] === 0) {
             $zip->close();
+            $soltarTodos();
             @unlink((string) $rutaZip);
-            throw new RuntimeException('Ninguno de los documentos tiene su archivo en el disco.');
+            throw new RuntimeException('Ninguno de los documentos tiene su archivo disponible.');
         }
 
         if (!$zip->close()) {
+            $soltarTodos();
             @unlink((string) $rutaZip);
             throw new RuntimeException('No se pudo terminar de escribir el archivo ZIP.');
         }
+        $soltarTodos();
 
         return $resumen;
     }

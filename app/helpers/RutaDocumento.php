@@ -107,11 +107,17 @@ class RutaDocumento
         return $raiz . DIRECTORY_SEPARATOR . self::normalizarSeparadores(ltrim($ruta, '\\/'));
     }
 
-    /** ¿El archivo existe en esta máquina? Acepta las dos formas. */
+    /**
+     * ¿El archivo existe? Acepta las dos formas.
+     *
+     * Se le pregunta al almacén y no al disco: los documentos pueden no estar
+     * en un disco. Ver AlmacenDocumentos.
+     */
     public static function existe($ruta)
     {
-        $absoluta = self::absoluta($ruta);
-        return $absoluta !== '' && is_file($absoluta);
+        require_once __DIR__ . '/AlmacenDocumentos.php';
+
+        return AlmacenDocumentos::actual()->existe($ruta);
     }
 
     /**
@@ -129,28 +135,55 @@ class RutaDocumento
      * "error al cargar el documento PDF", sin pista de qué había pasado.
      *
      * Devuelve el manejador abierto —hay que cerrarlo— o false si el
-     * contenido no está disponible en esta máquina.
+     * contenido no está disponible.
      */
-    public static function abrirParaLeer($rutaAbsoluta)
+    public static function abrirParaLeer($ruta)
     {
-        $rutaAbsoluta = trim((string) $rutaAbsoluta);
-        if ($rutaAbsoluta === '' || !is_file($rutaAbsoluta)) {
-            return false;
-        }
-        return @fopen($rutaAbsoluta, 'rb');
+        require_once __DIR__ . '/AlmacenDocumentos.php';
+
+        return AlmacenDocumentos::actual()->abrir($ruta);
+    }
+
+    /** Tamaño del documento en bytes, o null si no se sabe. */
+    public static function tamano($ruta)
+    {
+        require_once __DIR__ . '/AlmacenDocumentos.php';
+
+        return AlmacenDocumentos::actual()->tamano($ruta);
     }
 
     /**
-     * Por qué no se puede leer un archivo que sí está en la carpeta, dicho
-     * para quien usa la aplicación y no administra el servidor.
+     * Un archivo real en el disco, para lo que no sirve un chorro de bytes
+     * —armar un ZIP, sobre todo—. Puede ser un temporal: hay que devolverlo
+     * con soltarLocal() al terminar. Ver AlmacenDocumentos.
+     *
+     * @return string|null
      */
-    public static function porQueNoSeLee($rutaAbsoluta)
+    public static function rutaLocal($ruta)
     {
-        return 'El archivo está en la carpeta compartida, pero OneDrive lo tiene solo en la nube '
-            . 'y el servidor no puede bajarlo: corre como servicio de Windows y esa descarga se le '
-            . 'niega. Abrí la carpeta compartida en el Explorador, clic derecho sobre ella y elegí '
-            . '"Conservar siempre en este dispositivo". Para este documento suelto alcanza con '
-            . 'abrirlo una vez desde el Explorador.';
+        require_once __DIR__ . '/AlmacenDocumentos.php';
+
+        return AlmacenDocumentos::actual()->rutaLocal($ruta);
+    }
+
+    /** Devuelve lo que dio rutaLocal(). */
+    public static function soltarLocal($rutaLocal)
+    {
+        require_once __DIR__ . '/AlmacenDocumentos.php';
+
+        AlmacenDocumentos::actual()->soltarLocal($rutaLocal);
+    }
+
+    /**
+     * Por qué no se puede leer un archivo que sí está registrado, dicho para
+     * quien usa la aplicación y no administra el servidor. La explicación
+     * depende de dónde vivan los documentos, así que la da el almacén.
+     */
+    public static function porQueNoSeLee($ruta)
+    {
+        require_once __DIR__ . '/AlmacenDocumentos.php';
+
+        return AlmacenDocumentos::actual()->porQueNoSeLee($ruta);
     }
 
     /** Ruta absoluta a una subcarpeta de trabajo dentro de la raíz. */

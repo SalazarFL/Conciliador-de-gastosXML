@@ -292,7 +292,7 @@ class DevolucionesController extends Controller
     {
         $modelo = $this->loadModel('Devolucion');
         $dev = $modelo->getDevolucion((int) $id);
-        if ($dev === null || empty($dev['ruta_pdf']) || !is_file($dev['ruta_pdf'])) {
+        if ($dev === null || empty($dev['ruta_pdf']) || !RutaDocumento::existe($dev['ruta_pdf'])) {
             $this->redirectWithMessage($this->url('/devoluciones'), 'El PDF de la devolución no está disponible.', 'error');
         }
         // Abrir antes de las cabeceras: un marcador de OneDrive pasa is_file()
@@ -307,7 +307,7 @@ class DevolucionesController extends Controller
         }
         header('Content-Type: application/pdf');
         header('Content-Disposition: inline; filename="' . basename((string) $dev['archivo_pdf']) . '"');
-        header('Content-Length: ' . filesize($dev['ruta_pdf']));
+        header('Content-Length: ' . RutaDocumento::tamano($dev['ruta_pdf']));
         fpassthru($manejador);
         fclose($manejador);
         exit;

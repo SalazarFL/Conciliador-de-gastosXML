@@ -18,6 +18,8 @@
  * salió (ver RecuperadorDocumentos).
  */
 
+require_once __DIR__ . '/RutaDocumento.php';
+
 class EstadoArchivo
 {
     /**
@@ -31,8 +33,10 @@ class EstadoArchivo
         $rutaXml = trim((string) ($fila['ruta_xml'] ?? ''));
         $rutaPdf = trim((string) ($fila['ruta_pdf'] ?? ''));
 
-        $xmlOk = $rutaXml !== '' && is_file($rutaXml);
-        $pdfOk = $rutaPdf !== '' && is_file($rutaPdf);
+        // Se le pregunta al almacén, no al disco: los documentos pueden no
+        // estar en un disco. Ver AlmacenDocumentos.
+        $xmlOk = $rutaXml !== '' && RutaDocumento::existe($rutaXml);
+        $pdfOk = $rutaPdf !== '' && RutaDocumento::existe($rutaPdf);
         $perdido = ($rutaXml !== '' && !$xmlOk) || ($rutaPdf !== '' && !$pdfOk);
 
         return [
