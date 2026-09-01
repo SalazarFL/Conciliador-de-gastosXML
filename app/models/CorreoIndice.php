@@ -330,8 +330,8 @@ class CorreoIndice extends Model
         return $this->execute(
             "UPDATE {$this->table}
              SET adjuntos = ?, consecutivo = COALESCE(consecutivo, ?), numero_corto = COALESCE(numero_corto, ?)
-             WHERE id = ?",
-            [(string) $texto, $consecutivo, $numeroCorto, (int) $id]
+             WHERE id = ? AND cuenta_id = ?",
+            [(string) $texto, $consecutivo, $numeroCorto, (int) $id, $this->cuentaId]
         );
     }
 
@@ -410,17 +410,17 @@ class CorreoIndice extends Model
     public function guardarCc($id, $texto)
     {
         return $this->execute(
-            "UPDATE {$this->table} SET cc = ? WHERE id = ?",
-            [mb_substr((string) $texto, 0, 1000, 'UTF-8'), (int) $id]
+            "UPDATE {$this->table} SET cc = ? WHERE id = ? AND cuenta_id = ?",
+            [mb_substr((string) $texto, 0, 1000, 'UTF-8'), (int) $id, $this->cuentaId]
         );
     }
 
     public function guardarDestinatarios($id, $cc, $replyTo)
     {
         return $this->execute(
-            "UPDATE {$this->table} SET cc = ?, reply_to = ? WHERE id = ?",
+            "UPDATE {$this->table} SET cc = ?, reply_to = ? WHERE id = ? AND cuenta_id = ?",
             [mb_substr((string) $cc, 0, 1000, 'UTF-8'),
-             mb_substr((string) $replyTo, 0, 255, 'UTF-8'), (int) $id]
+             mb_substr((string) $replyTo, 0, 255, 'UTF-8'), (int) $id, $this->cuentaId]
         );
     }
 
