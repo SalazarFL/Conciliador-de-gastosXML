@@ -475,12 +475,18 @@ class CorreoIndice extends Model
      * base vive en otra: restar aquí una fecha escrita allá daba una edad
      * falsa en cuanto los dos relojes (o sus zonas horarias) no coincidían,
      * y con eso ninguna carpeta parecía revisada nunca.
+     *
+     * 'edad_cambio' es lo mismo pero desde el último cambio DETECTADO en la
+     * carpeta, que es otra cosa: se la mira cada pocos minutos aunque no pase
+     * nada. Es el dato con el que RitmoCarpetas decide cada cuánto vale la
+     * pena volver a preguntarle.
      */
     public function getCarpetas()
     {
         $mapa = [];
         $filas = $this->fetchAll(
-            "SELECT *, TIMESTAMPDIFF(SECOND, ultima_sync, NOW()) AS edad_sync
+            "SELECT *, TIMESTAMPDIFF(SECOND, ultima_sync, NOW()) AS edad_sync,
+                    TIMESTAMPDIFF(SECOND, ultimo_cambio, NOW()) AS edad_cambio
              FROM correo_carpetas WHERE cuenta_id = ?",
             [$this->cuentaId]
         );
@@ -504,20 +510,30 @@ class CorreoIndice extends Model
         ) ?: [];
     }
 
+    /**
+     * @param bool $huboCambio Si en esta visita se encontró algo distinto
+     *        —mensajes nuevos, o una reconstrucción—. Marca `ultimo_cambio`,
+     *        que es lo que RitmoCarpetas mira para decidir si esta carpeta
+     *        sigue viva o pasó a ser archivo. Sin cambio la columna se deja
+     *        como estaba: mirarla no es cambiarla.
+     */
     public function guardarEstadoCarpeta($carpeta, $uidvalidity, $ultimoUid, $mensajes,
-                                         $mensajesOmitidos = 0, $retencionDias = 0)
+                                         $mensajesOmitidos = 0, $retencionDias = 0,
+                                         $huboCambio = false)
     {
+        $cambio = $huboCambio ? 'NOW()' : 'ultimo_cambio';
         $sql = "INSERT INTO correo_carpetas
                     (cuenta_id, carpeta, uidvalidity, ultimo_uid, mensajes,
-                     mensajes_omitidos, retencion_dias, ultima_sync)
-                VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+                     mensajes_omitidos, retencion_dias, ultima_sync, ultimo_cambio)
+                VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), " . ($huboCambio ? 'NOW()' : 'NULL') . ")
                 ON DUPLICATE KEY UPDATE
                     uidvalidity = VALUES(uidvalidity),
                     ultimo_uid = VALUES(ultimo_uid),
                     mensajes = VALUES(mensajes),
                     mensajes_omitidos = VALUES(mensajes_omitidos),
                     retencion_dias = VALUES(retencion_dias),
-                    ultima_sync = NOW()";
+                    ultima_sync = NOW(),
+                    ultimo_cambio = {$cambio}";
 
         return $this->execute($sql, [
             $this->cuentaId, (string) $carpeta, (int) $uidvalidity,
@@ -860,7 +876,8 @@ class CorreoIndice extends Model
 
         if (empty($columnasPorTabla['correo_carpetas'])
             || !isset($columnasPorTabla['correo_carpetas']['mensajes_omitidos'])
-            || !isset($columnasPorTabla['correo_carpetas']['retencion_dias'])) {
+            || !isset($columnasPorTabla['correo_carpetas']['retencion_dias'])
+            || !isset($columnasPorTabla['correo_carpetas']['ultimo_cambio'])) {
             return false;
         }
 
@@ -994,6 +1011,7 @@ class CorreoIndice extends Model
                     mensajes_omitidos INT UNSIGNED NOT NULL DEFAULT 0,
                     retencion_dias INT UNSIGNED NOT NULL DEFAULT 0,
                     ultima_sync DATETIME NULL DEFAULT NULL,
+                    ultimo_cambio DATETIME NULL DEFAULT NULL,
                     PRIMARY KEY (cuenta_id, carpeta)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
         try {
@@ -1004,6 +1022,30 @@ class CorreoIndice extends Model
                           INT UNSIGNED NOT NULL DEFAULT 0 AFTER mensajes_omitidos");
         } catch (Throwable $e) {
             // Queda disponible la migración manual para motores antiguos.
+        }
+        try {
+            $this->query("ALTER TABLE correo_carpetas
+                          ADD COLUMN IF NOT EXISTS ultimo_cambio
+                          DATETIME NULL DEFAULT NULL AFTER ultima_sync");
+
+            // Sembrado: la fecha del mensaje más nuevo de cada carpeta. Sin
+            // esto ninguna carpeta tendría cambio anotado y todas se tratarían
+            // como vivas hasta que pasaran dos semanas: el ahorro no empezaría
+            // hasta dentro de dos semanas. Corre una sola vez, porque después
+            // la columna ya no es NULL.
+            $this->query(
+                "UPDATE correo_carpetas c
+                    SET c.ultimo_cambio = (
+                        SELECT FROM_UNIXTIME(MAX(i.timestamp))
+                          FROM {$this->table} i
+                         WHERE i.cuenta_id = c.cuenta_id
+                           AND i.carpeta = c.carpeta
+                           AND i.timestamp > 0
+                    )
+                  WHERE c.ultimo_cambio IS NULL"
+            );
+        } catch (Throwable $e) {
+            // Queda disponible database/migration_correo_carpetas_ritmo.sql.
         }
     }
 

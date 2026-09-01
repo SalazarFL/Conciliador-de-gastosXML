@@ -27,6 +27,7 @@
  */
 
 require_once __DIR__ . '/MailFetcher.php';
+require_once __DIR__ . '/RitmoCarpetas.php';
 
 class CorreoSync
 {
@@ -85,6 +86,7 @@ class CorreoSync
             'carpetas' => 0, 'nuevos' => 0, 'reindexadas' => 0,
             'podados' => 0, 'capturas_detectadas' => 0,
             'restantes' => 0, 'carpetas_totales' => 0, 'carpetas_por_revisar' => 0,
+            'carpetas_activas' => 0, 'carpetas_archivo' => 0,
             'metadatos_resueltos' => 0, 'metadatos_pendientes' => 0,
             'completado' => true,
         ];
@@ -115,36 +117,37 @@ class CorreoSync
             $carpetas = $fetcher->carpetasABuscar();
             $estados = $indice->getCarpetas();
 
-            // Nunca sincronizadas primero, luego de la más vieja a la más nueva
-            $edad = function ($carpeta) use ($estados) {
-                $registro = $estados[$carpeta] ?? null;
-                return ($registro && $registro['edad_sync'] !== null)
-                    ? (int) $registro['edad_sync']
-                    : PHP_INT_MAX;
-            };
-            usort($carpetas, function ($a, $b) use ($edad) {
-                return $edad($b) <=> $edad($a);
-            });
-
-            // Carpetas que toca revisar en esta pasada. Una pasada completa
-            // por un buzón grande no cabe en una sola tanda, así que la
-            // ventana de frescura tiene que ser bastante más larga que lo que
-            // tarda la vuelta entera: con 2 minutos, las primeras carpetas ya
-            // estaban "viejas" antes de llegar a las últimas y cada tanda
-            // volvía a empezar por el principio sin terminar nunca.
-            // El correo nuevo llega a la carpeta base, y esa sí se vigila
-            // seguido para que la bandeja no se vea atrasada.
+            // Cada carpeta tiene su propio ritmo según qué tan viva esté: la
+            // bandeja de entrada casi seguido, una carpeta que recibió algo
+            // hace poco cada cinco minutos, y las de meses cerrados —que solo
+            // cambian si alguien archiva a mano— una vez por hora. La regla y
+            // el porqué están en RitmoCarpetas.
+            //
+            // Y se atienden por cuánto se pasó cada una de SU plazo, no por
+            // antigüedad a secas: con ritmos distintos, una carpeta de archivo
+            // vista hace 50 minutos lleva más tiempo sin mirarse que la bandeja
+            // vista hace 4, pero la que está vencida es la bandeja.
             $carpetaBase = trim((string) ($config['carpeta'] ?? 'INBOX'));
-            $porRevisar = [];
+            $conRitmo = [];
             foreach ($carpetas as $carpeta) {
-                $ventana = ($carpeta === $carpetaBase) ? 60 : 300;
-                if ($edad($carpeta) < $ventana) {
-                    continue;
-                }
-                $porRevisar[] = $carpeta;
+                $registro = $estados[$carpeta] ?? null;
+                $conRitmo[] = [
+                    'carpeta'     => $carpeta,
+                    'es_base'     => $carpeta === $carpetaBase,
+                    'edad_sync'   => ($registro && $registro['edad_sync'] !== null)
+                        ? (int) $registro['edad_sync'] : null,
+                    'edad_cambio' => ($registro && ($registro['edad_cambio'] ?? null) !== null)
+                        ? (int) $registro['edad_cambio'] : null,
+                ];
             }
+
+            $porRevisar = RitmoCarpetas::porRevisar($conRitmo);
+            $ritmos = RitmoCarpetas::resumen($conRitmo);
+
             $stats['carpetas_totales'] = count($carpetas);
             $stats['carpetas_por_revisar'] = count($porRevisar);
+            $stats['carpetas_activas'] = $ritmos['activas'];
+            $stats['carpetas_archivo'] = $ritmos['archivo'];
 
             foreach ($porRevisar as $i => $carpeta) {
                 $registro = $estados[$carpeta] ?? null;
@@ -174,6 +177,12 @@ class CorreoSync
                     // recupera del servidor los encabezados antes omitidos.
                     || (int) ($registro['retencion_dias'] ?? 0) !== $retencionDias;
 
+                // Si esta visita encontró algo distinto. Marca la carpeta como
+                // viva para RitmoCarpetas: mirarla no cuenta, encontrarle algo
+                // sí. De eso depende que siga en el ritmo de cinco minutos o
+                // baje al de una hora.
+                $huboCambio = false;
+
                 if ($resync) {
                     // Carpeta nueva o renumerada por el servidor: completa
                     $filas = $estado['mensajes'] > 0
@@ -202,6 +211,7 @@ class CorreoSync
                         $filas
                     );
                     $stats['reindexadas']++;
+                    $huboCambio = true;
                 } elseif ($estado['uidnext'] > $ultimoUid + 1) {
                     // Solo lo nuevo. Nota IMAP: 'n:*' devuelve al menos el
                     // último mensaje aunque n supere su UID; se filtra aquí.
@@ -223,6 +233,10 @@ class CorreoSync
                     [$filas, $omitidosNuevos] = self::aplicarRetencion($filas, $corteRetencion);
                     $omitidosRetencion += $omitidosNuevos;
                     $stats['nuevos'] += $indice->insertarLote($carpeta, $nombre, $estado['uidvalidity'], $filas);
+                    // Solo si de verdad entró algo: el UID puede haber avanzado
+                    // por un mensaje que la retención descartó, y eso no
+                    // mantiene viva a una carpeta de 2024.
+                    $huboCambio = $huboCambio || !empty($filas);
                 }
 
                 // Movidos/eliminados: el total local incluye tanto las filas
@@ -243,6 +257,9 @@ class CorreoSync
                         $filas
                     );
                     $stats['reindexadas']++;
+                    // Alguien movió o borró correos acá: la carpeta se está
+                    // usando aunque no le entren mensajes nuevos.
+                    $huboCambio = true;
                 }
 
                 $indice->guardarEstadoCarpeta(
@@ -251,7 +268,8 @@ class CorreoSync
                     max(0, $estado['uidnext'] - 1),
                     $estado['mensajes'],
                     $omitidosRetencion,
-                    $retencionDias
+                    $retencionDias,
+                    $huboCambio
                 );
             }
 
