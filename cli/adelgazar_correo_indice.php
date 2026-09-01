@@ -168,9 +168,11 @@ require_once __DIR__ . '/../app/helpers/MailFetcher.php';
 require_once __DIR__ . '/../app/helpers/CorreoSync.php';
 require_once __DIR__ . '/../app/models/CorreoIndice.php';
 
-$fpLock = @fopen(CorreoSync::rutaLock(), 'c');
-if ($fpLock === false || !flock($fpLock, LOCK_EX | LOCK_NB)) {
-    exit("Otra sincronización está en curso. Intenta de nuevo cuando termine.\n");
+// Esto reescribe el índice entero, así que necesita a TODOS los buzones
+// quietos, no solo a uno: el candado general en exclusiva es justamente eso.
+$fpLock = CorreoSync::adquirirLockMantenimiento();
+if ($fpLock === null) {
+    exit("Hay sincronizaciones en curso. Intenta de nuevo cuando terminen.\n");
 }
 
 try {
@@ -262,6 +264,5 @@ try {
     }
     echo "Los documentos y los mensajes del servidor no se modificaron.\n";
 } finally {
-    flock($fpLock, LOCK_UN);
-    fclose($fpLock);
+    CorreoSync::liberarLock($fpLock);
 }

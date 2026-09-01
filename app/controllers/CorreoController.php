@@ -842,19 +842,21 @@ class CorreoController extends Controller
      * (cli/sync_correo.php), que mantiene el índice al día aunque el
      * módulo esté cerrado.
      *
-     * Solo corre UNA sincronización a la vez en todo el sistema (mismo
-     * lock que el CLI): con varios usuarios abriendo el módulo, el primero
-     * sincroniza y los demás siguen leyendo el índice sin abrir IMAP.
+     * Solo corre UNA sincronización a la vez POR BUZÓN (mismo candado que el
+     * CLI): con varios usuarios abriendo el módulo, el primero sincroniza ese
+     * buzón y los demás siguen leyendo el índice sin abrir IMAP. Dos usuarios
+     * mirando buzones distintos sí sincronizan a la vez, que es el punto.
      */
     private function ejecutarSincronizacion(array $config, $indice, $presupuestoSegundos = 20)
     {
         require_once __DIR__ . '/../helpers/CorreoSync.php';
 
-        $lock = CorreoSync::adquirirLock();
+        $lock = CorreoSync::adquirirLock((int) ($config['cuenta_id'] ?? 0));
         if ($lock === null) {
             /*
-             * Otro usuario o el cron ya están sincronizando: no se duplica la
-             * conexión. completado=true corta el ciclo de tandas del JS.
+             * Otro usuario o el cron ya están sincronizando ESTE buzón, o hay
+             * un mantenimiento en curso: no se duplica la conexión.
+             * completado=true corta el ciclo de tandas del JS.
              *
              * La cola sí se cuenta —es una consulta al índice, no al buzón—
              * porque de ella depende que la búsqueda tenga que ir hasta el
@@ -2578,6 +2580,21 @@ class CorreoController extends Controller
         );
         $maxCorreos = max(1, min(200, (int) $this->post('max_correos_corrida', 20)));
         $maxIntentos = max(1, min(10, (int) $this->post('max_intentos', 3)));
+        /*
+         * Cuántas copias del sincronizador corren a la vez. El tope de 12 no
+         * es del sistema sino del servidor de correo: pasarse de conexiones
+         * simultáneas contra el buzón hace que empiece a rechazarlas.
+         *
+         * Si no viene en la petición se conserva lo que ya estaba, no se
+         * vuelve a 1: la pantalla todavía no ofrece este campo, y guardar
+         * cualquier otro ajuste no tiene por qué deshacer este.
+         */
+        $autoGuardado = is_array($this->configLocal()['auto_sync'] ?? null)
+            ? $this->configLocal()['auto_sync'] : [];
+        $trabajadores = max(1, min(12, (int) $this->post(
+            'trabajadores',
+            (int) ($autoGuardado['trabajadores'] ?? 1)
+        )));
 
         if ($capturarNuevos) {
             $raiz = DocumentoArchivo::raizConfigurada();
@@ -2616,7 +2633,25 @@ class CorreoController extends Controller
             $vbs = MailFetcher::storagePath() . DIRECTORY_SEPARATOR . 'sync_launch.vbs';
             $cmd = '"' . $php . '" "' . $script . '" ' . $topeSegundos;
             $vbsCmd = str_replace('"', '""', $cmd);
-            file_put_contents($vbs, 'CreateObject("WScript.Shell").Run "' . $vbsCmd . '", 0, False' . "\r\n");
+
+            /*
+             * Varias copias del sincronizador, no una.
+             *
+             * Hablarle al servidor de correo es esperar: 105 ms por viaje. Con
+             * un buzón se nota poco; con 42 la fila no cabe en la ventana. Las
+             * copias se reparten los buzones solas por el candado de cada uno
+             * —no hay coordinador— así que lanzarlas es literalmente repetir
+             * la línea. La CPU casi no se entera: están bloqueadas en la red.
+             *
+             * Por omisión sigue siendo una: subirlo es una decisión que hay
+             * que tomar sabiendo cuántas conexiones simultáneas tolera el
+             * servidor de correo.
+             */
+            $lineas = '';
+            for ($i = 0; $i < $trabajadores; $i++) {
+                $lineas .= 'CreateObject("WScript.Shell").Run "' . $vbsCmd . '", 0, False' . "\r\n";
+            }
+            file_put_contents($vbs, $lineas);
         } catch (Throwable $e) {
             $this->json(['ok' => false, 'message' => 'No se pudo crear el lanzador: ' . $e->getMessage()], 500);
         }
@@ -2643,6 +2678,7 @@ class CorreoController extends Controller
             'capturar_nuevos'      => $capturarNuevos,
             'max_correos_corrida'  => $maxCorreos,
             'max_intentos'         => $maxIntentos,
+            'trabajadores'         => $trabajadores,
             'captura_activada_en'  => $capturaActivadaEn,
             'php'                  => $php,
             'actualizado'          => date('Y-m-d H:i:s'),

@@ -4,15 +4,30 @@
  * abierto, disparada por la Tarea Programada de Windows "XMLConcilia_SyncCorreo"
  * (se activa/desactiva desde el ⚙ del módulo Correo).
  *
- * Recorre TODAS las cuentas registradas en round-robin, dándole a cada una
- * tandas cortas (12s) de CorreoSync hasta que todas quedan al día o hasta
- * agotar el tope total de la corrida. El tope por defecto es 4 min: con un
- * rezago grande de adjuntos/CC un tope corto deja el índice trabajando solo
- * una fracción del tiempo y la cola no termina nunca. Solaparse es imposible:
- * el lock de archivo hace que una corrida nueva se retire si la anterior
- * sigue viva. Deja el resultado en storage/correo/sync_estado.json
- * (lo lee el ⚙ para mostrar "última actualización") y un registro en
- * storage/correo/sync_auto.log.
+ * Reserva los buzones que puede, los recorre en round-robin dándole a cada uno
+ * tandas cortas (12s) de CorreoSync hasta que quedan al día o hasta agotar el
+ * tope total de la corrida. El tope por defecto es 4 min: con un rezago grande
+ * de adjuntos/CC un tope corto deja el índice trabajando solo una fracción del
+ * tiempo y la cola no termina nunca.
+ *
+ * ── Varias copias a la vez ──
+ *
+ * Este script está pensado para correr en paralelo consigo mismo. Hablarle al
+ * servidor de correo es esperar —105 ms por viaje contra mail.bm.cr— y con 42
+ * buzones esa espera en fila no cabe en ninguna ventana razonable. Con varias
+ * copias, la espera se solapa y el reloj se divide; la CPU casi no se entera,
+ * porque son procesos bloqueados en la red.
+ *
+ * No hay coordinador ni reparto previo: cada copia toma el candado de los
+ * buzones que encuentra libres y trabaja con esos. El candado ES el reparto.
+ * Así una copia que se muera no deja a nadie esperando —su candado se suelta
+ * con el proceso— y agregar o quitar copias no requiere reconfigurar nada.
+ *
+ * Lo que sigue habiendo es un candado por buzón: dos procesos nunca tocan el
+ * mismo. Ver CorreoSync::adquirirLock().
+ *
+ * Deja el resultado en storage/correo/sync_estado.json (lo lee el ⚙ para
+ * mostrar "última actualización") y un registro en storage/correo/sync_auto.log.
  *
  * Uso manual (para probar):  php cli\sync_correo.php [tope_segundos]
  */
@@ -45,7 +60,6 @@ $topeSegundos = isset($argv[1]) ? max(30, min(3600, (int) $argv[1])) : 240; // 4
 $presupuestoTanda = 12; // segundos por tanda de una cuenta
 
 $dirCorreo = MailFetcher::storagePath();
-$rutaLock   = CorreoSync::rutaLock(); // mismo lock que la sincronización web
 $rutaEstado = $dirCorreo . DIRECTORY_SEPARATOR . 'sync_estado.json';
 $rutaLog    = $dirCorreo . DIRECTORY_SEPARATOR . 'sync_auto.log';
 
@@ -67,12 +81,23 @@ $capturaCorrida = [
     'documentos' => 0, 'sin_documentos' => 0, 'errores' => 0,
 ];
 
-// Lock: si otra corrida sigue viva, esta se retira en silencio
-$fpLock = @fopen($rutaLock, 'c');
-if ($fpLock === false || !flock($fpLock, LOCK_EX | LOCK_NB)) {
-    fwrite(STDERR, "Otra sincronización sigue en curso; se omite esta corrida.\n");
-    exit(0);
-}
+/*
+ * Ya no hay un candado que abarque la corrida entera: cada buzón se reserva
+ * por separado, y esta corrida trabaja con los que consiga. Varias copias de
+ * este script pueden correr a la vez —esa es la idea— y se reparten los
+ * buzones solas, sin coordinador: el que agarra el candado de un buzón se lo
+ * queda, y el que lo encuentra tomado sigue al siguiente.
+ *
+ * Se conserva $locks para soltarlos todos al final, pase lo que pase.
+ */
+$locks = [];
+$soltarLocks = function () use (&$locks) {
+    foreach ($locks as $lock) {
+        CorreoSync::liberarLock($lock);
+    }
+    $locks = [];
+};
+register_shutdown_function($soltarLocks);
 
 /** Escribe una línea con marca de tiempo al log (recortándolo si crece). */
 function registrar($rutaLog, $texto)
@@ -112,6 +137,14 @@ try {
             continue;
         }
 
+        // La reserva del buzón. Si otro trabajador ya lo tiene, este se saltea
+        // en silencio: no es un error, es el reparto funcionando.
+        $lock = CorreoSync::adquirirLock((int) $c['id']);
+        if ($lock === null) {
+            continue;
+        }
+        $locks[(int) $c['id']] = $lock;
+
         $cfg['captura_automatica'] = $capturaActiva;
         $cfg['captura_activada_en'] = $capturaActivadaEn;
 
@@ -133,9 +166,11 @@ try {
     }
 
     if (empty($cola)) {
-        registrar($rutaLog, 'No hay cuentas con credenciales para sincronizar.');
+        // Con varios trabajadores esto es lo normal para el que llega último:
+        // los buzones ya están todos repartidos.
+        registrar($rutaLog, 'Sin buzones que atender: o no hay credenciales, o los tienen otros trabajadores.');
     } else {
-        registrar($rutaLog, 'Inicio: ' . count($cola) . ' cuenta(s), tope ' . $topeSegundos . 's.');
+        registrar($rutaLog, 'Inicio: ' . count($cola) . ' cuenta(s) reservada(s), tope ' . $topeSegundos . 's.');
     }
 
     // Round-robin: una tanda por cuenta, ciclando hasta que todas queden al
@@ -218,7 +253,15 @@ if ($capturaActiva && isset($cuentasModel, $cuentas)
 
         // Tandas cortas en round-robin: una cuenta con mucho tráfico no
         // monopoliza toda la corrida ni retrasa a los demás buzones.
-        $cuentasCaptura = array_values($cuentas);
+        //
+        // Solo los buzones que este trabajador reservó. La cola de capturas se
+        // reparte sola por la base —tomarPendientes reclama sus filas con FOR
+        // UPDATE—, así que dos trabajadores no se pisarían; pero cada uno abre
+        // su propia conexión IMAP, y no hay razón para gastar dos contra el
+        // mismo buzón.
+        $cuentasCaptura = array_values(array_filter($cuentas, function ($c) use ($locks) {
+            return isset($locks[(int) ($c['id'] ?? 0)]);
+        }));
         $huboTrabajo = true;
         while ($huboTrabajo
             && $capturaCorrida['procesados'] < $capturaMax
@@ -494,9 +537,59 @@ $estado = [
         return !$r['completado'];
     }),
 ];
-@file_put_contents($rutaEstado, json_encode($estado, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), LOCK_EX);
 
-flock($fpLock, LOCK_UN);
-fclose($fpLock);
+/*
+ * El estado se FUNDE con lo que haya, no se pisa.
+ *
+ * Cada trabajador atiende solo los buzones que reservó, así que escribir el
+ * archivo entero dejaría al ⚙ mostrando una parte —y cambiando de parte según
+ * cuál trabajador terminó último—. Se conservan las cuentas de los demás y se
+ * reemplazan únicamente las propias.
+ *
+ * El candado es sobre el archivo de estado, no sobre los buzones: es corto y
+ * solo ordena la escritura entre trabajadores que terminan a la vez.
+ */
+$fpEstado = @fopen($rutaEstado, 'c+');
+if ($fpEstado !== false) {
+    try {
+        if (flock($fpEstado, LOCK_EX)) {
+            $previo = json_decode((string) stream_get_contents($fpEstado), true);
+            $previo = is_array($previo) ? $previo : [];
+
+            $cuentasFundidas = [];
+            foreach (($previo['cuentas'] ?? []) as $c) {
+                if (is_array($c) && isset($c['id'])) {
+                    $cuentasFundidas[(int) $c['id']] = $c;
+                }
+            }
+            foreach ($resumenCuentas as $c) {
+                $cuentasFundidas[(int) $c['id']] = $c;
+            }
+            ksort($cuentasFundidas);
+
+            $estado['cuentas'] = array_values($cuentasFundidas);
+            $estado['pendientes_total'] = array_sum(array_map(function ($r) {
+                return max(0, (int) ($r['metadatos_pendientes'] ?? 0));
+            }, $cuentasFundidas));
+            $estado['todo_al_dia'] = $errorGlobal === null
+                && !array_filter($cuentasFundidas, function ($r) {
+                    return empty($r['completado']);
+                });
+
+            ftruncate($fpEstado, 0);
+            rewind($fpEstado);
+            fwrite($fpEstado, json_encode(
+                $estado,
+                JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+            ));
+            fflush($fpEstado);
+            flock($fpEstado, LOCK_UN);
+        }
+    } finally {
+        fclose($fpEstado);
+    }
+}
+
+$soltarLocks();
 
 exit($errorGlobal === null ? 0 : 1);

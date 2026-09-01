@@ -31,39 +31,104 @@ require_once __DIR__ . '/RitmoCarpetas.php';
 
 class CorreoSync
 {
-    /**
-     * Archivo de lock que serializa TODA sincronización (navegador y CLI).
-     * Es el mismo que usa cli/sync_correo.php: nunca corren dos
-     * sincronizaciones a la vez contra el buzón ni escriben doble el índice.
+    /*
+     * ── Los candados, en dos niveles ──────────────────────────────────────
+     *
+     * Antes había uno solo y serializaba TODA sincronización: con tres buzones
+     * eso alcanzaba, pero los buzones se atendían de a uno esperando 105 ms
+     * por cada viaje al servidor de correo. Con 42 buzones esa fila no termina
+     * nunca, y el tiempo que se pierde no es de cálculo sino de espera: es
+     * exactamente el trabajo que conviene hacer en paralelo.
+     *
+     * Lo que hay que impedir no es que dos buzones se sincronicen a la vez
+     * —eso es lo que se busca—, sino que dos procesos toquen EL MISMO buzón.
+     * De ahí los dos niveles:
+     *
+     *   Candado de cuenta   Exclusivo, uno por buzón. Es la reserva: quien lo
+     *                       tiene, ese buzón es suyo. Otro trabajador que lo
+     *                       encuentre tomado sigue de largo al siguiente.
+     *
+     *   Candado general     Compartido por todas las sincronizaciones a la vez,
+     *                       y exclusivo para el mantenimiento que reescribe el
+     *                       índice entero (adelgazar, migrar). Así una tarea de
+     *                       mantenimiento sigue excluyendo a todos los buzones
+     *                       de una sola vez, que es lo que necesita.
+     *
+     * Es el patrón de lectores y escritores, con los buzones de lectores.
      */
+
+    /** El candado general. Compartido entre sincronizaciones. */
     public static function rutaLock()
     {
         return MailFetcher::storagePath() . DIRECTORY_SEPARATOR . 'sync_auto.lock';
     }
 
-    /**
-     * Intenta tomar el lock sin bloquear. Devuelve el handle (hay que
-     * conservarlo mientras dura la corrida y soltarlo con liberarLock)
-     * o null si otra sincronización está en curso.
-     */
-    public static function adquirirLock()
+    /** El candado de un buzón. Exclusivo: es la reserva de ese buzón. */
+    public static function rutaLockCuenta($cuentaId)
     {
-        $fp = @fopen(self::rutaLock(), 'c');
-        if ($fp === false) {
-            return null;
-        }
-        if (!flock($fp, LOCK_EX | LOCK_NB)) {
-            fclose($fp);
-            return null;
-        }
-        return $fp;
+        return MailFetcher::storagePath() . DIRECTORY_SEPARATOR
+             . 'sync_cuenta_' . (int) $cuentaId . '.lock';
     }
 
-    public static function liberarLock($fp)
+    /**
+     * Reserva un buzón para sincronizarlo. Sin bloquear: si otro trabajador lo
+     * tiene, devuelve null y el que llama pasa al siguiente.
+     *
+     * Devuelve un manojo de manijas que hay que conservar mientras dure el
+     * trabajo y soltar con liberarLock().
+     */
+    public static function adquirirLock($cuentaId = 0)
     {
-        if (is_resource($fp)) {
-            flock($fp, LOCK_UN);
-            fclose($fp);
+        $general = @fopen(self::rutaLock(), 'c');
+        if ($general === false) {
+            return null;
+        }
+        // Compartido: no estorba a los otros buzones, pero mantiene fuera al
+        // mantenimiento mientras haya aunque sea una sincronización viva.
+        if (!flock($general, LOCK_SH | LOCK_NB)) {
+            fclose($general);
+            return null;
+        }
+
+        $propio = @fopen(self::rutaLockCuenta($cuentaId), 'c');
+        if ($propio === false || !flock($propio, LOCK_EX | LOCK_NB)) {
+            if (is_resource($propio)) {
+                fclose($propio);
+            }
+            flock($general, LOCK_UN);
+            fclose($general);
+            return null;
+        }
+
+        return [$propio, $general];
+    }
+
+    /**
+     * Para el mantenimiento que reescribe el índice entero: excluye a todas
+     * las sincronizaciones de todos los buzones a la vez.
+     */
+    public static function adquirirLockMantenimiento()
+    {
+        $general = @fopen(self::rutaLock(), 'c');
+        if ($general === false) {
+            return null;
+        }
+        if (!flock($general, LOCK_EX | LOCK_NB)) {
+            fclose($general);
+            return null;
+        }
+
+        return [$general];
+    }
+
+    /** Acepta el manojo o una manija suelta, por los llamadores viejos. */
+    public static function liberarLock($lock)
+    {
+        foreach (is_array($lock) ? $lock : [$lock] as $fp) {
+            if (is_resource($fp)) {
+                flock($fp, LOCK_UN);
+                fclose($fp);
+            }
         }
     }
 

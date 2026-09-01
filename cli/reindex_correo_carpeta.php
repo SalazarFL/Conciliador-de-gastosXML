@@ -23,9 +23,11 @@ if ($cuentaId <= 0 || $carpeta === '') {
     exit(2);
 }
 
-$lock = CorreoSync::adquirirLock();
+// Solo este buzón: reindexar una carpeta del buzón 4 no tiene por qué frenar
+// la sincronización del 2.
+$lock = CorreoSync::adquirirLock($cuentaId);
 if ($lock === null) {
-    fwrite(STDERR, "Otra sincronización está en curso; intente nuevamente.\n");
+    fwrite(STDERR, "Este buzón se está sincronizando ahora mismo; intente nuevamente.\n");
     exit(3);
 }
 
