@@ -1,6 +1,6 @@
 <?php
 /**
- * Lectura del reporte agrupado del pago semanal.
+ * Lectura del reporte agrupado del pago.
  *
  * El reporte no trae encabezados de columna: es "Proveedor <código> <nombre>"
  * y debajo las facturas de ese proveedor. El nombre solo cambia cuando se
@@ -8,7 +8,7 @@
  * error ni fila perdida: produce facturas atribuidas al proveedor ANTERIOR,
  * que es la peor forma de fallar porque se ve bien.
  *
- * Eso pasó de verdad (semana 130826): la factura 00100001010002629934 de
+ * Eso pasó de verdad (pago 130826): la factura 00100001010002629934 de
  * COMPAÑIA AMERICANA DE HELADOS (código 140000076) salió a nombre de COMERCIO
  * E INDUSTRIA GIMA (140000074), el grupo inmediatamente anterior.
  *
@@ -48,7 +48,7 @@ class PorPagarLector extends PorPagarController
 
 $lector = new PorPagarLector();
 
-// Las filas tal como vienen en el archivo real de la semana 130826: el
+// Las filas tal como vienen en el archivo real del pago 130826: el
 // encabezado repartido en celdas, y el de HELADOS con la "x" del preparador
 // delante y su recordatorio detrás.
 $dataset = [

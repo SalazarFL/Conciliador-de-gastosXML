@@ -15,6 +15,20 @@
  */
 require_once __DIR__ . '/../app/core/Model.php';
 require_once __DIR__ . '/../app/helpers/XmlParser.php';
+
+/*
+ * Un listado de proveedores de mentira, declarado antes de que el importador
+ * lo busque. Sin él la importación no arranca —es el portón: sin lista no
+ * entra ningún comprobante— y lo que se prueba acá es lo de más adelante.
+ */
+class ProveedorCodigoErp
+{
+    public static function hayListado() { return true; }
+    public static function conoceCedula($cedula) { return true; }
+    public static function normalizarCedula($c) { return preg_replace("/\D/", "", (string) $c); }
+    public static function veredicto($codigo, $proveedorId) { return 'propio'; }
+}
+
 require_once __DIR__ . '/../app/helpers/XmlDocumentImporter.php';
 
 function assertDescarte($condition, $message)

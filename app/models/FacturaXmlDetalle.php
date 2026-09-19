@@ -7,6 +7,7 @@
  */
 
 require_once __DIR__ . '/../helpers/XmlParser.php';
+require_once __DIR__ . '/../helpers/RutaDocumento.php';
 
 class FacturaXmlDetalle extends Model
 {
@@ -34,7 +35,11 @@ class FacturaXmlDetalle extends Model
             }
         }
 
-        $detalle = XmlInvoiceParser::parseDetalleFromFile($rutaXml);
+        // El XML ya está archivado, así que puede vivir lejos: el parser
+        // necesita un archivo de esta máquina y el almacén se lo consigue.
+        $detalle = RutaDocumento::conArchivoLocal($rutaXml, function ($local) {
+            return XmlInvoiceParser::parseDetalleFromFile($local);
+        });
 
         $db = self::getDB();
         $enTransaccion = $db->inTransaction();
@@ -117,7 +122,8 @@ class FacturaXmlDetalle extends Model
      */
     public function pendientes($despuesDeId, $limite, $tipoDocumento = 'NC')
     {
-        $sql = 'SELECT id, ruta_xml FROM facturas_xml
+        // sociedad_id: sin él no se sabe en qué almacén está el XML.
+        $sql = 'SELECT id, ruta_xml, sociedad_id FROM facturas_xml
                 WHERE detalle_extraido_en IS NULL
                   AND ruta_xml IS NOT NULL AND ruta_xml <> \'\'
                   AND id > ?';

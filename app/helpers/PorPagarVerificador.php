@@ -66,9 +66,6 @@ class PorPagarVerificador
         $stats = ['respaldada' => 0, 'con_diferencia' => 0, 'sin_respaldo' => 0];
         $usadas = [];
         $pendientes = [];
-        // Los rechazos de la guarda se juntan aquí y se escriben al final: no
-        // se toca la base dentro del bucle de comparaciones.
-        $vetos = [];
 
         // Los vínculos hechos a mano se respetan y su XML no vuelve a estar
         // disponible. Se marcan antes para que ninguna fila automática se lo
@@ -88,7 +85,7 @@ class PorPagarVerificador
                 continue;
             }
 
-            $xml = self::buscarXml($linea, $indice, $usadas, $vetos);
+            $xml = self::buscarXml($linea, $indice, $usadas);
             if ($xml === null) {
                 $pendientes[] = self::fila((int) $linea['id'], null, 'sin_respaldo', null, null, null);
                 $stats['sin_respaldo']++;
@@ -114,17 +111,12 @@ class PorPagarVerificador
             $erp->actualizarRespaldoLote($pendientes);
         }
 
-        // Anotar los rechazos y volver a deducir el mapa, en ese orden: los
-        // vetos describen lo que pasó con el mapa que había, y la cosecha lee
-        // los estados que `actualizarRespaldoLote` acaba de escribir.
-        self::aprenderDelMapa($lineas, $vetos);
-
-        // La semana del comprobante se deduce del pago, no se elige. Verificar
+        // El pago del comprobante se deduce del pago, no se elige. Verificar
         // sigue sin mover un solo archivo —eso solo pasa por orden expresa—,
-        // pero deja anotado a qué semana pertenece cada XML para cuando esa
+        // pero deja anotado a qué pago pertenece cada XML para cuando esa
         // orden llegue.
-        if (method_exists($erp, 'sincronizarSemanaXml')) {
-            $erp->sincronizarSemanaXml($listadoId);
+        if (method_exists($erp, 'sincronizarPagoXml')) {
+            $erp->sincronizarPagoXml($listadoId);
         }
         return $stats;
     }
@@ -162,23 +154,21 @@ class PorPagarVerificador
      * el otro tenía el `id` más bajo.
      *
      * Cuando el ERP no trae consecutivo se cae a la llave corta, y ahí manda el
-     * proveedor: "FACT-12339" lo usan muchos emisores. La cédula, cuando el
-     * mapa la conoce, vale más que el parecido del nombre —confirma identidad
-     * en vez de estimarla— así que rescata los casos donde los nombres no se
-     * parecen en nada.
+     * proveedor: "FACT-12339" lo usan muchos emisores. La cédula del catálogo
+     * vale más que el parecido del nombre —confirma identidad en vez de
+     * estimarla— así que rescata los casos donde los nombres no se parecen en
+     * nada.
      */
-    private static function buscarXml(array $linea, array $indice, array $usadas, array &$vetos)
+    private static function buscarXml(array $linea, array $indice, array $usadas)
     {
         $codigo = trim((string) ($linea['proveedor_codigo'] ?? ''));
-        $monto = (float) ($linea['monto'] ?? 0);
-
         $documento = trim((string) ($linea['documento'] ?? ''));
         if (preg_match('/^\d{20}$/', $documento)) {
             foreach ($indice['consecutivo'][$documento] ?? [] as $xml) {
                 if (isset($usadas[(int) $xml['id']])) {
                     continue;
                 }
-                if (self::esAjeno($codigo, $linea, $xml, $monto, $vetos)) {
+                if (!self::puedeEngancharSolo($codigo, $xml)) {
                     continue;
                 }
                 $xml['_score_numero'] = 100.0;
@@ -205,15 +195,16 @@ class PorPagarVerificador
             if (isset($usadas[(int) $xml['id']])) {
                 continue;
             }
-            if (self::esAjeno($codigo, $linea, $xml, $monto, $vetos)) {
+            if (!self::puedeEngancharSolo($codigo, $xml)) {
                 continue;
             }
 
-            // La cédula confirmada gana sobre el texto: es identidad, no
-            // parecido. Es lo que rescata a los proveedores cuyo nombre en el
-            // ERP no se parece al del XML.
-            $confirmado = self::veredicto($codigo, $xml['proveedor_id'] ?? 0) === 'propio';
-            $score = $confirmado
+            // Con listado cargado, haber llegado hasta acá ya es la
+            // confirmación: la cédula del emisor es la del código y es de un
+            // solo código. El parecido de los nombres no agrega nada y no se
+            // vuelve a mirar. Sin listado —este archivo usado suelto— sigue
+            // siendo lo único que hay.
+            $score = self::hayCatalogo()
                 ? 100.0
                 : FacturaMatcher::similaridadTexto($proveedor, (string) ($xml['proveedor_nombre'] ?? ''));
             if ($score < FacturaMatcher::UMBRAL_PROVEEDOR) {
@@ -251,39 +242,54 @@ class PorPagarVerificador
      */
     private static function veredicto($codigo, $proveedorIdXml)
     {
-        if (!class_exists('ProveedorCodigoErp')) {
-            $ruta = __DIR__ . '/../models/ProveedorCodigoErp.php';
-            if (!class_exists('Model') || !is_file($ruta)) {
-                return 'desconocido';
-            }
-            require_once $ruta;
+        if (!self::hayCatalogo()) {
+            return 'desconocido';
         }
         return ProveedorCodigoErp::veredicto($codigo, $proveedorIdXml);
     }
 
     /**
-     * ¿La guarda rechaza este comprobante para esta línea?
+     * ¿Se puede consultar el listado de proveedores?
      *
-     * Anota el rechazo de paso. Lleva el dato de si el monto cuadraba porque
-     * es lo que distingue las dos causas posibles: cuando NO cuadra es una
-     * colisión de consecutivo y el rechazo es rutina; cuando cuadra al colón
-     * es la firma de un código que cambió de proveedor, y eso lo tiene que
-     * mirar una persona.
+     * Falso solo cuando no hay con qué preguntarle: sin la capa de modelos
+     * cargada, o con la lista vacía. En la aplicación eso no pasa —sin listado
+     * no se importa nada— así que la vía permisiva de abajo es para quien use
+     * este archivo suelto, en pruebas o desde la línea de comandos.
      */
-    private static function esAjeno($codigo, array $linea, array $xml, $monto, array &$vetos)
+    private static function hayCatalogo()
     {
-        if (self::veredicto($codigo, $xml['proveedor_id'] ?? 0) !== 'ajeno') {
-            return false;
+        if (!class_exists('ProveedorCodigoErp')) {
+            $ruta = __DIR__ . '/../models/ProveedorCodigoErp.php';
+            if (!class_exists('Model') || !is_file($ruta)) {
+                return false;
+            }
+            require_once $ruta;
         }
+        return ProveedorCodigoErp::hayListado();
+    }
 
-        $vetos[] = [
-            'codigo'                 => $codigo,
-            'proveedor_id_propuesto' => (int) ($xml['proveedor_id'] ?? 0),
-            'factura_erp_id'         => (int) ($linea['id'] ?? 0),
-            'factura_xml_id'         => (int) ($xml['id'] ?? 0),
-            'monto_cuadraba'         => abs($monto - (float) ($xml['total'] ?? 0)) <= FacturaMatcher::TOLERANCIA_CRC,
-        ];
-        return true;
+    /**
+     * ¿Este comprobante puede engancharse solo a esta factura?
+     *
+     * Una sola respuesta sirve: que la cédula del emisor sea la del código, y
+     * que esa cédula sea de un solo código. Todo lo demás —la cédula de otro,
+     * un código que no está en la lista, una cédula compartida entre varios
+     * puntos de la misma empresa— se deja para que lo decida una persona.
+     *
+     * Antes bastaba con que la guarda no se opusiera, y el parecido de los
+     * nombres hacía el resto. Así se armaron los 29 enganches en los que una
+     * factura terminó con el comprobante de otro proveedor.
+     */
+    private static function puedeEngancharSolo($codigo, array $xml)
+    {
+        $veredicto = self::veredicto($codigo, $xml['proveedor_id'] ?? 0);
+        if ($veredicto === 'propio') {
+            return true;
+        }
+        // Sin listado que consultar, este archivo se comporta como antes de
+        // que la guarda existiera: es la única forma de que siga sirviendo
+        // suelto. La aplicación nunca llega acá.
+        return $veredicto === 'desconocido' && !self::hayCatalogo();
     }
 
     /**
@@ -305,45 +311,6 @@ class PorPagarVerificador
             (string) ($linea['proveedor_nombre'] ?? ''),
             (string) ($xml['proveedor_nombre'] ?? '')
         ), 1);
-    }
-
-    /**
-     * Guarda lo aprendido en esta corrida: los rechazos y los contadores.
-     *
-     * La cosecha es un recálculo desde los emparejamientos, no un incremento.
-     * Un pago se reverifica cada vez que alguien vincula algo a mano, y sumar
-     * uno por corrida inflaría los contadores hasta volverlos mentira. Contando
-     * desde la fuente, correr esto de más nunca hace daño.
-     *
-     * Nunca lanza: aprender no puede tumbar una verificación.
-     */
-    private static function aprenderDelMapa(array $lineas, array $vetos)
-    {
-        // Sin la capa de modelos no hay nada que aprender ni dónde guardarlo.
-        if (!class_exists('ProveedorCodigoErp') || !class_exists('Model')) {
-            return;
-        }
-
-        try {
-            $mapa = new ProveedorCodigoErp();
-
-            foreach ($vetos as $veto) {
-                $mapa->registrarVeto($veto);
-            }
-
-            $codigos = [];
-            foreach ($lineas as $linea) {
-                $codigo = trim((string) ($linea['proveedor_codigo'] ?? ''));
-                if ($codigo !== '') {
-                    $codigos[$codigo] = true;
-                }
-            }
-            if ($codigos) {
-                $mapa->cosechar(array_keys($codigos));
-            }
-        } catch (Throwable $e) {
-            // El emparejamiento ya quedó escrito; esto es lo que se aprende.
-        }
     }
 
     private static function fila($id, $xmlId, $estado, $diferencia, $scoreNumero, $scoreProveedor)
@@ -388,17 +355,15 @@ class PorPagarVerificador
         return $resueltas;
     }
 
-    /** Re-verifica todos los pagos de una semana. */
-    public static function verificarSemana($semanaId, $erp, $facturas = null)
+    /** Re-verifica un pago entero. */
+    public static function verificarPago($pagoId, $erp, $facturas = null)
     {
-        $semanaId = (int) $semanaId;
-        if ($semanaId <= 0) {
+        $pagoId = (int) $pagoId;
+        if ($pagoId <= 0) {
             return;
         }
         try {
-            foreach ($erp->idsPagosDeSemana($semanaId) as $id) {
-                self::verificarListado((int) $id, $erp, $facturas);
-            }
+            self::verificarListado($pagoId, $erp, $facturas);
         } catch (Throwable $e) {
             // Best effort: otra asignación o el botón manual la repiten.
         }
@@ -461,14 +426,12 @@ class PorPagarVerificador
             }
 
             $pendientes = [];
-            $aprendidas = [];
-            $vetos = [];
 
             foreach ($lineas as $linea) {
                 $desdeId = max($desdeId, (int) $linea['id']);
                 $revisadas++;
 
-                $xml = self::buscarXml($linea, $indice, $usadas, $vetos);
+                $xml = self::buscarXml($linea, $indice, $usadas);
                 if ($xml === null) {
                     continue;
                 }
@@ -487,11 +450,10 @@ class PorPagarVerificador
                     (float) $xml['_score_numero'],
                     (float) $xml['_score_proveedor']
                 );
-                $aprendidas[] = $linea;
                 $enganchadas++;
 
-                if (!empty($linea['porpagar_listado_id'])) {
-                    $listados[(int) $linea['porpagar_listado_id']] = true;
+                if (!empty($linea['pago_id'])) {
+                    $listados[(int) $linea['pago_id']] = true;
                 }
             }
 
@@ -499,24 +461,16 @@ class PorPagarVerificador
                 $erp->actualizarRespaldoLote($pendientes);
             }
 
-            // Solo los códigos de lo que cambió: la cosecha recalcula desde los
-            // emparejamientos, y pasarle los miles de códigos de una tanda
-            // entera sería pedirle que recalcule lo que nadie tocó. Una tanda
-            // sin novedades no tiene nada que enseñarle al mapa.
-            if ($aprendidas || $vetos) {
-                self::aprenderDelMapa($aprendidas, $vetos);
-            }
-
             if (count($lineas) < $tanda) {
                 break;
             }
         }
 
-        // Las que estaban en un pago le heredan la semana a su comprobante,
+        // Las que estaban en un pago le heredan el pago a su comprobante,
         // igual que cuando el enganche ocurre al importar el XML.
-        if ($listados && method_exists($erp, 'sincronizarSemanaXml')) {
+        if ($listados && method_exists($erp, 'sincronizarPagoXml')) {
             foreach (array_keys($listados) as $listadoId) {
-                $erp->sincronizarSemanaXml($listadoId);
+                $erp->sincronizarPagoXml($listadoId);
             }
         }
 

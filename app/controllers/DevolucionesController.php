@@ -1,8 +1,10 @@
 <?php
 require_once __DIR__ . '/../helpers/DevolucionImporter.php';
+require_once __DIR__ . '/../helpers/AlmacenDocumentos.php';
 require_once __DIR__ . '/../helpers/DevolucionVerificador.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 require_once __DIR__ . '/../helpers/BusquedaImporte.php';
+require_once __DIR__ . '/../helpers/Columnas.php';
 
 class DevolucionesController extends Controller
 {
@@ -39,6 +41,36 @@ class DevolucionesController extends Controller
                 $modelo->proveedoresParaFiltro($sociedad ? (int) $sociedad['id'] : null)
             ),
         ]);
+    }
+
+    /**
+     * El listado en Excel, con los mismos filtros y las mismas columnas.
+     *
+     * Las devoluciones no tenían exportación: para pasarle a un proveedor lo
+     * que se le devolvió había que copiar la pantalla a mano.
+     */
+    public function exportar()
+    {
+        try {
+            $sociedad = $this->loadModel('Sociedad')->getActiva();
+            $filas = $this->loadModel('Devolucion')->listar([
+                'sociedad_id' => $sociedad ? (int) $sociedad['id'] : null,
+                'tipo' => trim((string) $this->get('tipo', '')),
+                'estado' => trim((string) $this->get('estado', '')),
+                'proveedor' => ProveedorCatalogo::normalizarClave($this->get('proveedor', '')),
+                'q' => trim((string) $this->get('q', '')),
+                'monto' => BusquedaImporte::numero($this->get('monto', '')),
+            ]);
+
+            Columnas::descargar('devoluciones', $filas, $this->get('cols', ''));
+        } catch (Throwable $e) {
+            $this->registrarFallo('exportar las devoluciones', $e);
+            $this->redirectWithMessage(
+                $this->url('/devoluciones'),
+                'No se pudo generar el Excel: ' . $e->getMessage(),
+                'error'
+            );
+        }
     }
 
     public function subir()
@@ -276,8 +308,8 @@ class DevolucionesController extends Controller
                 throw new Exception('La devolución no existe.');
             }
             $modelo->eliminar((int) $id);
-            if (!empty($dev['ruta_pdf']) && is_file($dev['ruta_pdf'])) {
-                @unlink($dev['ruta_pdf']);
+            if (!empty($dev['ruta_pdf'])) {
+                AlmacenDocumentos::de($dev['ruta_pdf'])->borrar($dev['ruta_pdf']);
             }
             $this->redirectWithMessage(
                 $this->url('/devoluciones'),

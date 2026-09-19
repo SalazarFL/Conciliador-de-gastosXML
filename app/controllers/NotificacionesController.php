@@ -31,16 +31,8 @@ class NotificacionesController extends Controller
         $modelo = $this->loadModel('Notificacion');
         $avisos = $modelo->listar($estado === 'todas' ? '' : $estado);
 
-        // Cada aviso de código trae su propio contexto: los candidatos y los
-        // vetos que lo originaron. Se resuelve en la misma pantalla, sin tener
-        // que ir a buscar a qué proveedor pertenece cada cédula.
-        $mapa = $this->loadModel('ProveedorCodigoErp');
         foreach ($avisos as &$aviso) {
             $aviso['datos_obj'] = $this->datosDe($aviso);
-            if (($aviso['tipo'] ?? '') === 'codigo_proveedor' && $aviso['ref_clave'] !== '') {
-                $aviso['candidatos'] = $mapa->proveedoresSugeridos($aviso['ref_clave']);
-                $aviso['conflictos'] = $mapa->conflictosDe($aviso['ref_clave'], 5);
-            }
         }
         unset($aviso);
 
@@ -66,7 +58,7 @@ class NotificacionesController extends Controller
             // recordatorios de seguimiento que ya vencieron se convierten en
             // avisos aquí, cuando alguien abre cualquier pantalla. Va dentro
             // del try de siempre: si falla, la campana se pinta igual.
-            $this->loadModel('Seguimiento')->generarRecordatorios();
+            $this->loadModel('Seguimiento')->generarRecordatoriosSiToca();
 
             $modelo = $this->loadModel('Notificacion');
             $avisos = $modelo->recientes();
@@ -86,48 +78,202 @@ class NotificacionesController extends Controller
     }
 
     /**
-     * "Este código es de este proveedor."
+     * La lista de comprobantes de proveedores sin código (POST, JSON).
      *
-     * Es la decisión humana explícita, y por eso manda sobre el contador: una
-     * persona que sabe que el código cambió de dueño vale más que setenta
-     * emparejamientos viejos. Queda con origen 'manual' y la cosecha no lo
-     * vuelve a tocar.
+     * Estos avisos ya no suenan en la campana —ver Notificacion::FUERA_DE_LA_CAMPANA—
+     * porque llegan a decenas y tapaban lo que sí urgía. Su sitio es el botón
+     * "Comprobantes sin código" de Correo, que es la pantalla donde se está
+     * cuando aparecen. Aquí se sirven todos juntos para poder despacharlos de
+     * corrido, sin abandonar el buzón.
+     *
+     * Devuelve también el conteo de pendientes aunque se estén pidiendo los ya
+     * decididos: es el número del botón, y tiene que quedar al día después de
+     * resolver sin recargar la página entera.
      */
-    public function confirmarCodigo()
+    public function sinCodigo()
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            $this->json(['ok' => false, 'message' => 'Método no permitido.'], 405);
+        }
+
+        $estado = (string) $this->post('estado', 'pendiente');
+        if (!in_array($estado, ['pendiente', 'resuelta', 'descartada', 'todas'], true)) {
+            $estado = 'pendiente';
+        }
+
+        try {
+            $modelo = $this->loadModel('Notificacion');
+            $filas = $modelo->porTipo(
+                'proveedor_sin_codigo',
+                $estado === 'todas' ? '' : $estado
+            );
+
+            $avisos = [];
+            foreach ($filas as $fila) {
+                $datos = $this->datosDe($fila);
+                $avisos[] = [
+                    'id'       => (int) $fila['id'],
+                    // La cédula vive en dos sitios por historia: en los datos del
+                    // aviso y en su referencia. Con los avisos viejos a la vista,
+                    // el respaldo no sobra.
+                    'cedula'   => (string) ($datos['cedula'] ?? $fila['ref_clave']),
+                    'nombre'   => (string) ($datos['nombre'] ?? ''),
+                    'veces'    => (int) $fila['veces'],
+                    'estado'   => (string) $fila['estado'],
+                    'creada_en' => (string) $fila['creada_en'],
+                    'motivo'   => (string) ($fila['motivo'] ?? ''),
+                    'resuelta_por_nombre' => (string) ($fila['resuelta_por_nombre'] ?? ''),
+                ];
+            }
+
+            $this->json([
+                'ok' => true,
+                'estado' => $estado,
+                'pendientes' => $modelo->contarPorTipo('proveedor_sin_codigo'),
+                'avisos' => $avisos,
+            ]);
+        } catch (Throwable $e) {
+            $this->json(['ok' => false, 'message' => 'No se pudo leer la lista: ' . $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Los códigos entre los que elegir, para la lista de Correo (POST, JSON).
+     *
+     * El mismo buscador que Configuración → Proveedores, y a propósito: es la
+     * misma pregunta hecha desde la otra punta. Allá se parte de un código
+     * huérfano y se le busca dueño; acá se parte de un comprobante huérfano y se
+     * le busca código. Lo que se elige sale del mismo catálogo.
+     *
+     * Tiene ruta propia y no se reusa la de Configuración porque los permisos
+     * son otros: quién despacha comprobantes y quién administra el catálogo no
+     * son la misma persona, y colgarse de aquella ruta obligaba a darle a la
+     * primera las llaves de Configuración entera.
+     *
+     * Con `buscar`, lo que coincida por código, nombre o cédula. Sin él, los que
+     * se parecen al nombre del proveedor: la lista abre con los candidatos ya
+     * puestos, que es lo primero que uno escribiría.
+     */
+    public function opcionesCodigo()
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            $this->json(['ok' => false, 'message' => 'Método no permitido.'], 405);
+        }
+
+        try {
+            $modelo = $this->loadModel('ProveedorCodigoErp');
+            $buscar = trim((string) $this->post('buscar', ''));
+
+            $this->json([
+                'ok' => true,
+                'sugeridas' => $buscar === '',
+                'opciones' => $buscar !== ''
+                    ? $modelo->opcionesDeCodigo($buscar)
+                    : $modelo->opcionesParecidas((string) $this->post('nombre', '')),
+            ]);
+        } catch (Throwable $e) {
+            $this->json(['ok' => false, 'message' => 'No se pudo buscar: ' . $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * "Este proveedor sí nos factura, y este es su código."
+     *
+     * La primera de las dos salidas del aviso de un comprobante que no
+     * pertenece a ningún código del ERP. Da de alta el código en el catálogo,
+     * con lo cual el comprobante deja de estar huérfano —y todos los demás de
+     * esa misma cédula con él— y las facturas de ese código pueden volver a
+     * emparejar.
+     */
+    public function codigoNuevo()
     {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
             $this->json(['ok' => false, 'message' => 'Método no permitido.'], 405);
         }
 
         $codigo = trim((string) $this->post('codigo', ''));
-        $proveedorId = (int) $this->post('proveedor_id', 0);
+        $cedula = trim((string) $this->post('cedula', ''));
+        $nombre = trim((string) $this->post('nombre', ''));
         $avisoId = (int) $this->post('aviso_id', 0);
 
-        if ($codigo === '' || $proveedorId <= 0) {
-            $this->json(['ok' => false, 'message' => 'Falta el código o el proveedor.'], 422);
+        if ($codigo === '' || $cedula === '') {
+            $this->json(['ok' => false, 'message' => 'Falta el código o la cédula.'], 422);
+        }
+
+        /*
+         * La lista ya no deja escribir un código a mano, y esto lo sostiene
+         * aunque alguien mande el formulario por su cuenta. Un código escrito
+         * que no existe es casi siempre una cédula o un número mal copiado, y
+         * ese error no se ve hasta que una factura acepta el comprobante
+         * equivocado —que es justo lo que este aviso quería evitar.
+         */
+        if ($this->post('existente', '') === '1'
+            && !$this->loadModel('ProveedorCodigoErp')->codigoExiste($codigo)) {
+            $this->json([
+                'ok' => false,
+                'message' => 'Ese código no está en la lista ni en las facturas del sistema. '
+                           . 'Si el proveedor es nuevo, importá de nuevo el listado del sistema.',
+            ], 422);
         }
 
         try {
-            $ok = $this->loadModel('ProveedorCodigoErp')
-                ->confirmarManual($codigo, $proveedorId, (int) ($_SESSION['user_id'] ?? 0));
-            if (!$ok) {
-                $this->json(['ok' => false, 'message' => 'No se pudo guardar la confirmación.'], 500);
+            $r = $this->loadModel('ProveedorCodigoErp')
+                ->guardarCodigo($codigo, $cedula, $nombre, (int) ($_SESSION['user_id'] ?? 0));
+            if (empty($r['ok'])) {
+                $this->json(['ok' => false, 'message' => $r['message']], 422);
             }
 
             if ($avisoId > 0) {
                 $this->loadModel('Notificacion')->cerrar(
-                    $avisoId, 'resuelta', (int) ($_SESSION['user_id'] ?? 0), 'Código confirmado a mano'
+                    $avisoId, 'resuelta', (int) ($_SESSION['user_id'] ?? 0),
+                    'Se le dio el código ' . $codigo
                 );
             }
 
-            // Con el mapa corregido, los pagos que quedaron sin respaldo por
-            // culpa del veto pueden repararse solos.
-            $reparadas = $this->reverificarPendientes();
-
-            $this->json(['ok' => true, 'reparadas' => $reparadas]);
+            // Con el código dado de alta, las facturas que se habían quedado
+            // sin respaldo por no tener con qué emparejar pueden repararse.
+            $this->json(['ok' => true, 'reparadas' => $this->reverificarPendientes()]);
         } catch (Throwable $e) {
-            $this->json(['ok' => false, 'message' => 'No se pudo confirmar: ' . $e->getMessage()], 500);
+            $this->json(['ok' => false, 'message' => 'No se pudo guardar: ' . $e->getMessage()], 500);
         }
+    }
+
+    /**
+     * "Este proveedor no nos factura: no lo procesés."
+     *
+     * La otra salida. El comprobante ya entró y se queda donde está —no se
+     * borra nada—, pero la cédula deja de preguntarse: ni este comprobante ni
+     * los que lleguen después de ella vuelven a pedir una decisión.
+     */
+    public function ignorarProveedor()
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            $this->json(['ok' => false, 'message' => 'Método no permitido.'], 405);
+        }
+
+        $cedula = trim((string) $this->post('cedula', ''));
+        $avisoId = (int) $this->post('aviso_id', 0);
+        if ($cedula === '') {
+            $this->json(['ok' => false, 'message' => 'Cédula no indicada.'], 422);
+        }
+
+        $r = $this->loadModel('ProveedorCodigoErp')->ignorarCedula(
+            $cedula,
+            (string) $this->post('nombre', ''),
+            (string) $this->post('motivo', ''),
+            (int) ($_SESSION['user_id'] ?? 0)
+        );
+        if (empty($r['ok'])) {
+            $this->json(['ok' => false, 'message' => $r['message']], 422);
+        }
+
+        if ($avisoId > 0) {
+            $this->loadModel('Notificacion')->cerrar(
+                $avisoId, 'resuelta', (int) ($_SESSION['user_id'] ?? 0), 'Proveedor marcado como no procesable'
+            );
+        }
+
+        $this->json(['ok' => true]);
     }
 
     /** Cierra un aviso sin decidir nada: "ya lo vi". */
@@ -147,37 +293,6 @@ class NotificacionesController extends Controller
             ->cerrar($id, $estado, (int) ($_SESSION['user_id'] ?? 0), (string) $this->post('motivo', ''));
 
         $this->json(['ok' => $filas > 0]);
-    }
-
-    /**
-     * "No sé de quién es, pero que deje de bloquear."
-     *
-     * La salida honesta para cuando no hay con qué decidir: el código queda en
-     * disputa, la guarda se abstiene y el emparejamiento vuelve a comportarse
-     * como antes de que existiera el mapa. No es la mejor respuesta, pero es
-     * mejor que dejar facturas atascadas esperando una decisión que nadie
-     * puede tomar todavía.
-     */
-    public function liberarCodigo()
-    {
-        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-            $this->json(['ok' => false, 'message' => 'Método no permitido.'], 405);
-        }
-
-        $codigo = trim((string) $this->post('codigo', ''));
-        $avisoId = (int) $this->post('aviso_id', 0);
-        if ($codigo === '') {
-            $this->json(['ok' => false, 'message' => 'Código no indicado.'], 422);
-        }
-
-        $this->loadModel('ProveedorCodigoErp')->ponerEnDisputa($codigo, true);
-        if ($avisoId > 0) {
-            $this->loadModel('Notificacion')->cerrar(
-                $avisoId, 'resuelta', (int) ($_SESSION['user_id'] ?? 0), 'Código liberado sin decidir'
-            );
-        }
-
-        $this->json(['ok' => true, 'reparadas' => $this->reverificarPendientes()]);
     }
 
     // ── Auxiliares ─────────────────────────────────────────────────

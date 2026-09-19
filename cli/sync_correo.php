@@ -10,6 +10,22 @@
  * de adjuntos/CC un tope corto deja el índice trabajando solo una fracción del
  * tiempo y la cola no termina nunca.
  *
+ * ── Qué hace con lo que encuentra ──
+ *
+ * Una corrida completa deja el trabajo hecho, no preparado:
+ *
+ *   1. Índice al día: qué correos hay en cada buzón.
+ *   2. Captura: los comprobantes de los correos nuevos bajan a la Bandeja.
+ *   3. Entrada: los que están limpios entran solos al sistema —se archivan en
+ *      la carpeta de su mes, se registran y se enganchan con su factura del
+ *      ERP—. En la Bandeja solo queda lo que una persona tiene que resolver.
+ *   4. Listados: se cruzan los pagos y las notas de crédito de las
+ *      empresas que recibieron algo, una vez por corrida.
+ *   5. Archivo local: reconciliar y acomodar la carpeta compartida.
+ *
+ * El paso 3 se puede apagar desde Configuración → Automatización, y entonces
+ * todo espera en la Bandeja como antes. Ver app/helpers/EntradaAutomatica.php.
+ *
  * ── Varias copias a la vez ──
  *
  * Este script está pensado para correr en paralelo consigo mismo. Hablarle al
@@ -52,8 +68,10 @@ require_once $ROOT . '/app/helpers/XmlParser.php';
 require_once $ROOT . '/app/models/CorreoCuenta.php';
 require_once $ROOT . '/app/models/CorreoIndice.php';
 require_once $ROOT . '/app/models/CorreoCapturaAutomatica.php';
+require_once $ROOT . '/app/models/CorreoBandeja.php';
 require_once $ROOT . '/app/models/Sociedad.php';
 require_once $ROOT . '/app/controllers/CorreoController.php';
+require_once $ROOT . '/app/helpers/EntradaAutomatica.php';
 require_once $ROOT . '/app/helpers/OrganizadorDocumentos.php';
 
 $topeSegundos = isset($argv[1]) ? max(30, min(3600, (int) $argv[1])) : 240; // 4 min por defecto
@@ -76,9 +94,16 @@ $capturaActiva = !empty($autoCfg['activo']) && !empty($autoCfg['capturar_nuevos'
 $capturaMax = max(1, min(200, (int) ($autoCfg['max_correos_corrida'] ?? 20)));
 $capturaIntentos = max(1, min(10, (int) ($autoCfg['max_intentos'] ?? 3)));
 $capturaActivadaEn = trim((string) ($autoCfg['captura_activada_en'] ?? ''));
+// Que los comprobantes limpios entren solos, sin esperar a que alguien los
+// autorice en la Bandeja. Es lo normal; se apaga desde Configuración.
+$entradaAutomatica = EntradaAutomatica::activa($autoCfg);
 $capturaCorrida = [
     'activa' => $capturaActiva, 'detectados' => 0, 'procesados' => 0,
     'documentos' => 0, 'sin_documentos' => 0, 'errores' => 0,
+    // Con entrada automática, en qué terminó cada documento capturado.
+    'entrada_automatica' => $entradaAutomatica,
+    'ingresados' => 0, 'duplicados' => 0, 'retenidos' => 0,
+    'fallidos' => 0, 'pdf_pendientes' => 0,
 ];
 
 /*
@@ -159,7 +184,8 @@ try {
                 'nuevos' => 0, 'adjuntos' => 0, 'adjuntos_pendientes' => null,
                 'cc' => 0, 'cc_pendientes' => null, 'metadatos_pendientes' => null,
                 'capturas_detectadas' => 0, 'capturas_procesadas' => 0,
-                'documentos_revision' => 0, 'capturas_error' => 0,
+                'documentos_revision' => 0, 'documentos_ingresados' => 0,
+                'capturas_error' => 0,
                 'completado' => false, 'error' => null,
             ],
         ];
@@ -227,10 +253,15 @@ try {
     registrar($rutaLog, 'ERROR GLOBAL: ' . $e->getMessage());
 }
 
-// Captura: consume solamente la cola de UIDs nuevos que dejó CorreoSync y
-// lleva sus comprobantes a correo_bandeja. Deliberadamente no marca el correo
-// como importado/procesado ni llama a importar(): esa decisión sigue siendo
-// manual desde la Bandeja.
+// Captura: consume solamente la cola de UIDs nuevos que dejó CorreoSync y baja
+// sus comprobantes a correo_bandeja. Con la entrada automática activa, los que
+// están limpios siguen de largo y entran al sistema en el acto; la Bandeja se
+// queda con lo que hay que mirar.
+//
+// Lo que sigue sin tocar es el buzón: no se marca el correo como procesado
+// (eso es del modo Descargas, que trabaja con correo_procesados) ni se le pone
+// bandera de leído. Lo que se lee no cambia de aspecto para quien abra el
+// buzón desde Outlook.
 $resumenCapturas = [
     'pendiente' => 0, 'procesando' => 0, 'capturado' => 0,
     'sin_documentos' => 0, 'error' => 0, 'documentos' => 0,
@@ -250,6 +281,13 @@ if ($capturaActiva && isset($cuentasModel, $cuentas)
         foreach ((new Sociedad())->getAll() as $sociedad) {
             $sociedadesPorId[(int) $sociedad['id']] = $sociedad;
         }
+
+        // Quien mete al sistema lo que se va capturando. Es uno solo para toda
+        // la corrida a propósito: va anotando qué empresas recibieron algo, y
+        // al final cruza sus listados de una vez en vez de por cada correo.
+        $entrada = $entradaAutomatica
+            ? new EntradaAutomatica(new CorreoBandeja(), $sociedadesPorId)
+            : null;
 
         // Tandas cortas en round-robin: una cuenta con mucho tráfico no
         // monopoliza toda la corrida ni retrasa a los demás buzones.
@@ -311,33 +349,62 @@ if ($capturaActiva && isset($cuentasModel, $cuentas)
                             );
 
                             if (empty($mensaje['xmls']) && empty($mensaje['pdfs'])) {
+                                // Los avisos dicen si había adjuntos y se
+                                // descartaron (un ZIP desmedido, por ejemplo):
+                                // sin ellos, esto parecería un correo vacío.
+                                $detalle = 'El correo no contiene XML ni PDF.';
+                                if (!empty($mensaje['avisos'])) {
+                                    $detalle .= ' ' . implode(' ', (array) $mensaje['avisos']);
+                                }
                                 $capturas->finalizar(
                                     (int) $pendiente['id'],
                                     'sin_documentos',
-                                    'El correo no contiene XML ni PDF.'
+                                    $detalle
                                 );
                                 $capturaCorrida['sin_documentos']++;
                                 $capturaCorrida['procesados']++;
                                 continue;
                             }
 
-                            $resultado = $correoController->capturarMensajeParaRevision(
+                            $resultado = $correoController->capturarMensajeAutomatico(
                                 $mensaje,
                                 $cuentaId,
-                                $sociedadesCuenta
+                                $sociedadesCuenta,
+                                $entrada,
+                                [
+                                    'carpeta' => (string) $pendiente['carpeta'],
+                                    'uidvalidity' => (int) $pendiente['uidvalidity'],
+                                    'uid' => (int) $pendiente['uid'],
+                                    'fecha_correo' => $mensaje['fecha'] ?? null,
+                                ]
                             );
                             $documentos = count($resultado['filas'] ?? []);
-                            $detalle = implode(' | ', array_slice($resultado['errores'] ?? [], 0, 8));
+                            $ingreso = is_array($resultado['entrada'] ?? null) ? $resultado['entrada'] : null;
+                            $avisos = $resultado['errores'] ?? [];
+                            if ($ingreso) {
+                                $capturaCorrida['ingresados'] += (int) $ingreso['ingresados'];
+                                $capturaCorrida['duplicados'] += (int) $ingreso['duplicados'];
+                                $capturaCorrida['retenidos'] += (int) $ingreso['retenidos'];
+                                $capturaCorrida['fallidos'] += (int) $ingreso['fallidos'];
+                                $capturaCorrida['pdf_pendientes'] += (int) $ingreso['pdf_pendientes'];
+                                $avisos = array_merge($avisos, $ingreso['errores']);
+                            }
+                            $detalle = implode(' | ', array_slice($avisos, 0, 8));
                             if ($documentos > 0) {
                                 $capturas->finalizar(
                                     (int) $pendiente['id'],
                                     'capturado',
-                                    $detalle !== '' ? $detalle : 'Disponible en la Bandeja para revisión manual.',
+                                    $detalle !== '' ? $detalle : ($ingreso
+                                        ? 'Ingresó al sistema: ' . (int) $ingreso['ingresados']
+                                            . ' documento(s), ' . (int) $ingreso['duplicados'] . ' ya estaban.'
+                                        : 'Disponible en la Bandeja para revisión manual.'),
                                     $documentos
                                 );
                                 $capturaCorrida['documentos'] += $documentos;
                                 if (isset($resumenCuentas[$cuentaId])) {
                                     $resumenCuentas[$cuentaId]['documentos_revision'] += $documentos;
+                                    $resumenCuentas[$cuentaId]['documentos_ingresados']
+                                        += $ingreso ? (int) $ingreso['ingresados'] : 0;
                                 }
                             } else {
                                 $capturas->finalizar(
@@ -404,6 +471,22 @@ if ($capturaActiva && isset($cuentasModel, $cuentas)
             }
         }
 
+        // Todo lo de esta corrida ya entró: ahora, una sola vez, se cruzan los
+        // listados de las empresas que recibieron algo. Antes esto solo pasaba
+        // cuando alguien abría Por Pagar y pulsaba «Verificar de nuevo», así
+        // que una factura podía estar en la base y su fila del ERP seguir
+        // diciendo «sin respaldo» durante días.
+        if ($entrada instanceof EntradaAutomatica && $entrada->hayQueVerificar()) {
+            $cruce = $entrada->verificarListados();
+            registrar($rutaLog, sprintf(
+                'Listados cruzados: %d empresa(s) con facturas, %d con notas de crédito; %d fila(s) del ERP quedaron con su respaldo.%s',
+                (int) $cruce['sociedades_fe'],
+                (int) $cruce['sociedades_nc'],
+                (int) $cruce['pagos_resueltos'],
+                $cruce['errores'] ? ' [' . implode('; ', array_slice($cruce['errores'], 0, 3)) . ']' : ''
+            ));
+        }
+
         $resumenCapturas = $capturas->resumen();
     } catch (Throwable $e) {
         $capturaCorrida['errores']++;
@@ -423,10 +506,10 @@ if ($capturaActiva && isset($cuentasModel, $cuentas)
 // 1. Reconciliar: busca los archivos que alguien movió a mano y corrige la
 //    base para seguirlos. No toca ningún archivo.
 // 2. Ordenar: lleva cada documento a la carpeta de su mes y deja una copia en
-//    la del pago semanal si le toca. Antes había que pedirlo desde
+//    la del pago si le toca. Antes había que pedirlo desde
 //    Configuración, con una previsualización de por medio; se volvió
 //    automático porque la carpeta de un documento la deciden su fecha y su
-//    tipo —que no cambian nunca— y su semana de pago, así que no hay nada que
+//    tipo —que no cambian nunca— y su pago de pago, así que no hay nada que
 //    decidir ni nada que previsualizar.
 //
 // Ordenar NO borra: solo mueve el par a su carpeta y copia a la del pago. Y
@@ -434,6 +517,28 @@ if ($capturaActiva && isset($cuentasModel, $cuentas)
 // en la carpeta por su cuenta se queda donde está.
 //
 // Un error de cualquiera de los dos pasos no invalida el correo.
+//
+// Antes, el barrido de los documentos bajados que alguien no devolvió: un
+// proceso que murió a la mitad —un tiempo agotado de Apache, un corte de luz—
+// no llegó a soltarlos. Con los documentos en disco no hay nada que barrer.
+$barridos = AlmacenDocumentos::barrerTemporales(3600);
+if ($barridos > 0) {
+    registrar($rutaLog, 'Temporales de documentos: ' . $barridos . ' olvidados, borrados.');
+}
+
+// Y lo que se quiso deshacer en SharePoint y no se pudo: un documento subido
+// cuya fila no se guardó. Ver app/models/AlmacenPendiente.php.
+try {
+    require_once $ROOT . '/app/models/AlmacenPendiente.php';
+    $compensados = (new AlmacenPendiente())->drenar(50);
+    if ($compensados['hechos'] > 0 || $compensados['fallidos'] > 0) {
+        registrar($rutaLog, 'Borrados pendientes en el almacén: ' . $compensados['hechos'] . ' hechos, '
+            . $compensados['fallidos'] . ' siguen fallando.');
+    }
+} catch (Throwable $e) {
+    registrar($rutaLog, 'No se pudieron revisar los borrados pendientes: ' . $e->getMessage());
+}
+
 try {
     if (DocumentoArchivo::raizConfigurada() !== '') {
         $organizador = new OrganizadorDocumentos();
@@ -452,7 +557,7 @@ try {
         ));
 
         // No en cada corrida: la carpeta que le toca a un documento solo
-        // cambia cuando entra uno nuevo o cuando cambia su semana de pago, y
+        // cambia cuando entra uno nuevo o cuando cambia su pago de pago, y
         // recorrer el archivo entero cada cinco minutos sería tener la carpeta
         // compartida en danza para nada.
         if ($organizador->requiereOrden(900)) {
@@ -461,7 +566,7 @@ try {
                 registrar($rutaLog, 'Acomodo del archivo: omitido, hay otra corrida en curso.');
             } else {
                 registrar($rutaLog, sprintf(
-                    'Acomodo del archivo: %d movidos a su mes; %d copias al pago semanal (%d ya estaban); %d ya ordenados; %d carpetas vacías podadas; %d sin archivo en disco; %d errores.',
+                    'Acomodo del archivo: %d movidos a su mes; %d copias al pago (%d ya estaban); %d ya ordenados; %d carpetas vacías podadas; %d sin archivo en disco; %d errores.',
                     (int) ($acomodo['movidos'] ?? 0),
                     (int) ($acomodo['copias_pago'] ?? 0),
                     (int) ($acomodo['copias_pago_vigentes'] ?? 0),
@@ -498,17 +603,48 @@ try {
     registrar($rutaLog, 'Archivo local: ERROR ' . $e->getMessage());
 }
 
+// Los documentos que viven en SharePoint no los ve el organizador: de esos se
+// ocupa su reconciliador, que lee los cambios de la biblioteca en vez de
+// recorrerla. Sin empresas ni documentos allá, no sale a la red.
+try {
+    require_once $ROOT . '/app/helpers/ReconciliadorGraph.php';
+    if (ReconciliadorGraph::hayQueCorrer()) {
+        $nube = (new ReconciliadorGraph(AlmacenDocumentos::tipo(AlmacenEnGraph::TIPO)))->ejecutar(false);
+        if (!empty($nube['omitido_por_bloqueo'])) {
+            registrar($rutaLog, 'SharePoint: omitido, otra PC está revisando la biblioteca.');
+        } else {
+            registrar($rutaLog, sprintf(
+                'SharePoint: %d cambios leídos%s; %d documentos revisados; %d rutas corregidas; %d sin archivo; %d volvieron; %d con otro contenido; %d copias al pago (%d ya estaban, %d para la próxima vuelta); %d errores.',
+                (int) $nube['cambios_leidos'],
+                $nube['delta_reiniciado'] ? ' (el enlace de cambios venció: se reinició)' : '',
+                (int) $nube['documentos_revisados'],
+                (int) $nube['rutas_actualizadas'],
+                (int) $nube['marcados_sin_archivo'],
+                (int) $nube['desmarcados'],
+                (int) $nube['editados'],
+                (int) $nube['copias_pago'],
+                (int) $nube['copias_pago_vigentes'],
+                (int) $nube['copias_pago_para_despues'],
+                (int) $nube['errores'] + (int) $nube['errores_copia_pago']
+            ));
+        }
+    }
+} catch (Throwable $e) {
+    registrar($rutaLog, 'SharePoint: ERROR ' . $e->getMessage());
+}
+
 $duracion = round(microtime(true) - $inicioCorrida, 1);
 
 // Registro resumido por cuenta
 foreach ($resumenCuentas as $r) {
     registrar($rutaLog, sprintf(
-        'Cuenta "%s": +%d encabezados, +%d adjuntos, +%d CC/Reply-To, +%d a revisión, pendientes=%s, %s%s',
+        'Cuenta "%s": +%d encabezados, +%d adjuntos, +%d CC/Reply-To, +%d documento(s) capturado(s) (%d al sistema), pendientes=%s, %s%s',
         $r['nombre'],
         (int) $r['nuevos'],
         (int) $r['adjuntos'],
         (int) $r['cc'],
         (int) ($r['documentos_revision'] ?? 0),
+        (int) ($r['documentos_ingresados'] ?? 0),
         $r['metadatos_pendientes'] === null
             ? '?'
             : (string) (int) $r['metadatos_pendientes'],

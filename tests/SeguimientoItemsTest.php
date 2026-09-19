@@ -34,7 +34,7 @@ assertSameSeg(
     'acepta la forma de arreglo'
 );
 
-// El origen viejo del pago semanal ya no existe: aceptarlo escribiría filas
+// El origen viejo del pago ya no existe: aceptarlo escribiría filas
 // que la consulta de la cola nunca vuelve a encontrar.
 assertSameSeg(
     [],

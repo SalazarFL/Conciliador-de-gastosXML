@@ -19,6 +19,14 @@
  * usando.
  */
 
+/*
+ * La vista pregunta a Permisos qué botones ofrecer (administrar empresas, los
+ * accesos rápidos). En la aplicación lo carga Controller.php; aquí, que se
+ * incluye la vista suelta, hay que traerlo a mano. Desde CLI Permisos deja
+ * pasar todo, así que esta prueba sigue viendo la pantalla completa.
+ */
+require_once __DIR__ . '/../app/core/Permisos.php';
+
 $fallos = 0;
 function verificaHome($condicion, $mensaje)
 {

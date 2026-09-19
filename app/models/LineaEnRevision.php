@@ -51,6 +51,12 @@ class LineaEnRevision extends Model
             contenedor_id INT UNSIGNED NULL,
             fila_origen INT UNSIGNED NOT NULL DEFAULT 0,
             firma VARCHAR(40) NOT NULL,
+            -- Qué líneas son el mismo enredo. Vacío en la mayoría: una línea
+            -- ilegible se resuelve sola y no tiene con quién agruparse. Las
+            -- que comparten identidad, en cambio, no se pueden decidir de a
+            -- una —elegir cuál entra exige ver a las otras— y llevan acá la
+            -- clave que las choca, que es lo que las junta en pantalla.
+            grupo VARCHAR(190) NOT NULL DEFAULT '',
             motivo VARCHAR(400) NOT NULL DEFAULT '',
             celdas LONGTEXT NULL,
             campos LONGTEXT NULL,
@@ -63,8 +69,11 @@ class LineaEnRevision extends Model
             PRIMARY KEY (id),
             KEY idx_rev_pendientes (sociedad_id, estado, id),
             KEY idx_rev_carga (carga_id),
-            KEY idx_rev_firma (firma)
+            KEY idx_rev_firma (firma),
+            KEY idx_rev_grupo (sociedad_id, estado, grupo)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        $this->ponerseAlDia();
 
         // Lo que ya se decidió una vez. Sin esta tabla, recordar no serviría
         // de nada: el reporte se vuelve a subir completo cada semana y la
@@ -85,6 +94,33 @@ class LineaEnRevision extends Model
             PRIMARY KEY (id),
             UNIQUE KEY uk_rev_memoria (sociedad_id, firma)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    }
+
+    /**
+     * La bandeja es anterior a los enredos: en las bases ya instaladas hay que
+     * agregarle la columna que los agrupa. Sin ella, las líneas gemelas se
+     * verían como líneas sueltas y volvería a poder decidirse cada una por su
+     * lado, que es justo lo que no se puede hacer con ellas.
+     */
+    private function ponerseAlDia()
+    {
+        try {
+            $tiene = (int) $this->fetchColumn(
+                "SELECT COUNT(*) FROM information_schema.COLUMNS
+                  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?
+                    AND COLUMN_NAME = 'grupo'",
+                [$this->tabla()]
+            );
+            if ($tiene === 0) {
+                $this->execute(
+                    "ALTER TABLE {$this->tabla()}
+                       ADD COLUMN grupo VARCHAR(190) NOT NULL DEFAULT '' AFTER firma,
+                       ADD KEY idx_rev_grupo (sociedad_id, estado, grupo)"
+                );
+            }
+        } catch (Throwable $e) {
+            // Sin permisos de DDL la bandeja sigue funcionando como antes.
+        }
     }
 
     private function tabla() { return $this->modulo . '_revision'; }
@@ -176,14 +212,15 @@ class LineaEnRevision extends Model
 
             $this->execute(
                 "INSERT INTO {$this->tabla()}
-                    (sociedad_id, carga_id, contenedor_id, fila_origen, firma, motivo, celdas, campos)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (sociedad_id, carga_id, contenedor_id, fila_origen, firma, grupo, motivo, celdas, campos)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     (int) $sociedadId,
                     $cargaId !== null ? (int) $cargaId : null,
                     $contenedorId !== null ? (int) $contenedorId : null,
                     (int) ($linea['fila_origen'] ?? 0),
                     $firma,
+                    mb_substr((string) ($linea['grupo'] ?? ''), 0, 190),
                     mb_substr((string) ($linea['motivo'] ?? ''), 0, 400),
                     self::json($linea['celdas'] ?? []),
                     self::json($linea['campos'] ?? []),
@@ -193,6 +230,45 @@ class LineaEnRevision extends Model
         }
 
         return $insertadas;
+    }
+
+    /**
+     * Retira los enredos que la carga nueva ya no trae.
+     *
+     * Es la salida por el otro lado: un enredo se puede resolver decidiendo, o
+     * arreglándolo en el ERP y volviendo a exportar el reporte. Sin esto, la
+     * segunda no serviría de nada —las filas viejas seguirían pendientes y
+     * seguirían cerrando el listado— y peor: decidir sobre ellas metería al
+     * listado una factura que el reporte de hoy ya no tiene así.
+     *
+     * Solo alcanza a los enredos. Una línea ilegible que deja de venir se
+     * queda esperando a propósito: es un pendiente, no un bloqueo, y borrarla
+     * porque el reporte cambió sería perder la pregunta sin contestarla.
+     *
+     * @param array $firmasPresentes Las firmas que sí trae la carga de ahora.
+     * @return int Cuántos enredos se retiraron.
+     */
+    public function retirarEnredosAusentes($sociedadId, array $firmasPresentes)
+    {
+        $params = [(int) $sociedadId];
+        $sql = "UPDATE {$this->tabla()}
+                   SET estado = 'descartada',
+                       nota = 'El reporte dejó de traer estas filas: el enredo se arregló en el origen.',
+                       resuelta_en = NOW()
+                 WHERE sociedad_id = ? AND estado = 'pendiente' AND grupo <> ''";
+
+        $firmas = array_values(array_unique(array_filter(array_map('strval', $firmasPresentes))));
+        if ($firmas) {
+            $sql .= ' AND firma NOT IN (' . implode(',', array_fill(0, count($firmas), '?')) . ')';
+            $params = array_merge($params, $firmas);
+        }
+
+        try {
+            return (int) $this->execute($sql, $params);
+        } catch (Throwable $e) {
+            // Que no se pueda limpiar no puede tumbar una carga que ya entró.
+            return 0;
+        }
     }
 
     /** Anota que una corrección recordada volvió a usarse. */
@@ -289,12 +365,27 @@ class LineaEnRevision extends Model
     // Consultas de pantalla
     // ------------------------------------------------------------------
 
+    /**
+     * Las líneas sueltas que esperan decisión. Los enredos quedan fuera: se
+     * resuelven en grupo y tienen su propia consulta.
+     *
+     * "Suelta" incluye a la que se quedó sola en su grupo. Un enredo del que
+     * ya se resolvieron las demás dejó de ser un enredo: no hay entre qué
+     * elegir. Sin esta salida esa línea no saldría ni acá ni entre los
+     * enredos —que piden dos— y quedaría invisible, pendiente para siempre y
+     * con el listado cerrado por algo que nadie podría ver.
+     */
     public function pendientes($sociedadId, $limite = 200)
     {
         return $this->decodificar($this->fetchAll(
-            "SELECT * FROM {$this->tabla()}
-              WHERE sociedad_id = ? AND estado = 'pendiente'
-              ORDER BY id ASC LIMIT " . max(1, (int) $limite),
+            "SELECT x.* FROM {$this->tabla()} x
+              WHERE x.sociedad_id = ? AND x.estado = 'pendiente'
+                AND (x.grupo = '' OR (
+                        SELECT COUNT(*) FROM {$this->tabla()} y
+                         WHERE y.sociedad_id = x.sociedad_id
+                           AND y.estado = 'pendiente' AND y.grupo = x.grupo
+                    ) < 2)
+              ORDER BY x.id ASC LIMIT " . max(1, (int) $limite),
             [(int) $sociedadId]
         ) ?: []);
     }
@@ -305,6 +396,62 @@ class LineaEnRevision extends Model
             "SELECT COUNT(*) FROM {$this->tabla()} WHERE sociedad_id = ? AND estado = 'pendiente'",
             [(int) $sociedadId]
         );
+    }
+
+    /**
+     * Los enredos sin resolver, cada uno con todas sus líneas juntas.
+     *
+     * Van aparte de `pendientes()` porque no se deciden igual: una línea
+     * ilegible es una pregunta que se contesta sola, y un enredo es una
+     * pregunta sobre varias filas a la vez —cuál de estas entra— que no tiene
+     * sentido plantear de a una.
+     *
+     * @return array grupo => lista de líneas
+     */
+    public function enredosPendientes($sociedadId, $limite = 200)
+    {
+        $filas = $this->decodificar($this->fetchAll(
+            "SELECT * FROM {$this->tabla()}
+              WHERE sociedad_id = ? AND estado = 'pendiente' AND grupo <> ''
+              ORDER BY grupo ASC, fila_origen ASC, id ASC LIMIT " . max(1, (int) $limite),
+            [(int) $sociedadId]
+        ) ?: []);
+
+        // Un grupo con una sola línea ya no es un enredo: no hay entre qué
+        // elegir. Sale por `pendientes()` como la línea suelta que quedó.
+        $porGrupo = [];
+        foreach ($filas as $fila) {
+            $porGrupo[(string) $fila['grupo']][] = $fila;
+        }
+        return array_filter($porGrupo, function ($lineas) { return count($lineas) > 1; });
+    }
+
+    /** Cuántos enredos distintos están esperando una decisión. */
+    public function contarEnredos($sociedadId)
+    {
+        return (int) $this->fetchColumn(
+            "SELECT COUNT(*) FROM (
+                 SELECT grupo FROM {$this->tabla()}
+                  WHERE sociedad_id = ? AND estado = 'pendiente' AND grupo <> ''
+                  GROUP BY grupo HAVING COUNT(*) > 1
+             ) g",
+            [(int) $sociedadId]
+        );
+    }
+
+    /** Las líneas de un enredo, para resolverlo entero de una sola vez. */
+    public function lineasDelGrupo($sociedadId, $grupo)
+    {
+        $grupo = trim((string) $grupo);
+        if ($grupo === '') {
+            return [];
+        }
+        return $this->decodificar($this->fetchAll(
+            "SELECT * FROM {$this->tabla()}
+              WHERE sociedad_id = ? AND estado = 'pendiente' AND grupo = ?
+              ORDER BY fila_origen ASC, id ASC",
+            [(int) $sociedadId, $grupo]
+        ) ?: []);
     }
 
     public function resueltas($sociedadId, $limite = 100)

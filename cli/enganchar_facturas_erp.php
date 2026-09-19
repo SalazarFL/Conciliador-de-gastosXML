@@ -2,12 +2,12 @@
 /**
  * Engancha los comprobantes ya importados con su factura del ERP.
  *
- * Desde que el correo dejó de pedir semana, cada XML que entra busca solo su
+ * Desde que el correo dejó de pedir pago, cada XML que entra busca solo su
  * factura en el ERP (FacturaErp::engancharXml, llamado por XmlDocumentImporter).
  * Pero los comprobantes que se importaron ANTES de que eso existiera solo se
- * engancharon si alguien los verificó dentro de un pago semanal: los demás
+ * engancharon si alguien los verificó dentro de un pago: los demás
  * quedaron sueltos, con su factura marcada 'sin_respaldo' aunque el XML esté
- * guardado y archivado desde hace semanas.
+ * guardado y archivado desde hace pagos.
  *
  * Eso no se notaba mientras el seguimiento solo miraba las facturas metidas en
  * un pago. Ahora que la cola mira todas las facturas con saldo pendiente, esas

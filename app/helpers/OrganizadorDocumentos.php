@@ -1,8 +1,10 @@
 <?php
 require_once __DIR__ . '/DocumentoArchivo.php';
+require_once __DIR__ . '/AlmacenDocumentos.php';
 require_once __DIR__ . '/XmlParser.php';
 require_once __DIR__ . '/../models/Factura.php';
-require_once __DIR__ . '/../models/Semana.php';
+require_once __DIR__ . '/../models/Pago.php';
+require_once __DIR__ . '/../models/BloqueoEnBase.php';
 
 /**
  * Ordena el archivo local sin perder la relación XML/PDF ni romper las rutas
@@ -10,8 +12,8 @@ require_once __DIR__ . '/../models/Semana.php';
  *
  * La carpeta de un documento sale de su fecha de emisión y su tipo —dos datos
  * que no cambian nunca—, así que ordenar es idempotente: correrlo dos veces no
- * mueve nada la segunda. La única excepción es PAGOS SEMANALES, donde se
- * reúnen los pares completos de una semana para poder entregarlos.
+ * mueve nada la segunda. La única excepción es PAGOS, donde se
+ * reúnen los pares completos de un pago para poder entregarlos.
  *
  * Todo el árbol de años vive bajo SISTEMA (ver DocumentoArchivo). Como el
  * destino se recalcula en cada corrida, esa mudanza no necesitó migración
@@ -26,7 +28,7 @@ class OrganizadorDocumentos
      * Cuántos documentos movidos se anotan en la base de una sola vez. Acota
      * el daño si la escritura falla —solo ese grupo se devuelve a su sitio— y
      * a la vez evita la consulta por documento, que contra un servidor remoto
-     * agotaba el tiempo de la petición al ordenar una semana entera.
+     * agotaba el tiempo de la petición al ordenar un pago entero.
      */
     private const LOTE_UBICACION = 100;
 
@@ -55,9 +57,9 @@ class OrganizadorDocumentos
     public function __construct($raiz = '', $facturas = null)
     {
         // También prepara carpeta_pago cuando esta clase corre desde la
-        // tarea programada antes de que alguien abra el módulo semanal.
+        // tarea programada antes de que alguien abra el módulo de pagos.
         if ($facturas === null) {
-            new Semana();
+            new Pago();
         }
         $this->archivo = new DocumentoArchivo($raiz);
         $real = realpath($this->archivo->raiz());
@@ -66,6 +68,12 @@ class OrganizadorDocumentos
         }
         $this->raiz = rtrim($real, '/\\');
         $this->facturas = $facturas ?: new Factura();
+        // Sin acotar: reacomoda el árbol de TODAS las empresas de una pasada,
+        // y cada documento le dice a cuál pertenece. Corre desde la tarea
+        // programada, que no tiene empresa seleccionada.
+        if (method_exists($this->facturas, 'setSociedad')) {
+            $this->facturas->setSociedad(0);
+        }
         $logDir = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'logs';
         if (!is_dir($logDir)) {
             @mkdir($logDir, 0777, true);
@@ -85,16 +93,9 @@ class OrganizadorDocumentos
     public function ejecutar($dryRun = false, $incluirNoRegistrados = true)
     {
         $resumen = $this->resumenBase((bool) $dryRun);
-        $lockDir = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'locks';
-        if (!is_dir($lockDir) && !@mkdir($lockDir, 0777, true) && !is_dir($lockDir)) {
-            throw new RuntimeException('No se pudo crear el directorio de bloqueos del organizador.');
-        }
-        $fp = @fopen($this->lockArchivo, 'c');
-        if ($fp === false || !flock($fp, LOCK_EX | LOCK_NB)) {
+        $bloqueo = $this->tomarBloqueo();
+        if ($bloqueo === null) {
             $resumen['omitido_por_bloqueo'] = true;
-            if (is_resource($fp)) {
-                fclose($fp);
-            }
             return $resumen;
         }
 
@@ -116,8 +117,7 @@ class OrganizadorDocumentos
                 $this->anotarOrden();
             }
         } finally {
-            flock($fp, LOCK_UN);
-            fclose($fp);
+            $this->soltarBloqueo($bloqueo);
         }
 
         if (!$dryRun) {
@@ -141,14 +141,9 @@ class OrganizadorDocumentos
         $resumen = $this->resumenBase($dryRun);
         $resumen['modo'] = $completo ? 'reconciliacion_completa' : 'reconciliacion_incremental';
 
-        $lockDir = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'locks';
-        if (!is_dir($lockDir) && !@mkdir($lockDir, 0777, true) && !is_dir($lockDir)) {
-            throw new RuntimeException('No se pudo crear el directorio de bloqueos del organizador.');
-        }
-        $fp = @fopen($this->lockArchivo, 'c');
-        if ($fp === false || !flock($fp, LOCK_EX | LOCK_NB)) {
+        $bloqueo = $this->tomarBloqueo();
+        if ($bloqueo === null) {
             $resumen['omitido_por_bloqueo'] = true;
-            if (is_resource($fp)) fclose($fp);
             return $resumen;
         }
 
@@ -190,8 +185,7 @@ class OrganizadorDocumentos
                 $this->anotarFaltantes($faltantes['sin_archivo'], $ids, $dryRun, $resumen);
             }
         } finally {
-            flock($fp, LOCK_UN);
-            fclose($fp);
+            $this->soltarBloqueo($bloqueo);
         }
 
         if (!$dryRun) {
@@ -228,14 +222,9 @@ class OrganizadorDocumentos
     public function organizarIds(array $ids, $dryRun = false)
     {
         $resumen = $this->resumenBase((bool) $dryRun);
-        $lockDir = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'locks';
-        if (!is_dir($lockDir)) {
-            @mkdir($lockDir, 0777, true);
-        }
-        $fp = @fopen($this->lockArchivo, 'c');
-        if ($fp === false || !flock($fp, LOCK_EX | LOCK_NB)) {
+        $bloqueo = $this->tomarBloqueo();
+        if ($bloqueo === null) {
             $resumen['omitido_por_bloqueo'] = true;
-            if (is_resource($fp)) fclose($fp);
             return $resumen;
         }
         try {
@@ -243,6 +232,7 @@ class OrganizadorDocumentos
                 $this->archivo->asegurarCarpetaSistema();
             }
             $this->organizarRegistrados($resumen, (bool) $dryRun, $ids);
+            $this->contarCopiasEnEspera($ids, $resumen);
             $estado = $this->estadoRutasFaltantes($this->facturas->getParaOrganizarArchivos($ids));
             $this->anotarFaltantes($estado['sin_archivo'], $ids, (bool) $dryRun, $resumen);
             if (!$dryRun) {
@@ -250,10 +240,73 @@ class OrganizadorDocumentos
                 $this->registrarLog($resumen);
             }
         } finally {
-            flock($fp, LOCK_UN);
-            fclose($fp);
+            $this->soltarBloqueo($bloqueo);
         }
         return $resumen;
+    }
+
+    /**
+     * Los documentos de SharePoint del pago no se copian aquí: armar su copia
+     * son varias llamadas por archivo, y esto corre mientras alguien espera la
+     * pantalla. Las hace la tarea programada (ReconciliadorGraph). Se cuentan
+     * para que la pantalla lo diga, en vez de mostrar una carpeta a medias.
+     */
+    private function contarCopiasEnEspera(array $ids, array &$resumen)
+    {
+        $resumen['copias_pago_en_espera'] = 0;
+        try {
+            foreach ($this->facturas->getParaOrganizarArchivos($ids, 'sharepoint', true) as $fila) {
+                if (($fila['almacen'] ?? '') !== '' && !empty($fila['en_pago'])
+                    && trim((string) ($fila['carpeta_pago'] ?? '')) !== '') {
+                    $resumen['copias_pago_en_espera']++;
+                }
+            }
+        } catch (Throwable $e) {
+            // Es un aviso; si no se puede contar, no se avisa.
+        }
+    }
+
+    /** El nombre del candado que comparten todas las PC. */
+    private const BLOQUEO_EN_BASE = 'organizador_documentos';
+
+    /**
+     * Dos candados: el de esta máquina, como siempre, y el de la base, que ven
+     * todas las PC. Con varias PC contra la misma base, dos organizadores
+     * sueltos se moverían los documentos el uno al otro (ver BloqueoEnBase).
+     *
+     * @return array|null null si otro ya está ordenando, aquí o en otra PC.
+     */
+    private function tomarBloqueo()
+    {
+        $lockDir = dirname($this->lockArchivo);
+        if (!is_dir($lockDir) && !@mkdir($lockDir, 0777, true) && !is_dir($lockDir)) {
+            throw new RuntimeException('No se pudo crear el directorio de bloqueos del organizador.');
+        }
+        $fp = @fopen($this->lockArchivo, 'c');
+        if ($fp === false || !flock($fp, LOCK_EX | LOCK_NB)) {
+            if (is_resource($fp)) {
+                fclose($fp);
+            }
+            return null;
+        }
+        // Sin base a la que preguntar se sigue con el de la máquina: es lo que
+        // había, y dejar de ordenar por eso sería peor.
+        $enBase = BloqueoEnBase::tomar(self::BLOQUEO_EN_BASE);
+        if ($enBase === false) {
+            flock($fp, LOCK_UN);
+            fclose($fp);
+            return null;
+        }
+        return ['archivo' => $fp, 'base' => $enBase === true];
+    }
+
+    private function soltarBloqueo(array $bloqueo)
+    {
+        if ($bloqueo['base']) {
+            BloqueoEnBase::soltar(self::BLOQUEO_EN_BASE);
+        }
+        flock($bloqueo['archivo'], LOCK_UN);
+        fclose($bloqueo['archivo']);
     }
 
     private function estadoRutasFaltantes(array $filas)
@@ -384,7 +437,7 @@ class OrganizadorDocumentos
      * Ordenar recorre la ficha de todos los documentos y pregunta al disco por
      * cada archivo. Hacerlo cada cinco minutos tendría a la carpeta compartida
      * en danza permanente para nada: la carpeta que le toca a un documento
-     * solo cambia cuando entra uno nuevo o cuando su semana de pago cambia, y
+     * solo cambia cuando entra uno nuevo o cuando su pago de pago cambia, y
      * ninguna de las dos cosas pasa cada cinco minutos.
      */
     public function requiereOrden($intervaloSegundos = 900)
@@ -775,12 +828,14 @@ class OrganizadorDocumentos
 
                 // La carpeta del documento depende solo de su fecha de emisión
                 // y su tipo, dos datos que no cambian nunca. Ahí vive el
-                // original, siempre, incluso mientras está en un pago semanal:
-                // a la carpeta del pago va una copia (ver copiarAPagoSemanal).
+                // original, siempre, incluso mientras está en un pago:
+                // a la carpeta del pago va una copia (ver copiarAPago).
                 $fecha = $this->fechaValida((string) ($fila['fecha_emision'] ?? ''), $xml !== '' ? $xml : $pdf);
                 $tipo = $this->tipoValido((string) ($fila['tipo_documento'] ?? 'FE'));
                 $estado = $tipo;
-                $destinoDir = $this->archivo->carpetaDocumento($fecha, $tipo);
+                // Cada documento a la carpeta de SU empresa. El árbol separa
+                // las empresas del grupo, igual que las separan los listados.
+                $destinoDir = $this->archivoDe($fila)->carpetaDocumento($fecha, $tipo);
                 $base = pathinfo($xml !== '' ? $xml : $pdf, PATHINFO_FILENAME);
 
                 $movimiento = $this->moverConjunto(['xml' => $xml, 'pdf' => $pdf], $destinoDir, $base, $dryRun);
@@ -788,7 +843,7 @@ class OrganizadorDocumentos
                 // La copia de entrega se refresca aunque el original ya
                 // estuviera en su sitio: es lo que repone una carpeta de pago
                 // que alguien borró después de recibirla.
-                $this->copiarAPagoSemanal($fila, $movimiento['rutas'], $dryRun, $resumen);
+                $this->copiarAPago($fila, $movimiento['rutas'], $dryRun, $resumen);
 
                 if (!$movimiento['cambio']) {
                     $resumen['ya_ordenados']++;
@@ -842,9 +897,9 @@ class OrganizadorDocumentos
      * original. La copia es material de entrega, reponible en la próxima
      * corrida; el original es el documento, y ese ya quedó en su sitio.
      */
-    private function copiarAPagoSemanal(array $fila, array $rutas, $dryRun, array &$resumen)
+    private function copiarAPago(array $fila, array $rutas, $dryRun, array &$resumen)
     {
-        if (empty($fila['pago_semanal']) || empty($fila['carpeta_pago'])) {
+        if (empty($fila['en_pago']) || empty($fila['carpeta_pago'])) {
             return;
         }
         $xml = trim((string) ($rutas['xml'] ?? ''));
@@ -867,7 +922,7 @@ class OrganizadorDocumentos
         }
 
         try {
-            $copia = $this->archivo->copiarAPagoSemanal(
+            $copia = $this->archivo->copiarAPago(
                 $xml,
                 $pdf,
                 $fila,
@@ -878,7 +933,7 @@ class OrganizadorDocumentos
                 $resumen['copias_pago']++;
                 $this->agregarOperacion($resumen, [
                     'documento_id' => (int) $fila['id'],
-                    'accion' => 'copia_pago_semanal',
+                    'accion' => 'copia_pago',
                     'xml' => $copia['ruta_xml'],
                     'pdf' => $copia['ruta_pdf'],
                 ]);
@@ -890,7 +945,7 @@ class OrganizadorDocumentos
             $resumen['errores_copia_pago']++;
             $this->agregarOperacion($resumen, [
                 'documento_id' => (int) ($fila['id'] ?? 0),
-                'accion' => 'copia_pago_semanal',
+                'accion' => 'copia_pago',
                 'error' => $e->getMessage(),
             ]);
         }
@@ -945,7 +1000,7 @@ class OrganizadorDocumentos
 
         // Dos carpetas quedan fuera de esta pasada.
         //
-        // PAGOS SEMANALES: ahí no vive ningún documento, solo copias de
+        // PAGOS: ahí no vive ningún documento, solo copias de
         // entrega de documentos que sí están registrados en otra carpeta. Sin
         // esta excepción, cada copia parecería un archivo suelto y esta misma
         // corrida se la llevaría de vuelta al mes, deshaciendo la carpeta que
@@ -956,8 +1011,12 @@ class OrganizadorDocumentos
         // mano— y otras tablas guardan su ruta. Archivarlo sería darle a un
         // XML sin importar la carpeta definitiva de un comprobante y romper
         // de paso la fila que lo apunta.
+        // Las dos formas de la carpeta de pagos: la instalación que todavía
+        // no la renombró tiene la vieja, y meterse ahí a archivar sería
+        // llevarse las copias que alguien está por entregar.
         $fuera = [];
-        foreach ([DocumentoArchivo::CARPETA_PAGOS, RutaDocumento::TRABAJO] as $nombre) {
+        foreach ([DocumentoArchivo::CARPETA_PAGOS, DocumentoArchivo::CARPETA_PAGOS_VIEJA,
+                  RutaDocumento::TRABAJO] as $nombre) {
             $fuera[] = $this->claveRuta($this->raiz . DIRECTORY_SEPARATOR . $nombre . DIRECTORY_SEPARATOR);
         }
 
@@ -1011,7 +1070,7 @@ class OrganizadorDocumentos
                     $estado = 'XML INVALIDO';
                 } else {
                     $estado = $info['tipo'];
-                    $destinoDir = $this->archivo->carpetaDocumento($info['fecha'], $info['tipo']);
+                    $destinoDir = $this->archivoDe($info)->carpetaDocumento($info['fecha'], $info['tipo']);
                 }
 
                 $base = pathinfo($xml !== '' ? $xml : $pdf, PATHINFO_FILENAME);
@@ -1106,9 +1165,8 @@ class OrganizadorDocumentos
             return ['cambio' => $cambio, 'rutas' => $rutas, 'movidos' => []];
         }
 
-        if (!is_dir($destinoDir) && !mkdir($destinoDir, 0777, true) && !is_dir($destinoDir)) {
-            throw new RuntimeException('No se pudo crear la carpeta destino: ' . $destinoDir);
-        }
+        $almacen = AlmacenDocumentos::actual();
+        $almacen->asegurarCarpeta($destinoDir);
         $movidos = [];
         try {
             foreach ($existentes as $ext => $origen) {
@@ -1116,13 +1174,13 @@ class OrganizadorDocumentos
                 if ($this->mismaRuta($origen, $destino)) {
                     continue;
                 }
-                if (!rename($origen, $destino)) {
-                    throw new RuntimeException('No se pudo mover ' . $origen . ' a ' . $destino . '.');
-                }
+                $almacen->mover($origen, $destino);
                 $movidos[] = ['origen' => $origen, 'destino' => $destino];
                 $this->carpetasVaciadas[$this->claveRuta(dirname($origen))] = dirname($origen);
             }
         } catch (Throwable $e) {
+            // El par nunca queda partido: si el XML se movió y el PDF falló,
+            // el XML vuelve a su sitio antes de que la excepción suba.
             $this->revertirMovimientos($movidos);
             throw $e;
         }
@@ -1131,20 +1189,33 @@ class OrganizadorDocumentos
 
     private function hayColision(array $origenes, $destinoDir, $base)
     {
+        $almacen = AlmacenDocumentos::actual();
         foreach ($origenes as $ext => $origen) {
             $destino = $destinoDir . DIRECTORY_SEPARATOR . $base . '.' . $ext;
-            if (is_file($destino) && !$this->mismaRuta($origen, $destino)) {
+            if ($almacen->identidad($destino) !== null && !$this->mismaRuta($origen, $destino)) {
                 return true;
             }
         }
         return false;
     }
 
+    /**
+     * Deshace lo movido, en orden inverso y con dos guardias: que el destino
+     * siga estando y que el origen siga libre. Es best-effort a propósito —si
+     * la reversión también falla no hay a quién quejarse—, pero deja el par
+     * junto, que es lo que importa.
+     */
     private function revertirMovimientos(array $movidos)
     {
+        $almacen = AlmacenDocumentos::actual();
         foreach (array_reverse($movidos) as $movido) {
-            if (is_file($movido['destino']) && !is_file($movido['origen'])) {
-                @rename($movido['destino'], $movido['origen']);
+            if ($almacen->identidad($movido['destino']) !== null
+                && $almacen->identidad($movido['origen']) === null) {
+                try {
+                    $almacen->mover($movido['destino'], $movido['origen']);
+                } catch (Throwable $e) {
+                    // Sin a quién avisar: quien llamó ya está lanzando lo suyo.
+                }
             }
         }
     }
@@ -1171,6 +1242,10 @@ class OrganizadorDocumentos
                 'clase' => 'documento',
                 'tipo' => $this->tipoValido((string) ($doc['tipo_documento'] ?? 'FE')),
                 'fecha' => $this->fechaValida((string) ($doc['fecha_emision'] ?? ''), $ruta),
+                // De un archivo suelto —que no está en la base— la empresa se
+                // deduce del receptor del comprobante, que es exactamente lo
+                // que la define. Solo si no se reconoce va a SIN EMPRESA.
+                'sociedad_nombre' => $this->empresaPorCedula((string) ($doc['receptor_id'] ?? '')),
             ];
         } catch (Throwable $e) {
             return ['clase' => 'invalido', 'tipo' => 'FE', 'fecha' => $this->fechaValida('', $ruta)];
@@ -1216,6 +1291,48 @@ class OrganizadorDocumentos
      * archivo: cuando estaban las dos listas de meses, mover el árbol dejaba
      * la mitad de las carpetas en el sitio viejo.
      */
+    /**
+     * El archivo apuntando a la carpeta de la empresa de este documento.
+     *
+     * Se resuelve por fila y no se recuerda: una corrida pasa por documentos
+     * de todas las empresas, y recordar la última es cómo terminaría uno
+     * guardado en la carpeta de otra.
+     */
+    private function archivoDe(array $fila)
+    {
+        $nombre = trim((string) ($fila['sociedad_nombre'] ?? ''));
+        return $this->archivo->paraEmpresa(
+            $nombre !== '' ? $nombre : DocumentoArchivo::EMPRESA_SIN_DEFINIR
+        );
+    }
+
+    /** cédula normalizada => nombre de la empresa. Se arma una sola vez. */
+    private $empresasPorCedula = null;
+
+    /** El nombre de la empresa a la que va dirigido un comprobante, o ''. */
+    private function empresaPorCedula($cedula)
+    {
+        $cedula = preg_replace('/\D+/', '', (string) $cedula);
+        if ($cedula === '') {
+            return '';
+        }
+        if ($this->empresasPorCedula === null) {
+            $this->empresasPorCedula = [];
+            try {
+                require_once __DIR__ . '/../models/Sociedad.php';
+                foreach ((new Sociedad())->getTodas() as $s) {
+                    $clave = preg_replace('/\D+/', '', (string) $s['cedula']);
+                    if ($clave !== '') {
+                        $this->empresasPorCedula[$clave] = (string) $s['nombre'];
+                    }
+                }
+            } catch (Throwable $e) {
+                // Sin base, los sueltos van a SIN EMPRESA y no se pierde nada.
+            }
+        }
+        return (string) ($this->empresasPorCedula[$cedula] ?? '');
+    }
+
     private function carpetaIgnorados($fecha, $motivo)
     {
         $ts = strtotime((string) $fecha) ?: time();
@@ -1285,7 +1402,8 @@ class OrganizadorDocumentos
     private function podarCarpetasVacias(array &$resumen)
     {
         $protegidas = [];
-        foreach ([DocumentoArchivo::CARPETA_SISTEMA, DocumentoArchivo::CARPETA_PAGOS, RutaDocumento::TRABAJO] as $nombre) {
+        foreach ([DocumentoArchivo::CARPETA_SISTEMA, DocumentoArchivo::CARPETA_PAGOS,
+                  DocumentoArchivo::CARPETA_PAGOS_VIEJA, RutaDocumento::TRABAJO] as $nombre) {
             $protegidas[$this->claveRuta($this->raiz . DIRECTORY_SEPARATOR . $nombre)] = true;
         }
         $raiz = $this->claveRuta($this->raiz);
@@ -1339,7 +1457,7 @@ class OrganizadorDocumentos
             'marcados_sin_archivo' => 0,
             'fuera_de_raiz' => 0,
             'por_fecha' => 0,
-            'pago_semanal' => 0,
+            'en_pago' => 0,
             'copias_pago' => 0,
             'copias_pago_vigentes' => 0,
             'copias_pago_planificadas' => 0,
@@ -1389,7 +1507,7 @@ class OrganizadorDocumentos
 
     private function contarEstado(array &$resumen, $estado)
     {
-        if ($estado === DocumentoArchivo::CARPETA_PAGOS) $resumen['pago_semanal']++;
+        if ($estado === DocumentoArchivo::CARPETA_PAGOS) $resumen['en_pago']++;
         elseif (in_array($estado, ['FE', 'NC', 'ND'], true)) $resumen['por_fecha']++;
         else $resumen['ignorados']++;
     }

@@ -12,6 +12,7 @@ require_once __DIR__ . '/../helpers/BusquedaImporte.php';
 require_once __DIR__ . '/../helpers/EstadoArchivo.php';
 require_once __DIR__ . '/../helpers/NumeroFactura.php';
 require_once __DIR__ . '/../helpers/Retorno.php';
+require_once __DIR__ . '/../helpers/Columnas.php';
 
 class FacturasController extends Controller
 {
@@ -24,6 +25,13 @@ class FacturasController extends Controller
 	 * Ver listadoPorRespaldo().
 	 */
 	const MAX_REVISION_RESPALDO = 2000;
+
+	/**
+	 * Y cuántas caben en un Excel. No es un límite de Excel —aguanta un
+	 * millón de filas— sino de esta máquina: por cada comprobante hay que
+	 * preguntarle al disco compartido por su XML y su PDF.
+	 */
+	const TOPE_EXPORTACION = 5000;
 
 	private $queueService;
 
@@ -49,7 +57,7 @@ class FacturasController extends Controller
 
 		/*
 		 * Tarjeta del documento que se está buscando: se llega acá con el botón
-		 * "Buscar en los XML cargados" del pago semanal o de la cola de
+		 * "Buscar en los XML cargados" del pago o de la cola de
 		 * seguimiento, y se recorre esa lista sin volver al otro módulo.
 		 */
 		$navDoc = null;
@@ -74,10 +82,10 @@ class FacturasController extends Controller
 		$filtros           = $this->filtrosListado();
 
 		/*
-		 * Acá se elegía la "semana de trabajo" y la lista salía recortada a
-		 * esa semana. Esta pantalla es el archivo de comprobantes XML, que no
-		 * se organiza por pago semanal: se muestra completo. Su columna
-		 * "Semana" también se fue del listado: la semana la pone el pago en el
+		 * Acá se elegía la "pago" y la lista salía recortada a
+		 * ese pago. Esta pantalla es el archivo de comprobantes XML, que no
+		 * se organiza por pago: se muestra completo. Su columna
+		 * "Pago" también se fue del listado: el pago la pone el pago en el
 		 * que está su fila del ERP, y se mira desde ahí.
 		 */
 
@@ -108,7 +116,7 @@ class FacturasController extends Controller
 				$importacionId = max(0, (int) ($_GET['importacion_id'] ?? 0));
 				$consulta = $filtros;
 
-				// Sin recorte por semana: el listado es el archivo entero de
+				// Sin recorte por pago: el listado es el archivo entero de
 				// comprobantes y se acota con los buscadores de la barra. Lo
 				// único que sigue acotándolo es haber llegado desde una
 				// importación concreta.
@@ -343,14 +351,14 @@ class FacturasController extends Controller
 	}
 
 	/**
-	 * Semana elegida en un formulario (semana_id + semana_nueva) → id o null.
+	 * Pago elegida en un formulario (pago_id + pago_nuevo) → id o null.
 	 */
-	private function resolverSemana()
+	private function resolverPago()
 	{
 		try {
-			return $this->loadModel('Semana')->resolverSeleccion(
-				(string) $this->post('semana_id', ''),
-				(string) $this->post('semana_nueva', '')
+			return $this->loadModel('Pago')->resolverSeleccion(
+				(string) $this->post('pago_id', ''),
+				(string) $this->post('pago_nuevo', '')
 			);
 		} catch (Throwable $e) {
 			return null;
@@ -358,30 +366,30 @@ class FacturasController extends Controller
 	}
 
 	/**
-	 * Asignar la semana de una factura a mano salió del sistema junto con su
-	 * botón. La semana de un comprobante ya no se elige: la hereda de la
-	 * factura del ERP a la que respalda, y esa factura sabe en qué pago
-	 * semanal está. Forzarla por fuera no la metía en ningún pago —el cruce va
-	 * por consecutivo— y sí podía sacarle el par XML/PDF de la carpeta del
-	 * pago, que se decide comparando ambas semanas.
+	 * Asignar el pago de una factura a mano salió del sistema junto con su
+	 * botón. El pago de un comprobante ya no se elige: lo hereda de la factura
+	 * del ERP a la que respalda, y esa factura sabe en qué pago está. Forzarlo
+	 * por fuera no la metía en ningún pago —el cruce va por consecutivo— y sí
+	 * podía sacarle el par XML/PDF de la carpeta del pago, que se decide
+	 * comparando el pago del comprobante con el del listado.
 	 */
 
 	/**
-	 * Re-verifica los listados por pagar de las semanas indicadas. Corre
-	 * sola cada vez que facturas entran o salen de una semana (asignación
+	 * Re-verifica los listados por pagar de los pagos indicadas. Corre
+	 * sola cada vez que facturas entran o salen de un pago (asignación
 	 * manual, subida directa o cola de importación) y reemplaza al botón
 	 * "Verificar de nuevo". Nunca lanza: la verificación automática no
 	 * debe romper la operación que la disparó.
 	 */
-	private function verificarSemanasPorPagar(array $semanaIds)
+	private function verificarListadosDePagos(array $pagoIds)
 	{
 		try {
 			require_once __DIR__ . '/../helpers/PorPagarVerificador.php';
 			$erp = $this->loadModel('FacturaErp');
 			$facturas = $this->loadModel('Factura');
-			foreach (array_unique(array_map('intval', $semanaIds)) as $sid) {
+			foreach (array_unique(array_map('intval', $pagoIds)) as $sid) {
 				if ($sid > 0) {
-					PorPagarVerificador::verificarSemana($sid, $erp, $facturas);
+					PorPagarVerificador::verificarPago($sid, $erp, $facturas);
 				}
 			}
 		} catch (Throwable $e) {
@@ -392,9 +400,9 @@ class FacturasController extends Controller
 	/**
 	 * Re-verifica los pagos que todavía tienen facturas sin respaldo.
 	 *
-	 * Es la red para el XML que entra sin semana: no se sabe a qué pago
+	 * Es la red para el XML que entra sin pago: no se sabe a qué pago
 	 * pertenece, así que se revisan los que todavía esperan comprobantes.
-	 * Nunca lanza, por lo mismo que verificarSemanasPorPagar.
+	 * Nunca lanza, por lo mismo que verificarListadosDePagos.
 	 */
 	private function verificarPagosPendientes()
 	{
@@ -414,7 +422,7 @@ class FacturasController extends Controller
 	 * carga directa como por la cola usada desde Correo.
 	 *
 	 * Corre sola cada vez que entran notas y reemplaza al botón "Verificar
-	 * nuevamente" del módulo, igual que verificarSemanasPorPagar reemplazó al
+	 * nuevamente" del módulo, igual que verificarListadosDePagos reemplazó al
 	 * de Por Pagar. Nunca lanza: la verificación automática no debe romper la
 	 * importación que la disparó.
 	 */
@@ -435,15 +443,15 @@ class FacturasController extends Controller
 
 	/**
 	 * Nombre automático del lote de importación (ya no se pide al usuario).
-	 * Usa la semana si viene, si no la fecha/hora.
+	 * Usa el pago si viene, si no la fecha/hora.
 	 */
-	private function nombreImportacionAuto($semanaId = null)
+	private function nombreImportacionAuto($pagoId = null)
 	{
-		if (!empty($semanaId)) {
+		if (!empty($pagoId)) {
 			try {
-				$semana = $this->loadModel('Semana')->findById((int) $semanaId);
-				if (!empty($semana['nombre'])) {
-					return mb_substr('Carga ' . $semana['nombre'], 0, 120, 'UTF-8');
+				$pago = $this->loadModel('Pago')->findById((int) $pagoId);
+				if (!empty($pago['nombre'])) {
+					return mb_substr('Carga ' . $pago['nombre'], 0, 120, 'UTF-8');
 				}
 			} catch (Throwable $e) {
 			}
@@ -465,9 +473,9 @@ class FacturasController extends Controller
 		$maxSize = $config['max_upload_size'] ?? 10485760;
 		$allowed = $config['allowed_extensions']['xml'] ?? ['xml'];
 
-		// El nombre del lote se genera solo (el sistema se organiza por semana).
-		$semanaId = $this->resolverSemana();
-		$nombreImportacion = $this->nombreImportacionAuto($semanaId);
+		// El nombre del lote se genera solo (el sistema se organiza por pago).
+		$pagoId = $this->resolverPago();
+		$nombreImportacion = $this->nombreImportacionAuto($pagoId);
 
 		try {
 			$uploadedFiles = FileUploader::uploadMultiple('xml_files', $uploadDir, $allowed, $maxSize);
@@ -488,7 +496,7 @@ class FacturasController extends Controller
 			$exitosos = 0;
 			$duplicados = 0;
 			$fallidos = 0;
-			$semanasAfectadas = !empty($semanaId) ? [(int) $semanaId] : [];
+			$pagosAfectados = !empty($pagoId) ? [(int) $pagoId] : [];
 			$errores = [];
 			$archivosError = [];
 			$archivosDup = [];
@@ -498,17 +506,17 @@ class FacturasController extends Controller
 					$resultado = $documentImporter->importar($file['path'], null, [
 						'origen' => 'facturas_xml',
 						'importacion_id' => $importacionId,
-						'semana_id' => $semanaId,
+						'pago_id' => $pagoId,
 						'tipos_permitidos' => ['FE'],
 						'validar_receptor' => !empty($sociedad),
 						'cedula_receptor' => $sociedad['cedula'] ?? '',
 						'sociedad_id' => (int) ($sociedad['id'] ?? 0),
 					]);
-					if (!empty($resultado['semana_anterior'])) {
-						$semanasAfectadas[] = (int) $resultado['semana_anterior'];
+					if (!empty($resultado['pago_anterior'])) {
+						$pagosAfectados[] = (int) $resultado['pago_anterior'];
 					}
 
-					if (in_array(($resultado['estado'] ?? ''), ['duplicado', 'duplicado_semana', 'pdf_completado'], true)) {
+					if (in_array(($resultado['estado'] ?? ''), ['duplicado', 'duplicado_pago', 'pdf_completado'], true)) {
 						$duplicados++;
 						$archivosDup[] = $file['original_name'];
 					} else {
@@ -541,15 +549,15 @@ class FacturasController extends Controller
 
 			$importacionModel->cerrar($importacionId, $recibidos, $exitosos, $fallidos + $duplicados, $errores);
 
-			// Facturas nuevas en la semana → re-verificar su listado por pagar.
-			// Sin semana elegida no hay listado al que apuntar, pero el
+			// Facturas nuevas en el pago → re-verificar su listado por pagar.
+			// Sin pago elegida no hay listado al que apuntar, pero el
 			// comprobante puede ser justo el que le falta a un pago: se revisan
 			// los que tienen facturas sin respaldo, igual que hace el correo.
 			// Si no se hiciera, el XML quedaría cruzado en Facturas y sin
 			// cruzar en Por pagar, que es la diferencia que nadie entiende.
 			if ($exitosos > 0) {
-				if (!empty($semanasAfectadas)) {
-					$this->verificarSemanasPorPagar($semanasAfectadas);
+				if (!empty($pagosAfectados)) {
+					$this->verificarListadosDePagos($pagosAfectados);
 				} else {
 					$this->verificarPagosPendientes();
 				}
@@ -595,16 +603,16 @@ class FacturasController extends Controller
 		}
 
 		try {
-			// El nombre del lote se genera solo (el sistema se organiza por semana).
-			$semanaId = $this->resolverSemana();
-			$nombre = $this->nombreImportacionAuto($semanaId);
+			// El nombre del lote se genera solo (el sistema se organiza por pago).
+			$pagoId = $this->resolverPago();
+			$nombre = $this->nombreImportacionAuto($pagoId);
 
 			$service = $this->getQueueService();
 			$sociedad = $this->loadModel('Sociedad')->getActiva();
 			$result = $service->iniciarImportacion([
 				'archivo_origen' => $nombre,
 				'total_esperado' => (int) $this->post('total_esperado', 0),
-				'semana_id' => $semanaId,
+				'pago_id' => $pagoId,
 				'tipo_documento' => 'FE',
 				'cedula_receptor' => $sociedad['cedula'] ?? '',
 				'sociedad_id' => (int) ($sociedad['id'] ?? 0),
@@ -613,7 +621,7 @@ class FacturasController extends Controller
 			$this->json([
 				'ok' => true,
 				'importacion_id' => $result['importacion_id'],
-				'semana_id' => $semanaId,
+				'pago_id' => $pagoId,
 				'estado' => $service->getEstado($result['importacion_id']),
 			]);
 		} catch (Throwable $e) {
@@ -676,13 +684,13 @@ class FacturasController extends Controller
 
 			$result = $this->getQueueService()->procesarBatch($importacionId, $limit);
 
-			// Cola terminada: re-verificar los listados de la semana para
+			// Cola terminada: re-verificar los listados del pago para
 			// que las facturas recién importadas queden cruzadas solas
 			// (sin el botón "Verificar de nuevo")
 			if (!empty($result['completed'])) {
-				$semanasCola = $this->getQueueService()->semanasAfectadasImportacion($importacionId);
-				if (!empty($semanasCola)) {
-					$this->verificarSemanasPorPagar($semanasCola);
+				$pagosCola = $this->getQueueService()->pagosAfectadosImportacion($importacionId);
+				if (!empty($pagosCola)) {
+					$this->verificarListadosDePagos($pagosCola);
 				}
 
 				// Una cola de facturas FE no cambia ninguna nota de crédito. Evita
@@ -752,6 +760,50 @@ class FacturasController extends Controller
 			]);
 		} catch (Exception $e) {
 			$this->redirectWithMessage($this->url('/facturas'), 'Error al cargar detalle: ' . $e->getMessage(), 'error');
+		}
+	}
+
+	/**
+	 * El listado en Excel: los mismos filtros que se están viendo y las mismas
+	 * columnas encendidas.
+	 *
+	 * Las columnas llegan en `cols`, que el botón de la esquina de la tabla le
+	 * pone al enlace antes de que se pulse. Sin ellas —un enlace guardado en
+	 * marcadores— bajan las de fábrica; Columnas se encarga.
+	 */
+	public function exportar()
+	{
+		try {
+			$filtros = $this->filtrosListado();
+			$respaldo = (string) ($filtros['respaldo'] ?? '');
+			$filtros['limite'] = self::TOPE_EXPORTACION;
+			$filtros['offset'] = 0;
+
+			$filas = EstadoArchivo::decorar(
+				$this->loadModel('Factura')->buscarConImportacion($filtros)
+			);
+
+			/*
+			 * El filtro de respaldo no lo resuelve SQL —si el archivo sigue en
+			 * la carpeta compartida solo lo sabe el disco—, así que se aplica
+			 * acá, igual que en el listado. Sin esto, el Excel traería filas
+			 * que la pantalla no está enseñando.
+			 */
+			if ($respaldo !== '') {
+				$filas = array_values(array_filter(
+					$filas,
+					function ($factura) use ($respaldo) { return $this->cumpleRespaldo($factura, $respaldo); }
+				));
+			}
+
+			Columnas::descargar('facturas', $filas, $this->get('cols', ''));
+		} catch (Throwable $e) {
+			$this->registrarFallo('exportar los comprobantes XML', $e);
+			$this->redirectWithMessage(
+				$this->url('/facturas'),
+				'No se pudo generar el Excel: ' . $e->getMessage(),
+				'error'
+			);
 		}
 	}
 

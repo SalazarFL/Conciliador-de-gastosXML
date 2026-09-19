@@ -1,14 +1,14 @@
 <?php
+require_once __DIR__ . '/../../helpers/Columnas.php';
 $baseUrl        = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
-$listados       = $listados ?? [];
-$listado        = $listado ?? null;
-$lineas         = $lineas ?? [];
-$resumen        = $resumen ?? [];
-$semanas        = is_array($semanas ?? null) ? $semanas : [];
-$carpetasPago   = is_array($carpetasPago ?? null) ? $carpetasPago : [];
+$pago              = $pago ?? null;
+$lineas            = $lineas ?? [];
+$resumen           = $resumen ?? [];
+$pagos             = is_array($pagos ?? null) ? $pagos : [];
+$carpetasPago      = is_array($carpetasPago ?? null) ? $carpetasPago : [];
 $proveedoresFiltro = is_array($proveedoresFiltro ?? null) ? $proveedoresFiltro : [];
-$sucursales     = is_array($sucursales ?? null) ? $sucursales : [];
-$semanaFiltro   = (int) ($semanaFiltro ?? 0);
+$sucursales        = is_array($sucursales ?? null) ? $sucursales : [];
+$pagoFiltro        = (int) ($pagoFiltro ?? 0);
 $sinCoincidencia = (int) ($sinCoincidencia ?? 0);
 $filtros = array_replace([
     'q' => '', 'proveedor' => '', 'sucursal' => '', 'estado' => '', 'vinculo' => '',
@@ -22,15 +22,15 @@ $conDiferencia = (int) ($resumen['con_diferencia'] ?? 0);
 $sinRespaldo   = (int) ($resumen['sin_respaldo'] ?? 0);
 $totalLineas   = $respaldadas + $conDiferencia + $sinRespaldo;
 $contextoListado = [
-    'semana_id' => $semanaFiltro,
-    'listado_id' => (int) ($listado['id'] ?? 0),
+    'pago_id' => $pagoFiltro,
+    'pago_id' => (int) ($pago['id'] ?? 0),
 ];
 // 'limpiar' le dice al servidor que olvide los filtros guardados de esta
 // pantalla: sin él, entrar sin criterios los devuelve puestos.
 $urlLimpiarFiltros = $baseUrl . '/por-pagar?'
     . http_build_query(array_merge($contextoListado, ['limpiar' => 1]));
 $urlExportar = $baseUrl . '/por-pagar/exportar?' . http_build_query(array_merge(
-    ['listado_id' => (int) ($listado['id'] ?? 0)],
+    ['pago_id' => (int) ($pago['id'] ?? 0)],
     $filtrosQuery
 ));
 $queryRetornoFiltros = http_build_query(array_merge($contextoListado, $filtrosQuery));
@@ -43,15 +43,15 @@ $queryRetornoFiltros = http_build_query(array_merge($contextoListado, $filtrosQu
  * nadie estuviera viendo. Mismo prefijo ctx_f_ que usa la cola de
  * seguimiento; lo lee NavegacionDocumentos.
  */
-$ctxTarjeta = 'ctx=pago&ctx_lista=' . (int) ($listado['id'] ?? 0);
+$ctxTarjeta = 'ctx=pago&ctx_lista=' . (int) ($pago['id'] ?? 0);
 foreach ($filtrosQuery as $nombreCtx => $valorCtx) {
     $ctxTarjeta .= '&' . http_build_query(['ctx_f_' . $nombreCtx => $valorCtx]);
 }
 $carpetaPagoActiva = '';
-foreach ($semanas as $semanaItem) {
-    if ((int) $semanaItem['id'] === $semanaFiltro) {
-        $carpetaPagoActiva = trim((string) ($semanaItem['carpeta_pago'] ?? ''));
-        if ($carpetaPagoActiva === '') $carpetaPagoActiva = (string) $semanaItem['nombre'];
+foreach ($pagos as $pagoItem) {
+    if ((int) $pagoItem['id'] === $pagoFiltro) {
+        $carpetaPagoActiva = trim((string) ($pagoItem['carpeta_pago'] ?? ''));
+        if ($carpetaPagoActiva === '') $carpetaPagoActiva = (string) $pagoItem['nombre'];
         break;
     }
 }
@@ -67,7 +67,7 @@ function ppFecha($f) {
     <div class="card-header mb-12">
         <div class="card-title">
             <i class="fas fa-file-arrow-up" style="margin-right:6px;color:var(--navy-light);"></i>
-            Subir listado del pago semanal
+            Subir listado del pago
         </div>
     </div>
     <style>
@@ -98,36 +98,52 @@ function ppFecha($f) {
         </div>
         <div>
             <label class="filter-label pp-campo-label">
-                <i class="fas fa-calendar-week" style="margin-right:3px;color:var(--gold);"></i>Semana de trabajo
+                <i class="fas fa-calendar-day" style="margin-right:3px;color:var(--gold);"></i>Pago
             </label>
-            <select name="semana_id" class="form-control" style="font-size:12.5px;"
-                    onchange="ppSemanaCambio(this)">
-                <option value="" <?= $semanaFiltro === 0 ? 'selected' : '' ?>>— Sin semana —</option>
-                <?php foreach ($semanas as $sem): ?>
-                <option value="<?= (int) $sem['id'] ?>" <?= $semanaFiltro === (int) $sem['id'] ? 'selected' : '' ?>>
-                    <?= htmlspecialchars($sem['nombre']) ?>
+            <?php /*
+             * Cada pago se llama por su fecha. Antes se llamaba por su semana,
+             * y dos del mismo lunes eran indistinguibles en esta lista:
+             * había que abrirlos para saber cuál era cuál. El nombre solo
+             * aparece cuando dice algo que la fecha no dice (ver Pago::etiqueta).
+             */ ?>
+            <select name="pago_id" class="form-control" style="font-size:12.5px;"
+                    onchange="ppPagoCambio(this)">
+                <option value="" <?= $pagoFiltro === 0 ? 'selected' : '' ?>>— Sin pago —</option>
+                <?php foreach ($pagos as $p): ?>
+                <option value="<?= (int) $p['id'] ?>" <?= $pagoFiltro === (int) $p['id'] ? 'selected' : '' ?>>
+                    <?= htmlspecialchars(Pago::etiqueta($p)) ?>
                 </option>
                 <?php endforeach; ?>
-                <option value="nueva">➕ Nueva semana…</option>
+                <option value="nuevo">➕ Nuevo pago…</option>
             </select>
-            <input type="text" name="semana_nueva" id="pp-semana-nueva" maxlength="100"
-                   placeholder="Semana <?= date('d/m/Y') ?>"
-                   class="form-control" style="display:none;font-size:12px;margin-top:5px;">
+            <div id="pp-pago-nuevo-campos" style="display:none;margin-top:5px;">
+                <?php /*
+                 * La fecha primero y obligatoria: es lo que identifica al pago.
+                 * El nombre es opcional —para "el urgente" o "el de planilla"—
+                 * y si se deja vacío el pago se llama por su fecha.
+                 */ ?>
+                <input type="date" name="pago_fecha" id="pp-pago-fecha"
+                       value="<?= date('Y-m-d') ?>"
+                       class="form-control" style="font-size:12px;">
+                <input type="text" name="pago_nuevo" id="pp-pago-nombre" maxlength="100"
+                       placeholder="Nombre (opcional): urgente, planilla…"
+                       class="form-control" style="font-size:12px;margin-top:4px;">
+            </div>
         </div>
         <div>
             <label class="filter-label pp-campo-label">
-                <i class="fas fa-folder-tree" style="margin-right:3px;color:var(--gold);"></i>Carpeta de pago semanal
+                <i class="fas fa-folder-tree" style="margin-right:3px;color:var(--gold);"></i>Carpeta de pago
             </label>
             <input type="text" name="carpeta_pago" id="pp-carpeta-pago" list="pp-carpetas-pago"
                    maxlength="100" class="form-control" style="font-size:12.5px;"
                    value="<?= htmlspecialchars($carpetaPagoActiva) ?>"
-                   placeholder="Ej. Pago semana 31" <?= $semanaFiltro <= 0 ? 'disabled' : 'required' ?>>
+                   placeholder="Ej. Pago 31" <?= $pagoFiltro <= 0 ? 'disabled' : 'required' ?>>
             <datalist id="pp-carpetas-pago">
                 <?php foreach ($carpetasPago as $carpeta): ?>
                 <option value="<?= htmlspecialchars($carpeta) ?>"></option>
                 <?php endforeach; ?>
             </datalist>
-            <div class="pp-campo-ayuda">Dentro de PAGOS SEMANALES. Puedes elegir una existente o escribir una nueva.</div>
+            <div class="pp-campo-ayuda">Dentro de PAGOS. Puedes elegir una existente o escribir una nueva.</div>
         </div>
         <div class="pp-acciones">
             <button type="submit" class="btn btn-primary btn-sm" id="pp-btn-subir">
@@ -142,32 +158,51 @@ function ppFecha($f) {
 </div>
 
 <script>
-// El selector "Semana de trabajo" controla lo que se ve abajo: al cambiar
-// se recarga con el listado de esa opción ("Sin semana" = los no asignados).
-// "Nueva semana" solo abre el campo del nombre, sin recargar.
-function ppSemanaCambio(sel) {
-    var box = document.getElementById('pp-semana-nueva');
+// El selector "Pago" controla lo que se ve abajo: al cambiar
+// se recarga con el listado de esa opción ("Sin pago" = los no asignados).
+// "Nuevo pago" solo abre el campo del nombre, sin recargar.
+function ppPagoCambio(sel) {
+    var box = document.getElementById('pp-pago-nuevo-campos');
     var carpeta = document.getElementById('pp-carpeta-pago');
-    if (sel.value === 'nueva') {
+    if (sel.value === 'nuevo') {
         box.style.display = 'block';
         carpeta.disabled = false;
         carpeta.required = true;
-        carpeta.value = '';
-        box.focus();
+        carpeta.value = ppNombrePorFecha();
+        document.getElementById('pp-pago-fecha').focus();
         return;
     }
     box.style.display = 'none';
     carpeta.disabled = sel.value === '';
     carpeta.required = sel.value !== '';
-    // "Sin semana" navega con semana_id=0 explícito para que se recuerde
+    // "Sin pago" navega con pago_id=0 explícito para que se recuerde
     // como selección (y no se confunda con una llegada sin parámetro).
     var base = '<?= $baseUrl ?>/por-pagar';
-    window.location.href = base + '?semana_id=' + (sel.value === '' ? '0' : sel.value);
+    window.location.href = base + '?pago_id=' + (sel.value === '' ? '0' : sel.value);
 }
 
-document.getElementById('pp-semana-nueva').addEventListener('input', function () {
-    var carpeta = document.getElementById('pp-carpeta-pago');
-    if (!carpeta.dataset.editada) carpeta.value = this.value;
+/**
+ * Cómo se llamaría la carpeta del pago que se está creando.
+ *
+ * La carpeta sigue al pago sin que haya que escribirla dos veces: la fecha
+ * sola si no hay nombre, y "fecha · nombre" si lo hay —igual que la etiqueta
+ * de la lista, para que lo que se ve en pantalla y lo que queda en el disco se
+ * llamen igual—. Quien la edite a mano manda: ahí se deja de tocar.
+ */
+function ppNombrePorFecha() {
+    var fecha = document.getElementById('pp-pago-fecha').value;
+    var nombre = document.getElementById('pp-pago-nombre').value.trim();
+    var partes = fecha.split('-');
+    var enLetras = partes.length === 3 ? partes[2] + '/' + partes[1] + '/' + partes[0] : '';
+    if (enLetras === '') return nombre;
+    return nombre === '' ? 'Pago ' + enLetras : enLetras + ' ' + nombre;
+}
+
+['pp-pago-fecha', 'pp-pago-nombre'].forEach(function (id) {
+    document.getElementById(id).addEventListener('input', function () {
+        var carpeta = document.getElementById('pp-carpeta-pago');
+        if (!carpeta.dataset.editada) carpeta.value = ppNombrePorFecha();
+    });
 });
 document.getElementById('pp-carpeta-pago').addEventListener('input', function () {
     this.dataset.editada = '1';
@@ -195,7 +230,7 @@ function ppUpdateFileDisplay(input) {
         <div id="ppv-sin-erp" style="display:none;margin:7px 13px 0;padding:7px 9px;background:#fef2f2;
              border:1px solid #fecaca;border-radius:7px;color:#991b1b;font-size:12px;line-height:1.5;
              flex-shrink:0;"></div>
-        <!-- Facturas que se le quitan al pago de otra semana. No bloquean: la
+        <!-- Facturas que se le quitan al pago de otro pago. No bloquean: la
              carga se hace igual. Se avisan porque el efecto cae sobre otra
              pantalla, que es la que nadie está mirando en este momento. -->
         <div id="ppv-reasignadas" style="display:none;margin:7px 13px 0;padding:7px 9px;background:#fffbeb;
@@ -224,7 +259,46 @@ function ppUpdateFileDisplay(input) {
     </div>
 </div>
 
-<!-- Comparacion independiente contra el listado actual de la semana -->
+<!-- ── Pantalla de carga ──
+     La carga de un pago es una sola petición que puede tardar minutos, y
+     antes no mostraba nada: el botón decía "Importando…" y la pantalla se
+     quedaba quieta. Sin saber si está trabajando o si se colgó, a los dos
+     minutos uno vuelve a darle al botón, que es lo peor que puede hacer.
+     Las fases salen del servidor, no de una animación: lo que se ve es lo
+     que de verdad está pasando. -->
+<div id="ppl-overlay" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.62);z-index:1200;">
+    <div style="background:#fff;border-radius:12px;max-width:520px;width:92%;margin:16vh auto;
+                box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden;">
+        <div style="padding:14px 17px 11px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;">
+            <i id="ppl-icono" class="fas fa-spinner fa-spin" style="color:var(--gold);font-size:17px;"></i>
+            <div style="flex:1;min-width:0;">
+                <div id="ppl-titulo" style="font-size:15px;font-weight:800;color:var(--navy);">Cargando el pago</div>
+                <div id="ppl-destino" style="font-size:12px;color:var(--text-muted);"></div>
+            </div>
+            <span id="ppl-reloj" style="font-size:12px;color:var(--text-muted);font-variant-numeric:tabular-nums;">0:00</span>
+        </div>
+
+        <div style="padding:13px 17px 6px;">
+            <div style="background:#e2e8f0;border-radius:8px;height:9px;overflow:hidden;">
+                <div id="ppl-barra" style="background:linear-gradient(90deg,#0c2461,#1e3a8a);height:100%;width:0%;transition:width .4s;"></div>
+            </div>
+        </div>
+
+        <?php // La lista entera desde el principio: media espera es saber
+              // cuánto falta, y una barra sola no lo dice. ?>
+        <ol id="ppl-pasos" style="list-style:none;margin:0;padding:9px 17px 13px;font-size:12.5px;"></ol>
+
+        <div id="ppl-detalle" style="padding:0 17px 13px;font-size:11.5px;color:var(--text-muted);line-height:1.5;"></div>
+
+        <div id="ppl-pie" style="padding:9px 17px;background:#f8fafc;border-top:1px solid var(--border);font-size:11px;color:var(--text-muted);line-height:1.5;">
+            <i class="fas fa-circle-info" style="margin-right:4px;"></i>
+            No cierres esta pestaña ni vuelvas a darle al botón: la carga sigue en el servidor y al
+            terminar te lleva sola al pago.
+        </div>
+    </div>
+</div>
+
+<!-- Comparacion independiente contra el listado actual del pago -->
 <div id="ppc-overlay" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:1010;overflow:auto;">
     <div style="background:#fff;border-radius:12px;max-width:1120px;width:95%;margin:4vh auto;max-height:91vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.25);">
         <div style="padding:9px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;flex-shrink:0;">
@@ -237,7 +311,7 @@ function ppUpdateFileDisplay(input) {
         </div>
         <div id="ppc-aviso" style="padding:6px 13px;background:#f8fafc;border-bottom:1px solid var(--border);font-size:11.5px;color:#475569;flex-shrink:0;">
             <i class="fas fa-shield-halved" style="color:#16a34a;margin-right:5px;"></i>
-            Comparar no cambia nada. Para dejar la semana igual al archivo, usá
+            Comparar no cambia nada. Para dejar el pago igual al archivo, usá
             <strong>Actualizar el listado</strong>.
         </div>
         <div id="ppc-resumen" style="padding:7px 13px;display:flex;gap:9px;flex-wrap:wrap;font-size:12px;border-bottom:1px solid var(--border);flex-shrink:0;"></div>
@@ -461,7 +535,7 @@ document.addEventListener('keydown', function (e) {
         nueva: ['Entra', '#dcfce7', '#166534'],
         igual: ['Ya está', '#e2e8f0', '#475569'],
         faltante: ['Sale', '#dbeafe', '#1e40af'],
-        ausente: ['No está en ERP', '#fee2e2', '#991b1b'],
+        ausente: ['No está en el sistema', '#fee2e2', '#991b1b'],
         ambigua: ['Ambigua', '#fef3c7', '#92400e'],
         repetida: ['Repetida', '#fef3c7', '#92400e'],
         error: ['Error', '#fee2e2', '#991b1b']
@@ -469,14 +543,14 @@ document.addEventListener('keydown', function (e) {
 
     function pintar(r) {
         var x = r.resumen || {};
-        document.getElementById('ppc-destino').textContent = r.semana + ' · ' + r.archivo
-            + (r.listado_existente ? ' · Contra "' + r.listado_existente + '"' : ' · La semana todavía no tiene pago');
+        document.getElementById('ppc-destino').textContent = r.pago + ' · ' + r.archivo
+            + (r.listado_existente ? ' · Contra "' + r.listado_existente + '"' : ' · El pago todavía no tiene pago');
         var problemas = (x.ausente || 0) + (x.ambigua || 0) + (x.error || 0);
         document.getElementById('ppc-resumen').innerHTML =
             '<span style="color:#166534;font-weight:800;">' + (x.nueva || 0) + ' entran</span>'
             + '<span style="color:#475569;font-weight:700;">' + (x.igual || 0) + ' ya están</span>'
             + '<span style="color:#1e40af;font-weight:800;">' + (x.faltante || 0) + ' salen</span>'
-            + ((x.ausente || 0) ? '<span style="color:#991b1b;font-weight:700;">' + x.ausente + ' no están en el ERP</span>' : '')
+            + ((x.ausente || 0) ? '<span style="color:#991b1b;font-weight:700;">' + x.ausente + ' no están en el sistema</span>' : '')
             + ((x.ambigua || 0) ? '<span style="color:#92400e;">' + x.ambigua + ' ambiguas</span>' : '')
             + ((x.reasignada || 0) ? '<span style="color:#92400e;">' + x.reasignada + ' vienen de otro pago</span>' : '')
             + ((x.error || 0) ? '<span style="color:#991b1b;">' + x.error + ' ilegibles</span>' : '')
@@ -527,7 +601,7 @@ document.addEventListener('keydown', function (e) {
 
         if (!r.listado_existente) {
             btnActualizar.style.display = 'none';
-            nota.textContent = 'Esta semana todavía no tiene listado: cargalo con "Vista previa".';
+            nota.textContent = 'Este pago todavía no tiene listado: cargalo con "Vista previa".';
             return;
         }
         if (cambios === 0) {
@@ -538,7 +612,7 @@ document.addEventListener('keydown', function (e) {
 
         btnActualizar.style.display = '';
         nota.innerHTML = 'Al actualizar entran <strong>' + (x.nueva || 0)
-            + '</strong> facturas del ERP y salen <strong>' + (x.faltante || 0) + '</strong>.';
+            + '</strong> facturas del sistema y salen <strong>' + (x.faltante || 0) + '</strong>.';
     }
 
     // Se recorre el mismo archivo del formulario: el servidor lo vuelve a leer
@@ -556,14 +630,14 @@ document.addEventListener('keydown', function (e) {
         }
 
         var aviso = 'Se va a dejar "' + ultima.listado_existente + '" igual que el archivo:\n\n'
-            + '  • ' + (x.nueva || 0) + ' facturas del ERP entran al pago\n'
+            + '  • ' + (x.nueva || 0) + ' facturas del sistema entran al pago\n'
             + '  • ' + (x.faltante || 0) + ' salen y vuelven a quedar pendientes\n\n'
-            + 'Las facturas del ERP no se eliminan: solo dejan de estar en esta semana.\n'
+            + 'Las facturas del sistema no se eliminan: solo dejan de estar en este pago.\n'
             + 'El XML y el PDF de las que salgan vuelven a su carpeta por fecha de emisión, '
-            + 'y los de las que entren se reúnen en la carpeta del pago semanal.\n\n'
+            + 'y los de las que entren se reúnen en la carpeta del pago.\n\n'
             + 'Esto no se puede deshacer. ¿Continuar?';
         if (!(await AppDialog.confirm(aviso, {
-            title: 'Actualizar pago semanal',
+            title: 'Actualizar pago',
             type: 'warning',
             confirmText: 'Actualizar listado'
         }))) return;
@@ -589,13 +663,13 @@ document.addEventListener('keydown', function (e) {
                 var partes = ['Pago actualizado: +' + res.anadidas + ' facturas entraron, '
                     + res.quitadas + ' salieron.'];
                 if (arch.por_fecha) partes.push(arch.por_fecha + ' documento(s) volvieron a su carpeta por fecha.');
-                if (arch.pago_semanal) partes.push(arch.pago_semanal + ' se reunieron en la carpeta del pago.');
+                if (arch.en_pago) partes.push(arch.en_pago + ' se reunieron en la carpeta del pago.');
                 if (arch.aviso) partes.push(arch.aviso);
                 return AppDialog.alert(partes.join('\n'), {
-                    title: 'Pago semanal actualizado', type: 'success'
+                    title: 'Pago actualizado', type: 'success'
                 }).then(function () {
-                    window.location.href = '<?= $baseUrl ?>/por-pagar?listado_id=' + res.listado_id
-                        + '&semana_id=' + res.semana_id;
+                    window.location.href = '<?= $baseUrl ?>/por-pagar?pago_id=' + res.pago_id
+                        + '&pago_id=' + res.pago_id;
                 });
             })
             .catch(function (err) {
@@ -607,16 +681,16 @@ document.addEventListener('keydown', function (e) {
 
     btn.addEventListener('click', function () {
         var archivo = document.getElementById('pp-listado-file');
-        var semana = form.querySelector('[name="semana_id"]');
+        var pago = form.querySelector('[name="pago_id"]');
         if (!archivo.files.length) {
             AppDialog.alert('Selecciona un archivo CSV o XLSX antes de comparar.', {
                 title: 'Archivo requerido', type: 'warning'
             });
             return;
         }
-        if (!/^\d+$/.test(semana.value) || Number(semana.value) <= 0) {
-            AppDialog.alert('Selecciona una semana existente para realizar la comparación.', {
-                title: 'Semana requerida', type: 'warning'
+        if (!/^\d+$/.test(pago.value) || Number(pago.value) <= 0) {
+            AppDialog.alert('Selecciona un pago existente para realizar la comparación.', {
+                title: 'Pago requerida', type: 'warning'
             });
             return;
         }
@@ -645,7 +719,7 @@ document.addEventListener('keydown', function (e) {
 <script>
 // Vista previa: el formulario de subida ya no importa directo — primero
 // analiza el archivo (sin escribir nada) y muestra qué es nuevo, qué ya
-// estaba en el listado de la semana y qué viene ilegible. Importar de
+// estaba en el listado del pago y qué viene ilegible. Importar de
 // verdad reenvía el archivo guardado (token) a /por-pagar/subir.
 (function () {
     var form = document.getElementById('pp-form-subir');
@@ -705,16 +779,16 @@ document.addEventListener('keydown', function (e) {
     // qué se encontró en Facturas ERP, que es lo que decide si la carga puede
     // hacerse: lo que no está en el ERP no se paga.
     var estilosPrev = {
-        resuelta: ['en el ERP', '#dcfce7', '#166534'],
-        ausente: ['no está en ERP', '#fee2e2', '#991b1b'],
+        resuelta: ['en el sistema', '#dcfce7', '#166534'],
+        ausente: ['no está en el sistema', '#fee2e2', '#991b1b'],
         ambigua: ['ambigua', '#fef3c7', '#92400e'],
         repetida: ['repetida', '#fef3c7', '#92400e'],
         error: ['ilegible', '#fee2e2', '#991b1b']
     };
     // No es un estado del resolutor: es una resuelta que además se le quita a
-    // otra semana. Se pinta distinto porque la fila entra igual, pero mueve
+    // otro pago. Se pinta distinto porque la fila entra igual, pero mueve
     // algo fuera de esta pantalla.
-    var estiloMovida = ['cambia de semana', '#fef3c7', '#92400e'];
+    var estiloMovida = ['cambia de pago', '#fef3c7', '#92400e'];
 
     function pintar(r) {
         var x = r.resumen || {};
@@ -722,13 +796,13 @@ document.addEventListener('keydown', function (e) {
 
         document.getElementById('ppv-destino').textContent = (r.listado_existente
             ? 'Se añadirán al pago existente "' + r.listado_existente + '"'
-            : 'Se creará el pago de la semana')
+            : 'Se creará el pago del pago')
             + ' · ' + r.archivo + (r.carpeta_pago ? ' · Carpeta: ' + r.carpeta_pago : '');
 
         document.getElementById('ppv-resumen').innerHTML =
-            '<span style="color:#16a34a;font-weight:800;">' + (x.resuelta || 0) + ' encontradas en el ERP</span>' +
+            '<span style="color:#16a34a;font-weight:800;">' + (x.resuelta || 0) + ' encontradas en el sistema</span>' +
             '<span style="color:var(--text-muted);">₡' + fmtMonto(r.monto_resuelto || 0) + '</span>' +
-            ((x.reasignada || 0) ? '<span style="color:#92400e;font-weight:700;">' + x.reasignada + ' cambian de semana</span>' : '') +
+            ((x.reasignada || 0) ? '<span style="color:#92400e;font-weight:700;">' + x.reasignada + ' cambian de pago</span>' : '') +
             (problemas ? '<span style="color:#b91c1c;font-weight:700;">' + problemas + ' sin resolver</span>' : '');
 
         document.getElementById('ppv-tbody').innerHTML = (r.lineas || []).map(function (l) {
@@ -766,7 +840,7 @@ document.addEventListener('keydown', function (e) {
             avisoErp.innerHTML = '';
         }
 
-        // Mover una factura la saca del pago de la otra semana. No impide
+        // Mover una factura la saca del pago de la otro pago. No impide
         // cargar —se paga una sola vez, el archivo más reciente manda—, pero
         // el efecto cae sobre una pantalla que nadie está mirando ahora.
         var avisoMovidas = document.getElementById('ppv-reasignadas');
@@ -774,7 +848,7 @@ document.addEventListener('keydown', function (e) {
         if (origenes.length) {
             avisoMovidas.style.display = 'block';
             avisoMovidas.innerHTML = '<strong>' + (x.reasignada || 0) + ' factura'
-                + ((x.reasignada || 0) !== 1 ? 's cambian' : ' cambia') + ' de semana:</strong> '
+                + ((x.reasignada || 0) !== 1 ? 's cambian' : ' cambia') + ' de pago:</strong> '
                 + origenes.map(function (o) {
                     return o.facturas + ' de “' + esc(o.pago) + '”';
                 }).join(', ')
@@ -814,21 +888,155 @@ document.addEventListener('keydown', function (e) {
                 : '<i class="fas fa-check-double"></i> Cargar ' + x.resuelta + ' factura' + (x.resuelta !== 1 ? 's' : ''));
     }
 
+    // ── La pantalla de carga ────────────────────────────────────────────
+    //
+    // El envío sigue siendo un POST de formulario, no un fetch: así el
+    // servidor conserva su redirección y su mensaje de siempre, y el navegador
+    // se queda en esta página —con la pantalla de carga a la vista— hasta que
+    // la carga termina. Lo único nuevo es que, mientras espera, pregunta por
+    // otro lado en qué va.
+    var PASOS = <?= json_encode(is_array($pasosCarga ?? null) ? $pasosCarga : [], JSON_UNESCAPED_UNICODE) ?>;
+
+    function pantallaCarga(destino) {
+        var caja = document.getElementById('ppl-overlay');
+        var lista = document.getElementById('ppl-pasos');
+        var barra = document.getElementById('ppl-barra');
+        var detalle = document.getElementById('ppl-detalle');
+        var reloj = document.getElementById('ppl-reloj');
+        var icono = document.getElementById('ppl-icono');
+        var titulo = document.getElementById('ppl-titulo');
+        var pie = document.getElementById('ppl-pie');
+        var actual = -1;
+
+        document.getElementById('ppl-destino').textContent = destino || '';
+        lista.innerHTML = PASOS.map(function (p, i) {
+            return '<li id="ppl-paso-' + i + '" style="display:flex;gap:8px;align-items:baseline;'
+                + 'padding:3px 0;color:var(--text-muted);">'
+                + '<span class="ppl-icono" style="width:14px;text-align:center;">·</span>'
+                + '<span>' + esc(p) + '</span></li>';
+        }).join('');
+        caja.style.display = 'block';
+
+        var arranque = Date.now();
+        var tic = setInterval(function () {
+            var s = Math.floor((Date.now() - arranque) / 1000);
+            reloj.textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+        }, 1000);
+
+        function marcar(i, estado) {
+            var li = document.getElementById('ppl-paso-' + i);
+            if (!li) return;
+            var icono = li.querySelector('.ppl-icono');
+            if (estado === 'hecho') {
+                li.style.color = '#16a34a';
+                icono.innerHTML = '<i class="fas fa-check"></i>';
+            } else if (estado === 'yendo') {
+                li.style.color = 'var(--navy)';
+                li.style.fontWeight = '700';
+                icono.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+            } else if (estado === 'roto') {
+                li.style.color = '#b91c1c';
+                icono.innerHTML = '<i class="fas fa-xmark"></i>';
+            }
+        }
+
+        return {
+            // Solo avanza: una respuesta que llega tarde y trae un paso
+            // anterior no puede hacer retroceder la pantalla.
+            avanzar: function (e) {
+                var i = Math.max(0, Math.min((e.paso || 1) - 1, PASOS.length - 1));
+                // Un spinner que sigue girando sobre algo que ya terminó —o que
+                // ya murió— dice lo contrario de lo que pasó, que es peor que
+                // no decir nada.
+                if (e.estado === 'error') {
+                    clearInterval(tic);
+                    if (actual >= 0) marcar(actual, 'roto');
+                    icono.className = 'fas fa-circle-exclamation';
+                    icono.style.color = '#b91c1c';
+                    titulo.textContent = 'No se pudo cargar el pago';
+                    // No se promete que no haya quedado nada escrito: las fases
+                    // ya pasadas sí tocaron la base, así que lo honesto es
+                    // decir en cuál se cayó y mandar a mirar el pago. Prometer
+                    // "no se cargó nada" sería mentir justo cuando más caro
+                    // sale creerlo.
+                    pie.innerHTML = '<i class="fas fa-rotate-left" style="margin-right:4px;"></i>'
+                        + 'Se cortó en el paso marcado en rojo. Los anteriores ya se hicieron, así que '
+                        + 'sí quedó algo escrito: revisá el pago antes de volver a cargarlo.';
+                    detalle.innerHTML = '<span style="color:#b91c1c;">' + esc(e.detalle || 'La carga falló.') + '</span>';
+                    return;
+                }
+                if (e.estado === 'listo') {
+                    clearInterval(tic);
+                    PASOS.forEach(function (_, k) { marcar(k, 'hecho'); });
+                    barra.style.width = '100%';
+                    icono.className = 'fas fa-circle-check';
+                    icono.style.color = '#16a34a';
+                    titulo.textContent = 'Pago cargado';
+                    pie.innerHTML = '<i class="fas fa-arrow-right" style="margin-right:4px;"></i>Abriendo el pago…';
+                    detalle.textContent = e.detalle || '';
+                    return;
+                }
+                if (i <= actual) return;
+                for (var k = actual; k < i; k++) { if (k >= 0) marcar(k, 'hecho'); }
+                actual = i;
+                marcar(i, 'yendo');
+                barra.style.width = ((i + 0.5) / PASOS.length * 100) + '%';
+                if (e.detalle) { detalle.textContent = e.detalle; }
+            },
+            parar: function () { clearInterval(tic); }
+        };
+    }
+
     btnImportar.addEventListener('click', function () {
         if (!vistaActual) return;
         btnImportar.disabled = true;
         btnImportar.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Importando…';
 
+        // Token del lado del navegador: el POST lo lleva y el que pregunta lo
+        // usa, así los dos hablan de la misma carga sin coordinar nada.
+        var token = '';
+        var bytes = new Uint8Array(16);
+        (window.crypto || window.msCrypto).getRandomValues(bytes);
+        bytes.forEach(function (b) { token += b.toString(16).padStart(2, '0'); });
+
+        overlay.style.display = 'none';
+        var pantalla = pantallaCarga(document.getElementById('ppv-destino').textContent);
+
+        // Cada segundo y medio: lo bastante seguido para que se sienta vivo,
+        // lo bastante espaciado para no hacerle peso al servidor que está
+        // ocupado justamente con la carga.
+        var vigilante = setInterval(function () {
+            fetch('<?= $baseUrl ?>/por-pagar/progreso?token=' + token, { credentials: 'same-origin' })
+                .then(function (r) { return r.json(); })
+                .then(function (e) {
+                    if (!e || !e.ok || e.estado === 'esperando') return;
+                    pantalla.avanzar(e);
+                    if (e.estado === 'listo' || e.estado === 'error') { clearInterval(vigilante); }
+                })
+                .catch(function () { /* un sondeo perdido no es nada: viene otro */ });
+        }, 1500);
+
+        // Si la navegación se cae, no dejar el intervalo dando vueltas.
+        window.addEventListener('pagehide', function () {
+            clearInterval(vigilante);
+            pantalla.parar();
+        });
+
         var f = document.createElement('form');
         f.method = 'POST';
         f.action = '<?= $baseUrl ?>/por-pagar/subir';
-        var semanaNueva = form.querySelector('[name="semana_nueva"]');
+        // El pago nuevo se crea al confirmar, no al mirar el archivo: por eso
+        // su fecha y su nombre viajan acá y no en la vista previa.
+        var pagoNuevo = form.querySelector('[name="pago_nuevo"]');
+        var pagoFecha = form.querySelector('[name="pago_fecha"]');
         var campos = {
             archivo_token: vistaActual.token,
             archivo_nombre: vistaActual.archivo,
-            semana_id: form.querySelector('[name="semana_id"]').value,
-            semana_nueva: semanaNueva ? semanaNueva.value : '',
-            carpeta_pago: form.querySelector('[name="carpeta_pago"]').value
+            pago_id: form.querySelector('[name="pago_id"]').value,
+            pago_nuevo: pagoNuevo ? pagoNuevo.value : '',
+            pago_fecha: pagoFecha ? pagoFecha.value : '',
+            carpeta_pago: form.querySelector('[name="carpeta_pago"]').value,
+            progreso_token: token
         };
         Object.keys(campos).forEach(function (k) {
             var i = document.createElement('input');
@@ -843,7 +1051,7 @@ document.addEventListener('keydown', function (e) {
 })();
 </script>
 
-<?php if ($listado): ?>
+<?php if ($pago): ?>
 
 <?php /*
  * Acá vivía una fila de cuatro tarjetas: total, respaldadas, con diferencia y
@@ -860,76 +1068,73 @@ document.addEventListener('keydown', function (e) {
     <div class="card-header mb-12" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <div class="card-title" style="margin-right:auto;">
             <i class="fas fa-clipboard-check" style="margin-right:6px;color:var(--navy-light);"></i>
-            <?= htmlspecialchars($listado['nombre']) ?>
-            <?php if (!empty($listado['semana_nombre'])): ?>
-            <span class="badge badge-navy" style="font-size:10px;padding:2px 8px;margin-left:4px;"
-                  title="Verificado solo contra las facturas de esta semana">
-                <i class="fas fa-calendar-week"></i> <?= htmlspecialchars($listado['semana_nombre']) ?>
-            </span>
-            <?php if (!empty($listado['semana_carpeta_pago'])): ?>
+            <?php /*
+             * Un solo nombre. Antes acá había dos —el del listado y, al lado,
+             * el del pago— porque eran dos fichas distintas de la misma cosa,
+             * y el del listado salía de pegarle "Pago " al del pago: en la
+             * cabecera se leía "Pago Pago Semana 200826 · Pago Semana 200826".
+             */ ?>
+            <?= htmlspecialchars(Pago::etiqueta($pago)) ?>
+            <?php if (!empty($pago['carpeta_pago'])): ?>
             <span class="badge" style="font-size:10px;padding:2px 8px;margin-left:4px;background:#e0f2fe;color:#075985;"
                   title="Los pares XML/PDF respaldados se reúnen en esta carpeta">
-                <i class="fas fa-folder"></i> PAGOS SEMANALES / <?= htmlspecialchars($listado['semana_carpeta_pago']) ?>
+                <i class="fas fa-folder"></i> PAGOS / <?= htmlspecialchars($pago['carpeta_pago']) ?>
             </span>
             <?php endif; ?>
-            <?php endif; ?>
             <span style="font-weight:400;font-size:11.5px;color:var(--text-muted);">
-                — subido el <?= ppFecha($listado['fecha_subida']) ?>
-                <?= !empty($listado['sociedad_nombre']) ? ' · ' . htmlspecialchars($listado['sociedad_nombre']) : '' ?>
-                <?= empty($listado['semana_nombre']) ? ' · verificado contra todas las facturas' : '' ?>
+                <?php if (!empty($pago['archivo_subido_en'])): ?>
+                — archivo subido el <?= ppFecha($pago['archivo_subido_en']) ?>
+                <?php else: ?>
+                — sin archivo cargado todavía
+                <?php endif; ?>
+                <?= !empty($pago['sociedad_nombre']) ? ' · ' . htmlspecialchars($pago['sociedad_nombre']) : '' ?>
             </span>
         </div>
 
-        <?php if (count($listados) > 1): ?>
-        <form method="GET" action="<?= $baseUrl ?>/por-pagar">
-            <input type="hidden" name="semana_id" value="<?= (int) $semanaFiltro ?>">
-            <?php foreach ($filtrosQuery as $nombreFiltro => $valorFiltro): ?>
-            <input type="hidden" name="<?= htmlspecialchars($nombreFiltro) ?>" value="<?= htmlspecialchars((string) $valorFiltro) ?>">
-            <?php endforeach; ?>
-            <select name="listado_id" class="form-control" style="font-size:12px;padding:5px 8px;" onchange="this.form.submit()">
-                <?php foreach ($listados as $l): ?>
-                <option value="<?= (int) $l['id'] ?>" <?= (int) $l['id'] === (int) $listado['id'] ? 'selected' : '' ?>>
-                    <?= htmlspecialchars($l['nombre']) ?><?= !empty($l['semana_nombre']) ? ' · ' . htmlspecialchars($l['semana_nombre']) : '' ?> (<?= (int) $l['total_lineas'] ?>)
-                </option>
-                <?php endforeach; ?>
-            </select>
-        </form>
-        <?php endif; ?>
+        <?php /*
+         * Acá había un segundo selector, para elegir cuál de los listados
+         * del pago mirar. Nunca tuvo dos opciones —un pago tuvo siempre un
+         * solo listado— y se fue con la tabla: el selector de arriba, el
+         * del pago, es ahora el único que hay que entender.
+         */ ?>
 
         <?php /* El botón "Verificar de nuevo" se eliminó: la verificación
                  corre sola cada vez que una factura entra o sale de la
-                 semana (asignación manual, subida de XML o importación
+                 el pago (asignación manual, subida de XML o importación
                  del correo). La ruta /por-pagar/verificar sigue viva. */ ?>
         <?php /* Un XML suelto solo es un problema si hay una línea esperándolo:
                  lo único que ofrece el panel es vincularlo con una línea sin
-                 respaldo. Con todas respaldadas, esos XML son comprobantes de
-                 la semana que no se pagan en ella, y no hay nada que hacer con
+                 respaldo. Con todas respaldadas, esos XML son comprobantes del
+                 pago que no se pagan en él, y no hay nada que hacer con
                  ellos. Esta condición la tapaba el pago cerrado, que escondía
                  el botón por otra razón. */ ?>
-        <?php if (!empty($listado['semana_id']) && !empty($sinCoincidencia) && $sinRespaldo > 0): ?>
+        <?php if (!empty($sinCoincidencia) && $sinRespaldo > 0): ?>
         <button type="button" class="btn btn-sm" onclick="ppsAbrir()"
                 style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;"
-                title="Facturas XML de esta semana que no coinciden con ninguna línea del listado">
+                title="Facturas XML de este pago que no coinciden con ninguna línea del listado">
             <i class="fas fa-triangle-exclamation"></i> Sin coincidencia (<?= (int) $sinCoincidencia ?>)
         </button>
         <?php endif; ?>
         <a href="<?= htmlspecialchars($urlExportar) ?>" class="btn btn-outline btn-sm"
-           title="<?= $filtrosActivos ? 'Exportar a Excel solamente los resultados filtrados' : 'Exportar todo el listado a Excel' ?>">
+           data-exportar="porpagar"
+           title="<?= $filtrosActivos
+               ? 'Bajar a Excel los resultados filtrados, con las columnas que estás viendo'
+               : 'Bajar todo el listado a Excel, con las columnas que estás viendo' ?>">
             <i class="fas fa-file-excel"></i> Exportar Excel
         </a>
-        <?php $nombreSemana = trim((string) ($listado['semana_nombre'] ?? $listado['nombre'])); ?>
-        <form method="POST" action="<?= $baseUrl ?>/por-pagar/semana/borrar/<?= (int) $listado['id'] ?>" style="display:inline;"
-              data-confirm="Se borra el pago de <?= htmlspecialchars($nombreSemana) ?>. Sus <?= (int) $totalLineas ?> factura(s) del ERP vuelven a quedar disponibles y sus XML/PDF regresan a la carpeta de documentos por fecha de emisión. Ni las facturas ni los comprobantes se eliminan."
-              data-confirm-title="Borrar semana"
+        <?php $nombrePago = Pago::etiqueta($pago); ?>
+        <form method="POST" action="<?= $baseUrl ?>/por-pagar/pago/borrar/<?= (int) $pago['id'] ?>" style="display:inline;"
+              data-confirm="Se borra el pago de <?= htmlspecialchars($nombrePago) ?>. Sus <?= (int) $totalLineas ?> factura(s) del sistema vuelven a quedar disponibles y sus XML/PDF regresan a la carpeta de documentos por fecha de emisión. Ni las facturas ni los comprobantes se eliminan."
+              data-confirm-title="Borrar pago"
               data-confirm-type="danger"
               data-confirm-accept="Continuar"
-              data-reconfirm="Esta acción no se puede deshacer: habría que volver a cargar el archivo del pago. ¿Borrar el pago de <?= htmlspecialchars($nombreSemana) ?> con sus <?= (int) $totalLineas ?> factura(s)?"
+              data-reconfirm="Esta acción no se puede deshacer: habría que volver a cargar el archivo del pago. ¿Borrar el pago de <?= htmlspecialchars($nombrePago) ?> con sus <?= (int) $totalLineas ?> factura(s)?"
               data-reconfirm-title="Confirmá otra vez"
-              data-reconfirm-accept="Sí, borrar la semana">
+              data-reconfirm-accept="Sí, borrar el pago">
             <button type="submit" class="btn btn-outline btn-sm"
-                    title="Borrar el pago de esta semana (las facturas y los comprobantes se conservan)"
+                    title="Borrar el pago de este pago (las facturas y los comprobantes se conservan)"
                     style="color:#b91c1c;border-color:#fed7d7;">
-                <i class="fas fa-trash-can"></i> Borrar semana
+                <i class="fas fa-trash-can"></i> Borrar pago
             </button>
         </form>
     </div>
@@ -955,13 +1160,13 @@ document.addEventListener('keydown', function (e) {
     $ppMontoTotal = (float) ($resumen['respaldada_monto'] ?? 0)
                   + (float) ($resumen['con_diferencia_monto'] ?? 0)
                   + (float) ($resumen['sin_respaldo_monto'] ?? 0);
-    $ppUrlEstado = function ($estado) use ($baseUrl, $filtros, $listado, $semanaFiltro) {
+    $ppUrlEstado = function ($estado) use ($baseUrl, $filtros, $pago, $pagoFiltro) {
         $q = array_filter($filtros, function ($v) { return (string) $v !== ''; });
         // Pulsar el que ya está puesto lo quita: es la forma de volver a
         // verlas todas sin ir a buscar el desplegable.
         $q['estado'] = ((string) ($filtros['estado'] ?? '') === $estado) ? '' : $estado;
-        $q['listado_id'] = (int) $listado['id'];
-        $q['semana_id'] = (int) $semanaFiltro;
+        $q['pago_id'] = (int) $pago['id'];
+        $q['pago_id'] = (int) $pagoFiltro;
         return $baseUrl . '/por-pagar?' . http_build_query(array_filter(
             $q, function ($v) { return (string) $v !== ''; }
         ));
@@ -982,8 +1187,8 @@ document.addEventListener('keydown', function (e) {
     </div>
 
     <form method="GET" action="<?= $baseUrl ?>/por-pagar" class="filter-bar">
-        <input type="hidden" name="semana_id" value="<?= (int) $semanaFiltro ?>">
-        <input type="hidden" name="listado_id" value="<?= (int) $listado['id'] ?>">
+        <input type="hidden" name="pago_id" value="<?= (int) $pagoFiltro ?>">
+        <input type="hidden" name="pago_id" value="<?= (int) $pago['id'] ?>">
         <?php
         /*
          * El checklist del pago se recorre persiguiendo respaldos: de quién,
@@ -993,7 +1198,7 @@ document.addEventListener('keydown', function (e) {
          *   Vínculo XML (automático/manual)  Sirve para auditar cómo se
          *                                    emparejó, no para completar el pago.
          *   Monto desde / hasta              Cuatro campos de rango para una
-         *   Fecha desde / hasta              pantalla que ya es de una semana
+         *   Fecha desde / hasta              pantalla que ya es de un pago
          *                                    y de un listado.
          * Siguen funcionando si llegan por la URL.
          */
@@ -1078,26 +1283,31 @@ document.addEventListener('keydown', function (e) {
     .pp-sucursal i { font-size: 9.5px; color: var(--navy-light); margin-right: 4px; }
     </style>
 
+    <?php $columnasListado = 'porpagar'; include __DIR__ . '/../partials/columnas.php'; ?>
     <div class="table-wrap">
-        <table class="data-table" style="font-size:12.5px;">
+        <table class="data-table" style="font-size:12.5px;" data-listado="porpagar">
             <thead>
                 <tr>
-                    <th style="width:120px;">Estado</th>
-                    <th>Fecha</th>
-                    <th>Documento ERP</th>
-                    <th>Proveedor</th>
-                    <th class="right">Monto</th>
-                    <th class="right">Saldo</th>
-                    <th>Factura XML</th>
-                    <th class="right">Diferencia</th>
-                    <th class="center" style="width:155px;">Acciones</th>
+                    <th style="width:120px;" data-col="estado">Estado</th>
+                    <th data-col="fecha">Fecha</th>
+                    <th data-col="documento">Documento del sistema</th>
+                    <th data-col="proveedor">Proveedor</th>
+                    <th class="right" data-col="monto">Monto</th>
+                    <th class="right" data-col="saldo">Saldo</th>
+                    <th data-col="xml">Factura XML</th>
+                    <th class="right" data-col="diferencia">Diferencia</th>
+                    <?php // La sucursal ya bajaba al Excel y en pantalla iba de
+                          // letra chica bajo el proveedor: acá es columna, y se
+                          // puede ordenar por ella, que es como se arma un pago. ?>
+                    <?= Columnas::cabecerasExtra('porpagar') ?>
+                    <th class="center" style="width:155px;" data-columnas-boton>Acciones</th>
                 </tr>
             </thead>
             <tbody>
                 <?php if ($lineas): ?>
                 <?php foreach ($lineas as $linea): ?>
                 <tr>
-                    <td>
+                    <td data-col="estado">
                         <?php if ($linea['estado'] === 'respaldada'): ?>
                         <span class="badge badge-ok"><i class="fas fa-check-circle"></i> Respaldada</span>
                         <?php elseif ($linea['estado'] === 'con_diferencia'): ?>
@@ -1142,12 +1352,12 @@ document.addEventListener('keydown', function (e) {
                         </span>
                         <?php endif; ?>
                     </td>
-                    <td style="white-space:nowrap;"><?= ppFecha($linea['fecha_emision']) ?></td>
-                    <td style="max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:var(--navy);"
+                    <td style="white-space:nowrap;" data-col="fecha"><?= ppFecha($linea['fecha_emision']) ?></td>
+                    <td data-col="documento" style="max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:var(--navy);"
                         title="<?= htmlspecialchars($linea['documento']) ?>">
                         <?= htmlspecialchars($linea['documento']) ?>
                     </td>
-                    <td style="max-width:240px;">
+                    <td style="max-width:240px;" data-col="proveedor">
                         <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
                              title="<?= htmlspecialchars($linea['proveedor_nombre']) ?>">
                             <?= htmlspecialchars($linea['proveedor_nombre']) ?>
@@ -1192,16 +1402,16 @@ document.addEventListener('keydown', function (e) {
                      * había que archivar el pago.
                      */
                     ?>
-                    <td class="right" style="white-space:nowrap;"><?= number_format((float) $linea['monto'], 2) ?></td>
+                    <td class="right" style="white-space:nowrap;" data-col="monto"><?= number_format((float) $linea['monto'], 2) ?></td>
                     <?php
                     $ppSaldo = (float) ($linea['saldo_pago'] ?? $linea['saldo'] ?? 0);
                     $ppDebe = $ppSaldo > 0.005;
                     ?>
-                    <td class="right" style="white-space:nowrap;<?= $ppDebe ? '' : 'color:var(--text-muted);' ?>"
+                    <td class="right" data-col="saldo" style="white-space:nowrap;<?= $ppDebe ? '' : 'color:var(--text-muted);' ?>"
                         title="<?= $ppDebe ? 'Saldo con el que entró a este pago' : 'Ya no queda saldo por pagar' ?>">
                         <?= $ppDebe ? number_format($ppSaldo, 2) : '—' ?>
                     </td>
-                    <td style="white-space:nowrap;">
+                    <td style="white-space:nowrap;" data-col="xml">
                         <?php if (!empty($linea['factura_xml_id'])): ?>
                         <?php if (!empty($linea['match_manual'])): ?>
                         <i class="fas fa-hand" style="color:var(--gold-dark);font-size:11px;margin-right:3px;"
@@ -1213,7 +1423,7 @@ document.addEventListener('keydown', function (e) {
                         <span style="color:#cbd5e1;">—</span>
                         <?php endif; ?>
                     </td>
-                    <td class="right" style="white-space:nowrap;">
+                    <td class="right" style="white-space:nowrap;" data-col="diferencia">
                         <?php if ($linea['estado'] === 'con_diferencia' && $linea['diferencia'] !== null): ?>
                         <?php $dif = (float) $linea['diferencia']; ?>
                         <span style="color:<?= $dif > 0 ? '#16a34a' : '#b91c1c' ?>;font-weight:700;">
@@ -1223,6 +1433,7 @@ document.addEventListener('keydown', function (e) {
                         <span style="color:#cbd5e1;">—</span>
                         <?php endif; ?>
                     </td>
+                    <?= Columnas::celdasExtra('porpagar', $linea) ?>
                     <td class="center" style="white-space:nowrap;">
                         <?php if ($linea['estado'] === 'sin_respaldo'): ?>
                         <?php /*
@@ -1253,18 +1464,18 @@ document.addEventListener('keydown', function (e) {
                          * ocurría (quitarFactura solo los reubica si hay XML).
                          */
                         $quitarAviso = !empty($linea['factura_xml_id'])
-                            ? 'No se elimina nada: la factura deja de ser de esta semana y vuelve a quedar disponible en Facturas. Su XML y PDF salen de la carpeta del pago y regresan a la carpeta de documentos por fecha de emisión.'
-                            : 'No se elimina nada: la factura deja de ser de esta semana y vuelve a quedar disponible en Facturas para otro pago. No tiene ningún XML vinculado, así que no se mueve ningún archivo.';
+                            ? 'No se elimina nada: la factura deja de ser de este pago y vuelve a quedar disponible en Facturas. Su XML y PDF salen de la carpeta del pago y regresan a la carpeta de documentos por fecha de emisión.'
+                            : 'No se elimina nada: la factura deja de ser de este pago y vuelve a quedar disponible en Facturas para otro pago. No tiene ningún XML vinculado, así que no se mueve ningún archivo.';
                         ?>
                         <form method="POST" action="<?= $baseUrl ?>/por-pagar/factura/quitar/<?= (int) $linea['id'] ?>?<?= htmlspecialchars($queryRetornoFiltros) ?>"
                               style="display:inline;margin-left:4px;"
                               data-confirm="<?= htmlspecialchars($quitarAviso) ?>"
-                              data-confirm-title="Quitar de la semana"
+                              data-confirm-title="Quitar del pago"
                               data-confirm-type="warning"
-                              data-confirm-accept="Quitar de la semana">
+                              data-confirm-accept="Quitar del pago">
                             <button type="submit" class="btn btn-outline btn-sm"
-                                    title="Quitar la factura de esta semana (no se elimina: vuelve a quedar disponible)"
-                                    aria-label="Quitar la factura de esta semana">
+                                    title="Quitar la factura de este pago (no se elimina: vuelve a quedar disponible)"
+                                    aria-label="Quitar la factura de este pago">
                                 <i class="fas fa-calendar-xmark"></i>
                             </button>
                         </form>
@@ -1285,8 +1496,8 @@ document.addEventListener('keydown', function (e) {
     </div>
 </div>
 
-<?php if (!empty($listado['semana_id']) && !empty($sinCoincidencia) && $sinRespaldo > 0): ?>
-<!-- ── Facturas sin coincidencia (de la semana, fuera del listado) ── -->
+<?php if (!empty($pago['pago_id']) && !empty($sinCoincidencia) && $sinRespaldo > 0): ?>
+<!-- ── Facturas sin coincidencia (del pago, fuera del listado) ── -->
 <div id="pps-overlay" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:1000;overflow:auto;">
     <div style="background:#fff;border-radius:12px;max-width:860px;width:94%;margin:5vh auto;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.25);">
         <div style="padding:9px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;flex-shrink:0;">
@@ -1294,7 +1505,7 @@ document.addEventListener('keydown', function (e) {
             <div style="flex:1;min-width:0;">
                 <div style="font-size:15px;font-weight:800;color:var(--navy);">Facturas sin coincidencia</div>
                 <div style="font-size:12px;color:var(--text-muted);">
-                    Facturas XML de <strong><?= htmlspecialchars((string) ($listado['semana_nombre'] ?? 'la semana')) ?></strong>
+                    Facturas XML de <strong><?= htmlspecialchars(Pago::etiqueta($pago)) ?></strong>
                     que no coinciden con ninguna línea del listado. Vinculá a mano la que le corresponda
                     a una línea sin respaldo (al vincular solo se compara el monto).
                 </div>
@@ -1313,14 +1524,13 @@ document.addEventListener('keydown', function (e) {
 </div>
 
 <script>
-// Modal "Sin coincidencia": lista las facturas XML de la semana que ningún
-// match del listado reclamó. Cada una se puede mover a otra semana (repite
+// Modal "Sin coincidencia": lista las facturas XML del pago que ningún
+// match del listado reclamó. Cada una se puede mover a otro pago (repite
 // el chequeo allá) o vincular a la fuerza con una línea sin respaldo — en
 // ese caso el estado sale SOLO del monto y el vínculo queda protegido de
 // la re-verificación automática (match_manual).
 var PPS_BASE = '<?= $baseUrl ?>';
-var PPS_LISTADO = <?= (int) $listado['id'] ?>;
-var PPS_SEMANA = <?= (int) $listado['semana_id'] ?>;
+var PPS_PAGO = <?= (int) $pago['id'] ?>;
 
 function ppsEsc(s) {
     var d = document.createElement('div');
@@ -1333,7 +1543,7 @@ function ppsMonto(n) {
 
 function ppsAbrir() {
     document.getElementById('pps-overlay').style.display = 'block';
-    fetch(PPS_BASE + '/por-pagar/sin-coincidencia?listado_id=' + PPS_LISTADO, { credentials: 'same-origin' })
+    fetch(PPS_BASE + '/por-pagar/sin-coincidencia?pago_id=' + PPS_PAGO, { credentials: 'same-origin' })
         .then(function (r) { return r.json(); })
         .then(function (r) {
             if (!r.ok) throw new Error(r.message || 'No se pudo cargar.');
@@ -1358,7 +1568,7 @@ function ppsPintar(r) {
     if (!r.facturas.length) {
         body.innerHTML = '<div style="padding:18px;text-align:center;color:var(--text-muted);font-size:12.5px;">'
             + '<i class="fas fa-circle-check" style="color:var(--ok);margin-right:6px;"></i>'
-            + 'Todas las facturas de la semana coinciden con el listado.</div>';
+            + 'Todas las facturas del pago coinciden con el listado.</div>';
         return;
     }
 
@@ -1393,9 +1603,9 @@ function ppsPintar(r) {
     }).join('');
 }
 
-// "Mover de semana" vivía acá. Se fue porque la semana de un comprobante dejó
+// "Mover de pago" vivía acá. Se fue porque el pago de un comprobante dejó
 // de ser algo que se elige: la hereda de la factura del ERP que respalda. Un
-// XML suelto que no respalda nada no pertenece a ninguna semana, y forzarle una
+// XML suelto que no respalda nada no pertenece a ningún pago, y forzarle una
 // no lo metía en ningún pago —el cruce va por consecutivo— pero sí podía
 // sacarle el archivo de la carpeta del pago. Lo que se hace con un XML suelto
 // es vincularlo a la factura que le toca, que es el botón de al lado.
@@ -1446,10 +1656,10 @@ async function ppsVincular(facturaId) {
 <div class="card" style="text-align:center;padding:22px 14px;color:var(--text-muted);">
     <i class="fas fa-file-invoice-dollar" style="font-size:34px;color:#cbd5e1;margin-bottom:10px;display:block;"></i>
     <div style="font-size:14px;font-weight:700;color:var(--navy);margin-bottom:4px;">
-        No hay listados <?= $semanaFiltro === 0 ? 'sin semana' : 'para esta semana' ?>
+        <?= $pagoFiltro > 0 ? 'Este pago todavía no tiene facturas' : 'Todavía no hay ningún pago' ?>
     </div>
     <div style="font-size:12.5px;">
-        Elige otra semana en el selector de arriba, o sube el listado del pago de esta semana.
+        Elegí "➕ Nuevo pago…" arriba, ponele fecha y subí el archivo que dice qué se paga.
     </div>
 </div>
 

@@ -163,6 +163,18 @@ documentos*. Es lo único que cambia de una computadora a otra.
 > arranca a media sincronización, va a reportar documentos que no encuentra —
 > no están perdidos, todavía no han bajado.
 
+**Si alguna empresa archiva en SharePoint** (Configuración → Empresas del
+grupo), esta computadora necesita además sus credenciales de Microsoft Graph:
+
+```
+copy app\config\graph.ejemplo.php app\config\local.graph.php
+php cli/probar_sharepoint.php
+```
+
+Cómo se completa, y todo lo demás de esas empresas, en
+[SHAREPOINT.md](SHAREPOINT.md). Sin ese archivo, los documentos de esas
+empresas no se abren desde esta computadora; los de las demás, sí.
+
 ### 7. Comprobar
 
 ```
@@ -198,8 +210,8 @@ propio MySQL, y cambiar de una a otra con un comando.
 > sobre la copia no sube a la oficina y se pierde entero la próxima vez que se
 > refresque. Sirve para tres cosas —seguir consultando cuando el servidor no
 > responde, probar una migración sin arriesgar los datos de todos, y tener un
-> respaldo fuera del servidor— y para ninguna más. Capturar correo o cerrar un
-> pago semanal se hace **siempre** contra la base de la oficina.
+> respaldo fuera del servidor— y para ninguna más. Capturar correo o armar un
+> pago se hace **siempre** contra la base de la oficina.
 
 ### Preparar la copia (una vez)
 
@@ -391,6 +403,7 @@ modelo, en orden de frecuencia:
 | "No abre ningún documento" | La carpeta compartida apunta al lugar equivocado, o SharePoint aún no termina de bajar los archivos |
 | "No abre *este* documento" | Alguien lo movió fuera de la carpeta compartida — devolvelo adentro y corré `php cli/organizar_documentos.php` |
 | "Me da error al guardar" | Falta una migración en la base, o permiso de solo lectura en SharePoint |
+| "No abre ningún documento de *esta* empresa" | La empresa archiva en SharePoint y esta computadora no tiene `app/config/local.graph.php` — ver [SHAREPOINT.md](SHAREPOINT.md) |
 | "No conecta" | Tailscale apagado en esa computadora, o el servidor caído. `tailscale status` lo dice en un segundo. Si va para largo, se puede seguir trabajando sobre la copia local — ver "Refrescar la copia — sin acceso al servidor" |
 | "Falta app/config/local.php" | Instalación a medias: hacer el paso 5 |
 | "No veo lo que capturó mi compañero" | Su `local.php` apunta a `localhost` en vez del servidor |
@@ -414,10 +427,14 @@ modelo, en orden de frecuencia:
 | `php cli/migrar_rutas_relativas.php --aplicar` | Convertirlas y sacar del proyecto los documentos que queden adentro |
 | `php cli/organizar_documentos.php` | Volver a ubicar documentos movidos a mano (no mueve nada) |
 | `php cli/organizar_documentos.php --forzar-orden` | **Mueve archivos**: ordena lo registrado por fecha, tipo y estado |
-| `php cli/organizar_documentos.php --semana=N` | **Mueve archivos**: solo los de esa semana, y copia su par a la carpeta del pago |
+| `php cli/organizar_documentos.php --pago=N` | **Mueve archivos**: solo los de ese pago, y copia su par a la carpeta del pago |
 | `php cli/limpiar_rutas_perdidas.php` | Ver qué rutas apuntan a un archivo que ya no existe (no cambia nada) |
 | `php cli/recuperar_documentos.php` | Ver qué documentos sin archivo se pueden volver a bajar del correo |
 | `php cli/recuperar_documentos.php --aplicar` | **Escribe archivos**: los baja del correo y los deja en su misma ruta |
+| `php cli/probar_sharepoint.php` | Probar de punta a punta la conexión con SharePoint (sube y borra un archivo de prueba) |
+| `php cli/probar_sharepoint.php --bibliotecas=URL` | Listar las bibliotecas de un sitio con su `drive_id` |
+| `php cli/organizar_documentos.php --sharepoint` | Poner la base al día con lo que se movió o borró en SharePoint (lo hace sola la tarea) |
+| `php cli/migrar_documentos_a_graph.php --sociedad=N` | Pasar una empresa a SharePoint, ver cómo va o volver atrás — ver [SHAREPOINT.md](SHAREPOINT.md) |
 | `php cli/procesar_lotes.php` | Avanzar los lotes de correo sin el navegador abierto |
 | `php cli/sync_correo.php` | Sincronizar el buzón y capturar correo nuevo si está habilitado |
 | `php cli/adelgazar_correo_indice.php` | Medir cuánto ocupa el índice del correo (no cambia nada) |
@@ -426,16 +443,27 @@ modelo, en orden de frecuencia:
 Los dos de rutas se pueden correr las veces que haga falta: no duplican nada
 ni deshacen lo ya hecho.
 
-### Ningún documento se archiva solo
+### Qué archiva solo, y qué no
 
-Los XML y PDF viven en una carpeta que la gente también abre en el Explorador.
-La captura automática puede descargar XML/PDF nuevos a `_TRABAJO/BANDEJA`.
-Esa es una zona de espera: **no los importa ni los archiva en las carpetas
-finales**. Una persona debe revisarlos, seleccionarlos y confirmar la
-importación desde Correo → Bandeja de revisión.
+Los XML y PDF viven en una carpeta que la gente también abre en el Explorador,
+así que conviene saber exactamente qué toca la aplicación sola.
 
-Fuera de esa zona de espera, la aplicación no mueve archivos al importar del
-correo ni al verificar un listado de Por Pagar.
+La captura automática baja los XML/PDF nuevos a `_TRABAJO/BANDEJA`, que es una
+zona de paso. Con la **entrada automática** encendida —lo normal— siguen de
+largo desde ahí: el comprobante que se lee bien, que Hacienda no rechazó y que
+viene a nombre de la empresa se archiva en la carpeta de su mes, queda
+registrado y se cruza con el listado que le toca. En la Bandeja solo se queda
+lo que hay que resolver a mano: rechazados por Hacienda, de otra cédula y lo
+que no se pudo guardar.
+
+Apagando la entrada automática (Configuración → Automatización) se vuelve al
+comportamiento anterior: todo espera en `_TRABAJO/BANDEJA` hasta que una
+persona lo seleccione y confirme la importación desde Correo → Bandeja de
+revisión.
+
+Lo que **nunca** se toca solo son los archivos que alguien haya dejado en la
+carpeta por su cuenta: el acomodo alcanza únicamente a los documentos
+registrados.
 
 El acomodo lo hace la tarea programada, como mucho **cada quince minutos**, y
 son dos cosas distintas:
@@ -443,7 +471,7 @@ son dos cosas distintas:
 - **Seguir**: busca los archivos que alguien movió a mano y corrige la base de
   datos para seguirlos, sin tocarlos.
 - **Acomodar**: lleva cada documento registrado a la carpeta de su mes y deja
-  una **copia** en la del pago semanal si le toca.
+  una **copia** en la del pago si le toca.
 
 Acomodar **nunca borra**: solo mueve el par a su carpeta y copia a la del pago.
 Y alcanza únicamente a los documentos que la aplicación registró; lo que
@@ -451,19 +479,23 @@ alguien haya dejado dentro de la carpeta por su cuenta se queda donde está.
 
 Antes esto se pedía a mano desde una pantalla, con una previsualización de por
 medio. Salió porque no había nada que decidir —la carpeta de un documento la
-deciden su fecha de emisión, su tipo y su semana de pago, y ninguno de los tres
+deciden su fecha de emisión, su tipo y el pago en el que entró, y ninguno de los tres
 admite dos respuestas—, y mientras nadie visitara esa pantalla, la carpeta del
 pago no se armaba.
 
-Para forzarlo a mano sigue estando `--forzar-orden` o `--semana=N` por línea de
+Para forzarlo a mano sigue estando `--forzar-orden` o `--pago=N` por línea de
 comandos. Agregá `--dry-run` a cualquier comando para ver el resultado sin
 aplicarlo.
 
-### La carpeta del pago semanal es una copia
+### La carpeta del pago es una copia
 
 Un documento vive siempre en la carpeta de su mes: `2026/08 AGOSTO/Facturas`.
-Cuando entra a un pago semanal, su par XML/PDF **se copia** a
-`PAGOS SEMANALES/<nombre del pago>`, y esa copia es lo que se entrega.
+Cuando entra a un pago, su par XML/PDF **se copia** a `PAGOS/<nombre del
+pago>`, y esa copia es lo que se entrega.
+
+> Esa carpeta se llamaba `PAGOS SEMANALES`. El sistema la renombra solo la
+> primera vez que la necesita, con todo lo que tenga dentro; si ya existe una
+> `PAGOS` al lado, no toca ninguna de las dos y hay que juntarlas a mano.
 
 La diferencia importa: esa carpeta se manda y quien la recibe la borra cuando
 termina. Mientras el par se mudaba ahí dentro, borrarla se llevaba el respaldo
@@ -476,7 +508,7 @@ mucho un cuarto de hora después.
 
 El organizador anota qué documentos tienen una ruta que apunta al vacío, y esos
 salen marcados **"Archivo perdido"** en el renglón, en todos los módulos donde
-el documento aparece: el checklist del pago semanal, la cola de seguimiento, el
+el documento aparece: el checklist del pago, la cola de seguimiento, el
 listado de comprobantes, Notas de crédito y sus XML. Antes había que hacer clic
 en el XML para enterarse, de uno en uno.
 

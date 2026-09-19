@@ -142,7 +142,7 @@ class Seguimiento extends Model
      * pantalla es un orden que en silencio cae en otro.
      *
      * Salió de aquí "Dinero en juego", que era el orden por omisión. La cola
-     * se trabaja por fecha —lo que entró esta semana—, no de mayor a menor
+     * se trabaja por fecha —lo que entró este pago—, no de mayor a menor
      * importe: encabezar siempre con las mismas facturas grandes escondía al
      * fondo lo recién llegado, que es lo que hay que registrar. El monto
      * sigue en su columna, y "Monto desde" sigue acotando por él si llega
@@ -363,10 +363,33 @@ class Seguimiento extends Model
         ];
     }
 
+    /**
+     * Una fecha que existe en el calendario, o ''.
+     *
+     * El formato solo no alcanza: '2026-02-30' lo cumple, llega a la consulta
+     * y deja la cola vacía sin nada en pantalla que explique por qué. Una
+     * fecha que no existe se ignora, igual que una mal escrita.
+     */
     private static function fechaFiltro($valor)
     {
         $valor = trim((string) $valor);
-        return preg_match('/^\d{4}-\d{2}-\d{2}$/', $valor) ? $valor : '';
+        if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $valor, $m)) {
+            return '';
+        }
+        return checkdate((int) $m[2], (int) $m[3], (int) $m[1]) ? $valor : '';
+    }
+
+    /**
+     * Lo que se escribió en un buscador, listo para ir dentro de un LIKE.
+     *
+     * `%` y `_` son comodines de SQL, no texto: buscar "50%_A" traía "50 de
+     * cualquier cosa seguida de A". Se escapan para que se busque lo que la
+     * persona escribió, letra por letra. La barra invertida primero, que es
+     * con la que se escapan las otras dos.
+     */
+    private static function like($valor)
+    {
+        return '%' . addcslashes(trim((string) $valor), '\\%_') . '%';
     }
 
     public function __construct()
@@ -417,7 +440,7 @@ class Seguimiento extends Model
                 KEY idx_bitacora_seguimiento (seguimiento_id, id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
-            $this->renombrarOrigenPagoSemanal();
+            $this->renombrarOrigenPago();
             $this->migrarEstadosDeGestion();
             $this->agregarRecordatorio();
             $this->admitirOrigenesDelCorreo();
@@ -511,7 +534,7 @@ class Seguimiento extends Model
      * id de facturas_erp—, así que la gestión ya registrada sigue apuntando a
      * donde apuntaba.
      */
-    private function renombrarOrigenPagoSemanal()
+    private function renombrarOrigenPago()
     {
         $tipo = (string) $this->fetchColumn(
             "SELECT COLUMN_TYPE FROM information_schema.COLUMNS
@@ -734,10 +757,10 @@ class Seguimiento extends Model
                               FROM notas_credito_listados actual
                              WHERE actual.sociedad_id = li.sociedad_id)";
 
-        // El documento es la factura del ERP, no el pago semanal.
+        // El documento es la factura del ERP, no el pago.
         //
         // El pago dejó de tener líneas propias: solo marca cuáles de estas
-        // facturas se pagan esta semana. Entrar por él dejaba fuera de la cola
+        // facturas se pagan este pago. Entrar por él dejaba fuera de la cola
         // toda factura sin respaldo que nadie hubiera metido todavía en un
         // pago —y las sacaba otra vez en cuanto el pago se archivaba—, cuando
         // el XML se le debe igual. Ahora entran todas y el pago, si lo hay,
@@ -774,24 +797,30 @@ class Seguimiento extends Model
                 COALESCE(ABS(pe.diferencia), COALESCE(pe.saldo_pago, pe.saldo)) AS en_juego,
                 /*
                  * Del lado de la factura la pregunta se da vuelta: no contra
-                 * qué se aplica, sino cuánta nota tiene esperando. Sale por
-                 * subconsulta y no por JOIN porque una factura puede tener
-                 * varias notas y un JOIN duplicaría el renglón en la cola.
-                 * Va por el índice idx_nc_linea_factura_erp.
+                 * qué se aplica, sino cuánta nota tiene esperando.
+                 *
+                 * Sale de un agregado que se arma una vez —una fila por
+                 * factura con notas aplicables— y no de un JOIN directo, que
+                 * duplicaría el renglón de una factura con varias notas.
+                 * Antes eran dos subconsultas correlacionadas que corrían por
+                 * cada una de las ~8 500 facturas: medido contra la copia de
+                 * la base, la unión pasó de 200 a 143 ms con la misma salida
+                 * fila por fila.
                  */
                 NULL AS aplicacion_estado,
                 NULL AS aplicacion_factura_id,
                 NULL AS aplicacion_factura_doc,
                 NULL AS aplicacion_factura_saldo,
-                (SELECT COUNT(*) FROM notas_credito_lineas nca
-                  WHERE nca.factura_erp_id = pe.id
-                    AND nca.estado_aplicacion = 'aplicable') AS notas_vivas,
-                (SELECT COALESCE(SUM(nca.saldo), 0) FROM notas_credito_lineas nca
-                  WHERE nca.factura_erp_id = pe.id
-                    AND nca.estado_aplicacion = 'aplicable') AS notas_vivas_saldo
+                COALESCE(nv.n, 0) AS notas_vivas,
+                COALESCE(nv.saldo, 0) AS notas_vivas_saldo
               FROM facturas_erp pe
-              LEFT JOIN porpagar_listados li ON li.id = pe.porpagar_listado_id
-              LEFT JOIN facturas_xml x ON x.id = pe.factura_xml_id";
+              LEFT JOIN pagos li ON li.id = pe.pago_id
+              LEFT JOIN facturas_xml x ON x.id = pe.factura_xml_id
+              LEFT JOIN (SELECT factura_erp_id, COUNT(*) AS n, SUM(saldo) AS saldo
+                           FROM notas_credito_lineas
+                          WHERE estado_aplicacion = 'aplicable'
+                            AND factura_erp_id IS NOT NULL
+                          GROUP BY factura_erp_id) nv ON nv.factura_erp_id = pe.id";
 
         return "({$nc}) UNION ALL ({$fe})";
     }
@@ -834,9 +863,11 @@ class Seguimiento extends Model
      * La cola con el seguimiento pegado. Se resuelve en una sola consulta
      * porque desde fuera de la oficina cada viaje a la base cuesta ~100 ms.
      */
-    private function sqlBase()
+    private function sqlBase($conTotal = false)
     {
-        return "SELECT c.*,
+        // El total de la paginación viaja en cada fila de la página: contar
+        // aparte era recorrer la unión entera otra vez, y la unión es lo caro.
+        return "SELECT " . ($conTotal ? 'COUNT(*) OVER () AS total_filas, ' : '') . "c.*,
                        s.id AS seguimiento_id,
                        " . $this->sqlEfectivo() . " AS seguimiento_estado,
                        " . $this->sqlCalculado() . " AS estado_calculado,
@@ -969,7 +1000,7 @@ class Seguimiento extends Model
             $where[] = 'ABS(c.saldo) <= 0.005';
         }
         if (!empty($f['q'])) {
-            $like = '%' . trim((string) $f['q']) . '%';
+            $like = self::like($f['q']);
             $where[] = '(c.documento LIKE ? OR c.proveedor LIKE ? OR c.consecutivo LIKE ?)';
             $params[] = $like;
             $params[] = $like;
@@ -977,12 +1008,12 @@ class Seguimiento extends Model
         }
 
         if (!empty($f['col_documento'])) {
-            $like = '%' . trim((string) $f['col_documento']) . '%';
+            $like = self::like($f['col_documento']);
             $where[] = '(c.documento LIKE ? OR c.contexto LIKE ? OR CAST(c.fecha AS CHAR) LIKE ? OR c.clase LIKE ?)';
             array_push($params, $like, $like, $like, $like);
         }
         if (!empty($f['col_proveedor'])) {
-            $like = '%' . trim((string) $f['col_proveedor']) . '%';
+            $like = self::like($f['col_proveedor']);
             $where[] = '(c.proveedor LIKE ? OR c.sucursal LIKE ?)';
             array_push($params, $like, $like);
         }
@@ -993,7 +1024,10 @@ class Seguimiento extends Model
          * un solo filtro por concepto.
          */
         foreach (['col_monto' => 'c.monto', 'col_saldo' => 'c.saldo'] as $clave => $columna) {
-            $valor = preg_replace('/[₡$,\s]/u', '', (string) ($f[$clave] ?? ''));
+            // Pasa por BusquedaImporte aunque filtrosDesde() ya lo haga: la
+            // navegación arma filtros por su cuenta, y un importe crudo con
+            // bytes rotos o un comodín no puede llegar al LIKE.
+            $valor = BusquedaImporte::numero($f[$clave] ?? '');
             if ($valor !== '') {
                 $where[] = "CAST({$columna} AS CHAR) LIKE ?";
                 $params[] = '%' . $valor . '%';
@@ -1059,36 +1093,80 @@ class Seguimiento extends Model
         return $elegido . ', c.origen ASC';
     }
 
-    public function cola(array $filtros, $pagina = 1, $porPagina = 50)
+    /** Lo más que trae una página de la pantalla. */
+    public const POR_PAGINA_MAXIMO = 200;
+
+    /**
+     * Una página de la cola, con su total.
+     *
+     * @param int $maximo Hasta cuántas filas se admiten. La pantalla se queda
+     *                    en POR_PAGINA_MAXIMO; quien necesite más de una vez
+     *                    —la exportación, la tarjeta de navegación— lo pide
+     *                    con su propio tope. Antes el 200 estaba fijo aquí y
+     *                    el Excel salía con 200 renglones aunque pidiera 5 000.
+     */
+    public function cola(array $filtros, $pagina = 1, $porPagina = 50, $maximo = self::POR_PAGINA_MAXIMO)
     {
         [$where, $params] = $this->condiciones($filtros);
-        $porPagina = max(10, min(200, (int) $porPagina));
-        $pagina = max(1, (int) $pagina);
-        $offset = ($pagina - 1) * $porPagina;
+        $maximo = max(10, (int) $maximo);
+        $porPagina = max(10, min($maximo, (int) $porPagina));
+        // Una página escrita a mano en la URL (?pagina=99999999999999999999)
+        // satura el entero, y multiplicarla por el tamaño desbordaba a un
+        // float que MariaDB no acepta en el OFFSET. El tope es holgado —ninguna
+        // cola llega a millones de páginas— y deja la cuenta en enteros; la
+        // página real se endereza abajo, cuando ya se sabe cuántas hay.
+        $pagina = min(max(1, (int) $pagina), intdiv(PHP_INT_MAX, $porPagina * 2));
+        $orden = $this->ordenSql($filtros['orden'] ?? '');
 
-        $total = (int) $this->fetchColumn(
-            "SELECT COUNT(*) FROM (" . $this->sqlUnion() . ") c
-              LEFT JOIN seguimiento s ON s.origen = c.origen AND s.referencia_id = c.referencia_id
-              {$where}",
-            $params
-        );
+        $filas = $this->paginaDeCola($where, $params, $orden, $porPagina, $pagina);
+        if ($filas) {
+            $total = (int) ($filas[0]['total_filas'] ?? count($filas));
+        } elseif ($pagina === 1) {
+            $total = 0;
+        } else {
+            // Una página vacía que no es la primera: se pidió una más allá de
+            // la última. Solo aquí hace falta contar aparte, para mostrar la
+            // última en vez de una lista vacía.
+            $total = (int) $this->fetchColumn(
+                "SELECT COUNT(*) FROM (" . $this->sqlUnion() . ") c
+                  LEFT JOIN seguimiento s ON s.origen = c.origen AND s.referencia_id = c.referencia_id
+                  {$where}",
+                $params
+            );
+            $ultima = (int) max(1, ceil($total / $porPagina));
+            if ($pagina > $ultima) {
+                $pagina = $ultima;
+                if ($total > 0) {
+                    $filas = $this->paginaDeCola($where, $params, $orden, $porPagina, $pagina);
+                }
+            }
+        }
 
-        // LIMIT y OFFSET van interpolados y no como parámetros: con consultas
-        // preparadas emuladas llegarían entrecomillados y MariaDB los rechaza.
-        // Son enteros ya acotados arriba, no texto del usuario.
-        $filas = $this->fetchAll(
-            $this->sqlBase() . " {$where} ORDER BY " . $this->ordenSql($filtros['orden'] ?? '')
-            . " LIMIT {$porPagina} OFFSET {$offset}",
-            $params
-        );
+        foreach ($filas as &$fila) {
+            unset($fila['total_filas']);
+        }
+        unset($fila);
 
         return [
-            'filas' => $filas ?: [],
+            'filas' => $filas,
             'total' => $total,
             'pagina' => $pagina,
             'por_pagina' => $porPagina,
             'paginas' => (int) max(1, ceil($total / $porPagina)),
         ];
+    }
+
+    private function paginaDeCola($where, array $params, $orden, $porPagina, $pagina)
+    {
+        // LIMIT y OFFSET van interpolados y no como parámetros: con consultas
+        // preparadas emuladas llegarían entrecomillados y MariaDB los rechaza.
+        // Son enteros ya acotados en cola(), no texto del usuario.
+        $offset = ((int) $pagina - 1) * (int) $porPagina;
+        return $this->fetchAll(
+            $this->sqlBase(true) . " {$where} ORDER BY {$orden}"
+            . ' LIMIT ' . (int) $porPagina . ' OFFSET ' . $offset,
+            $params
+        ) ?: [];
     }
 
     /**
@@ -1148,13 +1226,25 @@ class Seguimiento extends Model
         return $vacio;
     }
 
-    /** Un renglón concreto, para el panel de detalle. */
-    public function uno($origen, $referenciaId)
+    /**
+     * Un renglón concreto, para el panel de detalle.
+     *
+     * Acotado a la empresa igual que la cola: el expediente trae proveedor,
+     * montos, el motivo escrito a mano y la bitácora, y sin este filtro
+     * bastaba con cambiar el `referencia_id` de la URL para leer los de otra
+     * empresa. Un renglón ajeno responde lo mismo que uno que no existe.
+     *
+     * @param int $sociedadId 0 = sin acotar, igual que en condiciones().
+     */
+    public function uno($origen, $referenciaId, $sociedadId = 0)
     {
-        $fila = $this->fetchOne(
-            $this->sqlBase() . ' WHERE c.origen = ? AND c.referencia_id = ? LIMIT 1',
-            [(string) $origen, (int) $referenciaId]
-        );
+        $sql = $this->sqlBase() . ' WHERE c.origen = ? AND c.referencia_id = ?';
+        $params = [(string) $origen, (int) $referenciaId];
+        if ((int) $sociedadId > 0) {
+            $sql .= ' AND c.sociedad_id = ?';
+            $params[] = (int) $sociedadId;
+        }
+        $fila = $this->fetchOne($sql . ' LIMIT 1', $params);
         return $fila ?: null;
     }
 
@@ -1223,6 +1313,31 @@ class Seguimiento extends Model
         return ['proveedores' => $filas, 'sucursales' => $sucursales];
     }
 
+    /**
+     * Una firma de las tablas de las que salen los desplegables.
+     *
+     * dimensionesParaFiltro() recorre la unión entera —es tan cara como la
+     * página— para una respuesta que cambia cuando se carga un reporte o
+     * entran comprobantes, no entre una página y la siguiente. La firma es el
+     * último momento en que la base escribió en cada tabla: si no cambió, lo
+     * guardado sigue valiendo. Vacía si no se puede saber; entonces no se
+     * guarda nada y se consulta siempre, que es lo seguro.
+     */
+    public function huellaDimensiones()
+    {
+        try {
+            return (string) $this->fetchColumn(
+                "SELECT GROUP_CONCAT(CONCAT(TABLE_NAME, '=', COALESCE(UPDATE_TIME, '-')) ORDER BY TABLE_NAME)
+                   FROM information_schema.TABLES
+                  WHERE TABLE_SCHEMA = DATABASE()
+                    AND TABLE_NAME IN ('facturas_erp', 'notas_credito_lineas', 'notas_credito_listados',
+                                       'facturas_xml', 'proveedores')"
+            );
+        } catch (Throwable $e) {
+            return '';
+        }
+    }
+
     /** Quiénes tienen algo asignado, para el desplegable de responsable. */
     public function responsables()
     {
@@ -1259,6 +1374,70 @@ class Seguimiento extends Model
      */
     public function generarRecordatorios($limite = 50)
     {
+        /*
+         * Un solo barrido a la vez, en todo el grupo.
+         *
+         * La campana se pide en cada carga de página de cada persona, así que
+         * dos barridos a la vez son lo normal: los dos leían el mismo lote de
+         * vencidos antes de que ninguno marcara `avisado_en`, y el mismo
+         * pendiente sonaba dos veces. El candado es de la base —vale entre
+         * computadoras— y se pide sin esperar: si otro ya está barriendo, este
+         * no tiene nada que hacer.
+         */
+        if ((int) $this->fetchColumn('SELECT GET_LOCK(?, 0)', [self::CANDADO_RECORDATORIOS]) !== 1) {
+            return 0;
+        }
+        try {
+            return $this->barrerRecordatorios($limite);
+        } finally {
+            try {
+                $this->fetchColumn('SELECT RELEASE_LOCK(?)', [self::CANDADO_RECORDATORIOS]);
+            } catch (Throwable $e) {
+                // Si no se pudo soltar, lo suelta la base al cerrar la conexión.
+            }
+        }
+    }
+
+    private const CANDADO_RECORDATORIOS = 'xmlconcilia_seguimiento_recordatorios';
+
+    /** Cada cuánto barre como mucho la campana de una misma computadora. */
+    public const RECORDATORIOS_CADA_SEGUNDOS = 300;
+
+    /**
+     * El barrido de la campana, pero no en cada carga de página.
+     *
+     * Los recordatorios tienen hora y cada cuántos DÍAS insisten: mirarlos en
+     * cada navegación —que es lo que hacía la campana— era una escritura
+     * posible repartida por todas las pantallas para una pregunta que cambia
+     * de respuesta cada varios minutos, no cada segundo. Con una marca en
+     * storage/cache, cada computadora barre como mucho una vez cada cinco
+     * minutos; cli/recordatorios.php hace lo mismo desde el Programador de
+     * tareas, y el candado de generarRecordatorios() ordena a los dos.
+     *
+     * @return int Cuántos avisos se dejaron (0 si no tocaba).
+     */
+    public function generarRecordatoriosSiToca($marca = null, $cadaSegundos = self::RECORDATORIOS_CADA_SEGUNDOS)
+    {
+        $marca = $marca ?? dirname(__DIR__, 2) . '/storage/cache/seguimiento_recordatorios.marca';
+        clearstatcache(true, $marca);
+        if (is_file($marca) && time() - (int) filemtime($marca) < (int) $cadaSegundos) {
+            return 0;
+        }
+        // La marca se pone antes de barrer: si el barrido falla, reintentarlo
+        // en la carga siguiente no lo arregla, igual que con `avisado_en`. Sin
+        // poder escribirla se barre igual: el candado sigue ordenando.
+        try {
+            if (!is_dir(dirname($marca))) {
+                mkdir(dirname($marca), 0777, true);
+            }
+            touch($marca);
+        } catch (Throwable $e) {
+        }
+        return $this->generarRecordatorios();
+    }
+
+    private function barrerRecordatorios($limite)
+    {
         $vencidos = $this->fetchAll(
             "SELECT s.id, s.origen, s.referencia_id, s.motivo, s.responsable,
                     s.recordar_en, s.recordar_cada
@@ -1277,13 +1456,12 @@ class Seguimiento extends Model
         }
 
         $documentos = $this->documentosDe($vencidos);
-        $avisos = new Notificacion();
-        $dejados = 0;
+        $avisos = [];
         $ids = [];
 
         foreach ($vencidos as $v) {
             $clave = $v['origen'] . '|' . $v['referencia_id'];
-            $doc = $documentos[$clave] ?? ['documento' => $clave, 'proveedor' => ''];
+            $doc = $documentos[$clave] ?? ['documento' => $clave, 'proveedor' => '', 'sociedad_id' => null];
             $detalle = trim((string) $v['motivo']);
             if (!empty($doc['proveedor'])) {
                 $detalle = $doc['proveedor'] . ($detalle !== '' ? ' — ' . $detalle : '');
@@ -1292,12 +1470,15 @@ class Seguimiento extends Model
                 $detalle .= ' (a cargo: ' . $v['responsable'] . ')';
             }
 
-            $dejados += $avisos->avisar([
+            $avisos[] = [
                 'tipo' => 'seguimiento_recordatorio',
                 'severidad' => 'media',
                 'titulo' => 'Recordatorio de seguimiento: ' . $doc['documento'],
                 'detalle' => $detalle,
                 'firma' => self::firmaAviso($v['origen'], $v['referencia_id']),
+                // El pendiente es de la empresa del documento: su campana, no
+                // la de todas.
+                'sociedad_id' => (int) ($doc['sociedad_id'] ?? 0),
                 'ref_tabla' => 'seguimiento',
                 'ref_clave' => $clave,
                 'datos' => [
@@ -1305,9 +1486,12 @@ class Seguimiento extends Model
                     'referencia_id' => (int) $v['referencia_id'],
                     'documento' => $doc['documento'],
                 ],
-            ]);
+            ];
             $ids[] = (int) $v['id'];
         }
+
+        // Todos en una escritura: de a uno eran tantos viajes como vencidos.
+        $dejados = (new Notificacion())->avisarVarios($avisos);
 
         // Se marca aunque `avisar` haya fallado: reintentarlo en la carga de
         // página siguiente no arregla nada y sí lo intentaría mil veces.
@@ -1355,16 +1539,31 @@ class Seguimiento extends Model
                 continue;
             }
             $huecos = implode(',', array_fill(0, count($porOrigen[$origen]), '?'));
-            $partes[] = $esXml
-                ? "SELECT '{$origen}' AS origen, d.id AS referencia_id,
+            /*
+             * Cada rama trae también de qué empresa es el documento: el aviso
+             * que sale de aquí se sella con ella para que suene en la campana
+             * de esa empresa y no en la de las demás. La línea de nota no la
+             * lleva encima, la hereda de su acumulado.
+             */
+            if ($esXml) {
+                $partes[] = "SELECT '{$origen}' AS origen, d.id AS referencia_id,
                           d.numero_factura_asistente AS documento,
-                          COALESCE(pr.razon_social, '') AS proveedor
+                          COALESCE(pr.razon_social, '') AS proveedor,
+                          d.sociedad_id AS sociedad_id
                      FROM {$tabla} d
                      LEFT JOIN proveedores pr ON pr.id = d.proveedor_id
-                    WHERE d.id IN ({$huecos})"
-                : "SELECT '{$origen}' AS origen, id AS referencia_id, documento,
-                          proveedor_nombre AS proveedor
+                    WHERE d.id IN ({$huecos})";
+            } elseif ($tabla === 'notas_credito_lineas') {
+                $partes[] = "SELECT '{$origen}' AS origen, d.id AS referencia_id, d.documento,
+                          d.proveedor_nombre AS proveedor, li.sociedad_id AS sociedad_id
+                     FROM {$tabla} d
+                     JOIN notas_credito_listados li ON li.id = d.listado_id
+                    WHERE d.id IN ({$huecos})";
+            } else {
+                $partes[] = "SELECT '{$origen}' AS origen, id AS referencia_id, documento,
+                          proveedor_nombre AS proveedor, sociedad_id
                      FROM {$tabla} WHERE id IN ({$huecos})";
+            }
             $params = array_merge($params, $porOrigen[$origen]);
         }
         if (!$partes) {
@@ -1378,18 +1577,15 @@ class Seguimiento extends Model
         return $mapa;
     }
 
-    /** Apaga en la campana los avisos de unos renglones. */
+    /** Apaga en la campana los avisos de unos renglones, en una escritura. */
     private function cerrarAvisos(array $items, array $usuario)
     {
         try {
-            $avisos = new Notificacion();
-            foreach ($items as $item) {
-                $avisos->cerrarPorFirma(
-                    self::firmaAviso($item['origen'], $item['referencia_id']),
-                    'resuelta',
-                    (int) ($usuario['id'] ?? 0)
-                );
-            }
+            (new Notificacion())->cerrarPorFirmas(
+                array_map(static fn($item) => self::firmaAviso($item['origen'], $item['referencia_id']), $items),
+                'resuelta',
+                (int) ($usuario['id'] ?? 0)
+            );
         } catch (Throwable $e) {
             // La campana nunca tumba lo que la disparó.
         }
@@ -1416,6 +1612,15 @@ class Seguimiento extends Model
         if (!$items) {
             return ['afectados' => 0];
         }
+        // Un "marcar todo" sobre la cola entera eran INSERT de miles de filas
+        // y una transacción larga que bloqueaba a todos los demás. Se rechaza
+        // antes de tocar nada; la pantalla nunca manda más de una página.
+        if (count($items) > self::TOPE_TANDA) {
+            throw new InvalidArgumentException(sprintf(
+                'Son %d renglones: como mucho se cambian %d de una vez. Acota la cola con los filtros y hazlo por partes.',
+                count($items), self::TOPE_TANDA
+            ));
+        }
 
         $tocaEstado = array_key_exists('estado', $cambio);
         $estado = $tocaEstado ? (string) $cambio['estado'] : '';
@@ -1424,40 +1629,225 @@ class Seguimiento extends Model
         // pantalla no dibuja y de la que por lo tanto no se puede salir.
         if ($tocaEstado && $estado !== self::SIN_MARCA
             && !isset(self::estadosDe($this->modo)[$estado])) {
-            throw new Exception('Estado de seguimiento no válido: ' . $estado);
+            throw new InvalidArgumentException('Estado de seguimiento no válido: ' . $estado);
+        }
+        // Y contra el modo de cada renglón: la selección viaja desde el
+        // navegador, y un comprobante XML colado en una tanda del modo Sistema
+        // se quedaba en 'lista', que su pantalla no dibuja.
+        if ($tocaEstado && $estado !== self::SIN_MARCA) {
+            foreach ($items as $item) {
+                if (!isset(self::estadosDe(self::modoDeOrigen($item['origen']))[$estado])) {
+                    throw new InvalidArgumentException('Estado de seguimiento no válido para ese documento: ' . $estado);
+                }
+            }
+        }
+
+        // Los textos libres se limpian de lo que no se ve —espacio duro, ancho
+        // cero— además de los espacios de siempre: un motivo hecho solo de eso
+        // pasaba por descrito sin decir nada.
+        if (array_key_exists('motivo', $cambio)) {
+            $cambio['motivo'] = self::textoLimpio($cambio['motivo']);
+        }
+        if (array_key_exists('comentario', $cambio)) {
+            $cambio['comentario'] = self::textoLimpio($cambio['comentario']);
         }
         // La bandeja de enredos no sirve de nada si no dice cuál es el enredo:
         // sin el motivo, quien la abra mañana tiene que adivinar.
-        if ($estado === self::ESTADO_A_MANO && trim((string) ($cambio['motivo'] ?? '')) === '') {
-            throw new Exception('Para mandar algo a revisión hay que describir el problema.');
+        if ($estado === self::ESTADO_A_MANO && ($cambio['motivo'] ?? '') === '') {
+            throw new InvalidArgumentException('Para mandar algo a revisión hay que describir el problema.');
+        }
+        // Lo que no cabe se dice aquí, con palabras, y no como el error de la
+        // base que llegaba al navegador con el nombre de la columna.
+        if (mb_strlen((string) ($cambio['motivo'] ?? ''), 'UTF-8') > self::MOTIVO_MAXIMO) {
+            throw new InvalidArgumentException(sprintf(
+                'El motivo tiene %d caracteres y caben %d. Resúmelo y deja el detalle en el comentario.',
+                mb_strlen($cambio['motivo'], 'UTF-8'), self::MOTIVO_MAXIMO
+            ));
+        }
+        if (strlen(self::nota($cambio)) > self::ANOTACION_MAXIMA_BYTES) {
+            throw new InvalidArgumentException('La anotación es demasiado larga para guardarse. Acórtala o divídela en varias.');
         }
 
-        // Salir de revisión apaga el recordatorio y el aviso: los dos existían
-        // para un enredo que acaba de dejar de estarlo. Dejarlos sonando sería
-        // pedirle a alguien que persiga algo ya resuelto.
-        if ($tocaEstado && $estado !== self::ESTADO_A_MANO
-            && !array_key_exists('recordar_en', $cambio)) {
+        // Un recordatorio vive solo en revisión. Salir de ella lo apaga, y
+        // uno que llega junto a otro estado no se guarda: quedaría callado y
+        // volvería a sonar el día que el renglón regresara a revisión, por un
+        // enredo que ya no es el mismo.
+        if ($tocaEstado && $estado !== self::ESTADO_A_MANO) {
             $cambio['recordar_en'] = null;
             $cambio['recordar_cada'] = null;
         }
 
-        $this->begin();
-        try {
-            $antes = $this->estadosActuales($items);
-            $this->upsert($items, $cambio, $usuario);
-            $ids = $this->idsDe($items);
-            $this->anotar($ids, $antes, $tocaEstado ? $estado : null, self::nota($cambio), $usuario);
-            $this->commit();
-        } catch (Throwable $e) {
-            $this->rollback();
-            throw $e;
+        // Solo lo que está en la cola de la empresa activa. La clave única de
+        // la tabla evita pisar otra gestión, pero no dice si el documento
+        // existe ni de quién es: sin esto, un POST armado a mano anotaba
+        // documentos de otra empresa.
+        $descartados = 0;
+        if ($this->empresaAcotada !== null) {
+            $enCola = $this->enLaCola($items, $this->empresaAcotada);
+            $descartados = count($items) - count($enCola);
+            $items = $enCola;
+            if (!$items) {
+                throw new InvalidArgumentException('Ninguno de los renglones seleccionados está en la cola de la empresa activa.');
+            }
+        }
+
+        // Siempre en el mismo orden: dos tandas que se solapan toman los
+        // candados de las filas en la misma secuencia y no se cruzan.
+        usort($items, static fn($a, $b) => [$a['origen'], $a['referencia_id']] <=> [$b['origen'], $b['referencia_id']]);
+
+        for ($intento = 1; ; $intento++) {
+            $this->begin();
+            try {
+                $antes = $this->estadosActuales($items);
+                // Vaciar el motivo de algo que sigue en revisión lo dejaba
+                // mudo sin rastro. Se mira aquí, con el estado ya bloqueado.
+                if (!$tocaEstado && array_key_exists('motivo', $cambio) && $cambio['motivo'] === ''
+                    && in_array(self::ESTADO_A_MANO, $antes, true)) {
+                    throw new InvalidArgumentException(
+                        'Lo que está en revisión tiene que conservar la descripción del problema. Para quitarla, sácalo de revisión.'
+                    );
+                }
+                $this->upsert($items, $cambio, $usuario);
+                $ids = $this->idsDe($items);
+                $this->anotar($ids, $antes, $tocaEstado ? $estado : null, self::nota($cambio), $usuario);
+                $this->commit();
+                break;
+            } catch (Throwable $e) {
+                $this->rollback();
+                if (!self::esReintentable($e, $intento)) {
+                    throw $e;
+                }
+                // Un respiro corto y distinto para cada uno, para que los dos
+                // que chocaron no vuelvan a chocar en el mismo instante.
+                usleep(random_int(20000, 120000) * $intento);
+            }
         }
 
         if ($tocaEstado && $estado !== self::ESTADO_A_MANO) {
             $this->cerrarAvisos($items, $usuario);
         }
 
-        return ['afectados' => count($items)];
+        $resultado = ['afectados' => count($items)];
+        if ($descartados > 0) {
+            $resultado['descartados'] = $descartados;
+        }
+        return $resultado;
+    }
+
+    /** Lo más que se cambia de una vez. */
+    public const TOPE_TANDA = 2000;
+
+    /** `seguimiento.motivo` es VARCHAR(255). */
+    public const MOTIVO_MAXIMO = 255;
+
+    /** `seguimiento_bitacora.comentario` es TEXT: 65 535 bytes. */
+    private const ANOTACION_MAXIMA_BYTES = 65535;
+
+    /** null = sin acotar (pruebas y procesos); 0 = solo que exista; >0 = de esa empresa. */
+    private $empresaAcotada = null;
+
+    /**
+     * Acota las escrituras a lo que está en la cola de una empresa. Devuelve
+     * $this, igual que enModo(), para encadenarlo tras loadModel().
+     *
+     * @param int $sociedadId 0 = cualquier empresa, pero el documento tiene
+     *                        que existir en la cola.
+     */
+    public function acotadoA($sociedadId)
+    {
+        $this->empresaAcotada = max(0, (int) $sociedadId);
+        return $this;
+    }
+
+    /** El modo al que pertenece un origen. */
+    private static function modoDeOrigen($origen)
+    {
+        return isset(self::ORIGENES[self::MODO_CORREO][$origen]) ? self::MODO_CORREO : self::MODO_SISTEMA;
+    }
+
+    /**
+     * Un interbloqueo o una espera de candado agotada no son un error de la
+     * persona: la base deshizo la transacción y pide repetirla. Se repite unas
+     * pocas veces antes de rendirse; la espera agotada, una sola, porque cada
+     * intento ya esperó lo suyo.
+     */
+    private static function esReintentable(Throwable $e, $intento)
+    {
+        if (!$e instanceof PDOException) {
+            return false;
+        }
+        $codigo = (int) ($e->errorInfo[1] ?? 0);
+        if ($codigo === 1213 || ($codigo === 0 && (string) $e->getCode() === '40001')) {
+            return $intento < 3;
+        }
+        return $codigo === 1205 && $intento < 2;
+    }
+
+    /**
+     * Un texto libre sin lo que no se ve en sus bordes: espacios de cualquier
+     * clase (el duro, el ideográfico…) y caracteres de formato como el de
+     * ancho cero, que trim() no conoce.
+     */
+    private static function textoLimpio($texto)
+    {
+        $texto = (string) $texto;
+        $limpio = preg_replace('/^[\s\p{Z}\p{C}]+|[\s\p{Z}\p{C}]+$/u', '', $texto);
+        // Con bytes que no son UTF-8 la expresión no aplica: se cae a trim().
+        return $limpio === null ? trim($texto) : $limpio;
+    }
+
+    /**
+     * De unos renglones, los que existen en la cola de la empresa.
+     *
+     * Contra las tablas de las que sale cada rama de la unión y con sus mismas
+     * condiciones —las notas, del último acumulado y sin las de ajuste; los
+     * comprobantes, por su tipo—, pero sin armar la unión entera: son unos
+     * pocos ids que se miran por clave primaria.
+     */
+    private function enLaCola(array $items, $sociedadId)
+    {
+        $porOrigen = [];
+        foreach ($items as $item) {
+            $porOrigen[$item['origen']][] = (int) $item['referencia_id'];
+        }
+
+        $clases = "'" . implode("', '", array_keys(self::CLASES)) . "'";
+        $ramas = [
+            'factura' => ['facturas_erp d', 'd.sociedad_id', ''],
+            'nota_credito' => [
+                'notas_credito_lineas d JOIN notas_credito_listados li ON li.id = d.listado_id',
+                'li.sociedad_id',
+                " AND d.clase IN ({$clases})
+                  AND li.id = (SELECT MAX(actual.id) FROM notas_credito_listados actual
+                                WHERE actual.sociedad_id = li.sociedad_id)",
+            ],
+            'xml_factura' => ['facturas_xml d', 'd.sociedad_id', " AND (d.tipo_documento IS NULL OR d.tipo_documento = 'FE')"],
+            'xml_nota' => ['facturas_xml d', 'd.sociedad_id', " AND d.tipo_documento = 'NC'"],
+        ];
+
+        $partes = [];
+        $params = [];
+        foreach ($ramas as $origen => [$desde, $columnaEmpresa, $extra]) {
+            if (empty($porOrigen[$origen])) {
+                continue;
+            }
+            $sql = "SELECT '{$origen}' AS origen, d.id AS referencia_id, 1 AS en_cola
+                      FROM {$desde}
+                     WHERE d.id IN (" . implode(', ', array_fill(0, count($porOrigen[$origen]), '?')) . "){$extra}";
+            $params = array_merge($params, $porOrigen[$origen]);
+            if ((int) $sociedadId > 0) {
+                $sql .= " AND {$columnaEmpresa} = ?";
+                $params[] = (int) $sociedadId;
+            }
+            $partes[] = $sql;
+        }
+
+        $existen = [];
+        foreach ($this->fetchAll(implode(' UNION ALL ', $partes), $params) ?: [] as $fila) {
+            $existen[$fila['origen'] . '|' . (int) $fila['referencia_id']] = true;
+        }
+        return array_values(array_filter($items, static fn($item) =>
+            isset($existen[$item['origen'] . '|' . $item['referencia_id']])));
     }
 
     /**
@@ -1483,7 +1873,7 @@ class Seguimiento extends Model
     {
         $comentario = trim((string) $comentario);
         if ($comentario === '') {
-            throw new Exception('El comentario no puede ir vacío.');
+            throw new InvalidArgumentException('El comentario no puede ir vacío.');
         }
         return $this->aplicar(
             [['origen' => $origen, 'referencia_id' => $referenciaId]],
@@ -1530,20 +1920,19 @@ class Seguimiento extends Model
                 continue;
             }
 
-            $origen = trim((string) ($item['origen'] ?? ''));
-            $refCruda = $item['referencia_id'] ?? '';
-            // "12abc" no es un id: (int) lo convertiría en 12 y tocaría un
-            // renglón que nadie eligió.
-            if (!is_numeric($refCruda)) {
+            // Un arreglo donde va el origen no es un renglón: convertirlo a
+            // texto tumbaba la tanda entera con "Array to string conversion".
+            if (!is_scalar($item['origen'] ?? '')) {
                 continue;
             }
-            $ref = (int) $refCruda;
+            $origen = trim((string) ($item['origen'] ?? ''));
+            $ref = self::idDeReferencia($item['referencia_id'] ?? null);
             // Los cuatro orígenes, no los del modo: la selección viaja desde
             // el navegador y validarla contra el modo obligaría a que esto
             // dejara de ser estático. No hace falta: los valores son disjuntos
             // y la clave única (origen, referencia_id) impide que la gestión
             // de un comprobante caiga sobre la de un registro del ERP.
-            if ($ref <= 0 || !isset(self::ORIGENES[self::MODO_SISTEMA][$origen])
+            if ($ref === null || !isset(self::ORIGENES[self::MODO_SISTEMA][$origen])
                           && !isset(self::ORIGENES[self::MODO_CORREO][$origen])) {
                 continue;
             }
@@ -1558,6 +1947,44 @@ class Seguimiento extends Model
         return $limpios;
     }
 
+    /** `referencia_id` es INT UNSIGNED. */
+    private const REFERENCIA_MAXIMA = 4294967295;
+
+    /**
+     * El id de un renglón, o null si lo que llegó no es exactamente uno.
+     *
+     * Solo enteros escritos como enteros. "12abc" no, pero tampoco "7.9" ni
+     * "1e3": is_numeric() los acepta y (int) los volvía 7 y 1000, que son
+     * renglones que nadie eligió. Tampoco lo que no cabe en la columna, que
+     * la base habría recortado a otro id.
+     */
+    private static function idDeReferencia($crudo)
+    {
+        if (is_float($crudo)) {
+            // 7.0 viaja así desde un JSON; 7.5 no es un id.
+            $crudo = is_finite($crudo) && floor($crudo) === $crudo && abs($crudo) < 1e15
+                ? (string) (int) $crudo
+                : '';
+        } elseif (is_int($crudo)) {
+            $crudo = (string) $crudo;
+        } elseif (!is_string($crudo)) {
+            return null;
+        }
+
+        // Solo espacios: trim() sin lista quita también el byte nulo, y
+        // "1\0" no es un id que alguien haya elegido.
+        $crudo = trim($crudo, " \t\n\r\v\f");
+        if (!preg_match('/^\d+$/D', $crudo)) {
+            return null;
+        }
+        $digitos = ltrim($crudo, '0');
+        if ($digitos === '' || strlen($digitos) > 10) {
+            return null;
+        }
+        $id = (int) $digitos;
+        return $id <= self::REFERENCIA_MAXIMA ? $id : null;
+    }
+
     private function estadosActuales(array $items)
     {
         $mapa = [];
@@ -1568,13 +1995,18 @@ class Seguimiento extends Model
                 $params[] = $item['origen'];
                 $params[] = $item['referencia_id'];
             }
+            // FOR UPDATE: el estado anterior se lee con la fila tomada hasta
+            // el commit. Sin candado, dos personas moviendo el mismo renglón
+            // leían el mismo estado viejo y la bitácora quedaba con dos
+            // anotaciones que decían salir de él, una de ellas mentira.
             $filas = $this->fetchAll(
                 "SELECT origen, referencia_id, estado FROM seguimiento
-                  WHERE (origen, referencia_id) IN ({$huecos})",
+                  WHERE (origen, referencia_id) IN ({$huecos})
+                  FOR UPDATE",
                 $params
             );
             foreach ($filas ?: [] as $fila) {
-                $mapa[$fila['origen'] . '|' . $fila['referencia_id']] = $fila['estado'];
+                $mapa[$fila['origen'] . '|' . (int) $fila['referencia_id']] = $fila['estado'];
             }
         }
         return $mapa;
@@ -1677,7 +2109,10 @@ class Seguimiento extends Model
         $comentario = trim((string) $comentario);
         $filas = [];
         foreach ($ids as $clave => $seguimientoId) {
-            $anterior = $antes[$clave] ?: self::SIN_MARCA;
+            // Un renglón que nadie había tocado no tiene fila previa: su
+            // estado anterior es el del cálculo, que en la bitácora se lee
+            // "sin marca".
+            $anterior = ($antes[$clave] ?? null) ?: self::SIN_MARCA;
             $nuevo = $estadoNuevo === null ? null : ($estadoNuevo ?: self::SIN_MARCA);
             $cambioEstado = $nuevo !== null && $nuevo !== $anterior;
             if (!$cambioEstado && $comentario === '') {

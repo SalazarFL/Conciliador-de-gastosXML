@@ -1,6 +1,6 @@
 <?php
 /**
- * Verificación del pago semanal contra los comprobantes electrónicos.
+ * Verificación del pago contra los comprobantes electrónicos.
  *
  * El emparejamiento dejó de ser difuso. La línea del pago es la factura del
  * ERP, y esa fila trae en `documento` el consecutivo electrónico de veinte
@@ -26,7 +26,7 @@ class ErpFalso
 {
     public $lineas;
     public $escrito = [];
-    public $semanaSincronizada = null;
+    public $pagoSincronizado = null;
 
     public function __construct(array $lineas) { $this->lineas = $lineas; }
 
@@ -38,7 +38,7 @@ class ErpFalso
         return count($filas);
     }
 
-    public function sincronizarSemanaXml($listadoId) { $this->semanaSincronizada = $listadoId; return 1; }
+    public function sincronizarPagoXml($listadoId) { $this->pagoSincronizado = $listadoId; return 1; }
 }
 
 class FacturasFalso
@@ -75,7 +75,7 @@ $stats = PorPagarVerificador::verificarListado(9, $erp, new FacturasFalso([
 assertVerificador($stats['respaldada'] === 1, 'el consecutivo igual respalda la factura');
 assertVerificador($erp->escrito[1]['factura_xml_id'] === 100, 'vincula el XML correcto');
 assertVerificador($erp->escrito[1]['score_numero'] === 100.0, 'el cruce por consecutivo vale 100');
-assertVerificador($erp->semanaSincronizada === 9, 'deja anotada la semana del comprobante');
+assertVerificador($erp->pagoSincronizado === 9, 'deja anotada el pago del comprobante');
 
 // ── El proveedor NO se comprueba cuando el consecutivo es igual ──
 // El consecutivo lo emite Hacienda y es único a nivel país: si coincide, es la
@@ -163,4 +163,4 @@ assertVerificador($stats === ['respaldada' => 0, 'con_diferencia' => 0, 'sin_res
     'un pago sin facturas devuelve ceros y no escribe');
 assertVerificador($erp->escrito === [], 'y no escribe nada');
 
-echo "OK: verificador del pago semanal por consecutivo\n";
+echo "OK: verificador del pago por consecutivo\n";

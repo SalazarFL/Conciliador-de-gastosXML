@@ -9,6 +9,7 @@ require_once __DIR__ . '/../models/Factura.php';
 require_once __DIR__ . '/../models/Proveedor.php';
 require_once __DIR__ . '/FileUploader.php';
 require_once __DIR__ . '/RutaDocumento.php';
+require_once __DIR__ . '/AlmacenDocumentos.php';
 require_once __DIR__ . '/XmlDocumentImporter.php';
 
 if (!class_exists('XmlInvoiceParser', false)) {
@@ -22,7 +23,6 @@ class InvoiceImportQueue
     private const STALE_PROCESSING_SECONDS = 150;
 
     private $config;
-    private $queueBaseDir = null;
     private $allowedExtensions;
     private $maxUploadSize;
     private $importacionModel;
@@ -55,10 +55,10 @@ class InvoiceImportQueue
             'ultima_actualizacion' => date('Y-m-d H:i:s'),
         ];
 
-        // Semana de trabajo elegida: cada factura de esta importación
+        // Pago elegida: cada factura de esta importación
         // quedará asignada a ella (buildEstado conserva la clave al mergear)
-        if (!empty($data['semana_id'])) {
-            $metadata['semana_id'] = (int) $data['semana_id'];
+        if (!empty($data['pago_id'])) {
+            $metadata['pago_id'] = (int) $data['pago_id'];
         }
         $metadata['tipo_documento'] = strtoupper((string) ($data['tipo_documento'] ?? 'FE'));
         // La cola se procesa en varias peticiones: la sociedad se guarda con
@@ -79,7 +79,7 @@ class InvoiceImportQueue
             'metadata' => json_encode($metadata, JSON_UNESCAPED_UNICODE),
         ]);
 
-        $directory = $this->getImportacionDirectory($importacionId);
+        $directory = $this->getImportacionDirectory($importacionId, $metadata['sociedad_id']);
         $this->ensureDirectory($directory);
         $this->importacionModel->actualizarResumen($importacionId, [
             'ruta_archivo' => $directory,
@@ -95,10 +95,29 @@ class InvoiceImportQueue
     public function agregarArchivos($importacionId, $fieldName = 'xml_files')
     {
         $importacion = $this->getImportacionOrFail($importacionId);
-        $directory = $this->getImportacionDirectory((int) $importacion['id']);
+        // La carpeta que se le dio al iniciarla, en el almacén de su empresa.
+        $directory = (string) ($importacion['ruta_archivo'] ?? '');
+        if ($directory === '') {
+            $meta = json_decode((string) ($importacion['metadata'] ?? ''), true);
+            $directory = $this->getImportacionDirectory(
+                (int) $importacion['id'],
+                is_array($meta) ? (int) ($meta['sociedad_id'] ?? 0) : 0
+            );
+        }
         $this->ensureDirectory($directory);
 
-        $uploadedFiles = FileUploader::uploadMultiple($fieldName, $directory, $this->allowedExtensions, $this->maxUploadSize);
+        // Lo que sube el navegador cae primero en public/uploads, que es de
+        // esta máquina, y de ahí se le entrega al almacén. Subirlo directo a
+        // la carpeta de la cola funcionaba mientras esa carpeta fuera un
+        // disco; con los documentos en SharePoint no hay dónde escribir.
+        $paso = rtrim((string) ($this->config['uploads_path'] ?? ''), '/\\') . DIRECTORY_SEPARATOR . 'xml_queue';
+        $uploadedFiles = FileUploader::uploadMultiple($fieldName, $paso, $this->allowedExtensions, $this->maxUploadSize);
+
+        foreach ($uploadedFiles as $i => $file) {
+            $destino = $directory . DIRECTORY_SEPARATOR . $file['saved_name'];
+            AlmacenDocumentos::de($destino)->adoptar($destino, (string) $file['path']);
+            $uploadedFiles[$i]['path'] = $destino;
+        }
 
         foreach ($uploadedFiles as $file) {
             $this->importacionItemModel->crear([
@@ -128,18 +147,23 @@ class InvoiceImportQueue
     }
 
     /**
-     * Encola archivos que ya están en el servidor (p. ej. XML capturados del
-     * correo). Copia cada archivo al directorio de la importación; el original
-     * queda intacto (la cola borra su copia al procesarla).
+     * Encola archivos que ya están en el almacén (los XML capturados del
+     * correo, que esperan en la bandeja).
      *
-     * $rutas: lista de rutas absolutas, o ['ruta' => ..., 'nombre' => ...]
-     * para conservar el nombre original del adjunto.
+     * La cola los toma DONDE ESTÁN, sin copiarlos: el ítem apunta al archivo
+     * de la bandeja y la cola lo borra cuando termina de procesarlo. Antes se
+     * copiaba a IMPORTACIONES/ y enseguida se borraba el original, que es un
+     * traslado que costaba escribir dos veces; contra SharePoint serían dos
+     * subidas y una bajada por documento, a un segundo cada una.
+     *
+     * Quien llama NO tiene que borrar el original: ahora es de la cola.
+     *
+     * $rutas: lista de rutas, o ['ruta' => ..., 'nombre' => ...] para
+     * conservar el nombre original del adjunto.
      */
     public function agregarArchivosLocales($importacionId, array $rutas)
     {
         $importacion = $this->getImportacionOrFail($importacionId);
-        $directory = $this->getImportacionDirectory((int) $importacion['id']);
-        $this->ensureDirectory($directory);
 
         $agregados = [];
 
@@ -150,7 +174,7 @@ class InvoiceImportQueue
                 ? (string) $entrada['nombre']
                 : basename($ruta);
 
-            if ($ruta === '' || !is_file($ruta)) {
+            if ($ruta === '' || !RutaDocumento::existe($ruta)) {
                 continue;
             }
 
@@ -159,28 +183,22 @@ class InvoiceImportQueue
                 continue;
             }
 
-            $nombreSeguro = preg_replace('/[^A-Za-z0-9._-]+/', '_', $nombreOriginal);
-            $savedName = uniqid('local_', true) . '_' . $nombreSeguro;
-            $destino = $directory . DIRECTORY_SEPARATOR . $savedName;
-
-            if (!copy($ruta, $destino)) {
-                continue;
-            }
+            $savedName = basename(str_replace('\\', '/', $ruta));
 
             $this->importacionItemModel->crear([
                 'importacion_id' => (int) $importacion['id'],
                 'archivo_original' => $nombreOriginal,
                 'archivo_guardado' => $savedName,
-                'ruta_archivo' => $destino,
+                'ruta_archivo' => $ruta,
                 'extension' => $extension,
-                'tamano' => (int) filesize($destino),
+                'tamano' => (int) RutaDocumento::tamano($ruta),
                 'estado' => 'pendiente',
                 'metadata' => [
                     'subido_en' => date('Y-m-d H:i:s'),
                     'origen' => 'correo',
                     // Relativa como todo lo que se persiste: esta metadata la
                     // lee después otra petición, quizá en otra computadora.
-                    'ruta_pdf' => $rutaPdf !== '' && is_file($rutaPdf) ? RutaDocumento::relativa($rutaPdf) : null,
+                    'ruta_pdf' => $rutaPdf !== '' && RutaDocumento::existe($rutaPdf) ? RutaDocumento::relativa($rutaPdf) : null,
                     'correo_cuenta_id' => is_array($entrada) ? (int) ($entrada['correo_cuenta_id'] ?? 0) : 0,
                     'correo_carpeta' => is_array($entrada) ? (string) ($entrada['correo_carpeta'] ?? '') : '',
                     'correo_uidvalidity' => is_array($entrada) ? (int) ($entrada['correo_uidvalidity'] ?? 0) : 0,
@@ -192,7 +210,7 @@ class InvoiceImportQueue
             $agregados[] = [
                 'original_name' => $nombreOriginal,
                 'saved_name' => $savedName,
-                'path' => $destino,
+                'path' => $ruta,
             ];
         }
 
@@ -238,7 +256,7 @@ class InvoiceImportQueue
 
         $estado = $this->persistirEstadoImportacion((int) $importacion['id'], [
             'estado_cola' => empty($processed) ? 'en_cola' : 'procesando',
-            'semanas_afectadas' => $this->resolverSemanasAfectadas($importacion, $processed),
+            'pagos_afectados' => $this->resolverPagosAfectados($importacion, $processed),
         ]);
 
         return [
@@ -288,7 +306,7 @@ class InvoiceImportQueue
             $importacion = $this->getImportacionOrFail((int) $importacionId);
             $summaries[] = $this->persistirEstadoImportacion((int) $importacionId, [
                 'estado_cola' => 'procesando',
-                'semanas_afectadas' => $this->resolverSemanasAfectadas(
+                'pagos_afectados' => $this->resolverPagosAfectados(
                     $importacion,
                     $procesadosPorImportacion[(int) $importacionId] ?? []
                 ),
@@ -309,91 +327,86 @@ class InvoiceImportQueue
         return $this->buildEstado($importacion, $this->importacionItemModel->getStats((int) $importacion['id']));
     }
 
-    public function getImportacionDirectory($importacionId)
-    {
-        return $this->queueBaseDir() . DIRECTORY_SEPARATOR . 'importacion_' . (int) $importacionId;
-    }
-
     /**
-     * Carpeta de la cola, dentro de la carpeta compartida y no en
-     * public/uploads/: una importación se procesa a lo largo de varias
-     * peticiones y quien la termine puede ser otra persona desde otra
-     * computadora. Se resuelve al usarla —y no en el constructor— para que
-     * consultar el historial de importaciones siga funcionando aunque la
+     * Carpeta de una importación, en _TRABAJO/IMPORTACIONES del almacén de su
+     * empresa y no en public/uploads/: una importación se procesa a lo largo
+     * de varias peticiones y quien la termine puede ser otra persona desde
+     * otra computadora. Se resuelve al usarla —y no en el constructor— para
+     * que consultar el historial de importaciones siga funcionando aunque la
      * carpeta compartida todavía no esté configurada en esta máquina.
      */
-    private function queueBaseDir()
+    public function getImportacionDirectory($importacionId, $sociedadId = null)
     {
-        if ($this->queueBaseDir === null) {
-            $this->queueBaseDir = RutaDocumento::carpetaTrabajo('IMPORTACIONES');
-        }
-        return $this->queueBaseDir;
+        return RutaDocumento::carpetaTrabajo(
+            'IMPORTACIONES/importacion_' . (int) $importacionId,
+            $sociedadId !== null && (int) $sociedadId > 0 ? (int) $sociedadId : null
+        );
     }
 
-    /** Cache por petición: semana asignada a cada importación (metadata). */
-    private $semanaPorImportacion = [];
+    /** Cache por petición: pago asignada a cada importación (metadata). */
+    private $pagoPorImportacion = [];
 
     /**
-     * Semana de la importación, pública para la re-verificación automática
+     * Pago de la importación, pública para la re-verificación automática
      * de los listados por pagar al completarse la cola.
      */
-    public function semanaImportacion($importacionId)
+    public function pagoImportacion($importacionId)
     {
-        return $this->semanaDeImportacion($importacionId);
+        return $this->pagoDeImportacion($importacionId);
     }
 
-    /** Semanas que deben revalidarse porque recibieron o perdieron facturas. */
-    public function semanasAfectadasImportacion($importacionId)
+    /** Pagos que deben revalidarse porque recibieron o perdieron facturas. */
+    public function pagosAfectadosImportacion($importacionId)
     {
         $importacion = $this->getImportacionOrFail((int) $importacionId);
-        return $this->resolverSemanasAfectadas($importacion, []);
+        return $this->resolverPagosAfectados($importacion, []);
     }
 
-    private function resolverSemanasAfectadas(array $importacion, array $resultados)
+    private function resolverPagosAfectados(array $importacion, array $resultados)
     {
         $metadata = $this->decodeMetadata($importacion['metadata'] ?? null);
-        $semanas = array_map('intval', (array) ($metadata['semanas_afectadas'] ?? []));
-        if (!empty($metadata['semana_id'])) {
-            $semanas[] = (int) $metadata['semana_id'];
+        $pagos = array_map('intval', (array) ($metadata['pagos_afectados'] ?? []));
+        if (!empty($metadata['pago_id'])) {
+            $pagos[] = (int) $metadata['pago_id'];
         }
         foreach ($resultados as $resultado) {
-            if (!empty($resultado['semana_anterior'])) {
-                $semanas[] = (int) $resultado['semana_anterior'];
+            if (!empty($resultado['pago_anterior'])) {
+                $pagos[] = (int) $resultado['pago_anterior'];
             }
-            if (!empty($resultado['semana_id'])) {
-                $semanas[] = (int) $resultado['semana_id'];
+            if (!empty($resultado['pago_id'])) {
+                $pagos[] = (int) $resultado['pago_id'];
             }
         }
-        return array_values(array_unique(array_filter($semanas, static function ($id) {
+        return array_values(array_unique(array_filter($pagos, static function ($id) {
             return $id > 0;
         })));
     }
 
     /**
-     * Semana de trabajo de la importación (metadata.semana_id) o null.
+     * Pago de la importación (metadata.pago_id) o null.
      */
-    private function semanaDeImportacion($importacionId)
+    private function pagoDeImportacion($importacionId)
     {
         $importacionId = (int) $importacionId;
         if ($importacionId <= 0) {
             return null;
         }
 
-        if (!array_key_exists($importacionId, $this->semanaPorImportacion)) {
-            $semana = null;
+        if (!array_key_exists($importacionId, $this->pagoPorImportacion)) {
+            $pago = null;
             try {
                 $importacion = $this->importacionModel->findById($importacionId);
                 $metadata = $this->decodeMetadata($importacion['metadata'] ?? null);
-                if (!empty($metadata['semana_id'])) {
-                    $semana = (int) $metadata['semana_id'];
+                if (!empty($metadata['pago_id'])) {
+                    $pago = (int) $metadata['pago_id'];
                 }
             } catch (Throwable $e) {
-                // Sin metadata legible la factura queda sin semana
+                // Sin metadata legible la factura queda sin pago
             }
-            $this->semanaPorImportacion[$importacionId] = $semana;
+            $this->pagoPorImportacion[$importacionId] = $pago;
         }
 
-        return $this->semanaPorImportacion[$importacionId];
+        return $this->pagoPorImportacion[$importacionId];
     }
 
     private function procesarItem(array $item)
@@ -414,7 +427,7 @@ class InvoiceImportQueue
             $resultado = (new XmlDocumentImporter())->importar($filePath, $pdfPath !== '' ? $pdfPath : null, [
                 'origen' => 'cola_xml',
                 'importacion_id' => $importacionId,
-                'semana_id' => $this->semanaDeImportacion($importacionId),
+                'pago_id' => $this->pagoDeImportacion($importacionId),
                 'tipos_permitidos' => [$tipoPermitido],
                 'validar_receptor' => !empty($metaImportacion['cedula_receptor']),
                 'cedula_receptor' => (string) ($metaImportacion['cedula_receptor'] ?? ''),
@@ -429,22 +442,25 @@ class InvoiceImportQueue
             $facturaId = (int) ($resultado['id'] ?? 0);
             $docData = $resultado['documento'] ?? [];
             $estadoDocumento = (string) ($resultado['estado'] ?? '');
-            $estado = in_array($estadoDocumento, ['importado', 'movida_semana'], true)
+            $estado = in_array($estadoDocumento, ['importado', 'movido_pago'], true)
                 ? 'importado'
                 : 'duplicado';
             $this->importacionItemModel->marcarResultado($itemId, $estado, null, $facturaId ?: null, [
                 'proveedor' => $docData['razon_social_emisor'] ?? null,
                 'consecutivo' => $docData['consecutivo_completo'] ?? null,
                 'resultado_documento' => $estadoDocumento,
-                'semana_anterior' => $resultado['semana_anterior'] ?? null,
-                'semana_id' => $resultado['semana_id'] ?? $this->semanaDeImportacion($importacionId),
+                'pago_anterior' => $resultado['pago_anterior'] ?? null,
+                'pago_id' => $resultado['pago_id'] ?? $this->pagoDeImportacion($importacionId),
             ]);
 
-            if ($filePath && is_file($filePath)) {
-                @unlink($filePath);
+            // El documento ya está archivado en su carpeta definitiva: estas
+            // dos son las copias de trabajo, y quedarse con ellas sería tener
+            // el mismo comprobante en tres sitios.
+            if ($filePath) {
+                AlmacenDocumentos::de($filePath)->borrar($filePath);
             }
-            if (!empty($pdfPath) && is_file($pdfPath)) {
-                @unlink($pdfPath);
+            if (!empty($pdfPath)) {
+                AlmacenDocumentos::de($pdfPath)->borrar($pdfPath);
             }
 
             return [
@@ -453,21 +469,21 @@ class InvoiceImportQueue
                 'estado' => $estado,
                 'factura_id' => $facturaId,
                 'resultado_documento' => $estadoDocumento,
-                'semana_anterior' => $resultado['semana_anterior'] ?? null,
-                'semana_id' => $resultado['semana_id'] ?? $this->semanaDeImportacion($importacionId),
+                'pago_anterior' => $resultado['pago_anterior'] ?? null,
+                'pago_id' => $resultado['pago_id'] ?? $this->pagoDeImportacion($importacionId),
             ];
         } catch (Throwable $e) {
             $estado = $this->clasificarError($e->getMessage());
             $this->importacionItemModel->marcarResultado($itemId, $estado, $e->getMessage(), null, [
                 'exception_class' => get_class($e),
             ]);
-            if ($filePath && is_file($filePath)) {
-                @unlink($filePath);
+            if ($filePath) {
+                AlmacenDocumentos::de($filePath)->borrar($filePath);
             }
             $metaItem = isset($metaItem) ? $metaItem : $this->decodeMetadata($item['metadata'] ?? null);
             $pdfPath = RutaDocumento::absoluta($metaItem['ruta_pdf'] ?? '');
-            if ($pdfPath !== '' && is_file($pdfPath)) {
-                @unlink($pdfPath);
+            if ($pdfPath !== '') {
+                AlmacenDocumentos::de($pdfPath)->borrar($pdfPath);
             }
             return [
                 'item_id' => $itemId,
@@ -585,9 +601,7 @@ class InvoiceImportQueue
 
     private function ensureDirectory($path)
     {
-        if (!is_dir($path) && !mkdir($path, 0777, true) && !is_dir($path)) {
-            throw new Exception('No se pudo crear el directorio de cola: ' . $path);
-        }
+        AlmacenDocumentos::de($path)->asegurarCarpeta($path);
     }
 
     private function shouldStopCurrentBatch($startedAt)

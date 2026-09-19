@@ -224,7 +224,7 @@ class DevolucionVerificador
         // Nivel 3: nada.
         $motivo = 'No se encontró NC';
         if (empty($dev['proveedor_id'])) {
-            $motivo .= ' (proveedor del ERP sin equivalente local: "'
+            $motivo .= ' (proveedor del sistema sin equivalente local: "'
                 . (string) $dev['proveedor_nombre_erp'] . '")';
         } elseif ($dev['tipo'] === 'boleta_local' && empty($dev['factura_clave'])) {
             $motivo .= ' (la factura ' . (string) $dev['numero_factura']

@@ -3,8 +3,10 @@
  * Modelo de cuentas de correo IMAP.
  *
  * La empresa tiene varios buzones: las cuentas se administran desde el ⚙
- * del módulo Correo y se elige con cuál trabajar. El password se guarda en
- * base64 (herramienta local, la BD no sale del equipo).
+ * del módulo Correo y se elige con cuál trabajar. La contraseña se guarda
+ * cifrada (Secreto), con una clave que vive en app/config/local.php y no en
+ * la base: antes era base64, que se lee sin clave desde la tabla, desde un
+ * respaldo o desde el app.log. Lo guardado en base64 se sigue leyendo.
  *
  * La primera vez que se usa, si existe app/config/correo.php (la config
  * antigua de una sola cuenta) se siembra como "Cuenta principal" y los
@@ -13,8 +15,13 @@
  * correo_procesados (se prefijan con "c{id}:").
  */
 
+require_once __DIR__ . '/../helpers/Secreto.php';
+
 class CorreoCuenta extends Model
 {
+    /** El puerto de IMAP sobre TLS: lo que hay que usar salvo aviso. */
+    private const PUERTO_POR_OMISION = 993;
+
     // Un buzón puede servir a VARIAS sociedades y una sociedad tener varios
     // buzones, así que la relación vive en correo_cuenta_sociedades y no en
     // una columna. Decidido con los datos: los tres buzones del grupo
@@ -148,9 +155,9 @@ class CorreoCuenta extends Model
         $id = (int) $this->insert($sql, [
             (string) $datos['nombre'],
             (string) $datos['host'],
-            max(1, (int) ($datos['puerto'] ?? 993)),
+            self::puerto($datos['puerto'] ?? null),
             (string) $datos['usuario'],
-            base64_encode((string) $datos['password']),
+            Secreto::cifrar((string) $datos['password']),
             trim((string) ($datos['carpeta'] ?? '')) !== '' ? (string) $datos['carpeta'] : 'INBOX',
             max(0, (int) ($datos['dias_atras'] ?? 0)),
             max(0, min(3650, (int) ($datos['indice_retencion_dias'] ?? 1825))),
@@ -180,7 +187,7 @@ class CorreoCuenta extends Model
         }
 
         $password = trim((string) ($datos['password'] ?? '')) !== ''
-            ? base64_encode((string) $datos['password'])
+            ? Secreto::cifrar((string) $datos['password'])
             : $actual['password'];
 
         $sql = "UPDATE {$this->table}
@@ -190,7 +197,7 @@ class CorreoCuenta extends Model
         return $this->execute($sql, [
             (string) $datos['nombre'],
             (string) $datos['host'],
-            max(1, (int) ($datos['puerto'] ?? 993)),
+            self::puerto($datos['puerto'] ?? null),
             (string) $datos['usuario'],
             $password,
             trim((string) ($datos['carpeta'] ?? '')) !== '' ? (string) $datos['carpeta'] : 'INBOX',
@@ -205,6 +212,20 @@ class CorreoCuenta extends Model
     }
 
     /**
+     * El puerto que se guarda. Un campo vacío es "no lo sé, poné el normal",
+     * no "el puerto 1": `max(1, (int) '')` daba 1 y el buzón no conectaba
+     * nunca, sin decir por qué.
+     */
+    private static function puerto($valor)
+    {
+        $puerto = (int) $valor;
+        if ($puerto < 1 || $puerto > 65535) {
+            return self::PUERTO_POR_OMISION;
+        }
+        return $puerto;
+    }
+
+    /**
      * Config lista para MailFetcher (password decodificado + cuenta_id).
      */
     public function configPara($id)
@@ -216,10 +237,15 @@ class CorreoCuenta extends Model
 
         return [
             'cuenta_id' => (int) $cuenta['id'],
+            // Con qué empresa se está mirando este buzón. El buzón puede
+            // servir a varias, y "ya procesé este correo" es una marca de
+            // cada empresa: la segunda tiene que poder trabajar los mismos
+            // mensajes sin que la primera se los haya tapado.
+            'sociedad_id' => $this->sociedadId(),
             'host' => (string) $cuenta['host'],
             'puerto' => (int) $cuenta['puerto'],
             'usuario' => (string) $cuenta['usuario'],
-            'password' => (string) base64_decode((string) $cuenta['password'], true),
+            'password' => Secreto::descifrar((string) $cuenta['password']),
             'carpeta' => (string) $cuenta['carpeta'],
             'dias_atras' => (int) $cuenta['dias_atras'],
             'indice_retencion_dias' => (int) ($cuenta['indice_retencion_dias'] ?? 1825),

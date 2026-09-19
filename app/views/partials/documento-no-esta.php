@@ -3,8 +3,8 @@
  * "Ese comprobante no está cargado", cuando se llegó buscando UNO.
  *
  * A estos listados se entra de dos maneras muy distintas. Casi siempre se
- * abren solos, a mirar; pero desde la cola de seguimiento y desde el pago
- * semanal se llega con una pregunta concreta —¿está cargado el XML de este
+ * abren solos, a mirar; pero desde la cola de seguimiento y desde un pago
+ * se llega con una pregunta concreta —¿está cargado el XML de este
  * documento?— y con la tarjeta del documento arriba diciendo cuál.
  *
  * El buscador trae por coincidencia, que es lo que hace falta cuando uno se

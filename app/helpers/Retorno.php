@@ -3,7 +3,7 @@
  * A dónde vuelve el botón "Volver".
  *
  * El detalle de un documento no tiene una pantalla madre. Se llega a él desde
- * el listado de comprobantes, desde el checklist del pago semanal, desde una
+ * el listado de comprobantes, desde el checklist del pago, desde una
  * devolución y desde las notas de crédito. Un enlace fijo a "Volver a Facturas"
  * acertaba en uno de esos cuatro casos y en los otros tres sacaba a la persona
  * del sitio donde estaba trabajando —con sus filtros puestos y su lugar en la
@@ -28,11 +28,11 @@ class Retorno
      * Prefijo de ruta => cómo se nombra esa pantalla después de "Volver".
      *
      * El fragmento incluye la preposición porque no todas la llevan igual: "a
-     * Facturas" pero "al pago semanal". Armarlo con un "a " fijo delante daba
-     * "Volver a el pago semanal".
+     * Facturas" pero "al pago". Armarlo con un "a " fijo delante daba
+     * "Volver a el pago".
      */
     private const PANTALLAS = [
-        '/por-pagar'     => 'al pago semanal',
+        '/por-pagar'     => 'al pago',
         '/facturas-erp'  => 'a Facturas',
         '/notas-credito' => 'a Notas de crédito',
         '/notas-xml'     => 'a Notas de crédito XML',

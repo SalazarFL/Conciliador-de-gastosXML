@@ -12,6 +12,12 @@ class MailFetcher
     private const EXTENSIONES_FACTURA = ['xml', 'pdf', 'zip'];
     private const MAX_VISTA_PREVIA_BYTES = 15728640; // 15 MB en memoria
 
+    // Topes de un ZIP adjunto (ver extraerDeZip): archivos que se abren,
+    // tamaño sin comprimir de cada uno y de todos juntos.
+    private const MAX_ENTRADAS_ZIP = 100;
+    private const MAX_BYTES_ENTRADA_ZIP = 10485760;  // 10 MB
+    private const MAX_BYTES_ZIP = 26214400;          // 25 MB
+
     private $config;
     private $stream = null;
     private $uidValidity = 0;
@@ -19,6 +25,8 @@ class MailFetcher
     private $mailboxRef = '';      // '{host:993/imap/ssl}'
     private $carpetaBase = 'INBOX';
     private $carpetaActual = '';
+    /** Lo que se descartó del último mensaje leído, para contarlo como incidencia. */
+    private $avisos = [];
 
     public function __construct(array $config)
     {
@@ -636,7 +644,10 @@ class MailFetcher
                             : '',
                         'fecha'          => $ts > 0 ? date('Y-m-d H:i:s', $ts) : null,
                         'timestamp'      => $ts,
-                        'procesado'      => $this->yaProcesado($clave),
+                        // Se resuelve abajo, para la página que se devuelve y
+                        // de una sola vez: preguntar por correo es una
+                        // consulta por correo.
+                        'procesado'      => false,
                     ];
                 }
             }
@@ -647,6 +658,12 @@ class MailFetcher
         });
 
         $correos = array_slice($correos, $offset, $limite);
+
+        // Las marcas de "ya procesado", solo las de esta página.
+        $marcas = $this->procesadosDe(array_column($correos, 'clave'));
+        foreach ($correos as $i => $correo) {
+            $correos[$i]['procesado'] = !empty($marcas[(string) $correo['clave']]);
+        }
 
         return [
             'total'   => $totalCoincidencias,
@@ -708,6 +725,7 @@ class MailFetcher
 
         $uid = (int) $uid;
 
+        $this->avisos = [];
         $estructura = @imap_fetchstructure($this->stream, $uid, FT_UID);
         $adjuntos = $estructura ? $this->extraerAdjuntos($uid, $estructura) : [];
 
@@ -732,6 +750,9 @@ class MailFetcher
             'fecha'     => $info['fecha'],
             'xmls'      => $xmls,
             'pdfs'      => $pdfs,
+            // Lo que no se pudo (o no se debió) abrir de este mensaje: el lote
+            // lo anota como incidencia en vez de dejarlo pasar en silencio.
+            'avisos'    => $this->avisos,
         ];
     }
 
@@ -1093,15 +1114,71 @@ class MailFetcher
 
     public function yaProcesado($clave)
     {
-        $this->cargarProcesados();
-        return isset($this->procesados[$clave]);
+        $marcas = $this->procesadosDe([$clave]);
+        return !empty($marcas[(string) $clave]);
     }
 
     public function marcarProcesado($clave)
     {
-        $this->cargarProcesados();
-        $this->procesados[$clave] = date('Y-m-d H:i:s');
-        self::modeloProcesados()->marcar($clave);
+        if ($this->procesados === null) {
+            $this->procesados = [];
+        }
+        $this->procesados[(string) $clave] = date('Y-m-d H:i:s');
+        self::modeloProcesados()->marcar($clave, $this->sociedadDelBuzon());
+    }
+
+    /**
+     * Cuáles de estas claves ya se procesaron, en UNA consulta.
+     *
+     * Se pregunta por las claves que hacen falta —las de la página que se va a
+     * pintar— y no por la tabla entera de la empresa: son cientos de miles de
+     * filas y crecen sin techo. Lo preguntado queda recordado en la instancia,
+     * incluso lo que resultó NO estar marcado (false), para no repreguntarlo.
+     *
+     * @return array<string, string> clave => fecha de proceso
+     */
+    private function procesadosDe(array $claves)
+    {
+        if ($this->procesados === null) {
+            $this->procesados = [];
+        }
+        $claves = array_values(array_unique(array_filter(array_map('strval', $claves), 'strlen')));
+        $faltan = array_values(array_diff($claves, array_keys($this->procesados)));
+        if ($faltan) {
+            $marcas = self::modeloProcesados()->deClaves($faltan, $this->sociedadDelBuzon());
+            foreach ($faltan as $clave) {
+                $this->procesados[$clave] = $marcas[$clave] ?? false;
+            }
+        }
+
+        $resultado = [];
+        foreach ($claves as $clave) {
+            if (!empty($this->procesados[$clave])) {
+                $resultado[$clave] = $this->procesados[$clave];
+            }
+        }
+        return $resultado;
+    }
+
+    /**
+     * Fija con qué empresa se está mirando este buzón.
+     *
+     * Lo necesita quien trabaja SIN sesión —el trabajador de lotes de cli/—:
+     * la configuración de la cuenta trae la empresa "en curso", que sin sesión
+     * es la primera activa y no la del lote. Marcar con la empresa equivocada
+     * hace que la del lote vuelva a bajar el correo y que la otra lo dé por
+     * visto sin haberlo trabajado.
+     *
+     * Las marcas leídas se olvidan: son de cada empresa.
+     */
+    public function usarSociedad($sociedadId)
+    {
+        $sociedadId = max(0, (int) $sociedadId);
+        if ($sociedadId > 0 && $sociedadId !== (int) ($this->config['sociedad_id'] ?? 0)) {
+            $this->config['sociedad_id'] = $sociedadId;
+            $this->procesados = null;
+        }
+        return $this;
     }
 
     /**
@@ -1109,18 +1186,31 @@ class MailFetcher
      * como "sin procesar" (p. ej. al descartar de la bandeja).
      * Estático: no necesita conexión ni configuración de cuenta.
      */
-    public static function desmarcarProcesados(array $claves)
+    public static function desmarcarProcesados(array $claves, $sociedadId = 0)
     {
-        return self::modeloProcesados()->desmarcar($claves);
+        return self::modeloProcesados()->desmarcar($claves, (int) $sociedadId);
     }
 
-    private function cargarProcesados()
+    /**
+     * Con qué empresa se está mirando este buzón.
+     *
+     * La marca de "ya procesado" es de cada empresa: el mismo buzón puede
+     * servir a varias, y la segunda tiene que poder recorrer los mismos
+     * mensajes. Viene en la configuración de la cuenta (CorreoCuenta::
+     * configPara) y, en su defecto, es la empresa en curso.
+     */
+    private function sociedadDelBuzon()
     {
-        if ($this->procesados !== null) {
-            return;
+        $id = (int) ($this->config['sociedad_id'] ?? 0);
+        if ($id > 0) {
+            return $id;
         }
-        $this->procesados = self::modeloProcesados()->todas();
+        if (!class_exists('Sociedad')) {
+            require_once __DIR__ . '/../models/Sociedad.php';
+        }
+        return (int) Sociedad::seleccionadaIdActual();
     }
+
 
     private static function modeloProcesados()
     {
@@ -1239,6 +1329,19 @@ class MailFetcher
         return $ruta !== null ? [['ruta' => $ruta, 'nombre' => $nombre]] : [];
     }
 
+    /**
+     * Los XML y PDF de un ZIP adjunto, con techo.
+     *
+     * getFromIndex() descomprime la entrada ENTERA en memoria, así que sin
+     * topes un adjunto de pocos KB puede pedir cientos de MB (un ZIP de 102 KB
+     * dejó 801 archivos y 24 MB) y tumbar la sincronización por memory_limit.
+     * Antes de leer nada se mira el tamaño declarado en statIndex(); lo que se
+     * pasa se salta y queda anotado como aviso, para que el lote lo cuente
+     * como incidencia en vez de fallar en silencio.
+     *
+     * Los topes son holgados para lo que manda un proveedor de verdad: una
+     * factura electrónica pesa kilobytes y su representación gráfica, pocos MB.
+     */
     private function extraerDeZip($contenido, $nombreZip)
     {
         $adjuntos = [];
@@ -1250,10 +1353,27 @@ class MailFetcher
 
         $zip = new ZipArchive();
         if ($zip->open($tmpZip) === true) {
+            $acumulado = 0;
+            $saltadasPorTamano = 0;
+            $sobran = 0;
             for ($i = 0; $i < $zip->numFiles; $i++) {
                 $entrada = (string) $zip->getNameIndex($i);
                 $ext = strtolower(pathinfo($entrada, PATHINFO_EXTENSION));
                 if (!in_array($ext, ['xml', 'pdf'], true)) {
+                    continue;
+                }
+                if (count($adjuntos) >= self::MAX_ENTRADAS_ZIP) {
+                    $sobran++;
+                    continue;
+                }
+
+                // El tamaño sin comprimir, ANTES de descomprimir: es lo único
+                // que separa un adjunto normal de una bomba.
+                $stat = $zip->statIndex($i);
+                $tamano = (int) ($stat['size'] ?? 0);
+                if ($tamano > self::MAX_BYTES_ENTRADA_ZIP
+                    || $acumulado + $tamano > self::MAX_BYTES_ZIP) {
+                    $saltadasPorTamano++;
                     continue;
                 }
 
@@ -1261,6 +1381,7 @@ class MailFetcher
                 if ($datos === false || $datos === '') {
                     continue;
                 }
+                $acumulado += strlen($datos);
 
                 $ruta = $this->guardarTemp($datos, basename($entrada));
                 if ($ruta !== null) {
@@ -1268,6 +1389,20 @@ class MailFetcher
                 }
             }
             $zip->close();
+
+            if ($saltadasPorTamano > 0) {
+                $this->avisos[] = sprintf(
+                    '%s: %d archivo(s) del ZIP se saltaron por tamaño (tope %d MB por archivo y %d MB en total).',
+                    $nombreZip, $saltadasPorTamano,
+                    (int) (self::MAX_BYTES_ENTRADA_ZIP / 1048576), (int) (self::MAX_BYTES_ZIP / 1048576)
+                );
+            }
+            if ($sobran > 0) {
+                $this->avisos[] = sprintf(
+                    '%s: el ZIP trae más de %d archivos; se tomaron los primeros y quedaron %d sin abrir.',
+                    $nombreZip, self::MAX_ENTRADAS_ZIP, $sobran
+                );
+            }
         }
 
         @unlink($tmpZip);

@@ -5,7 +5,7 @@
  *
  * Para qué: los comprobantes viven en una carpeta compartida, y una carpeta
  * compartida es una carpeta que alguien puede borrar. Cuando eso pasa, el
- * documento sigue completo en la base —proveedor, montos, semana de pago— pero
+ * documento sigue completo en la base —proveedor, montos, pago de pago— pero
  * su respaldo electrónico deja de existir, y el respaldo es justo lo que hay
  * que entregar. Hasta ahora la única salida era la papelera de SharePoint o
  * pedírselo otra vez al proveedor.
@@ -28,6 +28,7 @@
 require_once __DIR__ . '/MailFetcher.php';
 require_once __DIR__ . '/DocumentoArchivo.php';
 require_once __DIR__ . '/RutaDocumento.php';
+require_once __DIR__ . '/AlmacenDocumentos.php';
 require_once __DIR__ . '/../models/Factura.php';
 require_once __DIR__ . '/../models/CorreoCuenta.php';
 
@@ -43,7 +44,7 @@ class RecuperadorDocumentos
      * @param callable|null $abrirBuzon function(array $config): MailFetcher —
      *        se inyecta para poder probar todo esto sin un servidor de correo.
      */
-    public function __construct($facturas = null, $cuentas = null, $raiz = '', callable $abrirBuzon = null)
+    public function __construct($facturas = null, $cuentas = null, $raiz = '', ?callable $abrirBuzon = null)
     {
         $this->facturas = $facturas ?: new Factura();
         $this->cuentas = $cuentas ?: new CorreoCuenta();
@@ -82,7 +83,7 @@ class RecuperadorDocumentos
         }
 
         // De a un buzón por vez, y dentro de él por carpeta: abrir una carpeta
-        // IMAP cuesta un viaje, y reponer una semana entera son cientos de
+        // IMAP cuesta un viaje, y reponer un pago entero son cientos de
         // documentos que salieron casi todos del mismo sitio.
         $porCuenta = [];
         foreach ($documentos as $documento) {
@@ -133,10 +134,10 @@ class RecuperadorDocumentos
             $hashXml = $this->hashValido($documento['hash_xml'] ?? '');
             $hashPdf = $this->hashValido($documento['hash_pdf'] ?? '');
 
-            $faltaXml = $destinoXml === '' || !is_file($destinoXml);
+            $faltaXml = $destinoXml === '' || !RutaDocumento::existe($destinoXml);
             // Un PDF sin ruta no es un faltante: puede ser un documento que
             // nunca trajo PDF. Solo se repone lo que la base prometió.
-            $faltaPdf = $destinoPdf !== '' && !is_file($destinoPdf);
+            $faltaPdf = $destinoPdf !== '' && !RutaDocumento::existe($destinoPdf);
 
             if (!$faltaXml && !$faltaPdf) {
                 $resumen['ya_estaban']++;
@@ -233,12 +234,20 @@ class RecuperadorDocumentos
      */
     private function archivarDeNuevo(array $documento, $xmlTemporal, $pdfTemporal)
     {
-        $archivado = $this->archivo()->archivar(
-            $xmlTemporal,
-            $pdfTemporal !== '' ? $pdfTemporal : null,
-            $documento,
-            (string) ($documento['proveedor_nombre'] ?? 'PROVEEDOR')
-        );
+        // A la carpeta de su empresa, la misma en la que habría quedado si el
+        // documento se hubiera archivado bien la primera vez.
+        $empresa = trim((string) ($documento['sociedad_nombre'] ?? ''));
+        $archivado = $this->archivo()
+            ->paraSociedad(
+                (int) ($documento['sociedad_id'] ?? 0),
+                $empresa !== '' ? $empresa : DocumentoArchivo::EMPRESA_SIN_DEFINIR
+            )
+            ->archivar(
+                $xmlTemporal,
+                $pdfTemporal !== '' ? $pdfTemporal : null,
+                $documento,
+                (string) ($documento['proveedor_nombre'] ?? 'PROVEEDOR')
+            );
 
         $this->facturas->actualizarArchivos((int) $documento['id'], [
             'ruta_xml' => $archivado['ruta_xml'],
@@ -251,6 +260,10 @@ class RecuperadorDocumentos
             // marcado como histórico sin PDF no se degrada a "pendiente".
             'estado_pdf' => $archivado['ruta_pdf'] ? 'disponible' : null,
             'archivado_en' => $archivado['archivado_en'],
+            'item_xml_id' => $archivado['item_xml_id'] ?? '',
+            'etag_xml' => $archivado['etag_xml'] ?? '',
+            'item_pdf_id' => $archivado['item_pdf_id'] ?? '',
+            'etag_pdf' => $archivado['etag_pdf'] ?? '',
         ]);
         $this->limpiarMarca((int) $documento['id']);
 
@@ -277,33 +290,33 @@ class RecuperadorDocumentos
     }
 
     /**
-     * Escribe por un temporal y solo renombra si la copia da la huella
-     * esperada, igual que al archivar por primera vez: nunca queda un archivo
-     * a medias con el nombre del bueno.
+     * Repone el documento en su ruta, y solo si es EL documento.
+     *
+     * El hash se comprueba antes de entregarle nada al almacén: lo que se
+     * repone es el respaldo de un comprobante, y uno parecido no sirve. Que
+     * nunca quede un archivo a medias con el nombre del bueno ya lo garantiza
+     * el almacén.
+     *
+     * Un documento que ya está no se pisa: si alguien lo repuso a mano
+     * mientras tanto, lo suyo manda.
      */
     private function escribirValidado($origen, $destino, $hashEsperado)
     {
-        $carpeta = dirname($destino);
-        if (!is_dir($carpeta) && !@mkdir($carpeta, 0777, true) && !is_dir($carpeta)) {
-            throw new RuntimeException('No se pudo crear la carpeta ' . $carpeta . '.');
+        if ($hashEsperado !== '' && hash_file('sha256', $origen) !== $hashEsperado) {
+            throw new RuntimeException('Lo bajado no coincide con lo que se archivó: no se repuso nada.');
         }
-        if (is_file($destino)) {
+
+        // $destino es la ruta de la fila ya hidratada: su forma dice de qué
+        // almacén es, y ahí se repone.
+        $almacen = AlmacenDocumentos::de($destino);
+        if ($almacen->identidad($destino) !== null) {
             throw new RuntimeException('Ya hay un archivo en ' . $destino . '; no se toca.');
         }
 
-        $parcial = $destino . '.partial_' . str_replace('.', '', uniqid('', true));
-        if (!copy($origen, $parcial)) {
-            throw new RuntimeException('No se pudo escribir ' . basename($destino) . ' en la carpeta compartida.');
-        }
-        if ($hashEsperado !== '' && hash_file('sha256', $parcial) !== $hashEsperado) {
-            @unlink($parcial);
-            throw new RuntimeException('Lo bajado no coincide con lo que se archivó: no se repuso nada.');
-        }
-        if (!rename($parcial, $destino)) {
-            @unlink($parcial);
-            throw new RuntimeException('No se pudo dejar el archivo en ' . $destino . '.');
-        }
-        return $destino;
+        $opciones = $hashEsperado !== '' ? ['hash' => $hashEsperado] : [];
+        $escrito = $almacen->escribir($destino, $origen, $opciones);
+
+        return $escrito['ruta'];
     }
 
     private function limpiarMarca($id)

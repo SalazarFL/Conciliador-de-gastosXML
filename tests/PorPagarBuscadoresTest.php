@@ -1,8 +1,8 @@
 <?php
 /**
- * Los buscadores del checklist del pago semanal.
+ * Los buscadores del checklist del pago.
  *
- * Buscan sobre las facturas del ERP marcadas para la semana, que es donde
+ * Buscan sobre las facturas del ERP marcadas para el pago, que es donde
  * viven ahora los datos. Lo que se comprueba es que cada filtro llegue al SQL
  * con la columna correcta: un filtro que apunte a la columna equivocada no da
  * error, da resultados que parecen buenos.
@@ -54,7 +54,7 @@ $modelo->getFacturasPago(12, [
 $sql = $modelo->sql;
 
 assertPorPagarBuscador($modelo->params[0] === 12, 'el checklist se limita al pago pedido');
-assertPorPagarBuscador(strpos($sql, 'e.porpagar_listado_id = ?') !== false,
+assertPorPagarBuscador(strpos($sql, 'e.pago_id = ?') !== false,
     'las líneas del pago son las facturas del ERP marcadas con ese pago');
 
 // El buscador de número mira las dos formas del ERP y las dos del XML: quien
@@ -79,7 +79,7 @@ assertPorPagarBuscador(strpos($sql, 'e.proveedor_nombre LIKE ?') === false,
 assertPorPagarBuscador(strpos($sql, 'e.estado_respaldo = ?') !== false,
     'el semáforo filtra por estado_respaldo, no por el estado de asignación');
 assertPorPagarBuscador(strpos($sql, 'e.estado = ?') === false,
-    'no se confunde con `estado`, que dice si la factura está asignada a una semana');
+    'no se confunde con `estado`, que dice si la factura está asignada a un pago');
 
 assertPorPagarBuscador(strpos($sql, 'e.match_manual = 1') !== false, 'filtra los vínculos hechos a mano');
 assertPorPagarBuscador(strpos($sql, 'e.fecha_emision >= ?') !== false
@@ -96,7 +96,7 @@ assertPorPagarBuscador(strpos($sql, 'CAST(e.monto AS CHAR) LIKE ?') !== false,
     'el importe se busca dentro del monto de la factura');
 
 // El saldo sigue siendo el del pago y no el vivo: si no, una factura ya
-// pagada (saldo 0) desaparecería del checklist de su propia semana.
+// pagada (saldo 0) desaparecería del checklist de su propia pago.
 assertPorPagarBuscador(strpos($sql, 'CAST(COALESCE(e.saldo_pago, e.saldo) AS CHAR) LIKE ?') !== false,
     'y el saldo se busca sobre el que la factura tenía al entrar al pago');
 
@@ -135,4 +135,4 @@ assertPorPagarBuscador($raro->params === [12], 'los valores que no existen se ig
 assertPorPagarBuscador(strpos($raro->sql, 'CAST(') === false,
     'y sin importe válido no se arma ninguna comparación de importe');
 
-echo "OK: buscadores del checklist del pago semanal\n";
+echo "OK: buscadores del checklist del pago\n";

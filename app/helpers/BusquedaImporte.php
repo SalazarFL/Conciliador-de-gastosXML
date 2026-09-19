@@ -33,6 +33,11 @@ class BusquedaImporte
             return '';
         }
         $limpio = preg_replace('/[₡$\s,]/u', '', (string) $valor);
+        // Con bytes que no son UTF-8 la expresión no se puede aplicar y
+        // devuelve null: no hay importe que leer ahí.
+        if ($limpio === null) {
+            return '';
+        }
 
         // Lo que queda tiene que poder ser parte de un importe: dígitos, un
         // punto decimal y, a lo sumo, un signo delante. Cualquier otra cosa

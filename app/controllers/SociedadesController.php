@@ -10,7 +10,15 @@
  * registran y se editan. Por eso el destino viaja en el formulario y no está
  * escrito fijo aquí: mandar de vuelta a Inicio a quien estaba administrando
  * empresas le hacía perder el sitio en cada cambio.
+ *
+ * Dos permisos distintos, porque son dos cosas distintas: dar de alta una
+ * empresa es administración (`empresas.administrar`, lo comprueba el
+ * enrutador); ELEGIR con cuál se trabaja lo hace cualquiera, pero solo entre
+ * las que tiene asignadas, y eso se comprueba aquí —esconder los botones de
+ * las demás no serviría de nada contra un POST escrito a mano.
  */
+
+require_once __DIR__ . '/../models/Bitacora.php';
 
 class SociedadesController extends Controller
 {
@@ -105,6 +113,25 @@ class SociedadesController extends Controller
             $this->redirect($this->destino());
         }
 
+        // Aquí está la restricción por empresa de verdad. El selector de
+        // Inicio solo ofrece las permitidas, pero un POST no viene
+        // necesariamente de ese selector.
+        if (!Permisos::puedeSociedad((int) $id)) {
+            Bitacora::registrar([
+                'accion'     => 'Intentó trabajar con una empresa que no tiene asignada',
+                'modulo'     => 'administracion',
+                'permiso'    => 'empresas.administrar',
+                'entidad'    => 'sociedad',
+                'entidad_id' => (int) $id,
+                'resultado'  => 'denegado',
+            ]);
+            $this->redirectWithMessage(
+                $this->destino(),
+                'No tienes acceso a esa empresa. Habla con el administrador.',
+                'error'
+            );
+        }
+
         try {
             $modelo = $this->loadModel('Sociedad');
             $modelo->activar((int) $id);
@@ -114,5 +141,58 @@ class SociedadesController extends Controller
         } catch (Throwable $e) {
             $this->redirectWithMessage($this->destino(),'No se pudo activar: ' . $e->getMessage(), 'error');
         }
+    }
+
+    /**
+     * Dónde se archiva lo NUEVO de una empresa: la carpeta compartida o
+     * SharePoint.
+     *
+     * No mueve nada de lo que ya está —cada documento sigue donde dice su
+     * fila; pasar lo existente es cli/migrar_documentos_a_graph.php—. Por eso
+     * cambiarlo es inmediato y volver atrás también.
+     *
+     * Antes de pasar a SharePoint se prueba de verdad que esta PC llega a la
+     * biblioteca, y si no llega no se guarda nada: el ajuste lo usan todas las
+     * PC, y quien lo cambia tiene que ver en el momento que funciona, no
+     * enterarse mañana por un documento que no se archivó.
+     */
+    public function almacen($id)
+    {
+        if (!$this->isPost()) {
+            $this->redirect($this->destino());
+        }
+        require_once __DIR__ . '/../helpers/AlmacenDocumentos.php';
+
+        $tipo = strtolower(trim((string) $this->post('almacen', '')));
+        $modelo = $this->loadModel('Sociedad');
+        $sociedad = $modelo->findById((int) $id);
+        if (!$sociedad) {
+            $this->redirectWithMessage($this->destino(), 'Esa empresa no existe.', 'error');
+        }
+        $nombre = (string) $sociedad['nombre'];
+
+        $biblioteca = '';
+        if ($tipo === 'sharepoint') {
+            try {
+                $biblioteca = AlmacenDocumentos::tipo('sharepoint')->probar();
+            } catch (Throwable $e) {
+                $this->redirectWithMessage($this->destino(),
+                    'No se cambió nada: esta computadora no llega a SharePoint. ' . $e->getMessage(), 'error');
+            }
+        }
+
+        try {
+            $modelo->definirAlmacen((int) $id, $tipo);
+        } catch (Throwable $e) {
+            $this->redirectWithMessage($this->destino(), 'No se cambió nada: ' . $e->getMessage(), 'error');
+        }
+
+        $this->redirectWithMessage($this->destino(), $tipo === 'sharepoint'
+            ? 'Desde ahora, lo nuevo de ' . $nombre . ' se archiva en SharePoint'
+              . ($biblioteca !== '' ? ' ("' . $biblioteca . '")' : '')
+              . '. Lo que ya estaba sigue en la carpeta compartida hasta que se migre.'
+            : 'Desde ahora, lo nuevo de ' . $nombre . ' se archiva en la carpeta compartida. '
+              . 'Lo que ya estaba en SharePoint sigue ahí.',
+            'success');
     }
 }

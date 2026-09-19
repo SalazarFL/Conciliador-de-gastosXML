@@ -7,6 +7,7 @@ require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 require_once __DIR__ . '/../helpers/AlcanceProveedor.php';
 require_once __DIR__ . '/../helpers/BusquedaImporte.php';
 require_once __DIR__ . '/../helpers/EstadoArchivo.php';
+require_once __DIR__ . '/../helpers/Columnas.php';
 
 class NotasCreditoController extends Controller
 {
@@ -132,6 +133,18 @@ class NotasCreditoController extends Controller
         $filas = EstadoArchivo::decorar($filas);
         foreach ($filas as $i => $fila) {
             unset($filas[$i]['ruta_xml'], $filas[$i]['ruta_pdf'], $filas[$i]['recuperable']);
+            /*
+             * Las columnas que no vienen de fábrica, ya dibujadas.
+             *
+             * Esta tabla se repinta en el navegador cada vez que alguien
+             * escribe en un filtro, así que sus celdas se arman dos veces: una
+             * en PHP al cargar y otra en JavaScript al filtrar. Las de fábrica
+             * llevan insignias y enlaces y están escritas en los dos sitios;
+             * estas no se van a escribir por tercera vez en JavaScript —serían
+             * quince fórmulas repetidas que un día dirían algo distinto que el
+             * Excel—: viajan hechas desde acá, con el mismo valor.
+             */
+            $filas[$i]['columnas_extra'] = Columnas::celdasExtra('notascredito', $fila);
         }
         return $filas;
     }
@@ -157,11 +170,43 @@ class NotasCreditoController extends Controller
         return $filters;
     }
 
+    /**
+     * El listado de notas en Excel, con los filtros y las columnas puestas.
+     *
+     * El permiso 'notas_credito.exportar' existía desde que se armó el control
+     * de accesos, pero no había ninguna ruta que lo exigiera: se podía conceder
+     * y no servía para nada. Esta es esa ruta.
+     */
+    public function exportar()
+    {
+        try {
+            $listadoId = (int) $this->get('listado_id', 0);
+            $modelo = $this->loadModel('NotaCredito');
+            $listado = $modelo->getListado($listadoId);
+            $sociedad = $this->loadModel('Sociedad')->getActiva();
+
+            if (!$listado || !$sociedad || (int) $listado['sociedad_id'] !== (int) $sociedad['id']) {
+                throw new Exception('El listado no pertenece a la sociedad activa.');
+            }
+
+            $filas = EstadoArchivo::decorar($modelo->getLineasFiltradas($listadoId, $this->filtrosLineas()));
+            Columnas::descargar('notascredito', $filas, $this->get('cols', ''));
+        } catch (Throwable $e) {
+            $this->registrarFallo('exportar las notas de crédito', $e);
+            $this->redirectWithMessage(
+                $this->url('/notas-credito'),
+                'No se pudo generar el Excel: ' . $e->getMessage(),
+                'error'
+            );
+        }
+    }
+
     public function previsualizar()
     {
         if (!$this->isPost()) {
             $this->json(['ok' => false, 'message' => 'Método no permitido.'], 405);
         }
+        $this->exigirListadoProveedores();
 
         require_once __DIR__ . '/../helpers/FileUploader.php';
         $config = require __DIR__ . '/../config/config.php';
@@ -466,6 +511,7 @@ class NotasCreditoController extends Controller
         if (!$this->isPost()) {
             $this->redirect($this->url('/notas-credito'));
         }
+        $this->exigirListadoProveedores($this->url('/notas-credito'));
 
         $modelo = $this->loadModel('NotaCredito');
         $tempDir = $this->uploadBase() . DIRECTORY_SEPARATOR . 'previas';

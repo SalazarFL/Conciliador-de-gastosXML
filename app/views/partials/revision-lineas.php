@@ -9,9 +9,10 @@
  * botón que la otra no.
  *
  * Espera: $modulo, $tituloModulo, $sustantivo, $volverA, $pendientes,
- * $resueltas, $memoria, $campos.
+ * $resueltas, $memoria, $campos. Opcional: $enredos.
  */
 $baseUrl = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
+$enredos = is_array($enredos ?? null) ? $enredos : [];
 $pendientes = is_array($pendientes ?? null) ? $pendientes : [];
 $resueltas = is_array($resueltas ?? null) ? $resueltas : [];
 $memoria = is_array($memoria ?? null) ? $memoria : [];
@@ -28,6 +29,143 @@ $fechaCorta = function ($valor) {
 };
 ?>
 
+<?php // ── Enredos: filas que no se distinguen entre sí ──────────────────────
+      // Van arriba y en rojo porque son las que tienen el listado cerrado. Y
+      // van en un solo bloque por grupo porque la pregunta es comparativa: de
+      // estas filas, cuál entra. Mirando una sola no se puede contestar. ?>
+<?php if ($enredos): ?>
+<div class="card mb-20" style="border:2px solid var(--danger,#dc2626);">
+    <div class="card-header mb-12">
+        <div class="card-title" style="margin-right:auto;color:var(--danger,#dc2626);">
+            <i class="fas fa-triangle-exclamation" style="margin-right:6px;"></i>
+            Hay que decidir esto para seguir
+            <span class="badge" style="background:var(--danger,#dc2626);color:#fff;font-size:10px;padding:2px 8px;margin-left:4px;">
+                <?= number_format(count($enredos)) ?>
+            </span>
+        </div>
+    </div>
+
+    <div style="padding:0 4px 4px;font-size:12px;color:var(--text-muted);margin-bottom:12px;line-height:1.6;">
+        El reporte trae filas repetidas: son iguales en todo, y no hay manera de distinguir una de
+        otra. Por eso no entraron, y el listado queda cerrado hasta que decidas qué hacer con ellas.
+    </div>
+
+    <?php foreach ($enredos as $grupo => $lineas): ?>
+    <?php $primera = $lineas[0]; ?>
+    <form method="POST" action="<?= $baseUrl ?>/<?= htmlspecialchars($modulo) ?>/revision/enredo"
+          style="border:1px solid #fecaca;border-radius:8px;margin-bottom:14px;overflow:hidden;">
+        <input type="hidden" name="grupo" value="<?= htmlspecialchars((string) $grupo) ?>">
+
+        <div style="background:#fef2f2;border-bottom:1px solid #fecaca;padding:9px 12px;">
+            <strong style="font-size:12.5px;color:#991b1b;">
+                <?= number_format(count($lineas)) ?> filas iguales
+            </strong>
+            <div style="font-size:11.5px;color:#7f1d1d;margin-top:3px;">
+                <?= htmlspecialchars((string) $primera['motivo']) ?>
+            </div>
+        </div>
+
+        <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead>
+                <tr style="background:#f8fafc;color:var(--text-muted);text-align:left;">
+                    <?php // Las dos columnas con las que se decide van primero:
+                          // el resto es idéntico en todas las filas —por eso
+                          // son un enredo— y solo está para poder comprobarlo.
+                          // Al final, quedarían fuera de la pantalla. ?>
+                    <th style="padding:6px 10px;font-weight:700;white-space:nowrap;">Esta entra</th>
+                    <th style="padding:6px 10px;font-weight:700;white-space:nowrap;">Fila</th>
+                    <th style="padding:6px 10px;font-weight:700;white-space:nowrap;">
+                        <?= htmlspecialchars($campos['documento'][0] ?? 'Documento') ?>
+                    </th>
+                    <?php foreach ($campos as $campo => $definicion): ?>
+                        <?php if ($campo === 'documento') { continue; } ?>
+                    <th style="padding:6px 10px;font-weight:700;white-space:nowrap;<?= $definicion[1] === 'importe' ? 'text-align:right;' : '' ?>">
+                        <?= htmlspecialchars($definicion[0]) ?>
+                    </th>
+                    <?php endforeach; ?>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ($lineas as $linea): ?>
+                <?php $valores = is_array($linea['campos'] ?? null) ? $linea['campos'] : []; ?>
+                <tr style="border-top:1px solid var(--border,#e5e7eb);">
+                    <td style="padding:6px 10px;text-align:center;">
+                        <input type="radio" name="elegida" value="<?= (int) $linea['id'] ?>">
+                    </td>
+                    <td style="padding:6px 10px;color:var(--text-muted);white-space:nowrap;">
+                        <?= (int) $linea['fila_origen'] ?>
+                    </td>
+                    <td style="padding:6px 10px;">
+                        <input type="text" name="documento_<?= (int) $linea['id'] ?>"
+                               class="form-control" style="font-size:12px;padding:4px 7px;min-width:190px;"
+                               value="<?= htmlspecialchars((string) ($valores['documento'] ?? '')) ?>"
+                               placeholder="número que la distingue">
+                    </td>
+                    <?php foreach ($campos as $campo => $definicion): ?>
+                        <?php if ($campo === 'documento') { continue; } ?>
+                    <td style="padding:6px 10px;white-space:nowrap;<?= $definicion[1] === 'importe' ? 'text-align:right;font-variant-numeric:tabular-nums;' : '' ?>">
+                        <?= htmlspecialchars((string) ($valores[$campo] ?? '')) ?>
+                    </td>
+                    <?php endforeach; ?>
+                </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+        </div>
+
+        <?php // Las dos salidas legítimas, y cuál corresponde no lo dice el
+              // archivo: o el reporte imprimió la misma factura dos veces, o
+              // son dos facturas distintas que el ERP dejó sin número. ?>
+        <div style="padding:11px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <button type="submit" name="modo" value="elegir" class="btn btn-primary btn-sm">
+                <i class="fas fa-check" style="margin-right:4px;"></i>Entra la marcada, descartar las otras
+            </button>
+            <button type="submit" name="modo" value="numerar" class="btn btn-outline btn-sm">
+                <i class="fas fa-list-ol" style="margin-right:4px;"></i>Numerarlas y que entren todas
+            </button>
+            <label style="font-size:11.5px;color:var(--text-muted);display:flex;align-items:center;gap:5px;cursor:pointer;">
+                <input type="checkbox" name="recordar" value="1" checked>
+                Recordar esta decisión para las próximas cargas
+            </label>
+        </div>
+
+        <div style="padding:0 12px 11px;font-size:11px;color:var(--text-muted);line-height:1.6;">
+            <b>¿Cuál de las dos es?</b>
+            Si el reporte imprimió dos veces la misma factura, marcá una y usá el primer botón: las
+            otras se descartan.
+            Si de verdad son facturas distintas que salieron sin número, escribile a cada una el suyo
+            en la columna de arriba y usá el segundo: entran todas.
+            Descartarlas cuando eran distintas deja esa plata fuera del listado.
+        </div>
+
+        <!-- Las celdas tal como vinieron: es lo único que permite comprobar
+             que las filas son de verdad idénticas y no se parecen nomás. -->
+        <details style="padding:0 12px 11px;">
+            <summary style="font-size:11px;color:var(--text-muted);cursor:pointer;">
+                Ver las celdas del archivo
+            </summary>
+            <?php foreach ($lineas as $linea): ?>
+            <div style="margin-top:7px;overflow-x:auto;">
+                <div style="font-size:10.5px;color:var(--text-muted);margin-bottom:3px;">
+                    Fila <?= (int) $linea['fila_origen'] ?>
+                </div>
+                <div style="display:flex;gap:4px;font-family:ui-monospace,Consolas,monospace;font-size:11px;white-space:nowrap;">
+                    <?php foreach ((array) ($linea['celdas'] ?? []) as $i => $celda): ?>
+                        <span style="border:1px solid #cbd5e1;border-radius:4px;padding:2px 6px;background:#fff;">
+                            <span style="color:#94a3b8;"><?= (int) $i ?></span>
+                            <?= htmlspecialchars((string) $celda) ?>
+                        </span>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+            <?php endforeach; ?>
+        </details>
+    </form>
+    <?php endforeach; ?>
+</div>
+<?php endif; ?>
+
 <div class="card mb-20">
     <div class="card-header mb-12">
         <div class="card-title" style="margin-right:auto;">
@@ -37,9 +175,13 @@ $fechaCorta = function ($valor) {
                 <?= number_format(count($pendientes)) ?>
             </span>
         </div>
+        <?php // Con un enredo abierto, ese botón solo devolvería acá: el
+              // listado está cerrado. Mejor no ofrecerlo que ofrecer un rebote. ?>
+        <?php if (!$enredos): ?>
         <a href="<?= $baseUrl ?>/<?= htmlspecialchars($modulo) ?>" class="btn btn-outline btn-sm">
             <i class="fas fa-arrow-left" style="margin-right:4px;"></i>Volver a <?= htmlspecialchars($tituloModulo) ?>
         </a>
+        <?php endif; ?>
     </div>
 
     <?php if (!$pendientes): ?>

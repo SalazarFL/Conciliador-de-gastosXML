@@ -4,8 +4,17 @@ require_once __DIR__ . '/../helpers/MailFetcher.php';
 
 class CorreoLote extends Model
 {
+    /*
+     * Las descargas son de una empresa: el lote guarda su sociedad_id desde
+     * que se crea. Lo que NO se acota es pendientes(), que consume el worker
+     * de cli/ sin sesión y tiene que ver el trabajo de todas.
+     */
+    use AlcanceSociedad;
+
     protected $table = 'correo_lotes';
     private static $schemaIncidenciasLista = false;
+    /** Se da por presente; solo se pone en false si se comprueba que falta. */
+    private static $hayColumnaTomadoPor = true;
 
     /**
      * Archivo de lock que serializa a los motores que hacen avanzar un lote:
@@ -71,14 +80,57 @@ class CorreoLote extends Model
      *
      * Descartar de la bandeja quita la marca (MailFetcher::desmarcarProcesados),
      * así que reprocesar a propósito sigue funcionando.
+     *
+     * La marca es de cada EMPRESA. Un buzón puede servir a varias, y que la
+     * primera ya haya trabajado un correo no puede dejar a la segunda sin
+     * poder verlo: sus facturas están en ese mismo mensaje. Dentro de una
+     * empresa la marca sigue evitando bajar dos veces lo mismo.
+     *
+     * La empresa entra como número en el texto y no como parámetro a
+     * propósito: esta condición se usa una vez en el SELECT y otra al final
+     * del WHERE, y con marcadores habría que llevar la cuenta del orden en que
+     * se agregan los parámetros en cada consulta.
      */
-    private const YA_PROCESADO =
-        "EXISTS (SELECT 1 FROM correo_procesados p
-                  WHERE p.clave = CONCAT('c', i.cuenta_id, ':', i.uidvalidity, ':', i.uid))";
+    private static function yaProcesado($sociedadId)
+    {
+        return "EXISTS (SELECT 1 FROM correo_procesados p
+                         WHERE p.sociedad_id = " . max(0, (int) $sociedadId) . "
+                           AND p.clave = CONCAT('c', i.cuenta_id, ':', i.uidvalidity, ':', i.uid))";
+    }
 
     public function __construct()
     {
-        Esquema::unaVez(static::class, function () { $this->ensureIncidenciasSchema(); });
+        Esquema::unaVez(static::class, function () {
+            $this->ensureIncidenciasSchema();
+            $this->ensureItemsSchema();
+        });
+    }
+
+    /**
+     * La columna con la que cada proceso firma los correos que tomó.
+     *
+     * Ver tomarPendientes(): sin ella, dos computadoras pidiendo tanda a la vez
+     * se llevan los mismos correos. database/migrations/008_correo_lote_tomado_por.sql
+     * hace lo mismo donde el usuario web no tiene permisos para alterar tablas.
+     */
+    private function ensureItemsSchema()
+    {
+        try {
+            $this->execute("ALTER TABLE correo_lote_items
+                            ADD COLUMN IF NOT EXISTS tomado_por VARCHAR(40) NULL AFTER iniciado_en");
+        } catch (Throwable $e) {
+            // Sin permiso de ALTER: se comprueba si de todos modos está, para
+            // poder decirlo con claridad en vez de fallar con un
+            // "Unknown column" a mitad de una descarga.
+            try {
+                self::$hayColumnaTomadoPor = (int) $this->fetchColumn(
+                    "SELECT COUNT(*) FROM information_schema.COLUMNS
+                      WHERE TABLE_SCHEMA = DATABASE()
+                        AND TABLE_NAME = 'correo_lote_items' AND COLUMN_NAME = 'tomado_por'"
+                ) > 0;
+            } catch (Throwable $e2) {
+            }
+        }
     }
 
     private function ensureIncidenciasSchema()
@@ -150,6 +202,11 @@ class CorreoLote extends Model
         if ($desdeTs === false || $hastaTs === false || $hastaTs <= $desdeTs) {
             throw new InvalidArgumentException('El rango de fechas no es válido.');
         }
+        // Todo lo que puede rechazarse, ANTES de insertar nada: el correo de
+        // búsqueda se validaba al armar la consulta de los items, o sea con el
+        // lote ya creado, y un correo mal escrito dejaba un lote huérfano en
+        // "pendiente" con 0 correos que después había que ir a cancelar.
+        self::validarCorreoBusqueda($data['correo_busqueda'] ?? '');
 
         $sql = "INSERT INTO {$this->table}
                 (cuenta_id, sociedad_id, fecha_desde, fecha_hasta, carpeta_raiz, carpetas_json, estado)
@@ -175,7 +232,7 @@ class CorreoLote extends Model
         $params = [$id, (int) $data['cuenta_id'], $desdeTs, $hastaTs];
         $this->agregarFiltroCorreo($insert, $params, $data['correo_busqueda'] ?? '');
         if (empty($data['incluir_procesados'])) {
-            $insert .= ' AND NOT ' . self::YA_PROCESADO;
+            $insert .= ' AND NOT ' . self::yaProcesado($data['sociedad_id'] ?? 0);
         }
         $this->prepararTablaProcesados();
         $this->execute($insert, $params);
@@ -191,15 +248,18 @@ class CorreoLote extends Model
      *
      * @return array{total:int,procesados:int,nuevos:int}
      */
-    public function estimar($cuentaId, $desde, $hasta, $correoBusqueda = '')
+    public function estimar($cuentaId, $desde, $hasta, $correoBusqueda = '', $sociedadId = null)
     {
         $desdeTs = strtotime($desde . ' 00:00:00');
         $hastaTs = strtotime($hasta . ' +1 day 00:00:00');
         if ($desdeTs === false || $hastaTs === false) {
             return ['total' => 0, 'procesados' => 0, 'nuevos' => 0];
         }
+        // Sin decir cuál, la de quien está mirando: es la que va a trabajar
+        // el lote y la que decide qué cuenta como ya procesado.
+        $sociedadId = $sociedadId === null ? $this->sociedadId() : (int) $sociedadId;
         $sql = 'SELECT COUNT(*) AS total,
-                       COALESCE(SUM(' . self::YA_PROCESADO . '), 0) AS procesados
+                       COALESCE(SUM(' . self::yaProcesado($sociedadId) . '), 0) AS procesados
                   FROM correo_indice i
                  WHERE ' . self::CONDICIONES_CANDIDATO;
         $params = [(int) $cuentaId, $desdeTs, $hastaTs];
@@ -229,14 +289,21 @@ class CorreoLote extends Model
         $lista = true;
     }
 
-    private function agregarFiltroCorreo(&$sql, array &$params, $correoBusqueda)
+    /** El correo de búsqueda, en minúsculas; '' si no hay. Lanza si no es uno. */
+    private static function validarCorreoBusqueda($correoBusqueda)
     {
         $correo = mb_strtolower(trim((string) $correoBusqueda), 'UTF-8');
+        if ($correo !== '' && filter_var($correo, FILTER_VALIDATE_EMAIL) === false) {
+            throw new InvalidArgumentException('El correo de búsqueda no es válido.');
+        }
+        return $correo;
+    }
+
+    private function agregarFiltroCorreo(&$sql, array &$params, $correoBusqueda)
+    {
+        $correo = self::validarCorreoBusqueda($correoBusqueda);
         if ($correo === '') {
             return;
-        }
-        if (filter_var($correo, FILTER_VALIDATE_EMAIL) === false) {
-            throw new InvalidArgumentException('El correo de búsqueda no es válido.');
         }
 
         $like = '%' . addcslashes($correo, '%_\\') . '%';
@@ -261,8 +328,12 @@ class CorreoLote extends Model
 
     public function ultimo($cuentaId = 0)
     {
-        $where = $cuentaId > 0 ? 'WHERE l.cuenta_id = ?' : '';
-        $params = $cuentaId > 0 ? [(int) $cuentaId] : [];
+        $params = [];
+        $where = 'WHERE 1=1' . $this->condicionSociedad('l.', $params);
+        if ((int) $cuentaId > 0) {
+            $where .= ' AND l.cuenta_id = ?';
+            $params[] = (int) $cuentaId;
+        }
         $row = $this->fetchOne("SELECT l.*, c.nombre AS cuenta_nombre, s.nombre AS sociedad_nombre
                                FROM {$this->table} l
                                LEFT JOIN correo_cuentas c ON c.id = l.cuenta_id
@@ -278,16 +349,23 @@ class CorreoLote extends Model
      * cambiar de buzón o de módulo no puede hacerla desaparecer. El más
      * viejo primero, igual que el worker. Un lote pausado no cuenta: ahí la
      * quietud se pidió a propósito.
+     *
+     * "Sea de la cuenta que sea" no es "sea de la empresa que sea": una
+     * empresa recién registrada, todavía sin buzones, veía descargando el
+     * correo de otra.
      */
     public function enCurso()
     {
+        $params = [];
         $row = $this->fetchOne(
             "SELECT l.*, c.nombre AS cuenta_nombre, s.nombre AS sociedad_nombre
                FROM {$this->table} l
                LEFT JOIN correo_cuentas c ON c.id = l.cuenta_id
                LEFT JOIN sociedades s ON s.id = l.sociedad_id
-              WHERE l.estado IN ('pendiente', 'ejecutando')
-              ORDER BY l.id ASC LIMIT 1"
+              WHERE l.estado IN ('pendiente', 'ejecutando')"
+              . $this->condicionSociedad('l.', $params) . "
+              ORDER BY l.id ASC LIMIT 1",
+            $params
         );
         return $row ?: null;
     }
@@ -353,10 +431,36 @@ class CorreoLote extends Model
         }
         $ids = array_map('intval', array_column($items, 'id'));
         $marks = implode(',', array_fill(0, count($ids), '?'));
-        $params = array_merge([(int) $loteId], $ids);
-        $this->execute("UPDATE correo_lote_items SET estado = 'procesando', intentos = intentos + 1, iniciado_en = NOW()
-                        WHERE lote_id = ? AND id IN ({$marks}) AND estado = 'pendiente'", $params);
-        return $this->fetchAll("SELECT * FROM correo_lote_items WHERE id IN ({$marks}) ORDER BY id", $ids) ?: [];
+
+        // Firma de ESTA toma. El candado de archivo (lotes.lock) ordena a los
+        // procesos de una máquina, no a los de la oficina: dos computadoras
+        // —o una y la tarea programada— pueden llegar aquí con los mismos ids.
+        // El UPDATE decide quién se los lleva, y después se releen SOLO los
+        // que llevan esta firma. Antes se releía "WHERE id IN (…)" a secas,
+        // así que el que perdía el UPDATE se los llevaba igual y los dos
+        // bajaban e importaban el mismo correo.
+        if (!self::$hayColumnaTomadoPor) {
+            throw new RuntimeException(
+                'Falta la columna correo_lote_items.tomado_por, sin la cual dos computadoras '
+                . 'pueden bajar los mismos correos. Aplica '
+                . 'database/migrations/008_correo_lote_tomado_por.sql.'
+            );
+        }
+        $firma = bin2hex(random_bytes(8));
+        $params = array_merge([$firma, (int) $loteId], $ids);
+        $tomados = (int) $this->execute(
+            "UPDATE correo_lote_items SET estado = 'procesando', intentos = intentos + 1,
+                    iniciado_en = NOW(), tomado_por = ?
+              WHERE lote_id = ? AND id IN ({$marks}) AND estado = 'pendiente'",
+            $params
+        );
+        if ($tomados === 0) {
+            return [];
+        }
+        return $this->fetchAll(
+            "SELECT * FROM correo_lote_items WHERE id IN ({$marks}) AND tomado_por = ? ORDER BY id",
+            array_merge($ids, [$firma])
+        ) ?: [];
     }
 
     /**
@@ -375,6 +479,16 @@ class CorreoLote extends Model
                         WHERE id IN ({$marks}) AND estado = 'procesando'", $ids);
     }
 
+    /**
+     * Cierra un correo del lote.
+     *
+     * NO recalcula los contadores del lote: eso es trabajo de cerrarTanda(),
+     * una vez al final. Recalcular aquí costaba un UPDATE con cinco
+     * subconsultas —y la consulta del lote_id— por cada correo: con la base al
+     * otro lado de la red eran ~0,5 s de espera por correo antes de bajar
+     * ningún XML. Los estados de los items sí quedan escritos en el acto, que
+     * es lo que hace falta para no repetir trabajo si la corrida se interrumpe.
+     */
     public function finalizarItem($itemId, array $resumen)
     {
         $estado = in_array($resumen['estado'] ?? '', ['completado', 'omitido', 'error'], true)
@@ -388,7 +502,18 @@ class CorreoLote extends Model
             mb_substr((string) ($resumen['detalle'] ?? ''), 0, 65000, 'UTF-8'),
             (int) $itemId,
         ]);
-        $loteId = (int) $this->fetchColumn('SELECT lote_id FROM correo_lote_items WHERE id = ?', [(int) $itemId]);
+    }
+
+    /**
+     * Pone al día los contadores del lote y lo completa si ya no queda nada.
+     * Se llama UNA vez al terminar la tanda, no por correo.
+     */
+    public function cerrarTanda($loteId)
+    {
+        $loteId = (int) $loteId;
+        if ($loteId <= 0) {
+            return;
+        }
         $this->recalcular($loteId);
         $this->completarSiTermino($loteId);
     }
@@ -445,7 +570,9 @@ class CorreoLote extends Model
             $descarte !== null ? date('Y-m-d H:i:s') : null,
             $descarte !== null ? ($descarte['motivo'] ?? null) : null,
         ]);
-        $this->recalcular((int) $loteId);
+        // El contador de incidencias del lote sube con el recálculo del cierre
+        // de la tanda (cerrarTanda): una incidencia no tiene por qué pagar un
+        // UPDATE de cinco subconsultas en el acto.
     }
 
     public function incidencias($loteId, $limit = 20)
@@ -477,7 +604,10 @@ class CorreoLote extends Model
 
         $q = trim((string) ($filters['q'] ?? ''));
         if ($q !== '') {
-            $like = '%' . $q . '%';
+            // Quien busca "100%" busca ese texto, no "100 seguido de lo que
+            // sea": los comodines viajan escapados, igual que en
+            // CorreoIndice::buscar y en agregarFiltroCorreo.
+            $like = '%' . addcslashes($q, '%_\\') . '%';
             $where[] = "(x.mensaje LIKE ? OR x.tipo LIKE ?
                         OR COALESCE(NULLIF(x.asunto, ''), i.asunto, li.asunto, '') LIKE ?
                         OR COALESCE(i.remitente, li.remitente, '') LIKE ? OR li.carpeta LIKE ?)";
@@ -598,10 +728,34 @@ class CorreoLote extends Model
     }
 
     /**
+     * A qué incidencias alcanza una acción por id.
+     *
+     * Los ids llegan de la pantalla, así que por sí solos no prueban nada: sin
+     * esto, mandar los ids de otro buzón los descarta igual. Se acota al buzón
+     * que se está mirando y, además, a la empresa en curso; el JOIN va dentro
+     * de la propia escritura para que no quede un hueco entre comprobar y
+     * escribir.
+     */
+    private function alcanceIncidencias($cuentaId, array &$params)
+    {
+        $sql = '';
+        if ((int) $cuentaId > 0) {
+            $sql .= ' AND l.cuenta_id = ?';
+            $params[] = (int) $cuentaId;
+        }
+        $sociedad = $this->sociedadId();
+        if ($sociedad > 0) {
+            $sql .= ' AND l.sociedad_id = ?';
+            $params[] = $sociedad;
+        }
+        return $sql;
+    }
+
+    /**
      * Descarta por id. `$permanente` guarda además la firma, para que la
      * incidencia no vuelva a aparecer si el correo se reprocesa.
      */
-    public function descartarIncidencias(array $ids, $motivo = '', $usuarioId = null, $permanente = true)
+    public function descartarIncidencias(array $ids, $motivo = '', $usuarioId = null, $permanente = true, $cuentaId = 0)
     {
         $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
         if (!$ids) {
@@ -613,29 +767,41 @@ class CorreoLote extends Model
 
         $this->begin();
         try {
+            $paramsFirmas = $ids;
+            $alcance = $this->alcanceIncidencias($cuentaId, $paramsFirmas);
             $filas = $this->fetchAll(
-                "SELECT DISTINCT firma, tipo, asunto FROM correo_incidencias
-                  WHERE id IN ({$marcas}) AND firma <> ''",
-                $ids
+                "SELECT DISTINCT x.firma, x.tipo, x.asunto
+                   FROM correo_incidencias x
+                   JOIN correo_lotes l ON l.id = x.lote_id
+                  WHERE x.id IN ({$marcas}) AND x.firma <> ''{$alcance}",
+                $paramsFirmas
             );
 
-            $this->execute(
-                "UPDATE correo_incidencias
-                    SET descartada = 1, descartada_en = NOW(), descartada_por = ?, motivo = ?
-                  WHERE id IN ({$marcas})",
-                array_merge([$usuario, $motivo !== '' ? $motivo : null], $ids)
+            $paramsUpdate = array_merge([$usuario, $motivo !== '' ? $motivo : null], $ids);
+            $alcanceUpdate = $this->alcanceIncidencias($cuentaId, $paramsUpdate);
+            $descartadas = $this->execute(
+                "UPDATE correo_incidencias x
+                   JOIN correo_lotes l ON l.id = x.lote_id
+                    SET x.descartada = 1, x.descartada_en = NOW(), x.descartada_por = ?, x.motivo = ?
+                  WHERE x.id IN ({$marcas}){$alcanceUpdate}",
+                $paramsUpdate
             );
 
             $firmas = 0;
             if ($permanente) {
                 foreach ($filas as $f) {
-                    // Alcanza también a las apariciones de otros lotes: si algo
-                    // ya no interesa, no interesa en ninguna corrida.
+                    // Alcanza también a las apariciones de otros lotes del
+                    // mismo buzón: si algo ya no interesa, no interesa en
+                    // ninguna corrida. De otro buzón, no: la firma lleva
+                    // carpeta y UID, que se repiten entre cuentas distintas.
+                    $paramsFirma = [$usuario, $motivo !== '' ? $motivo : null, $f['firma']];
+                    $alcanceFirma = $this->alcanceIncidencias($cuentaId, $paramsFirma);
                     $this->execute(
-                        "UPDATE correo_incidencias
-                            SET descartada = 1, descartada_en = NOW(), descartada_por = ?, motivo = ?
-                          WHERE firma = ? AND descartada = 0",
-                        [$usuario, $motivo !== '' ? $motivo : null, $f['firma']]
+                        "UPDATE correo_incidencias x
+                           JOIN correo_lotes l ON l.id = x.lote_id
+                            SET x.descartada = 1, x.descartada_en = NOW(), x.descartada_por = ?, x.motivo = ?
+                          WHERE x.firma = ? AND x.descartada = 0{$alcanceFirma}",
+                        $paramsFirma
                     );
                     $this->execute(
                         "INSERT INTO correo_incidencias_descartes (firma, tipo, asunto, motivo, usuario_id)
@@ -652,10 +818,12 @@ class CorreoLote extends Model
             throw $e;
         }
 
-        return ['descartadas' => count($ids), 'firmas' => $firmas];
+        // Lo realmente descartado, no lo pedido: los ids que no son de este
+        // buzón no cuentan.
+        return ['descartadas' => (int) $descartadas, 'firmas' => $firmas];
     }
 
-    public function restaurarIncidencias(array $ids)
+    public function restaurarIncidencias(array $ids, $cuentaId = 0)
     {
         $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
         if (!$ids) {
@@ -665,26 +833,36 @@ class CorreoLote extends Model
 
         $this->begin();
         try {
+            $paramsFirmas = $ids;
+            $alcance = $this->alcanceIncidencias($cuentaId, $paramsFirmas);
             $firmas = array_column($this->fetchAll(
-                "SELECT DISTINCT firma FROM correo_incidencias
-                  WHERE id IN ({$marcas}) AND firma <> ''",
-                $ids
+                "SELECT DISTINCT x.firma
+                   FROM correo_incidencias x
+                   JOIN correo_lotes l ON l.id = x.lote_id
+                  WHERE x.id IN ({$marcas}) AND x.firma <> ''{$alcance}",
+                $paramsFirmas
             ), 'firma');
 
             foreach ($firmas as $firma) {
                 $this->execute('DELETE FROM correo_incidencias_descartes WHERE firma = ?', [$firma]);
+                $paramsFirma = [$firma];
+                $alcanceFirma = $this->alcanceIncidencias($cuentaId, $paramsFirma);
                 $this->execute(
-                    "UPDATE correo_incidencias
-                        SET descartada = 0, descartada_en = NULL, descartada_por = NULL, motivo = NULL
-                      WHERE firma = ?",
-                    [$firma]
+                    "UPDATE correo_incidencias x
+                       JOIN correo_lotes l ON l.id = x.lote_id
+                        SET x.descartada = 0, x.descartada_en = NULL, x.descartada_por = NULL, x.motivo = NULL
+                      WHERE x.firma = ?{$alcanceFirma}",
+                    $paramsFirma
                 );
             }
-            $this->execute(
-                "UPDATE correo_incidencias
-                    SET descartada = 0, descartada_en = NULL, descartada_por = NULL, motivo = NULL
-                  WHERE id IN ({$marcas})",
-                $ids
+            $paramsUpdate = $ids;
+            $alcanceUpdate = $this->alcanceIncidencias($cuentaId, $paramsUpdate);
+            $restauradas = $this->execute(
+                "UPDATE correo_incidencias x
+                   JOIN correo_lotes l ON l.id = x.lote_id
+                    SET x.descartada = 0, x.descartada_en = NULL, x.descartada_por = NULL, x.motivo = NULL
+                  WHERE x.id IN ({$marcas}){$alcanceUpdate}",
+                $paramsUpdate
             );
             $this->commit();
         } catch (Throwable $e) {
@@ -692,7 +870,7 @@ class CorreoLote extends Model
             throw $e;
         }
 
-        return ['restauradas' => count($ids)];
+        return ['restauradas' => (int) $restauradas];
     }
 
     /**

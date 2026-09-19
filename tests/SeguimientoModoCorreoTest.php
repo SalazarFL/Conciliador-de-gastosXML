@@ -253,13 +253,25 @@ assertModoCorreo(Seguimiento::normalizarItems(['xml_inventado|3']) === [],
 $vistaSeg = file_get_contents(__DIR__ . '/../app/views/seguimiento/index.php');
 
 preg_match('~<tr class="seg-head-labels">.*?</tr>~s', $vistaSeg, $mCab);
+// Siete escritas a mano: la casilla de marcar, las cinco de datos y la de las
+// acciones. Las demás las añade el catálogo de columnas, apagadas de fábrica,
+// y por eso no se cuentan aquí.
 assertModoCorreo($mCab && substr_count($mCab[0], '<th') === 7,
-    'la cabecera declara siete columnas');
+    'la cabecera declara sus siete columnas fijas');
+assertModoCorreo($mCab && strpos($mCab[0], 'Columnas::cabecerasExtra') !== false,
+    'y detrás de ellas van las que se pueden encender');
 assertModoCorreo($mCab && strpos($mCab[0], '>Monto<') !== false
     && strpos($mCab[0], '>Saldo<') !== false,
     'Monto y Saldo son dos columnas, no una');
-assertModoCorreo(strpos($vistaSeg, 'colspan="7"') !== false,
-    'la fila de "no hay nada" ocupa las siete');
+
+// La fila de "no hay nada" tiene que cruzar la tabla entera, con todas las
+// columnas encendidas: si se quedara en siete, al encender unas cuantas el
+// mensaje ocuparía media tabla y el resto saldría en blanco.
+require_once __DIR__ . '/../app/helpers/Columnas.php';
+preg_match('~<tr class="empty-row">\s*<td colspan="(\d+)"~', $vistaSeg, $mVacia);
+$columnasPosibles = count(Columnas::catalogo('seguimiento')) + 2;   // + casilla y acciones
+assertModoCorreo($mVacia && (int) $mVacia[1] >= $columnasPosibles,
+    'la fila de "no hay nada" cruza la tabla aunque se enciendan todas las columnas');
 assertModoCorreo(strpos($vistaSeg, 'name="col_monto"') !== false
     && strpos($vistaSeg, 'name="col_saldo"') !== false,
     'cada una conserva su casilla de búsqueda');

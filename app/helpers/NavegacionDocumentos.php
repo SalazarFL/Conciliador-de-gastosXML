@@ -10,7 +10,7 @@
  *
  * La lista de la que se pasa depende de DÓNDE se venía:
  *
- *   pago         el checklist de la semana, en su orden
+ *   pago         el checklist del pago, en su orden
  *   seguimiento  la cola de trabajo, con los filtros tal como quedaron
  *
  * Los filtros viajan en la URL y la cola se rehace acá con ellos: recorrer una
@@ -21,6 +21,12 @@
  */
 
 require_once __DIR__ . '/FacturaMatcher.php';
+
+// El contexto del pago se titula con Pago::etiqueta(). El modelo extiende
+// Model, así que se trae también: este ayudante lo usan pantallas que no
+// pasan por el arranque completo de la aplicación.
+require_once __DIR__ . '/../core/Model.php';
+require_once __DIR__ . '/../models/Pago.php';
 
 class NavegacionDocumentos
 {
@@ -69,7 +75,7 @@ class NavegacionDocumentos
      * Qué origen pide la URL.
      *
      * 'pp_listado' se sigue aceptando: era el nombre que tenía cuando el único
-     * origen posible era el pago semanal, y anda en enlaces ya guardados.
+     * origen posible era el pago, y anda en enlaces ya guardados.
      */
     private static function origenPedido(array $get)
     {
@@ -80,16 +86,16 @@ class NavegacionDocumentos
         return !empty($get['pp_listado']) ? 'pago' : '';
     }
 
-    /** El checklist de una semana, tal como se estaba viendo. */
+    /** El checklist de un pago, tal como se estaba viendo. */
     private static function desdePago(array $get, callable $modelo, $baseUrl)
     {
-        $listadoId = (int) ($get['ctx_lista'] ?? $get['pp_listado'] ?? 0);
-        if ($listadoId <= 0) {
+        $pagoId = (int) ($get['ctx_lista'] ?? $get['pp_listado'] ?? 0);
+        if ($pagoId <= 0) {
             return null;
         }
 
-        $listado = $modelo('PorPagar')->getListado($listadoId);
-        if ($listado === null) {
+        $pago = $modelo('Pago')->findById($pagoId);
+        if ($pago === null) {
             return null;
         }
 
@@ -104,7 +110,7 @@ class NavegacionDocumentos
 
         // Las facturas del pago salen de Facturas ERP: desde que la línea ES
         // la factura del ERP, el pago solo la marca.
-        $lineas = $modelo('FacturaErp')->getFacturasPago($listadoId, $filtros);
+        $lineas = $modelo('FacturaErp')->getFacturasPago($pagoId, $filtros);
         foreach ($lineas as $fila) {
             if ((string) (int) $fila['id'] === $actual) {
                 $idx = count($items);
@@ -130,20 +136,19 @@ class NavegacionDocumentos
             return null;
         }
 
-        $semana = trim((string) ($listado['semana_nombre'] ?? ''));
         // Los filtros vuelven en las dos direcciones, como en la cola de
         // seguimiento: en 'volver', para caer en el checklist tal como se
         // dejó, y en 'params', para que pasar al siguiente con las flechas
         // no rearme una lista distinta a mitad del recorrido.
         return [
             'origen'  => 'pago',
-            'titulo'  => (string) $listado['nombre'] . ($semana !== '' ? ' · ' . $semana : ''),
+            'titulo'  => Pago::etiqueta($pago),
             'volver'  => rtrim($baseUrl, '/') . '/por-pagar?'
-                       . http_build_query(array_merge(['listado_id' => $listadoId], $filtros)),
+                       . http_build_query(array_merge(['pago_id' => $pagoId], $filtros)),
             'idx'     => min($idx, count($items) - 1),
             'total'   => count($lineas),
             'params'  => self::paramsDelContexto('pago', $filtros)
-                       . '&ctx_lista=' . $listadoId,
+                       . '&ctx_lista=' . $pagoId,
             'items'   => $items,
         ];
     }
@@ -174,7 +179,7 @@ class NavegacionDocumentos
         // modo viaja entre los filtros del contexto y decide de qué tablas
         // sale la lista, así que recorrerla en el otro daría documentos que
         // no son los que estaban en pantalla.
-        $cola = $seguimiento->enModo($filtros['modo'])->cola($filtros, 1, self::TOPE);
+        $cola = $seguimiento->enModo($filtros['modo'])->cola($filtros, 1, self::TOPE, self::TOPE);
 
         $actual = (string) ($get['ctx_item'] ?? '');
         $items = [];
@@ -367,7 +372,7 @@ class NavegacionDocumentos
 
     /**
      * El color del punto de la tarjeta, en el vocabulario del respaldo que ya
-     * usaba la del pago semanal: respaldada / con diferencia / sin respaldo.
+     * usaba la del pago: respaldada / con diferencia / sin respaldo.
      */
     private static function estadoDe(array $fila)
     {

@@ -88,5 +88,5 @@ printf("Sin el mensaje: %d | Sin coincidencia de huella: %d | Sin buzón: %d | E
 
 if ($resumen['recuperados'] > 0) {
     echo "\nCorre ahora `php cli/organizar_documentos.php` para que la carpeta"
-       . " del pago semanal reciba su copia.\n";
+       . " del pago reciba su copia.\n";
 }

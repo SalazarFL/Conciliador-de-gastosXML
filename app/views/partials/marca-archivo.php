@@ -27,7 +27,7 @@ if ($marcaEstado === null || empty($marcaEstado['perdido']) || $marcaId <= 0) {
 $marcaQueFalta = trim((string) ($marcaEstado['que_falta'] ?? ''));
 ?>
 <span class="badge badge-perdido"
-      title="El <?= htmlspecialchars($marcaQueFalta !== '' ? $marcaQueFalta : 'archivo') ?> de este documento se archivó y ya no está en la carpeta compartida">
+      title="El <?= htmlspecialchars($marcaQueFalta !== '' ? $marcaQueFalta : 'archivo') ?> de este documento se archivó y ya no está donde se guardó: alguien lo movió o lo borró">
     <i class="fas fa-link-slash"></i>
     <?= $marcaQueFalta !== '' ? 'Falta el ' . htmlspecialchars($marcaQueFalta) : 'Archivo perdido' ?>
 </span>

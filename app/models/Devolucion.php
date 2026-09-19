@@ -19,6 +19,38 @@ class Devolucion extends Model
     // El PDF del reporte se archiva en la carpeta compartida.
     protected $camposRuta = ['ruta_pdf'];
 
+    public function __construct()
+    {
+        Esquema::unaVez(static::class, function () { $this->acotarHashPorSociedad(); });
+    }
+
+    /**
+     * La unicidad del PDF es por empresa, no por toda la base.
+     *
+     * La migración la escribió sobre `hash_pdf` solo, cuando había una sola
+     * empresa. Con dos, el reporte que la segunda sube choca contra el índice
+     * en vez de guardarse. Se rehace una vez y solo si sigue siendo de una
+     * columna.
+     */
+    private function acotarHashPorSociedad()
+    {
+        try {
+            $partes = (int) $this->fetchColumn(
+                "SELECT COUNT(*) FROM information_schema.STATISTICS
+                  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'devoluciones'
+                    AND INDEX_NAME = 'uq_dev_hash'"
+            );
+            if ($partes === 1) {
+                $this->execute(
+                    'ALTER TABLE devoluciones DROP INDEX `uq_dev_hash`,
+                       ADD UNIQUE KEY `uq_dev_hash` (`sociedad_id`, `hash_pdf`)'
+                );
+            }
+        } catch (Throwable $e) {
+            // Sin permisos de DDL queda para la migración manual.
+        }
+    }
+
     public function begin() { return self::getDB()->beginTransaction(); }
     public function commit() { return self::getDB()->commit(); }
     public function rollback()
@@ -30,17 +62,25 @@ class Devolucion extends Model
     }
     public function inTransaction() { return self::getDB()->inTransaction(); }
 
+    /**
+     * ¿Ya está este PDF de devolución? Se pregunta dentro de la empresa: el
+     * reporte lo imprime el ERP de cada una, y sin acotar, subirlo en la
+     * segunda contestaba "duplicada" señalando una devolución que quien lo
+     * subió no puede ni abrir.
+     */
     public function buscarPorHash($hashPdf)
     {
+        $params = [(string) $hashPdf];
         return $this->fetchOne(
-            'SELECT id, tipo, numero, archivo_pdf FROM devoluciones WHERE hash_pdf = ? LIMIT 1',
-            [(string) $hashPdf]
+            'SELECT id, tipo, numero, archivo_pdf FROM devoluciones WHERE hash_pdf = ?'
+            . $this->condicionSociedad('', $params) . ' LIMIT 1',
+            $params
         ) ?: null;
     }
 
     public function crear(array $d)
     {
-        return $this->insert(
+        $id = $this->insert(
             'INSERT INTO devoluciones
                 (sociedad_id, tipo, numero, sucursal, bodega, numero_factura,
                  factura_xml_id, proveedor_codigo_erp, proveedor_nombre_erp,
@@ -60,6 +100,18 @@ class Devolucion extends Model
                 $d['hash_pdf'], $d['advertencias'],
             ]
         );
+
+        // El PDF quedó en SharePoint: la fila lo anota, igual que las
+        // facturas. La ruta ya lo dice con su prefijo; la columna es para
+        // consultar y para el reconciliador. En disco no hay nada que anotar.
+        require_once __DIR__ . '/../helpers/AlmacenDocumentos.php';
+        $tipo = AlmacenDocumentos::tipoDeDireccion($d['ruta_pdf'] ?? '');
+        if ($tipo !== '' && (int) $id > 0) {
+            $this->execute('UPDATE devoluciones SET almacen = ?, item_pdf_id = ? WHERE id = ?',
+                [$tipo, (string) ($d['item_pdf_id'] ?? '') ?: null, (int) $id]);
+        }
+
+        return $id;
     }
 
     /** Los valores de una línea, en el orden en que van al INSERT. */
@@ -109,8 +161,10 @@ class Devolucion extends Model
         return $insertadas;
     }
 
+    /** Una devolución por su id, acotada: por aquí entran el detalle y el PDF. */
     public function getDevolucion($id)
     {
+        $params = [(int) $id];
         return $this->fetchOne(
             'SELECT d.*, p.razon_social AS proveedor_local, p.rfc AS proveedor_rfc,
                     f.consecutivo_completo AS factura_consecutivo, f.clave AS factura_clave,
@@ -118,8 +172,9 @@ class Devolucion extends Model
              FROM devoluciones d
              LEFT JOIN proveedores p ON p.id = d.proveedor_id
              LEFT JOIN facturas_xml f ON f.id = d.factura_xml_id
-             WHERE d.id = ? LIMIT 1',
-            [(int) $id]
+             WHERE d.id = ?'
+            . $this->condicionSociedad('d.', $params) . ' LIMIT 1',
+            $params
         ) ?: null;
     }
 

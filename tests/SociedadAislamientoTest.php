@@ -14,8 +14,8 @@ require_once __DIR__ . '/../app/core/Model.php';
 require_once __DIR__ . '/../app/models/Sociedad.php';
 require_once __DIR__ . '/../app/models/Factura.php';
 require_once __DIR__ . '/../app/models/FacturaErp.php';
-require_once __DIR__ . '/../app/models/Semana.php';
-require_once __DIR__ . '/../app/models/PorPagar.php';
+require_once __DIR__ . '/../app/models/Pago.php';
+require_once __DIR__ . '/../app/models/Notificacion.php';
 require_once __DIR__ . '/../app/models/CorreoCuenta.php';
 
 function assertAislamiento($condition, $message)
@@ -47,16 +47,23 @@ $proveedorId = 0;
 $limpiar = function () use ($pdo, $marca, &$socA, &$socB) {
     foreach ([$socA, $socB] as $id) {
         if ($id <= 0) { continue; }
-        // El pago semanal ya no tiene líneas propias: sus facturas son filas
+        // El pago ya no tiene líneas propias: sus facturas son filas
         // de facturas_erp marcadas, y esas se sueltan, no se borran.
-        $pdo->prepare('UPDATE facturas_erp SET porpagar_listado_id = NULL, semana_id = NULL WHERE porpagar_listado_id IN (SELECT id FROM porpagar_listados WHERE sociedad_id = ?)')->execute([$id]);
-        $pdo->prepare('DELETE FROM porpagar_listados WHERE sociedad_id = ?')->execute([$id]);
+        $pdo->prepare('UPDATE facturas_erp SET pago_id = NULL WHERE pago_id IN (SELECT id FROM pagos WHERE sociedad_id = ?)')->execute([$id]);
         $pdo->prepare('DELETE FROM facturas_xml WHERE sociedad_id = ?')->execute([$id]);
         $pdo->prepare('DELETE FROM facturas_erp WHERE sociedad_id = ?')->execute([$id]);
-        $pdo->prepare('DELETE FROM semanas WHERE sociedad_id = ?')->execute([$id]);
+        // Las incidencias cuelgan de su carga, así que se van primero.
+        $pdo->prepare('DELETE FROM facturas_erp_incidencias
+                        WHERE carga_id IN (SELECT id FROM facturas_erp_cargas WHERE sociedad_id = ?)')->execute([$id]);
+        $pdo->prepare('DELETE FROM facturas_erp_cargas WHERE sociedad_id = ?')->execute([$id]);
+        $pdo->prepare('DELETE FROM facturas_erp_descartes WHERE sociedad_id = ?')->execute([$id]);
+        $pdo->prepare('DELETE FROM notificaciones WHERE sociedad_id = ?')->execute([$id]);
+        $pdo->prepare('DELETE FROM pagos WHERE sociedad_id = ?')->execute([$id]);
         $pdo->prepare('DELETE FROM correo_cuenta_sociedades WHERE sociedad_id = ?')->execute([$id]);
         $pdo->prepare('DELETE FROM sociedades WHERE id = ? AND nombre LIKE ?')->execute([$id, $marca . '%']);
     }
+    // El aviso del grupo no cuelga de ninguna empresa: se busca por su marca.
+    $pdo->prepare('DELETE FROM notificaciones WHERE firma LIKE ?')->execute([$marca . '%']);
 };
 
 $proveedorId = (int) $pdo->query('SELECT MIN(id) FROM proveedores')->fetchColumn();
@@ -105,8 +112,7 @@ try {
 
     $facturas = new Factura();
     $erp = new FacturaErp();
-    $semanas = new Semana();
-    $porPagar = new PorPagar();
+    $pagos = new Pago();
 
     // ── Facturas ──
     $listaA = $facturas->setSociedad($socA)->buscarConImportacion();
@@ -131,7 +137,54 @@ try {
     $resumenA = (new FacturaErp())->setSociedad($socA)->resumen();
     assertAislamiento((int) $resumenA['saldo'] === 1000, 'el saldo del ERP de A no suma el de B');
 
-    // ── Matching del pago semanal ──
+    // ── Historial de cargas e incidencias ──
+    //
+    // La carga lleva su empresa; la incidencia la hereda de su carga. Sin
+    // acotar, una empresa recién registrada abría Facturas con el historial y
+    // las alertas de otra, que es como se descubrió esto.
+    $insCarga = $pdo->prepare(
+        "INSERT INTO facturas_erp_cargas (archivo_origen, sociedad_id, filas_leidas, insertadas)
+         VALUES (?, ?, 1, 1)"
+    );
+    $insCarga->execute([$marca . '_a.csv', $socA]);
+    $cargaA = (int) $pdo->lastInsertId();
+    $insCarga->execute([$marca . '_b.csv', $socB]);
+    $cargaB = (int) $pdo->lastInsertId();
+
+    $insInc = $pdo->prepare(
+        "INSERT INTO facturas_erp_incidencias (carga_id, tipo, severidad, proveedor_codigo,
+                                               proveedor_nombre, documento, detalle, firma)
+         VALUES (?, 'saldo_subio', 'alerta', '140099999', ?, '00100001010000991001', 'prueba', ?)"
+    );
+    $insInc->execute([$cargaA, $marca . ' PROV', $marca . '_firma']);
+    $insInc->execute([$cargaB, $marca . ' PROV', $marca . '_firma']);
+
+    $cargasA = (new FacturaErp())->setSociedad($socA)->cargas(50);
+    assertAislamiento(count($cargasA) === 1, 'A ve solo su historial de cargas');
+    assertAislamiento($cargasA[0]['archivo_origen'] === $marca . '_a.csv',
+        'el historial de A trae su archivo, no el de B');
+
+    $ultimaB = (new FacturaErp())->setSociedad($socB)->ultimaCarga();
+    assertAislamiento($ultimaB && $ultimaB['archivo_origen'] === $marca . '_b.csv',
+        'la última carga de B es la suya, aunque A haya cargado después');
+
+    assertAislamiento((new FacturaErp())->setSociedad($socA)->contarIncidencias([]) === 1,
+        'las incidencias de A no cuentan las de B');
+    $incA = (new FacturaErp())->setSociedad($socA)->incidencias([], 50);
+    assertAislamiento(count($incA) === 1 && (int) $incA[0]['carga_id'] === $cargaA,
+        'el listado de incidencias de A trae solo las de su carga');
+
+    // Descartar en A no puede callar la misma firma en B: la firma es
+    // proveedor+documento y se repite entre empresas del mismo grupo.
+    (new FacturaErp())->setSociedad($socA)->descartarIncidencias(
+        array_map('intval', array_column($incA, 'id')), 'prueba'
+    );
+    assertAislamiento((new FacturaErp())->setSociedad($socB)->contarIncidencias([]) === 1,
+        'un descarte hecho en A deja en pie la incidencia de B');
+    assertAislamiento((new FacturaErp())->setSociedad($socA)->contarIncidencias([]) === 0,
+        'el descarte sí surte efecto en A');
+
+    // ── Matching del pago ──
     // Ambas tienen una factura con el mismo consecutivo: A solo debe ver la
     // suya. El cruce del pago es por consecutivo y el consecutivo se repite
     // entre sociedades, así que sin este filtro A se respaldaría con el
@@ -145,23 +198,112 @@ try {
     $indiceA = (new FacturaErp())->setSociedad($socA)->getIndicePago();
     assertAislamiento(count($indiceA) === 1, 'el índice de facturas ERP de A no incluye las de B');
 
-    // ── Semanas ──
-    $semanaA = (int) (new Semana())->setSociedad($socA)->crear('Semana A ' . $marca, $socA);
-    $semanaB = (int) (new Semana())->setSociedad($socB)->crear('Semana B ' . $marca, $socB);
-    assertAislamiento($semanaA > 0 && $semanaB > 0, 'se crean semanas para ambas sociedades');
-    assertAislamiento(count((new Semana())->setSociedad($socA)->getAll()) === 1, 'A ve solo su semana');
-    assertAislamiento((new Semana())->setSociedad($socA)->existePara($semanaB) === false,
-        'A no puede seleccionar una semana de B');
-    assertAislamiento((new Semana())->setSociedad($socA)->existePara($semanaA) === true,
+    /*
+     * La misma clave en las dos empresas.
+     *
+     * `clave` es proveedor|documento|fecha: identifica una factura dentro de
+     * una empresa, y las del grupo le compran a los mismos proveedores. Con la
+     * unicidad puesta solo sobre la clave, la segunda de estas dos filas
+     * reventaba el INSERT y se llevaba por delante la carga entera.
+     */
+    $insErp->execute([$marca . '_repetida', $socA, $marca . ' PROV']);
+    $pdo->prepare(
+        "INSERT INTO facturas_erp (clave, sociedad_id, proveedor_codigo, proveedor_nombre, sucursal, tipo,
+                                   documento, numero_corto, fecha_emision, origen, moneda, monto, saldo)
+         VALUES (?, ?, '140099999', ?, 'CEDI', 'F', '00100001010000991002', '00991002', '2026-08-01', 'Local', '¢', 1000.00, 1000.00)"
+    )->execute([$marca . '_repetida', $socB, $marca . ' PROV']);
+    assertAislamiento((new FacturaErp())->setSociedad($socA)->contar() === 2,
+        'A ve sus dos filas, y la clave repetida de B no le suma ni le quita');
+    assertAislamiento((new FacturaErp())->setSociedad($socB)->contar() === 2,
+        'B pudo guardar una factura cuya clave ya existía en A');
+
+    // ── Pagos ──
+    $pagoA = (int) (new Pago())->setSociedad($socA)->crear('Pago A ' . $marca, $socA);
+    $pagoB = (int) (new Pago())->setSociedad($socB)->crear('Pago B ' . $marca, $socB);
+    assertAislamiento($pagoA > 0 && $pagoB > 0, 'se crean pagos para ambas sociedades');
+    assertAislamiento(count((new Pago())->setSociedad($socA)->getAll()) === 1, 'A ve solo su pago');
+    assertAislamiento((new Pago())->setSociedad($socA)->existePara($pagoB) === false,
+        'A no puede seleccionar un pago de B');
+    assertAislamiento((new Pago())->setSociedad($socA)->existePara($pagoA) === true,
         'A sí puede seleccionar la suya');
 
-    // ── Listados por pagar ──
-    $listadoA = (int) (new PorPagar())->setSociedad($socA)->crearListado('Listado A', $socA, $marca . '.xlsx', $semanaA);
-    (new PorPagar())->setSociedad($socB)->crearListado('Listado B', $socB, $marca . '.xlsx', $semanaB);
-    assertAislamiento(count((new PorPagar())->setSociedad($socA)->getListados(50)) === 1,
-        'A ve solo su listado por pagar');
-    assertAislamiento((new PorPagar())->setSociedad($socB)->getListado($listadoA) === null,
-        'B no puede abrir un listado de A por id');
+    // ── El archivo del pago ──
+    //
+    // Ya no hay una ficha aparte para el listado: el archivo se anota sobre el
+    // propio pago, así que el aislamiento es el mismo del pago.
+    (new Pago())->setSociedad($socA)->registrarArchivo($pagoA, $marca . '.xlsx', $socA);
+    (new Pago())->setSociedad($socB)->registrarArchivo($pagoB, $marca . '.xlsx', $socB);
+    assertAislamiento(count((new Pago())->setSociedad($socA)->getConDetalle(50)) === 1,
+        'A ve solo su pago, con su archivo');
+    assertAislamiento((new Pago())->setSociedad($socB)->getConSociedad($pagoA) === null,
+        'B no puede abrir un pago de A por id');
+
+    /*
+     * ── Abrir por su id algo de la otra empresa ──
+     *
+     * Es la puerta que no se ve: los listados están acotados, pero a la ficha
+     * de un documento, al XML, al PDF y a un pago se llega con un número en la
+     * dirección o en el formulario. Escribir el de la otra empresa no puede
+     * devolver nada, y en el caso de /documentos/xml y /documentos/pdf eso no
+     * era mirar datos ajenos sino descargarse el comprobante.
+     */
+    $idXmlDeB = (int) $pdo->query(
+        "SELECT id FROM facturas_xml WHERE sociedad_id = {$socB} AND tipo_documento = 'FE' LIMIT 1"
+    )->fetchColumn();
+    assertAislamiento($idXmlDeB > 0, 'la prueba tiene un comprobante de B con el que preguntar');
+    assertAislamiento(
+        (new Factura())->setSociedad($socA)->getOneWithProvider($idXmlDeB) === null,
+        'A no puede abrir —ni descargar— el comprobante de B por su id'
+    );
+    assertAislamiento(
+        (new Factura())->setSociedad($socA)->findById($idXmlDeB) === null,
+        'A no puede tomar el comprobante de B para respaldar una factura suya'
+    );
+    assertAislamiento(
+        (new Factura())->setSociedad($socB)->getOneWithProvider($idXmlDeB) !== null,
+        'B sí abre el suyo: el filtro acota, no tapa'
+    );
+
+    $idErpDeB = (int) $pdo->query(
+        "SELECT id FROM facturas_erp WHERE sociedad_id = {$socB} LIMIT 1"
+    )->fetchColumn();
+    assertAislamiento(
+        (new FacturaErp())->setSociedad($socA)->getFacturaPago($idErpDeB) === null,
+        'A no puede abrir la factura del ERP de B por su id'
+    );
+
+    assertAislamiento((new Pago())->setSociedad($socA)->findById($pagoB) === null,
+        'A no puede abrir el pago de B por su id');
+    assertAislamiento((new Pago())->setSociedad($socB)->findById($pagoB) !== null,
+        'B sí abre el suyo');
+
+    // ── La campana ──
+    //
+    // Un aviso es de una empresa o del grupo. El del grupo (sociedad_id 0) se
+    // ve desde todas y sigue juntando sus repeticiones en un solo renglón, que
+    // es lo que se perdería si "del grupo" se guardara como NULL.
+    $avisos = new Notificacion();
+    $firmaA = $marca . '|solo_de_A';
+    $firmaGrupo = $marca . '|del_grupo';
+    (new Notificacion())->setSociedad($socA)->avisar([
+        'tipo' => 'prueba', 'titulo' => 'Pendiente de A',
+        'firma' => $firmaA, 'sociedad_id' => $socA,
+    ]);
+    $avisos->avisar(['tipo' => 'prueba', 'titulo' => 'Del grupo', 'firma' => $firmaGrupo]);
+    $avisos->avisar(['tipo' => 'prueba', 'titulo' => 'Del grupo', 'firma' => $firmaGrupo]);
+
+    $contar = $pdo->prepare('SELECT COUNT(*), MAX(veces) FROM notificaciones WHERE firma = ?');
+    $contar->execute([$firmaGrupo]);
+    [$filasGrupo, $vecesGrupo] = array_values($contar->fetch(PDO::FETCH_NUM));
+    assertAislamiento((int) $filasGrupo === 1 && (int) $vecesGrupo === 2,
+        'un aviso del grupo repetido sigue siendo un solo renglón que cuenta las veces');
+
+    $deA = array_column((new Notificacion())->setSociedad($socA)->listar('pendiente', 500), 'firma');
+    $deB = array_column((new Notificacion())->setSociedad($socB)->listar('pendiente', 500), 'firma');
+    assertAislamiento(in_array($firmaA, $deA, true), 'A ve su propio aviso');
+    assertAislamiento(!in_array($firmaA, $deB, true), 'B no ve el aviso de A');
+    assertAislamiento(in_array($firmaGrupo, $deA, true) && in_array($firmaGrupo, $deB, true),
+        'el aviso del grupo se ve desde las dos');
 
     // ── Buzones de correo ──
     $cuentaId = (int) $pdo->query('SELECT MIN(id) FROM correo_cuentas')->fetchColumn();

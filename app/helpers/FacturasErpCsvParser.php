@@ -70,6 +70,11 @@ class FacturasErpCsvParser
         }
 
         $facturas = [];
+        // La fila cruda de cada factura, por su misma posición en $facturas.
+        // Solo hace falta si una identidad sale repetida y hay que mandar el
+        // grupo a la bandeja, que guarda las celdas tal como venían; llevarla
+        // dentro de la factura ensuciaría lo que después se importa.
+        $crudas = [];
         $totalesSucursal = [];
         $totalesProveedor = [];
         $noReconocidas = [];
@@ -163,6 +168,7 @@ class FacturasErpCsvParser
                 && count($c) >= 7 && self::esFecha($c[1]) && self::esFecha($c[2])
                 && self::esMonto($c[5]) && self::esMonto($c[6])) {
                 $documento = $m[2];
+                $crudas[count($facturas)] = ['fila' => $i + 1, 'celdas' => array_values($c)];
                 $facturas[] = [
                     'proveedor_codigo' => $proveedorCodigo,
                     'proveedor_nombre' => $proveedorNombre,
@@ -227,6 +233,18 @@ class FacturasErpCsvParser
             $facturas[$k]['clave'] = self::clave($f);
         }
 
+        // Cuántas reconoció el parser, antes de apartar ninguna: es lo que
+        // dice si el archivo es este reporte. Después de apartar, un archivo
+        // donde TODAS las filas resultaron indistinguibles quedaría en cero y
+        // se le echaría la culpa al archivo por el problema equivocado.
+        $reconocidas = count($facturas);
+
+        // Las que comparten identidad salen del listado y se van a preguntar.
+        // Va antes del cuadre a propósito: lo que se cuadra tiene que ser lo
+        // que de verdad va a entrar, o el descuadre mentiría en la dirección
+        // cómoda —diciendo que cuadra cuando faltan filas—.
+        list($facturas, $revision) = self::apartarIdentidadesRepetidas($facturas, $crudas, $revision);
+
         $cuadre = self::cuadrar($facturas, $totalesSucursal, $totalesProveedor, $totalGeneralSaldo);
 
         // Una línea sin clasificar ya no tumba el archivo entero.
@@ -238,13 +256,8 @@ class FacturasErpCsvParser
         // se afloja es el cuadre contra los totales impresos: si de verdad se
         // perdió plata, la diferencia sigue saliendo por ahí.
         $errores = [];
-        if (!$facturas) {
+        if ($reconocidas === 0) {
             $errores[] = 'No se reconoció ninguna factura: ¿es el reporte "Facturas por Proveedor"?';
-        }
-        $claves = array_column($facturas, 'clave');
-        $repetidas = count($claves) - count(array_unique($claves));
-        if ($repetidas > 0) {
-            $errores[] = $repetidas . ' factura(s) comparten identidad dentro del mismo archivo.';
         }
 
         return [
@@ -266,7 +279,7 @@ class FacturasErpCsvParser
             // Los totales impresos viajan con el resultado para poder volver
             // a cuadrar cuando se le sumen las líneas rescatadas: si no, una
             // línea que entró por la bandeja seguiría contándose como
-            // faltante y el descuadre sonaría todas las semanas.
+            // faltante y el descuadre sonaría todas los pagos.
             'totales' => [
                 'sucursal' => $totalesSucursal,
                 'proveedor' => $totalesProveedor,
@@ -298,6 +311,139 @@ class FacturasErpCsvParser
         $resultado['incidencias'] = self::analizarIncidencias($resultado['facturas'], $resultado['cuadre']);
 
         return $resultado;
+    }
+
+    /**
+     * Saca del listado las facturas que comparten identidad y manda a la
+     * bandeja TODAS las del grupo, no las que sobran.
+     *
+     * Antes esto tumbaba el archivo entero. El reflejo era el correcto —dos
+     * facturas con la misma clave no se pueden distinguir en la carga
+     * siguiente, y quedarse con una cualquiera es inventar—, pero el castigo
+     * no guardaba proporción con el daño: un reporte de 8.581 facturas que
+     * cuadra al colón se quedaba sin cargar por dos filas repetidas que entre
+     * las dos movían cero colones de saldo.
+     *
+     * Se apartan todas y no las repetidas porque no hay ninguna primera: las
+     * filas son idénticas, así que elegir cuál entra y cuál se pregunta sería
+     * una moneda al aire, y la que entrara se llevaría la identidad de la
+     * otra. Mandándolas juntas, quien revise las ve una al lado de la otra y
+     * decide con las dos a la vista.
+     *
+     * El caso real que lo destapó: el ERP imprime "sin número" como una
+     * ristra de ceros, que se descarta a propósito (si no, todas las facturas
+     * sin número colapsarían en una sola). Dos facturas del mismo proveedor,
+     * la misma fecha y el mismo monto, las dos sin número, quedan entonces
+     * indistinguibles sobre el papel aunque en el ERP sean dos registros.
+     *
+     * @param array $crudas Fila original de cada factura, por su índice.
+     * @return array [facturas que siguen, revisión con las apartadas dentro]
+     */
+    private static function apartarIdentidadesRepetidas(array $facturas, array $crudas, array $revision)
+    {
+        $porClave = [];
+        foreach ($facturas as $k => $f) {
+            $porClave[$f['clave']][] = $k;
+        }
+
+        $apartadas = [];
+        foreach ($porClave as $indices) {
+            if (count($indices) < 2) {
+                continue;
+            }
+            foreach ($indices as $orden => $k) {
+                $apartadas[$k] = true;
+                $f = $facturas[$k];
+                $celdas = $crudas[$k]['celdas'] ?? [];
+                $revision[] = [
+                    'fila_origen' => (int) ($crudas[$k]['fila'] ?? 0),
+                    // La clave que las choca es lo que las junta: con ella la
+                    // bandeja las presenta como un solo enredo y obliga a
+                    // decidir cuál entra viendo a las demás. Una línea suelta
+                    // no lleva grupo.
+                    'grupo' => (string) $f['clave'],
+                    'motivo' => self::motivoIdentidadRepetida($f, count($indices)),
+                    'celdas' => $celdas,
+                    // Ya se leyó entera: lo que falta es distinguirla, no
+                    // teclearla. Se entrega con todo puesto para que quien
+                    // revise solo tenga que escribir el número que el reporte
+                    // no trajo.
+                    'campos' => self::camposDeFactura($f),
+                    // El orden entra en la firma porque sin él las dos filas
+                    // —idénticas hasta en las celdas— tendrían la misma, y la
+                    // bandeja se queda con una sola por firma: la segunda
+                    // desaparecería sin que nadie la viera. Con el orden, cada
+                    // una guarda su propia decisión para las cargas que vienen.
+                    'firma' => LineaRevision::firma(
+                        'facturas_erp',
+                        $celdas,
+                        $f['proveedor_codigo'] . '#' . ($orden + 1)
+                    ),
+                ];
+            }
+        }
+
+        if (!$apartadas) {
+            return [$facturas, $revision];
+        }
+
+        $quedan = [];
+        foreach ($facturas as $k => $f) {
+            if (!isset($apartadas[$k])) {
+                $quedan[] = $f;
+            }
+        }
+
+        // Por número de fila, para que la bandeja siga el orden del reporte y
+        // las filas de un mismo grupo queden juntas.
+        usort($revision, function ($a, $b) {
+            return ((int) ($a['fila_origen'] ?? 0)) <=> ((int) ($b['fila_origen'] ?? 0));
+        });
+
+        return [$quedan, $revision];
+    }
+
+    /** Qué se le dice a quien abra la bandeja y encuentre estas filas. */
+    private static function motivoIdentidadRepetida(array $f, $cuantas)
+    {
+        $senas = (string) $f['documento'] !== ''
+            ? 'el mismo documento (' . $f['documento'] . ') y la misma fecha ('
+              . self::fechaCorta($f['fecha_emision']) . ')'
+            : 'la misma fecha (' . self::fechaCorta($f['fecha_emision']) . ') y el mismo monto ('
+              . number_format((float) $f['monto'], 2) . '), y ninguna trae número de documento';
+
+        return sprintf(
+            'El proveedor %s trae %d filas con %s. Al ser idénticas, la próxima carga no podría saber '
+            . 'cuál es cuál. Ponele a cada una su número, o descartá las que sobren.',
+            $f['proveedor_codigo'],
+            (int) $cuantas,
+            $senas
+        );
+    }
+
+    /**
+     * Una factura ya leída, en la forma que espera la bandeja de revisión.
+     *
+     * Los importes van con dos decimales y punto porque así los reconoce
+     * `LineaRevision::mapaDeCampos` contra la celda de la que salieron, y de
+     * ese mapa depende que la corrección se pueda reaplicar la semana que
+     * viene, cuando el saldo ya sea otro.
+     */
+    private static function camposDeFactura(array $f)
+    {
+        return [
+            'proveedor_codigo' => (string) $f['proveedor_codigo'],
+            'proveedor_nombre' => (string) $f['proveedor_nombre'],
+            'sucursal' => (string) $f['sucursal'],
+            'tipo' => (string) $f['tipo'],
+            'documento' => (string) $f['documento'],
+            'fecha_emision' => (string) $f['fecha_emision'],
+            'fecha_vence' => (string) $f['fecha_vence'],
+            'origen' => (string) $f['origen'],
+            'moneda' => (string) $f['moneda'],
+            'monto' => number_format((float) $f['monto'], 2, '.', ''),
+            'saldo' => number_format((float) $f['saldo'], 2, '.', ''),
+        ];
     }
 
     /**

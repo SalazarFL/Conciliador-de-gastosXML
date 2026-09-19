@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/XmlParser.php';
 require_once __DIR__ . '/DocumentoArchivo.php';
+require_once __DIR__ . '/RutaDocumento.php';
 require_once __DIR__ . '/../models/Factura.php';
 require_once __DIR__ . '/../models/FacturaErp.php';
 require_once __DIR__ . '/../models/FacturaXmlDetalle.php';
@@ -23,6 +24,9 @@ class XmlDocumentImporter
     private $proveedores;
     private $archivo;
 
+    /** id de empresa => nombre, para no preguntarlo por cada documento. */
+    private $nombresEmpresa = [];
+
     public function __construct($carpetaRaiz = '')
     {
         $this->facturas = new Factura();
@@ -30,8 +34,103 @@ class XmlDocumentImporter
         $this->archivo = new DocumentoArchivo($carpetaRaiz);
     }
 
+    /**
+     * El archivo apuntando a la carpeta de una empresa.
+     *
+     * Una carga de correo trae documentos de la empresa del lote, y el mismo
+     * importador puede usarse para varias seguidas: la carpeta se resuelve por
+     * documento y no se recuerda entre uno y otro.
+     */
+    private function archivoDe($sociedadId)
+    {
+        $sociedadId = (int) $sociedadId;
+        if ($sociedadId <= 0) {
+            // No se sabe de quién es: va a la carpeta de los indefinidos, no
+            // revuelto con los de una empresa cualquiera.
+            return $this->archivo->paraEmpresa(DocumentoArchivo::EMPRESA_SIN_DEFINIR);
+        }
+        // La sociedad decide también DÓNDE: su carpeta y su almacén.
+        if (!array_key_exists($sociedadId, $this->nombresEmpresa)) {
+            $fila = (new Sociedad())->findById($sociedadId);
+            $this->nombresEmpresa[$sociedadId] = is_array($fila) ? (string) $fila['nombre'] : '';
+        }
+        $nombre = $this->nombresEmpresa[$sociedadId];
+        return $this->archivo->paraSociedad(
+            $sociedadId,
+            $nombre !== '' ? $nombre : DocumentoArchivo::EMPRESA_SIN_DEFINIR
+        );
+    }
+
+    /**
+     * Sin listado de proveedores no entra nada.
+     *
+     * Es el portón, y va acá porque los cinco caminos del XML —el correo, la
+     * cola, la carga a mano, la entrada automática y las notas— terminan todos
+     * en este método. Ponerlo en cada uno dejaría el hueco el día que alguien
+     * agregue el sexto.
+     *
+     * Se lanza excepción en vez de devolver un fallo silencioso para que el
+     * archivo NO se borre: quien llama borra el temporal solo cuando la
+     * importación salió bien. El comprobante se queda donde está y entra
+     * cuando la lista esté cargada.
+     */
+    private function exigirListado()
+    {
+        if (!class_exists('ProveedorCodigoErp')) {
+            $ruta = __DIR__ . '/../models/ProveedorCodigoErp.php';
+            if (!class_exists('Model') || !is_file($ruta)) {
+                return;
+            }
+            require_once $ruta;
+        }
+        if (ProveedorCodigoErp::hayListado()) {
+            return;
+        }
+        throw new RuntimeException(
+            'Todavía no se ha cargado el listado de proveedores, así que este comprobante no se '
+            . 'puede procesar: sin saber de quién es cada código, se engancharía a ciegas. '
+            . 'Cargá la Lista de Proveedores en Configuración y volvé a intentarlo. '
+            . 'El archivo no se perdió.'
+        );
+    }
+
+    /**
+     * Los cinco caminos del XML llegan acá con rutas de dos clases: los que
+     * subió una persona están en esta máquina, y los que vienen de la bandeja
+     * o de la cola están en el almacén. Todo lo de abajo —leer el XML, sacar
+     * los hashes, archivar— necesita un archivo local, así que se consigue una
+     * vez en la entrada y no en cada uno de los sitios que lo leen.
+     */
     public function importar($xmlPath, $pdfPath = null, array $contexto = [])
     {
+        return RutaDocumento::conArchivoLocal($xmlPath, function ($xmlLocal) use ($pdfPath, $contexto) {
+            // Un PDF que no se puede leer no frena al XML: el comprobante
+            // entra y el PDF queda pendiente, igual que si no hubiera venido.
+            // Es lo que ya pasaba con un PDF ausente, y por eso no se lanza.
+            $pdfLocal = null;
+            $esTemporal = false;
+            if (is_string($pdfPath) && $pdfPath !== '') {
+                if (RutaDocumento::esAbsoluta($pdfPath) && is_file($pdfPath)) {
+                    $pdfLocal = $pdfPath;
+                } else {
+                    $pdfLocal = RutaDocumento::rutaLocal($pdfPath);
+                    $esTemporal = $pdfLocal !== null;
+                }
+            }
+            try {
+                return $this->importarLocal($xmlLocal, $pdfLocal, $contexto);
+            } finally {
+                if ($esTemporal) {
+                    RutaDocumento::soltarLocal($pdfLocal);
+                }
+            }
+        });
+    }
+
+    private function importarLocal($xmlPath, $pdfPath, array $contexto)
+    {
+        $this->exigirListado();
+
         $doc = XmlInvoiceParser::parseCfdiFromFile($xmlPath);
         $tipo = strtoupper(trim((string) ($doc['tipo_documento'] ?? 'FE')));
 
@@ -66,6 +165,15 @@ class XmlDocumentImporter
             (string) ($doc['rfc_emisor'] ?? ''),
             (string) ($doc['razon_social_emisor'] ?? '')
         );
+
+        // El comprobante entra igual; lo que se pregunta es a qué código del
+        // ERP pertenece. Un emisor que no está en el catálogo no tiene ninguna
+        // factura a la que pegarse, así que el XML queda guardado pero suelto
+        // hasta que alguien le dé un código o diga que ese proveedor no va.
+        $this->avisarSiNoPerteneceANingunCodigo(
+            (string) ($doc['rfc_emisor'] ?? ''),
+            (string) ($doc['razon_social_emisor'] ?? '')
+        );
         $hash = (string) ($doc['hash_documento'] ?? ($doc['hash_xml'] ?? ''));
         $existente = $hash !== '' ? $this->facturas->findByHashRecord($hash) : null;
         if (!$existente && !empty($doc['consecutivo_completo'])) {
@@ -80,7 +188,8 @@ class XmlDocumentImporter
             return $this->completarExistente($existente, $xmlPath, $pdfPath, $doc, $contexto);
         }
 
-        $archivado = $this->archivo->archivar(
+        // La carpeta es la de la empresa del documento, no una sola para todas.
+        $archivado = $this->archivoDe($contexto['sociedad_id'] ?? 0)->archivar(
             $xmlPath,
             is_string($pdfPath) ? $pdfPath : null,
             $doc,
@@ -95,7 +204,7 @@ class XmlDocumentImporter
             $this->facturas->begin();
             $id = (int) $this->facturas->crear([
                 'importacion_id' => !empty($contexto['importacion_id']) ? (int) $contexto['importacion_id'] : null,
-                'semana_id' => $tipo === 'FE' && !empty($contexto['semana_id']) ? (int) $contexto['semana_id'] : null,
+                'pago_id' => $tipo === 'FE' && !empty($contexto['pago_id']) ? (int) $contexto['pago_id'] : null,
                 // Quien importa manda: el worker de un lote de correo trabaja
                 // con la sociedad DEL LOTE, que puede no ser la seleccionada
                 // en pantalla si alguien cambió de empresa mientras corría.
@@ -125,6 +234,12 @@ class XmlDocumentImporter
                 'fecha_correo' => $contexto['fecha_correo'] ?? null,
                 'archivado_en' => $archivado['archivado_en'],
                 'hash_xml' => $archivado['hash_xml'],
+                // Dónde quedó: la fila lo anota sola a partir de la ruta y
+                // de estos ids (ver Factura::anotarAlmacen).
+                'item_xml_id' => $archivado['item_xml_id'] ?? '',
+                'etag_xml' => $archivado['etag_xml'] ?? '',
+                'item_pdf_id' => $archivado['item_pdf_id'] ?? '',
+                'etag_pdf' => $archivado['etag_pdf'] ?? '',
                 'metadata' => json_encode($metadata, JSON_UNESCAPED_UNICODE),
             ]);
             $this->facturas->commit();
@@ -136,14 +251,14 @@ class XmlDocumentImporter
 
         // Aquí NO se reorganiza el árbol: el documento se queda donde lo dejó
         // DocumentoArchivo al archivarlo —la carpeta de su mes—, y si le toca
-        // entrar a un pago semanal, la copia la deja el acomodo de la tarea
+        // entrar a un pago, la copia la deja el acomodo de la tarea
         // programada. Importar no puede quedarse esperando a que se recorra el
         // archivo entero.
         if ($tipo === 'NC') {
             $this->extraerDetalle((int) $id, (string) $archivado['ruta_xml']);
         }
 
-        $enganche = $this->engancharConErp($tipo, (int) $id, $doc);
+        $enganche = $this->engancharConErp($tipo, (int) $id, $doc, (int) ($contexto['sociedad_id'] ?? 0));
 
         return [
             'estado' => 'importado',
@@ -153,7 +268,7 @@ class XmlDocumentImporter
             'documento' => $doc,
             'archivado' => $archivado,
             'erp' => $enganche,
-            'semana_id' => $enganche['semana_id'] ?? null,
+            'pago_id' => $enganche['pago_id'] ?? null,
         ];
     }
 
@@ -161,19 +276,30 @@ class XmlDocumentImporter
      * Busca la factura del ERP que corresponde a este comprobante y las
      * empareja.
      *
-     * Solo facturas: una nota de crédito no respalda un pago semanal.
+     * Solo facturas: una nota de crédito no respalda un pago.
      *
      * Nunca lanza. Que el enganche falle no puede tumbar una importación que ya
      * está guardada y archivada; si no engancha, el comprobante queda igual que
      * antes y la verificación del pago lo recoge después.
+     *
+     * Busca en la empresa DEL DOCUMENTO, no en la seleccionada. El worker de
+     * cli/ corre sin sesión: ahí "la seleccionada" es la empresa por omisión, y
+     * un lote de otra empresa buscaba su factura entre las de aquella. No
+     * encontraba ninguna —el consecutivo es de otro juego de facturas— y los
+     * comprobantes de la segunda empresa se quedaban sin enganchar, sin que
+     * nada avisara.
      */
-    private function engancharConErp($tipo, $facturaId, array $doc)
+    private function engancharConErp($tipo, $facturaId, array $doc, $sociedadId = 0)
     {
         if ($tipo !== 'FE') {
             return ['estado' => 'no_aplica'];
         }
         try {
-            return (new FacturaErp())->engancharXml(
+            $erp = new FacturaErp();
+            if ((int) $sociedadId > 0) {
+                $erp->setSociedad((int) $sociedadId);
+            }
+            return $erp->engancharXml(
                 $facturaId,
                 (string) ($doc['consecutivo_completo'] ?? ''),
                 (string) ($doc['numero_factura_asistente'] ?? ''),
@@ -184,21 +310,75 @@ class XmlDocumentImporter
         }
     }
 
+    /**
+     * Avisa cuando el emisor de un comprobante no está en el catálogo del ERP.
+     *
+     * Es la pregunta que antes no se hacía: el sistema guardaba el XML de
+     * cualquiera y solo se notaba el problema mucho después, cuando la factura
+     * del ERP se quedaba sin respaldo sin explicación. Ahora se pregunta en el
+     * momento, que es cuando alguien todavía se acuerda de por qué llegó ese
+     * correo.
+     *
+     * Un aviso por cédula y no por comprobante: la decisión es sobre el
+     * proveedor, y treinta facturas del mismo emisor son una sola pregunta.
+     * La firma se encarga de eso.
+     *
+     * Nunca lanza: el comprobante ya está guardado y el aviso es un extra. Si
+     * la campana falla, la importación tiene que seguir igual.
+     */
+    private function avisarSiNoPerteneceANingunCodigo($cedula, $nombre)
+    {
+        try {
+            // Con guardia, como arriba: quien ya tenga la clase cargada —o
+            // puesta a propósito, en las pruebas— no la ve redeclararse.
+            if (!class_exists('ProveedorCodigoErp')) {
+                require_once __DIR__ . '/../models/ProveedorCodigoErp.php';
+            }
+            require_once __DIR__ . '/../models/Notificacion.php';
+
+            $cedula = ProveedorCodigoErp::normalizarCedula($cedula);
+            if ($cedula === '' || ProveedorCodigoErp::conoceCedula($cedula)) {
+                return;
+            }
+
+            $nombre = trim((string) $nombre) ?: ('cédula ' . $cedula);
+
+            (new Notificacion())->avisar([
+                'tipo' => 'proveedor_sin_codigo',
+                'severidad' => 'media',
+                'titulo' => 'Llegó un comprobante de un proveedor sin código',
+                'detalle' => $nombre . ' (cédula ' . $cedula . ') no tiene ningún código en el sistema. '
+                           . 'Sus comprobantes quedan guardados, pero no se les puede buscar factura '
+                           . 'hasta saber cuál es su código. Dáselo acá, o decí que no se procesa.',
+                'firma' => 'proveedor_sin_codigo|' . $cedula,
+                // Del grupo y no de una empresa: el catálogo de proveedores del
+                // ERP es uno solo, igual que el mapa de códigos que reemplazó.
+                'ref_tabla' => 'proveedor_codigo_erp',
+                'ref_clave' => $cedula,
+                'datos' => ['cedula' => $cedula, 'nombre' => $nombre],
+            ]);
+        } catch (Throwable $e) {
+            // El comprobante ya quedó guardado; la campana es un extra.
+        }
+    }
+
     private function completarExistente(array $existente, $xmlPath, $pdfPath, array $doc, array $contexto)
     {
         $cambios = [];
         $creados = [];
         $tipo = strtoupper((string) ($existente['tipo_documento'] ?? ($doc['tipo_documento'] ?? 'FE')));
-        $semanaAnterior = !empty($existente['semana_id']) ? (int) $existente['semana_id'] : null;
-        $semanaDestino = $tipo === 'FE' && !empty($contexto['semana_id'])
-            ? (int) $contexto['semana_id']
+        $pagoAnterior = !empty($existente['pago_id']) ? (int) $existente['pago_id'] : null;
+        $pagoDestino = $tipo === 'FE' && !empty($contexto['pago_id'])
+            ? (int) $contexto['pago_id']
             : null;
-        $mismaSemana = $semanaDestino !== null && $semanaAnterior === $semanaDestino;
-        $moverSemana = $semanaDestino !== null && $semanaAnterior !== $semanaDestino;
+        $mismoPago = $pagoDestino !== null && $pagoAnterior === $pagoDestino;
+        $moverPago = $pagoDestino !== null && $pagoAnterior !== $pagoDestino;
 
         // Repara rutas históricas obsoletas si el XML vuelve a llegar.
-        if (empty($existente['ruta_xml']) || !is_file((string) $existente['ruta_xml'])) {
-            $creados = $this->archivo->archivar(
+        if (empty($existente['ruta_xml']) || !RutaDocumento::existe((string) $existente['ruta_xml'])) {
+            $creados = $this->archivoDe(
+                $existente['sociedad_id'] ?? ($contexto['sociedad_id'] ?? 0)
+            )->archivar(
                 $xmlPath,
                 is_string($pdfPath) ? $pdfPath : null,
                 $doc,
@@ -206,8 +386,10 @@ class XmlDocumentImporter
             );
             $cambios = $creados;
         } elseif (is_string($pdfPath) && $pdfPath !== '' && is_file($pdfPath)
-            && (empty($existente['ruta_pdf']) || !is_file((string) $existente['ruta_pdf']))) {
-            $cambios = $this->archivo->archivarPdfPara($existente, $pdfPath);
+            && (empty($existente['ruta_pdf']) || !RutaDocumento::existe((string) $existente['ruta_pdf']))) {
+            $cambios = $this->archivoDe(
+                    $existente['sociedad_id'] ?? ($contexto['sociedad_id'] ?? 0)
+                )->archivarPdfPara($existente, $pdfPath);
             $creados = $cambios;
         }
 
@@ -220,16 +402,13 @@ class XmlDocumentImporter
         try {
             $this->facturas->begin();
             $this->facturas->actualizarArchivos((int) $existente['id'], $cambios);
-            if ($moverSemana) {
-                $this->facturas->asignarSemana((int) $existente['id'], $semanaDestino);
+            if ($moverPago) {
+                $this->facturas->asignarPago((int) $existente['id'], $pagoDestino);
             }
             $this->facturas->commit();
         } catch (Throwable $e) {
             $this->facturas->rollback();
             DocumentoArchivo::eliminarCreados($creados);
-            if (!empty($creados['pdf_creado']) && !empty($creados['ruta_pdf']) && is_file($creados['ruta_pdf'])) {
-                @unlink($creados['ruta_pdf']);
-            }
             throw $e;
         }
 
@@ -240,26 +419,33 @@ class XmlDocumentImporter
 
         // Un comprobante que ya estaba puede no haberse enganchado nunca —
         // llegó antes de que su factura entrara a un pago—. Se reintenta.
-        $enganche = $this->engancharConErp($tipo, (int) $existente['id'], $doc);
-        if (!empty($enganche['semana_id'])) {
-            $semanaDestino = (int) $enganche['semana_id'];
-            $moverSemana = $semanaAnterior !== $semanaDestino;
-            $mismaSemana = !$moverSemana;
+        $enganche = $this->engancharConErp(
+            $tipo,
+            (int) $existente['id'],
+            $doc,
+            // Un comprobante que ya estaba lleva su empresa consigo; el contexto
+            // de esta importación puede venir vacío.
+            (int) ($existente['sociedad_id'] ?? ($contexto['sociedad_id'] ?? 0))
+        );
+        if (!empty($enganche['pago_id'])) {
+            $pagoDestino = (int) $enganche['pago_id'];
+            $moverPago = $pagoAnterior !== $pagoDestino;
+            $mismoPago = !$moverPago;
         }
 
-        $pdfDisponible = !empty($cambios['ruta_pdf']) || (!empty($existente['ruta_pdf']) && is_file((string) $existente['ruta_pdf']));
-        $estado = $moverSemana
-            ? 'movida_semana'
-            : ($mismaSemana ? 'duplicado_semana' : (!empty($cambios['ruta_pdf']) ? 'pdf_completado' : 'duplicado'));
+        $pdfDisponible = !empty($cambios['ruta_pdf']) || (!empty($existente['ruta_pdf']) && RutaDocumento::existe((string) $existente['ruta_pdf']));
+        $estado = $moverPago
+            ? 'movido_pago'
+            : ($mismoPago ? 'duplicado_pago' : (!empty($cambios['ruta_pdf']) ? 'pdf_completado' : 'duplicado'));
         return [
             'estado' => $estado,
             'id' => (int) $existente['id'],
             'tipo_documento' => $tipo,
             'pdf_pendiente' => !$pdfDisponible,
-            'semana_anterior' => $semanaAnterior,
-            'semana_id' => $moverSemana ? $semanaDestino : $semanaAnterior,
-            'movida_semana' => $moverSemana,
-            'duplicado_misma_semana' => $mismaSemana,
+            'pago_anterior' => $pagoAnterior,
+            'pago_id' => $moverPago ? $pagoDestino : $pagoAnterior,
+            'movido_pago' => $moverPago,
+            'duplicado_mismo_pago' => $mismoPago,
             'documento' => $doc,
             'archivado' => $cambios,
             'erp' => $enganche,
@@ -268,7 +454,7 @@ class XmlDocumentImporter
 
     private function extraerDetalle($id, $rutaXml)
     {
-        if ($rutaXml === '' || !is_file($rutaXml)) {
+        if ($rutaXml === '' || !RutaDocumento::existe($rutaXml)) {
             return;
         }
         try {

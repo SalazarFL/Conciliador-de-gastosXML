@@ -17,79 +17,13 @@ require_once __DIR__ . '/../app/helpers/AlmacenDocumentos.php';
 require_once __DIR__ . '/../app/helpers/AlmacenEnDisco.php';
 require_once __DIR__ . '/../app/helpers/RutaDocumento.php';
 require_once __DIR__ . '/../app/helpers/EstadoArchivo.php';
+require_once __DIR__ . '/soporte/AlmacenDePrueba.php';
 
 function assertAlmacen($condicion, $mensaje)
 {
     if (!$condicion) {
         fwrite(STDERR, "FAIL: {$mensaje}\n");
         exit(1);
-    }
-}
-
-/**
- * Un almacén que vive en memoria. No existe ningún archivo detrás: si algo
- * contesta bien con esto puesto, es que preguntó por la puerta.
- */
-class AlmacenDePrueba extends AlmacenDocumentos
-{
-    public $documentos = [];   // ruta => contenido
-    public $enLaNube = [];     // rutas que existen pero no sueltan contenido
-    public $soltados = [];
-
-    public function existe($ruta)
-    {
-        $ruta = $this->clave($ruta);
-        return isset($this->documentos[$ruta]) || in_array($ruta, $this->enLaNube, true);
-    }
-
-    public function abrir($ruta)
-    {
-        $ruta = $this->clave($ruta);
-        if (!isset($this->documentos[$ruta])) {
-            return false;
-        }
-        $fp = fopen('php://memory', 'r+');
-        fwrite($fp, $this->documentos[$ruta]);
-        rewind($fp);
-        return $fp;
-    }
-
-    public function tamano($ruta)
-    {
-        $ruta = $this->clave($ruta);
-        return isset($this->documentos[$ruta]) ? strlen($this->documentos[$ruta]) : null;
-    }
-
-    public function rutaLocal($ruta)
-    {
-        $ruta = $this->clave($ruta);
-        if (!isset($this->documentos[$ruta])) {
-            return null;
-        }
-        $tmp = tempnam(sys_get_temp_dir(), 'alm');
-        file_put_contents($tmp, $this->documentos[$ruta]);
-        return $tmp;
-    }
-
-    public function soltarLocal($rutaLocal)
-    {
-        $this->soltados[] = $rutaLocal;
-        @unlink($rutaLocal);
-    }
-
-    public function porQueNoSeLee($ruta)
-    {
-        return 'Está en el almacén de prueba y no suelta contenido.';
-    }
-
-    public function descripcion()
-    {
-        return 'el almacén de prueba';
-    }
-
-    private function clave($ruta)
-    {
-        return ltrim(str_replace('\\', '/', (string) $ruta), '/');
     }
 }
 
@@ -154,7 +88,7 @@ assertAlmacen($estado['perdido'] === true,
 //
 // El ZIP necesita archivos de verdad. Con los documentos lejos hay que bajarlos
 // a un temporal, y ese temporal hay que limpiarlo: si no, armar el ZIP de un
-// pago semanal dejaría cientos de archivos sueltos en el disco del servidor.
+// pago dejaría cientos de archivos sueltos en el disco del servidor.
 
 $local = RutaDocumento::rutaLocal('2026/08/FE_00000123.xml');
 assertAlmacen($local !== null && is_file($local),
@@ -168,6 +102,67 @@ assertAlmacen($almacen->soltados === [$local] && !is_file($local),
 
 assertAlmacen(RutaDocumento::rutaLocal('2026/08/NO_ESTA.xml') === null,
     'de lo que no está no hay archivo local que dar');
+
+// ── Escribir por la puerta ────────────────────────────────────────────────
+//
+// Archivar dos veces el mismo comprobante es lo NORMAL —un proveedor reenvía
+// el correo, una importación se reintenta— y no puede ser un error. Pero dos
+// documentos distintos con el mismo nombre sí tienen que frenar, porque el
+// segundo taparía al primero sin que nadie se entere.
+
+$origen = tempnam(sys_get_temp_dir(), 'org');
+file_put_contents($origen, '<NotaCredito/>');
+$hashOrigen = hash('sha256', '<NotaCredito/>');
+
+$escrito = $almacen->escribir('2026/09/NC_00000500.xml', $origen);
+assertAlmacen($escrito['creado'] === true && $escrito['hash'] === $hashOrigen,
+    'escribir() deja el documento y dice que lo creó');
+assertAlmacen($almacen->existe('2026/09/NC_00000500.xml'),
+    'y desde ese momento el almacén lo da por existente');
+
+$otraVez = $almacen->escribir('2026/09/NC_00000500.xml', $origen);
+assertAlmacen($otraVez['creado'] === false,
+    'escribir lo MISMO otra vez no es un error: no se reescribe y se avisa que ya estaba');
+
+$distinto = tempnam(sys_get_temp_dir(), 'org');
+file_put_contents($distinto, '<NotaCredito otra="1"/>');
+$choco = false;
+try {
+    $almacen->escribir('2026/09/NC_00000500.xml', $distinto);
+} catch (AlmacenConflicto $e) {
+    $choco = true;
+    assertAlmacen($e->hashExistente() === $hashOrigen,
+        'el conflicto dice el hash de lo que ya estaba, para que quien llama decida');
+}
+assertAlmacen($choco, 'escribir algo DISTINTO donde ya hay un documento tiene que frenar');
+
+// Mover conserva el contenido y deja libre el origen. Es lo que hace el
+// organizador cuando un documento cambia de carpeta.
+$almacen->mover('2026/09/NC_00000500.xml', '2026/09/Notas/NC_00000500.xml');
+assertAlmacen(!$almacen->existe('2026/09/NC_00000500.xml')
+    && $almacen->existe('2026/09/Notas/NC_00000500.xml'),
+    'mover() deja el documento en el destino y lo saca del origen');
+
+// Copiar conserva los dos. Es lo que hace la carpeta de un pago, y la
+// diferencia importa: mover ahí dentro perdió los respaldos de un pago entero.
+$almacen->copiar('2026/09/Notas/NC_00000500.xml', 'PAGOS/semana 40/NC_00000500.xml');
+assertAlmacen($almacen->existe('2026/09/Notas/NC_00000500.xml')
+    && $almacen->existe('PAGOS/semana 40/NC_00000500.xml'),
+    'copiar() deja el original donde estaba: la carpeta del pago es material de entrega');
+
+$identidad = $almacen->identidad('2026/09/Notas/NC_00000500.xml');
+assertAlmacen(is_array($identidad) && $identidad['tamano'] === strlen('<NotaCredito/>'),
+    'identidad() describe el documento sin traer su contenido');
+assertAlmacen($almacen->identidad('2026/09/NO_ESTA.xml') === null,
+    'y de lo que no está no hay identidad que dar');
+
+assertAlmacen($almacen->borrar('PAGOS/semana 40/NC_00000500.xml') === true,
+    'borrar() se lleva el documento');
+assertAlmacen($almacen->borrar('PAGOS/semana 40/NC_00000500.xml') === false,
+    'y borrar lo que ya no está NO es un fallo: lo que se pedía era que no estuviera');
+
+@unlink($origen);
+@unlink($distinto);
 
 // ── El almacén de disco sigue siendo el de por omisión ────────────────────
 

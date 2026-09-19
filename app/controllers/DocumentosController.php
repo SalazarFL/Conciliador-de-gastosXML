@@ -62,7 +62,7 @@ class DocumentosController extends Controller
         }
         if (count($ids) > 200) {
             $this->json(['ok' => false, 'message' => 'Son demasiados de una vez: repón hasta 200. '
-                . 'Para una semana entera está `php cli/recuperar_documentos.php --aplicar`.'], 422);
+                . 'Para un pago entero está `php cli/recuperar_documentos.php --aplicar`.'], 422);
         }
 
         @set_time_limit(180);
@@ -114,8 +114,11 @@ class DocumentosController extends Controller
         $registro = $this->loadModel('Factura')->getOneWithProvider($id);
         $campo = $tipo === 'pdf' ? 'ruta_pdf' : 'ruta_xml';
         $ruta = $registro ? trim((string) ($registro[$campo] ?? '')) : '';
-        $real = $ruta !== '' ? realpath($ruta) : false;
-        if (!$registro || $real === false || !is_file($real)) {
+        // Se le pregunta al almacén, no al disco: realpath() solo sabe de
+        // sistemas de archivos y contestaría "no está" de todo documento que
+        // viva en SharePoint. La ruta ya viene resuelta por la puerta.
+        $real = $ruta;
+        if (!$registro || $ruta === '' || !RutaDocumento::existe($ruta)) {
             http_response_code(404);
             header('Content-Type: text/plain; charset=utf-8');
             // Decir por qué, no solo que no está: si la fila conserva la ruta,
@@ -123,7 +126,7 @@ class DocumentosController extends Controller
             // eso tiene arreglo desde el listado.
             $seArchivo = $registro && $ruta !== '';
             echo $seArchivo
-                ? 'Este ' . strtoupper($tipo) . ' se archivó y ya no está en la carpeta compartida. '
+                ? 'Este ' . strtoupper($tipo) . ' se archivó y ya no está donde se guardó. '
                     . 'Volvé al renglón de este documento: sale marcado "Archivo perdido", y ahí mismo '
                     . 'está el botón para volver a bajarlo del correo.'
                 : ($tipo === 'pdf' ? 'El PDF está pendiente o no está disponible.' : 'El XML local no está disponible.');

@@ -275,7 +275,9 @@ try {
         'las cinco identidades calculadas son distintas entre si'
     );
 
-    $modelo = new NotaCredito();
+    // Acotado a la empresa de la prueba, como lo hace la aplicación: las dos
+    // entradas por id del modelo —getListado y getLinea— respetan ese alcance.
+    $modelo = (new NotaCredito())->setSociedad($sociedadA);
 
     // 1) Primera foto: las dos notas son nuevas.
     $metaInicial = $meta($sociedadA, 'inicial', count($loteInicial));
@@ -291,7 +293,7 @@ try {
     $contarCargas->execute([$sociedadA]);
     $cargasAntesDeRevisarEsquema = (int) $contarCargas->fetchColumn();
     Esquema::olvidar();
-    $modelo = new NotaCredito();
+    $modelo = (new NotaCredito())->setSociedad($sociedadA);
     $contarCargas->execute([$sociedadA]);
     assertNotaCreditoUpsert(
         (int) $contarCargas->fetchColumn() === $cargasAntesDeRevisarEsquema,

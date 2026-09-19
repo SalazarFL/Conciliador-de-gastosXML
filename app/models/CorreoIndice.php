@@ -49,6 +49,49 @@ class CorreoIndice extends Model
 
     // ── Búsqueda local (rápida) ────────────────────────────────────
 
+    /** Cuántas palabras del buscador se llevan a la consulta. */
+    private const MAX_TERMINOS = 8;
+
+    /**
+     * Una fecha que existe de verdad, en aaaa-mm-dd.
+     *
+     * El patrón solo por sí mismo deja pasar el 30 de febrero, y strtotime lo
+     * corre al 2 de marzo: la búsqueda terminaba filtrando por un rango que
+     * nadie pidió, sin decir nada. checkdate es lo que separa una fecha de
+     * algo que se le parece.
+     */
+    private static function esFecha($valor)
+    {
+        if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', (string) $valor, $m)) {
+            return false;
+        }
+        return checkdate((int) $m[2], (int) $m[3], (int) $m[1]);
+    }
+
+    /**
+     * Las palabras con las que se va a buscar.
+     *
+     * Cada término agrega hasta cinco `LIKE '%…%'` —que no usan índice— y la
+     * consulta se arma dos veces (el COUNT y la página). Pegar el cuerpo de un
+     * correo en el buscador (540 palabras, medido) producía 2 700 LIKE y 48 KB
+     * de SQL, dos veces. Con un texto largo se buscan solo las palabras más
+     * largas, que son las que de verdad acotan; el resultado es un superset
+     * del que daría el texto entero, así que no se pierde nada de vista.
+     */
+    private static function terminosBusqueda($texto)
+    {
+        $terminos = preg_split('/\s+/', (string) $texto, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        if (count($terminos) <= self::MAX_TERMINOS) {
+            return $terminos;
+        }
+
+        $candidatos = array_values(array_unique($terminos));
+        usort($candidatos, static function ($a, $b) {
+            return mb_strlen($b, 'UTF-8') <=> mb_strlen($a, 'UTF-8');
+        });
+        return array_slice($candidatos, 0, self::MAX_TERMINOS);
+    }
+
     /**
      * Busca en el índice. $texto se parte en términos y TODOS deben
      * aparecer (substring, sin distinguir mayúsculas) en el campo del
@@ -80,8 +123,7 @@ class CorreoIndice extends Model
 
         $fechaDesde = trim((string) $fechaDesde);
         $fechaHasta = trim((string) $fechaHasta);
-        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $fechaDesde)
-            && preg_match('/^\d{4}-\d{2}-\d{2}$/', $fechaHasta)) {
+        if (self::esFecha($fechaDesde) && self::esFecha($fechaHasta)) {
             $where[] = "timestamp >= ? AND timestamp < ?";
             $params[] = strtotime($fechaDesde . ' 00:00:00');
             $params[] = strtotime($fechaHasta . ' +1 day 00:00:00');
@@ -97,7 +139,7 @@ class CorreoIndice extends Model
         }
 
         $textoLimpio = trim((string) $texto);
-        $terminos = preg_split('/\s+/', $textoLimpio, -1, PREG_SPLIT_NO_EMPTY);
+        $terminos = self::terminosBusqueda($textoLimpio);
 
         // Una dirección completa se busca en los campos de destinatarios,
         // aunque el selector general también incluya asunto/archivo. El LIKE
@@ -228,8 +270,7 @@ class CorreoIndice extends Model
 
         $fechaDesde = trim((string) $fechaDesde);
         $fechaHasta = trim((string) $fechaHasta);
-        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $fechaDesde)
-            && preg_match('/^\d{4}-\d{2}-\d{2}$/', $fechaHasta)) {
+        if (self::esFecha($fechaDesde) && self::esFecha($fechaHasta)) {
             $where[] = 'timestamp >= ? AND timestamp < ?';
             $params[] = strtotime($fechaDesde . ' 00:00:00');
             $params[] = strtotime($fechaHasta . ' +1 day 00:00:00');

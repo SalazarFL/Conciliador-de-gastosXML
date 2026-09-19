@@ -8,6 +8,7 @@
 
 require_once __DIR__ . '/ReporteErpParser.php';
 require_once __DIR__ . '/RutaDocumento.php';
+require_once __DIR__ . '/AlmacenDocumentos.php';
 require_once __DIR__ . '/DevolucionVerificador.php';
 require_once __DIR__ . '/../models/Devolucion.php';
 
@@ -48,7 +49,8 @@ class DevolucionImporter
             ];
         }
 
-        $archivado = $this->archivarPdf($rutaPdf, $parsed, $hash);
+        $archivado = $this->archivarPdf($rutaPdf, $parsed, $hash,
+            !empty($contexto['sociedad_id']) ? (int) $contexto['sociedad_id'] : null);
         $datos = $this->mapear($parsed, $contexto, $nombreOriginal, $archivado, $hash);
 
         try {
@@ -58,7 +60,7 @@ class DevolucionImporter
             $this->modelo->commit();
         } catch (Throwable $e) {
             $this->modelo->rollback();
-            @unlink($archivado['ruta']);
+            AlmacenDocumentos::de($archivado['ruta'])->borrar($archivado['ruta']);
             throw $e;
         }
 
@@ -83,12 +85,12 @@ class DevolucionImporter
         ];
     }
 
-    private function archivarPdf($rutaPdf, array $parsed, $hash)
+    private function archivarPdf($rutaPdf, array $parsed, $hash, $sociedadId = null)
     {
-        // En la carpeta compartida, no en storage/: la fila de la devolución
-        // la consulta todo el grupo y su PDF tiene que abrirse desde cualquier
-        // computadora.
-        $dir = RutaDocumento::carpetaTrabajo('DEVOLUCIONES/' . date('Y'));
+        // Donde archiva la empresa —la carpeta compartida o SharePoint— y no
+        // en storage/: la fila de la devolución la consulta todo el grupo y
+        // su PDF tiene que abrirse desde cualquier computadora.
+        $dir = RutaDocumento::carpetaTrabajo('DEVOLUCIONES/' . date('Y'), $sociedadId);
 
         $numero = (string) ($parsed['tipo'] === 'boleta_local'
             ? ($parsed['no_boleta'] ?? '0')
@@ -97,10 +99,13 @@ class DevolucionImporter
             . '_' . substr($hash, 0, 8) . '.pdf';
         $destino = $dir . DIRECTORY_SEPARATOR . $nombre;
 
-        if (!copy($rutaPdf, $destino)) {
-            throw new RuntimeException('No se pudo archivar el PDF de la devolución.');
-        }
-        return ['archivo' => $nombre, 'ruta' => $destino];
+        // El PDF viene de public/uploads, que es de esta máquina: se entrega al
+        // almacén y el temporal deja de ser asunto de nadie. El nombre lleva
+        // los primeros 8 del hash, así que dos subidas del mismo reporte caen
+        // en el mismo destino y la escritura es idempotente.
+        $escrito = AlmacenDocumentos::de($destino)->escribir($destino, $rutaPdf, ['hash' => $hash]);
+
+        return ['archivo' => $nombre, 'ruta' => $escrito['ruta'], 'item_id' => (string) ($escrito['item_id'] ?? '')];
     }
 
     private function mapear(array $p, array $contexto, $nombreOriginal, array $archivado, $hash)
@@ -132,6 +137,7 @@ class DevolucionImporter
                 'nc_esperada_costo' => (float) $p['nc_esperada_costo'] > 0 ? (float) $p['nc_esperada_costo'] : null,
                 'archivo_pdf' => $nombreOriginal,
                 'ruta_pdf' => $archivado['ruta'],
+                'item_pdf_id' => $archivado['item_id'] ?? '',
                 'hash_pdf' => $hash,
                 'advertencias' => $advertencias,
             ];
@@ -158,6 +164,7 @@ class DevolucionImporter
             'nc_esperada_costo' => null,
             'archivo_pdf' => $nombreOriginal,
             'ruta_pdf' => $archivado['ruta'],
+            'item_pdf_id' => $archivado['item_id'] ?? '',
             'hash_pdf' => $hash,
             'advertencias' => $advertencias,
         ];

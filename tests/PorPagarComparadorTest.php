@@ -1,14 +1,14 @@
 <?php
 /**
- * Comparación de un archivo nuevo contra el pago que la semana ya tiene.
+ * Comparación de un archivo nuevo contra el pago que el pago ya tiene.
  *
  * Comparar se volvió una resta de conjuntos: cada fila del archivo se resolvió
- * a una factura del ERP, la semana tiene otras marcadas, y la diferencia dice
+ * a una factura del ERP, el pago tiene otras marcadas, y la diferencia dice
  * cuáles entran y cuáles salen. El estado 'modificada' desapareció con la copia
  * de los datos: no hay dos versiones de una factura que puedan discrepar.
  */
 require_once __DIR__ . '/../app/core/Model.php';
-require_once __DIR__ . '/../app/helpers/PagoSemanalResolutor.php';
+require_once __DIR__ . '/../app/helpers/PagoResolutor.php';
 require_once __DIR__ . '/../app/helpers/PorPagarComparador.php';
 
 function assertComparador($condition, $message)
@@ -115,6 +115,6 @@ $r = PorPagarComparador::comparar(
     []
 );
 assertComparador($r['resumen']['nueva'] === 1 && $r['resumen']['faltante'] === 0,
-    'contra una semana sin pago, todo lo resuelto entra');
+    'contra un pago sin pago, todo lo resuelto entra');
 
-echo "OK: comparador del pago semanal contra Facturas ERP\n";
+echo "OK: comparador del pago contra Facturas ERP\n";

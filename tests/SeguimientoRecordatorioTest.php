@@ -36,6 +36,8 @@ class SeguimientoRecordatorioFalso extends Seguimiento
         return strpos($sql, 'FROM seguimiento s') !== false ? $this->vencidos : [];
     }
     protected function fetchOne($sql, $params = []) { return null; }
+    // El candado de los recordatorios: libre, como en una base sin nadie más.
+    protected function fetchColumn($sql, $params = []) { return strpos($sql, '_LOCK(') !== false ? 1 : 0; }
     public function begin()    { return true; }
     public function commit()   { return true; }
     public function rollback() { return true; }

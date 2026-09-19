@@ -1,6 +1,6 @@
 <?php
 /**
- * Compara un archivo de pago contra las facturas que la semana ya tiene.
+ * Compara un archivo de pago contra las facturas que el pago ya tiene.
  *
  * Se volvió mucho más simple de lo que era, y no por recortarlo: por lo que
  * dejó de existir. Cuando el pago guardaba una copia de cada renglón del
@@ -9,7 +9,7 @@
  * una nueva. De ahí salían los estados 'modificada' y la mitad de las reglas.
  *
  * Ahora el archivo no aporta datos: aporta una selección. Cada renglón se
- * resuelve a una factura del ERP —eso lo hace PagoSemanalResolutor— y comparar
+ * resuelve a una factura del ERP —eso lo hace PagoResolutor— y comparar
  * es restar dos conjuntos de identificadores. No puede haber una factura
  * "modificada" porque no hay copia que se desincronice: los datos son los del
  * ERP, y son los mismos antes y después.
@@ -20,7 +20,7 @@
 class PorPagarComparador
 {
     /**
-     * @param array $resolucion Salida de PagoSemanalResolutor::resolver().
+     * @param array $resolucion Salida de PagoResolutor::resolver().
      * @param array $asignadas  Facturas del ERP hoy en el pago (id, documento,
      *                          proveedor_nombre, fecha_emision, saldo…).
      * @return array ['lineas' => [...], 'resumen' => [...]]
@@ -40,7 +40,7 @@ class PorPagarComparador
             $estado = (string) $fila['estado'];
 
             // Lo que el resolutor no pudo resolver se informa tal cual: no es
-            // una diferencia con la semana, es un problema del archivo o del
+            // una diferencia con el pago, es un problema del archivo o del
             // reporte del ERP, y se arregla en otro sitio.
             if ($estado !== 'resuelta') {
                 $lineas[] = self::linea($estado, $fila, null, $fila['motivo']);
@@ -50,16 +50,16 @@ class PorPagarComparador
             $vistas[$erpId] = true;
             if (isset($actuales[$erpId])) {
                 $lineas[] = self::linea('igual', $fila, $actuales[$erpId],
-                    'Ya está en el pago de esta semana.');
+                    'Ya está en el pago de este pago.');
             } else {
                 $lineas[] = self::linea('nueva', $fila, null,
                     empty($fila['movida_desde'])
-                        ? 'Entraría al pago de esta semana.'
-                        : 'Entraría a esta semana quitándosela al pago #' . (int) $fila['movida_desde'] . '.');
+                        ? 'Entraría al pago de este pago.'
+                        : 'Entraría a este pago quitándosela al pago #' . (int) $fila['movida_desde'] . '.');
             }
         }
 
-        // Lo que la semana tiene y el archivo nuevo no menciona.
+        // Lo que el pago tiene y el archivo nuevo no menciona.
         foreach ($actuales as $erpId => $factura) {
             if (isset($vistas[$erpId])) {
                 continue;
@@ -77,7 +77,7 @@ class PorPagarComparador
         }
 
         // 'en_otro_pago' salió de la lista: una factura que ya está en el pago
-        // de otra semana dejó de ser un conflicto y entra como cualquier otra,
+        // de otro pago dejó de ser un conflicto y entra como cualquier otra,
         // moviéndose. Sigue contándose aparte, en 'reasignada'.
         $resumen = array_fill_keys(
             ['nueva', 'igual', 'faltante', 'ausente', 'ambigua', 'repetida', 'error'],

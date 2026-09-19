@@ -17,10 +17,32 @@
 estados separan los mensajes pendientes, en proceso, capturados, sin documentos
 y con error; `intentos` y `reintentar_en` permiten reintentos sin duplicar.
 
-Una fila `capturado` solo indica que sus comprobantes llegaron a
-`correo_bandeja` con `origen = 'automatica'`. No crea una importación, no marca
-`correo_procesados` y no archiva documentos: la importación sigue requiriendo
-confirmación manual en la Bandeja.
+Una fila `capturado` indica que sus comprobantes llegaron a `correo_bandeja`
+con `origen = 'automatica'`. Con la entrada automática encendida —lo normal—
+los que están limpios se archivan y registran en el acto, y su fila de la
+bandeja queda en `importada`; los que no (rechazados por Hacienda, de otra
+cédula, o los que fallaron al guardarse) se quedan en `pendiente` esperando a
+una persona.
+
+Lo que no cambia en ninguno de los dos casos: no se crea una importación
+(`importaciones`) —la entrada automática llama al importador directamente, sin
+pasar por la cola— y no se marca `correo_procesados`, que es del modo
+Descargas.
+
+### Los pagos
+
+`pagos` es la ficha de una tanda de facturas que se paga junta: su
+`fecha_pago` —que es lo que la identifica—, un `nombre` opcional para
+distinguir dos del mismo día, la `carpeta_pago` donde se reúnen los XML y PDF
+para entregarla, y de qué `archivo_origen` salió.
+
+Sus líneas no viven acá: son las filas de `facturas_erp` con `pago_id`
+apuntando a este pago. `total_lineas` es ese conteo, recontado, no una copia.
+
+Esto estuvo en dos tablas hasta la migración 007: `semanas` (después `pagos`)
+con el nombre, y `porpagar_listados` con el archivo. Iban siempre de a una, y
+cada factura del ERP llevaba dos apuntadores diciendo lo mismo. Ver
+`database/migrations/006_pagos.sql` y `007_pago_unico.sql`.
 
 ### 1. `proveedores`
 **Propósito:** Catálogo normalizado de proveedores/emisores de facturas.

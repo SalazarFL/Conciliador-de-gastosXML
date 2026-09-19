@@ -2,8 +2,11 @@
 /**
  * Controlador de Home
  * Panel principal: sociedades (con la activa se trabaja) y estado del
- * último listado de facturas por pagar.
+ * último pago.
  */
+
+// La vista nombra el pago con Pago::etiqueta().
+require_once __DIR__ . '/../models/Pago.php';
 
 class HomeController extends Controller
 {
@@ -39,11 +42,11 @@ class HomeController extends Controller
         }
 
         try {
-            $listados = $this->loadModel('PorPagar')->getListados(1);
-            if (!empty($listados)) {
-                $ultimoListado = $listados[0];
+            $ultimos = $this->loadModel('Pago')->getConDetalle(1);
+            if (!empty($ultimos)) {
+                $ultimoListado = $ultimos[0];
                 // El semáforo del pago vive en las facturas del ERP marcadas
-                // para esa semana, no en una tabla de líneas propia.
+                // para ese pago, no en una tabla de líneas propia.
                 $resumenListado = $this->loadModel('FacturaErp')
                     ->resumenRespaldoPago((int) $ultimoListado['id']);
             }

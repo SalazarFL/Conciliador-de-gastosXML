@@ -11,7 +11,7 @@
  * Lo que se prueba es que esa decisión se guarde UNA vez y valga desde
  * entonces: para las facturas que ya estaban sin respaldo y para las que
  * lleguen después. Si no, el usuario tendría que repetir el emparejamiento
- * manual en cada factura de ese proveedor, cada semana.
+ * manual en cada factura de ese proveedor, cada pago.
  */
 require_once __DIR__ . '/../app/core/Model.php';
 require_once __DIR__ . '/../app/models/Proveedor.php';

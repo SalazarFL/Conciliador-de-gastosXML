@@ -4,6 +4,12 @@
  * Maneja registro y despacho de rutas
  */
 
+// La comprobación de permisos y el registro de la bitácora ocurren ANTES de
+// que exista un controlador, así que ambos se cargan aquí y no por loadModel.
+require_once __DIR__ . '/Permisos.php';
+require_once __DIR__ . '/Csrf.php';
+require_once __DIR__ . '/../models/Bitacora.php';
+
 class Router
 {
     protected $routes = [
@@ -91,7 +97,35 @@ class Router
                 if (preg_match($pattern, $uri, $matches)) {
                     // Extraer parámetros nombrados
                     $params = array_filter($matches, 'is_string', ARRAY_FILTER_USE_KEY);
-                    
+
+                    /*
+                     * El único sitio por el que pasa TODO. Por eso la
+                     * comprobación de permisos vive aquí y no en cada
+                     * controlador: una pantalla nueva que se olvide de
+                     * llamar a requireAlgo() no queda desprotegida, y quien
+                     * escriba la dirección a mano choca con la misma puerta
+                     * que quien pulsó el botón.
+                     *
+                     * Se comprueba contra la ruta REGISTRADA
+                     * ('/facturas/ver/{id}'), no contra la pedida, para que
+                     * el permiso no dependa del id que traiga.
+                     */
+                    Permisos::guardia($method, $route['uri']);
+
+                    // Y todo lo que escribe tiene que venir de una pantalla
+                    // de la aplicación, no de una página ajena que aprovecha
+                    // la sesión abierta. Mismo motivo para ponerlo aquí: una
+                    // acción nueva queda protegida sin acordarse de nada.
+                    if ($method !== 'GET' && $method !== 'HEAD') {
+                        Csrf::exigir($route['uri']);
+                    }
+
+                    // Y aquí se deja programado el renglón de la bitácora, si
+                    // esta ruta cambia algo. Se escribe al terminar la
+                    // petición: casi todos los controladores acaban en un
+                    // exit y nada puesto "después" llegaría a correr.
+                    Bitacora::vigilar($method, $route['uri'], $params);
+
                     return $this->execute($route['callback'], $params);
                 }
             }

@@ -10,7 +10,7 @@ puesto de pruebas.
 > **Esto no es un segundo servidor.** Lo que se trabaje aquí **no llega a
 > nadie** y se pierde entero la próxima vez que se refresque la copia. Sirve
 > para probar, para consultar y para capacitar. Capturar correo o cerrar un
-> pago semanal se hace siempre contra la base de la oficina.
+> pago se hace siempre contra la base de la oficina.
 
 Para el modelo normal —una base compartida y varias computadoras— ver
 [`INSTALACION.md`](INSTALACION.md).

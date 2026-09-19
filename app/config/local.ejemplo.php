@@ -36,4 +36,14 @@ return [
      * Vacío = buscar 'pdftotext' en el PATH del sistema.
      */
     'pdftotext_path' => '',
+
 ];
+
+/**
+ * Nota sobre la clave de cifrado de los buzones (app/helpers/Secreto.php):
+ * NO va aquí. Vive en su propio archivo, app/config/local.clave.php, porque
+ * `cambiar-base.ps1` pisa local.php con el perfil de base que se elija y se la
+ * llevaría por delante. Se crea con `php cli/clave_secretos.php` y ese archivo
+ * se copia tal cual al resto de computadoras: la base es una sola y todas
+ * abren los mismos buzones.
+ */

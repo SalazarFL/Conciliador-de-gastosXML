@@ -97,7 +97,7 @@ try {
         ]);
     }
 
-    $conteo = $lotes->estimar($cuentaId, $desde, $hasta);
+    $conteo = $lotes->estimar($cuentaId, $desde, $hasta, '', $sociedadId);
     assertSaltaProcesados($conteo['total'] === 3, 've los tres correos del rango');
     assertSaltaProcesados($conteo['procesados'] === 0, 'ninguno viene marcado todavía');
     assertSaltaProcesados($conteo['nuevos'] === 3, 'los tres son nuevos la primera vez');
@@ -105,10 +105,12 @@ try {
 
     // Dos de ellos terminan de procesarse.
     $marcas = new CorreoProcesado();
-    $marcas->marcar($claveDe($uids[0]));
-    $marcas->marcar($claveDe($uids[1]));
+    // La marca es de una empresa: el mismo buzón puede servir a varias y cada
+    // una lleva su propia cuenta de lo que ya trabajó.
+    $marcas->marcar($claveDe($uids[0]), $sociedadId);
+    $marcas->marcar($claveDe($uids[1]), $sociedadId);
 
-    $conteo = $lotes->estimar($cuentaId, $desde, $hasta);
+    $conteo = $lotes->estimar($cuentaId, $desde, $hasta, '', $sociedadId);
     assertSaltaProcesados($conteo['total'] === 3, 'el total del rango no cambia');
     assertSaltaProcesados($conteo['procesados'] === 2, 'reconoce los dos ya procesados');
     assertSaltaProcesados($conteo['nuevos'] === 1, 'solo queda uno nuevo por revisar');
@@ -120,9 +122,11 @@ try {
     assertSaltaProcesados($crear(true) === 3,
         'con incluir_procesados se vuelven a revisar los tres');
 
-    // Descartar de la bandeja quita la marca: el correo vuelve a estar disponible.
-    MailFetcher::desmarcarProcesados([$claveDe($uids[0])]);
-    $conteo = $lotes->estimar($cuentaId, $desde, $hasta);
+    // Descartar de la bandeja quita la marca: el correo vuelve a estar
+    // disponible. Solo para la empresa que lo descartó, que es de quien era
+    // la marca.
+    MailFetcher::desmarcarProcesados([$claveDe($uids[0])], $sociedadId);
+    $conteo = $lotes->estimar($cuentaId, $desde, $hasta, '', $sociedadId);
     assertSaltaProcesados($conteo['nuevos'] === 2, 'desmarcar devuelve el correo a la cola');
     assertSaltaProcesados($crear(false) === 2, 'y el lote siguiente lo vuelve a tomar');
 } catch (Throwable $e) {

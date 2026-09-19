@@ -11,15 +11,20 @@
 // antes de tocar la base. Sin esto, cambiar de estado moría con
 // 'Class "Seguimiento" not found' en vez de guardar.
 require_once __DIR__ . '/../models/Seguimiento.php';
+require_once __DIR__ . '/../models/Sociedad.php';
 require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 require_once __DIR__ . '/../helpers/ClaseNotaCredito.php';
 require_once __DIR__ . '/../helpers/AplicacionNotaCredito.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 require_once __DIR__ . '/../helpers/NavegacionDocumentos.php';
 require_once __DIR__ . '/../helpers/EstadoArchivo.php';
+require_once __DIR__ . '/../helpers/Columnas.php';
 
 class SeguimientoController extends Controller
 {
+    /** Cuántos renglones de la cola caben en un Excel de una sentada. */
+    const TOPE_EXPORTACION = 5000;
+
     private const POR_PAGINA = 50;
 
     public function __construct()
@@ -60,7 +65,7 @@ class SeguimientoController extends Controller
 
         $cola = $modelo->cola($filtros, $pagina, self::POR_PAGINA);
         $resumen = $modelo->resumen($filtros);
-        $dimensiones = $modelo->dimensionesParaFiltro($sociedad ? (int) $sociedad['id'] : 0);
+        $dimensiones = $this->dimensiones($modelo, $sociedad ? (int) $sociedad['id'] : 0, $modo);
 
         $this->render('seguimiento/index', [
             'title' => 'Seguimiento - Nexo Fiscal',
@@ -88,6 +93,55 @@ class SeguimientoController extends Controller
             'origenes' => Seguimiento::origenesDe($modo),
             'llegadas' => Seguimiento::LLEGADAS,
         ]);
+    }
+
+    /** Cuánto vale lo guardado de los desplegables aunque la base no haya cambiado. */
+    private const DIMENSIONES_VIGENCIA = 600;
+
+    /**
+     * Proveedores y sucursales para los desplegables, sin recorrer la unión
+     * en cada carga.
+     *
+     * Era la cuarta pasada por la unión entera de cada carga de la pantalla
+     * —tan cara como la página— para una lista que cambia cuando se carga un
+     * reporte, no al pasar de página. Se guarda en storage/cache por empresa
+     * y modo, junto con la huella de las tablas de las que sale: si la base
+     * escribió en alguna, o pasaron diez minutos, se vuelve a preguntar. No
+     * depende de quién mira, así que lo aprovechan todas las sesiones de esta
+     * computadora.
+     */
+    private function dimensiones(Seguimiento $modelo, $sociedadId, $modo)
+    {
+        $huella = $modelo->huellaDimensiones();
+        $archivo = dirname(__DIR__, 2) . '/storage/cache/seguimiento_dimensiones_'
+            . Seguimiento::modo($modo) . '_' . (int) $sociedadId . '.json';
+
+        if ($huella !== '' && is_file($archivo)) {
+            $guardado = file_get_contents($archivo);
+            $guardado = is_string($guardado) ? json_decode($guardado, true) : null;
+            if (is_array($guardado) && ($guardado['huella'] ?? null) === $huella
+                && time() - (int) ($guardado['en'] ?? 0) < self::DIMENSIONES_VIGENCIA
+                && isset($guardado['datos']['proveedores'], $guardado['datos']['sucursales'])) {
+                return $guardado['datos'];
+            }
+        }
+
+        $datos = $modelo->dimensionesParaFiltro($sociedadId);
+        if ($huella !== '') {
+            // Sin poder guardarlo la pantalla sigue igual, solo más lenta.
+            try {
+                if (!is_dir(dirname($archivo))) {
+                    mkdir(dirname($archivo), 0777, true);
+                }
+                file_put_contents($archivo, json_encode(
+                    ['huella' => $huella, 'en' => time(), 'datos' => $datos],
+                    JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE
+                ), LOCK_EX);
+            } catch (Throwable $e) {
+                $this->registrarFallo('guardar los desplegables de seguimiento', $e);
+            }
+        }
+        return $datos;
     }
 
     /**
@@ -166,7 +220,7 @@ class SeguimientoController extends Controller
 
     // Aquí se armaba la lista de listados para el desplegable "Listado".
     // Salió con el desplegable: recorrer la unión entera es lo caro de esta
-    // pantalla, y era una pasada más por una pregunta que el pago semanal ya
+    // pantalla, y era una pasada más por una pregunta que el pago ya
     // contesta en su propia pantalla. `Seguimiento::contextosDisponibles()`
     // sigue ahí para cuando haga falta.
 
@@ -272,11 +326,12 @@ class SeguimientoController extends Controller
         if (!$this->isPost()) {
             $this->json(['ok' => false, 'message' => 'Método no permitido.'], 405);
         }
+        $this->exigirPeticionPropia();
 
         try {
             $items = $this->itemsDelPost();
             if (!$items) {
-                throw new Exception('No se seleccionó ningún renglón.');
+                throw new InvalidArgumentException('No se seleccionó ningún renglón.');
             }
 
             $usuario = $this->usuario();
@@ -306,19 +361,44 @@ class SeguimientoController extends Controller
             if (!isset($cambio['estado']) && $cambio['comentario'] === ''
                 && !array_key_exists('recordar_en', $cambio)
                 && !array_key_exists('motivo', $cambio)) {
-                throw new Exception('No hay ningún cambio que guardar.');
+                throw new InvalidArgumentException('No hay ningún cambio que guardar.');
             }
 
             // El modo viaja con la tanda porque decide qué estados son válidos:
-            // 'lista' existe en Sistema y no en Correo.
+            // 'lista' existe en Sistema y no en Correo. La empresa no viaja:
+            // la pone la sesión, y el modelo solo escribe sobre lo que está en
+            // su cola.
             $modelo = $this->loadModel('Seguimiento')
-                ->enModo(Seguimiento::modo($this->post('modo', '')));
+                ->enModo(Seguimiento::modo($this->post('modo', '')))
+                ->acotadoA(Sociedad::seleccionadaIdActual());
             $resultado = $modelo->aplicar($items, $cambio, $usuario);
-            $this->json(['ok' => true] + $resultado);
         } catch (Throwable $e) {
+            $this->responderFallo('guardar un cambio de seguimiento', $e);
+        }
+        $this->json(['ok' => true] + $resultado);
+    }
+
+    /**
+     * El error de una acción, dicho para la persona.
+     *
+     * Los rechazos de la propia aplicación (InvalidArgumentException) traen un
+     * mensaje escrito para quien usa la pantalla y se muestran tal cual. Todo
+     * lo demás —la base, un fallo de programación— se anota en el log y la
+     * pantalla recibe un mensaje genérico: antes llegaba al navegador el
+     * SQLSTATE con el nombre de la columna, que no le sirve a quien trabaja y
+     * sí a quien quiera conocer la estructura por dentro.
+     */
+    private function responderFallo(string $donde, Throwable $e): never
+    {
+        if ($e instanceof InvalidArgumentException) {
             $this->json(['ok' => false, 'message' => $e->getMessage()], 422);
         }
+        $this->registrarFallo($donde, $e);
+        $this->json(['ok' => false, 'message' => self::MENSAJE_FALLO], 500);
     }
+
+    private const MENSAJE_FALLO = 'No se pudo completar por un problema del sistema. '
+        . 'Inténtalo de nuevo en un momento; si se repite, avisa a quien mantiene Nexo Fiscal.';
 
     /** El expediente de un renglón: sus datos y su bitácora. */
     public function detalle()
@@ -329,9 +409,13 @@ class SeguimientoController extends Controller
             $modo = Seguimiento::modo($this->get('modo', ''));
             $modelo = $this->loadModel('Seguimiento')->enModo($modo);
 
-            $fila = $modelo->uno($origen, $ref);
-            if (!$fila) {
-                throw new Exception('El renglón no existe o ya no está en la cola.');
+            // De la empresa activa, como la cola que se está viendo; y si no
+            // hay ninguna, de una a la que este usuario tenga acceso. Un
+            // documento ajeno responde igual que uno inexistente, para que
+            // recorrer ids no sirva ni para saber cuáles existen.
+            $fila = $modelo->uno($origen, $ref, Sociedad::seleccionadaIdActual());
+            if (!$fila || !Permisos::puedeSociedad((int) ($fila['sociedad_id'] ?? 0))) {
+                throw new InvalidArgumentException('El renglón no existe o ya no está en la cola.');
             }
 
             $decoradas = $this->decorar([$fila], $modo);
@@ -339,167 +423,64 @@ class SeguimientoController extends Controller
             // carpeta del disco de la oficina no tiene por qué viajar al
             // navegador.
             unset($decoradas[0]['ruta_xml'], $decoradas[0]['ruta_pdf']);
-            $this->json([
+            $respuesta = [
                 'ok' => true,
                 'fila' => $decoradas[0],
                 'bitacora' => $modelo->bitacora($origen, $ref),
-            ]);
+            ];
         } catch (Throwable $e) {
-            $this->json(['ok' => false, 'message' => $e->getMessage()], 422);
+            $this->responderFallo('abrir el expediente de seguimiento', $e);
         }
+        $this->json($respuesta);
     }
 
-    /** La cola tal como se ve, en CSV, para trabajarla fuera o mandarla. */
+    /**
+     * La cola tal como se ve, en Excel.
+     *
+     * Antes bajaba un CSV con veintidós columnas fijas mientras la pantalla
+     * enseñaba seis: el archivo y lo que se estaba mirando no eran lo mismo, y
+     * las veintidós no se podían ver en ningún sitio. Ahora es al revés —las
+     * veintidós se pueden encender en la tabla, y el archivo trae exactamente
+     * las que estén encendidas—, así que el Excel es lo que hay en pantalla.
+     *
+     * Cada modo tiene su catálogo: en Correo no hay diferencia contra el ERP
+     * que mirar, y en Sistema no hay "cómo llegó".
+     */
     public function exportar()
     {
-        $modo = Seguimiento::modo($this->get('modo', ''));
-        $modelo = $this->loadModel('Seguimiento')->enModo($modo);
-        $sociedad = $this->loadModel('Sociedad')->getActiva();
-        $filtros = $this->filtros($sociedad, $modo);
+        try {
+            $modo = Seguimiento::modo($this->get('modo', ''));
+            $modelo = $this->loadModel('Seguimiento')->enModo($modo);
+            $sociedad = $this->loadModel('Sociedad')->getActiva();
+            $filtros = $this->filtros($sociedad, $modo);
 
-        $cola = $modelo->cola($filtros, 1, 5000);
-        $filas = $this->decorar($cola['filas'], $modo);
+            $filas = $this->decorar($this->colaParaExportar($modelo, $filtros), $modo);
 
-        if ($modo === Seguimiento::MODO_CORREO) {
-            $this->exportarCorreo($filas);
+            Columnas::descargar(
+                $modo === Seguimiento::MODO_CORREO ? 'seguimiento_correo' : 'seguimiento',
+                $filas,
+                $this->get('cols', '')
+            );
+        } catch (Throwable $e) {
+            $this->registrarFallo('exportar la cola de seguimiento', $e);
+            $this->redirectWithMessage(
+                $this->url('/seguimiento'),
+                'No se pudo generar el Excel. ' . self::MENSAJE_FALLO,
+                'error'
+            );
         }
-
-        $nombre = 'seguimiento_' . date('Ymd_His') . '.csv';
-        header('Content-Type: text/csv; charset=utf-8');
-        header('Content-Disposition: attachment; filename="' . $nombre . '"');
-
-        $salida = fopen('php://output', 'w');
-        // BOM: sin él Excel en Windows abre los acentos rotos.
-        fwrite($salida, "\xEF\xBB\xBF");
-        fputcsv($salida, [
-            'Origen', 'Documento', 'Clase', 'Proveedor', 'Fecha', 'Moneda', 'Monto',
-            'Saldo', 'Diferencia', 'Qué falta', 'XML', 'PDF', 'Estado', 'Puesto a mano',
-            'Le tocaría', 'Responsable', 'Recordatorio', 'Motivo', 'Listado',
-            'Consecutivo XML', 'Último movimiento',
-            'Nota de crédito en juego',
-        ], ';', '"', '\\');
-
-        foreach ($filas as $f) {
-            fputcsv($salida, [
-                $f['origen'] === 'nota_credito' ? 'Nota de crédito' : 'Factura',
-                $f['documento'],
-                $f['clase'] ?: '',
-                $f['proveedor'],
-                $f['fecha'],
-                $f['moneda'],
-                number_format((float) $f['monto'], 2, '.', ''),
-                number_format((float) $f['saldo'], 2, '.', ''),
-                $f['diferencia'] !== null ? number_format((float) $f['diferencia'], 2, '.', '') : '',
-                Seguimiento::TAREAS[$f['tarea']] ?? $f['tarea'],
-                $f['xml_ok'] ? 'Sí' : 'No',
-                $f['pdf_ok'] ? 'Sí' : ($f['pdf_historico'] ? 'Histórico' : 'No'),
-                Seguimiento::ESTADOS[$f['seguimiento_estado']] ?? $f['seguimiento_estado'],
-                $f['estado_a_mano'] ? 'Sí' : '',
-                // Solo cuando la marca a mano y el cálculo no coinciden: en el
-                // resto de las filas repetir el estado no dice nada.
-                $f['desajustada'] ? (Seguimiento::ESTADOS[$f['estado_calculado']] ?? $f['estado_calculado']) : '',
-                $f['responsable'] ?: '',
-                $f['recordar_en'] ?: '',
-                $f['motivo'] ?: '',
-                $f['contexto'],
-                $f['consecutivo'] ?: '',
-                $f['seguimiento_actualizado_en'] ?: '',
-                // Las dos caras de lo mismo: una nota dice contra qué factura
-                // se descuenta, una factura dice cuánta nota tiene esperando.
-                self::notaEnJuego($f),
-            ], ';', '"', '\\');
-        }
-        fclose($salida);
-        exit;
     }
 
     /**
-     * El mismo CSV para el modo Correo, con las columnas que sí tiene.
+     * Las filas del Excel: la cola filtrada, hasta TOPE_EXPORTACION.
      *
-     * No comparte cabecera con el de Sistema porque la mitad de aquella no
-     * aplica —saldo, diferencia, clase, listado, nota en juego— y bajarla en
-     * blanco haría creer que el dato existe y salió vacío. Lo que sí trae y
-     * el otro no es lo que este modo viene a contestar: contra qué registro
-     * del ERP está enganchado el comprobante, y cómo llegó.
+     * El tope se le pasa a cola() como máximo propio. Sin él, la cola lo
+     * recortaba al de una página de la pantalla y el archivo salía con 200
+     * renglones sin avisar de que faltaban los demás.
      */
-    private function exportarCorreo(array $filas)
+    private function colaParaExportar(Seguimiento $modelo, array $filtros)
     {
-        $estados = Seguimiento::ESTADOS_CORREO;
-        $nombre = 'seguimiento_correo_' . date('Ymd_His') . '.csv';
-        header('Content-Type: text/csv; charset=utf-8');
-        header('Content-Disposition: attachment; filename="' . $nombre . '"');
-
-        $salida = fopen('php://output', 'w');
-        // BOM: sin él Excel en Windows abre los acentos rotos.
-        fwrite($salida, "\xEF\xBB\xBF");
-        fputcsv($salida, [
-            'Tipo', 'Número', 'Consecutivo', 'Proveedor', 'Fecha', 'Moneda', 'Monto',
-            'Saldo', 'En el sistema', 'Documento del sistema', 'Cómo llegó', 'XML', 'PDF',
-            'Estado', 'Puesto a mano', 'Le tocaría', 'Responsable', 'Recordatorio',
-            'Motivo', 'Importación', 'Último movimiento',
-        ], ';', '"', '\\');
-
-        foreach ($filas as $f) {
-            $enSistema = ($f['tarea'] ?? '') === 'completo';
-            fputcsv($salida, [
-                $f['origen'] === 'xml_nota' ? 'Nota de crédito' : 'Factura',
-                $f['documento'],
-                $f['consecutivo'] ?: '',
-                $f['proveedor'],
-                $f['fecha'],
-                $f['moneda'],
-                number_format((float) $f['monto'], 2, '.', ''),
-                // Vacío y cero no son lo mismo: sin enganche no hay saldo que
-                // mirar, y un 0,00 diría que ya se pagó.
-                $f['saldo'] === null ? '' : number_format((float) $f['saldo'], 2, '.', ''),
-                $enSistema ? 'Sí' : 'No',
-                $f['sistema_doc'] ?: '',
-                ($f['llegada'] ?? '') === 'correo' ? 'Correo' : 'Carga XML',
-                $f['xml_ok'] ? 'Sí' : 'No',
-                $f['pdf_ok'] ? 'Sí' : ($f['pdf_historico'] ? 'Histórico' : 'No'),
-                $estados[$f['seguimiento_estado']] ?? $f['seguimiento_estado'],
-                $f['estado_a_mano'] ? 'Sí' : '',
-                $f['desajustada'] ? ($estados[$f['estado_calculado']] ?? $f['estado_calculado']) : '',
-                $f['responsable'] ?: '',
-                $f['recordar_en'] ?: '',
-                $f['motivo'] ?: '',
-                $f['contexto'] ?: '',
-                $f['seguimiento_actualizado_en'] ?: '',
-            ], ';', '"', '\\');
-        }
-        fclose($salida);
-        exit;
-    }
-
-    /**
-     * La nota de crédito en juego de un renglón, en una frase.
-     *
-     * Se mira desde el origen del renglón porque la pregunta es distinta a
-     * cada lado: de una nota interesa contra qué factura va, de una factura
-     * interesa cuánto tiene esperando sin aplicar.
-     */
-    private static function notaEnJuego(array $f)
-    {
-        if (($f['origen'] ?? '') === 'nota_credito') {
-            $estado = (string) ($f['aplicacion_estado'] ?? '');
-            if ($estado === '' || $estado === AplicacionNotaCredito::NO_APLICA) {
-                return '';
-            }
-            $texto = AplicacionNotaCredito::etiqueta($estado);
-            return !empty($f['aplicacion_factura_doc'])
-                ? $texto . ' (factura ' . $f['aplicacion_factura_doc'] . ')'
-                : $texto;
-        }
-
-        $cuantas = (int) ($f['notas_vivas'] ?? 0);
-        if ($cuantas <= 0) {
-            return '';
-        }
-        return sprintf(
-            '%d nota(s) sin aplicar por %s',
-            $cuantas,
-            number_format((float) ($f['notas_vivas_saldo'] ?? 0), 2, '.', '')
-        );
+        return $modelo->cola($filtros, 1, self::TOPE_EXPORTACION, self::TOPE_EXPORTACION)['filas'];
     }
 
     private function itemsDelPost()

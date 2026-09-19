@@ -10,6 +10,16 @@ require_once __DIR__ . '/ProveedorCatalogo.php';
 
 class NotaCredito extends Model
 {
+    /*
+     * Casi todo este modelo recibe la empresa como parámetro, porque casi todo
+     * arranca de un acumulado y el acumulado ya es de una. Lo que NO arranca
+     * de ahí son las dos entradas por id —getListado() y getLinea()—, que
+     * reciben un número de la petición: esas se acotan con el alcance normal
+     * para que un id de otra empresa no abra nada. Los procesos sin sesión
+     * (EntradaAutomatica, cli/) deben decir con setSociedad() en cuál trabajan.
+     */
+    use AlcanceSociedad;
+
     /**
      * Las rutas son del comprobante enlazado, no suyas, pero salen en sus
      * consultas: quien las lee necesita la ruta real de esta máquina para
@@ -1270,16 +1280,19 @@ class NotaCredito extends Model
 
     public function getListado($id)
     {
+        $params = [(int) $id];
         $sql = "SELECT l.*, s.nombre AS sociedad_nombre, s.cedula AS sociedad_cedula
                 FROM notas_credito_listados l
                 JOIN sociedades s ON s.id = l.sociedad_id
-                WHERE l.id = ? LIMIT 1";
-        $row = $this->fetchOne($sql, [(int) $id]);
+                WHERE l.id = ?"
+             . $this->condicionSociedad('l.', $params) . ' LIMIT 1';
+        $row = $this->fetchOne($sql, $params);
         return $row ?: null;
     }
 
     public function getLinea($id)
     {
+        $params = [(int) $id];
         $sql = "SELECT nl.*, l.sociedad_id, l.nombre AS listado_nombre,
                        s.cedula AS sociedad_cedula,
                        f.consecutivo_completo AS xml_consecutivo,
@@ -1295,8 +1308,9 @@ class NotaCredito extends Model
                 JOIN sociedades s ON s.id = l.sociedad_id
                 LEFT JOIN facturas_xml f ON f.id = nl.factura_xml_id
                 LEFT JOIN proveedores p ON p.id = f.proveedor_id
-                WHERE nl.id = ? LIMIT 1";
-        $row = $this->fetchOne($sql, [(int) $id]);
+                WHERE nl.id = ?"
+             . $this->condicionSociedad('l.', $params) . ' LIMIT 1';
+        $row = $this->fetchOne($sql, $params);
         return $row ?: null;
     }
 
@@ -1362,6 +1376,7 @@ class NotaCredito extends Model
                        f.total AS xml_total,
                        f.moneda AS xml_moneda,
                        f.ruta_xml, f.ruta_pdf,
+                       f.sociedad_id,   -- de qué sociedad es el documento: sin eso no se sabe en qué almacén buscarlo
                        " . EstadoArchivo::columnaRecuperable('f.') . " AS recuperable,
                        p.razon_social AS xml_proveedor
                 FROM notas_credito_lineas nl
@@ -1533,6 +1548,7 @@ class NotaCredito extends Model
                        f.total AS xml_total,
                        f.moneda AS xml_moneda,
                        f.ruta_xml, f.ruta_pdf,
+                       f.sociedad_id,   -- de qué sociedad es el documento: sin eso no se sabe en qué almacén buscarlo
                        " . EstadoArchivo::columnaRecuperable('f.') . " AS recuperable,
                        p.razon_social AS xml_proveedor,
                        nl.factura_erp_id, nl.estado_aplicacion,

@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/../../helpers/Columnas.php';
 $baseUrl           = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 $facturas          = $facturas ?? [];
 $historial         = $historial ?? [];
@@ -50,16 +51,22 @@ $queryPagina = array_merge($queryPagina, $contextoDoc);
 $urlPagina = function ($p) use ($baseUrl, $queryPagina) {
     return $baseUrl . '/facturas?' . http_build_query(array_merge($queryPagina, ['pagina' => $p]));
 };
+
+// Exportar baja lo que se está viendo: los mismos buscadores puestos y las
+// mismas columnas encendidas. Los filtros van acá; la lista de columnas se la
+// pega app.js al enlace, porque quién las eligió lo sabe el navegador.
+$urlExportar = $baseUrl . '/facturas/exportar?'
+             . http_build_query(array_filter($filtros, static function ($v) { return (string) $v !== ''; }));
 ?>
 
 <!-- CARGA DE FACTURAS XML -->
 
 <?php /*
- * Acá arriba estaba la tarjeta "Semana de trabajo": un selector de semana que
+ * Acá arriba estaba la tarjeta "Pago": un selector de pago que
  * decidía qué facturas se listaban abajo. Esta pantalla dejó de mirarse por
- * semana de pago —es el archivo de comprobantes XML, completo— así que la
+ * pago de pago —es el archivo de comprobantes XML, completo— así que la
  * lista sale entera y se acota con los buscadores de la barra. La columna
- * "Semana" también se fue: la semana no es del comprobante sino del pago en
+ * "Pago" también se fue: el pago no es del comprobante sino del pago en
  * el que está su fila del ERP, y se mira desde ahí o en el detalle.
  */ ?>
 
@@ -68,9 +75,9 @@ $urlPagina = function ($p) use ($baseUrl, $queryPagina) {
  * entran son las filas de la tabla de abajo, así que cargar y comprobar que
  * entraron es el mismo sitio.
  *
- * No se pregunta a qué semana van. Al guardarse, cada comprobante busca su
+ * No se pregunta a qué pago van. Al guardarse, cada comprobante busca su
  * factura en el listado del ERP por el consecutivo, y si esa factura está en
- * un pago semanal hereda esa semana. Elegirla a mano era una decisión que
+ * un pago hereda ese pago. Elegirla a mano era una decisión que
  * nadie tenía por qué tomar, y equivocarse dejaba la factura fuera del pago
  * sin que nada lo avisara.
  */ ?>
@@ -115,7 +122,7 @@ $urlPagina = function ($p) use ($baseUrl, $queryPagina) {
 <script>
 // El XML se sube por tandas contra la cola: el navegador manda de a CHUNK
 // archivos (por debajo del max_file_uploads de PHP) y después pide procesar
-// en lotes. Sin esto, subir 300 XML de una semana se topaba con el límite del
+// en lotes. Sin esto, subir 300 XML de un pago se topaba con el límite del
 // servidor y se perdían en silencio los que sobraban.
 (function () {
     var BASE = '<?= $baseUrl ?>';
@@ -271,7 +278,7 @@ $urlPagina = function ($p) use ($baseUrl, $queryPagina) {
 <?php
 /*
  * La tarjeta del documento que se vino a buscar. Solo aparece si se llegó
- * desde el pago semanal o desde la cola de seguimiento.
+ * desde el pago o desde la cola de seguimiento.
  */
 include __DIR__ . '/../partials/tarjeta-documento.php';
 ?>
@@ -361,13 +368,18 @@ else: ?>
             'valor' => $filtros['saldo'],
         ]; include __DIR__ . '/../partials/filtro-importe.php';
         ?>
-        <?php // "Alcance" (semana seleccionada / todas las semanas) se fue con
-              // el selector de semana: ya no hay una semana que acotar. ?>
+        <?php // "Alcance" (pago seleccionada / todas los pagos) se fue con
+              // el selector de pago: ya no hay un pago que acotar. ?>
         <div class="filter-actions">
             <button type="submit" class="btn btn-primary btn-sm"><i class="fas fa-search"></i> Buscar</button>
             <?php if ($hayFiltros): ?>
             <a href="<?= htmlspecialchars($urlLimpiarFiltros) ?>" class="btn btn-outline btn-sm"><i class="fas fa-broom"></i> Limpiar</a>
             <?php endif; ?>
+            <a href="<?= htmlspecialchars($urlExportar) ?>" class="btn btn-outline btn-sm"
+               data-exportar="facturas"
+               title="Bajar a Excel lo que estás viendo: estos filtros y estas columnas">
+                <i class="fas fa-file-excel"></i> Exportar
+            </a>
         </div>
     </form>
 
@@ -414,8 +426,9 @@ else: ?>
     include __DIR__ . '/../partials/documento-no-esta.php';
     ?>
 
+    <?php $columnasListado = 'facturas'; include __DIR__ . '/../partials/columnas.php'; ?>
     <div class="table-wrap">
-        <table class="data-table">
+        <table class="data-table" data-listado="facturas">
             <?php /*
              * Las mismas once columnas, en el mismo orden, que el listado de
              * Notas de crédito XML: son el mismo archivo de comprobantes
@@ -426,31 +439,41 @@ else: ?>
              * se teclea cuando se busca un comprobante contra el ERP—, la
              * moneda, el subtotal y de dónde salió el documento.
              *
-             * Lo que salió: "Semana", que es del pago semanal y no del
+             * Lo que salió: "Pago", que es del pago y no del
              * comprobante, y la marca "Respaldo", que decía a la vez del XML
              * y del PDF. El XML ahora lo dice su propio botón —si está, se
              * puede abrir—, y la columna PDF habla solo del PDF.
              */ ?>
+            <?php /*
+             * El orden y los nombres de estas columnas son los de
+             * app/config/columnas.php, y no por gusto: el mismo identificador
+             * (data-col) enciende y apaga la columna en la pantalla y la mete
+             * en el Excel. ColumnasCatalogoTest comprueba que no se separen.
+             */ ?>
             <thead>
                 <tr>
-                    <th>Fecha</th>
-                    <th>Proveedor</th>
-                    <th>Consecutivo</th>
-                    <th>Número</th>
-                    <th>Moneda</th>
-                    <th class="right">Subtotal</th>
-                    <th class="right">IVA</th>
-                    <th class="right">Total</th>
-                    <th class="right">Saldo</th>
-                    <th>PDF</th>
-                    <th>Origen</th>
-                    <th></th>
+                    <th data-col="fecha">Fecha</th>
+                    <th data-col="proveedor">Proveedor</th>
+                    <th data-col="consecutivo">Consecutivo</th>
+                    <th data-col="numero">Número</th>
+                    <th data-col="moneda">Moneda</th>
+                    <th class="right" data-col="subtotal">Subtotal</th>
+                    <th class="right" data-col="iva">IVA</th>
+                    <th class="right" data-col="total">Total</th>
+                    <th class="right" data-col="saldo">Saldo</th>
+                    <th data-col="pdf">PDF</th>
+                    <th data-col="origen">Origen</th>
+                    <?php // Y las que la base sabía y no se enseñaban, dibujadas
+                          // desde el catálogo: son texto, y así no hay dieciocho
+                          // celdas repetidas aquí que mantener al día. ?>
+                    <?= Columnas::cabecerasExtra('facturas') ?>
+                    <th data-columnas-boton></th>
                 </tr>
             </thead>
             <tbody>
                 <?php if (empty($facturas)): ?>
                     <tr class="empty-row">
-                        <td colspan="12">
+                        <td colspan="20">
                             <i class="fas fa-inbox" style="font-size:28px;color:var(--border);display:block;margin-bottom:8px;"></i>
                             <?= $hayFiltros ? 'No se encontraron facturas con estos filtros.' : 'No hay facturas importadas todavía.' ?><br>
                             <span style="font-size:12px;"><?= $hayFiltros ? 'Cambia o limpia los criterios de búsqueda.' : 'Usa el formulario de arriba para subir archivos XML.' ?></span>
@@ -459,18 +482,18 @@ else: ?>
                 <?php else: ?>
                     <?php foreach ($facturas as $f): ?>
                     <tr>
-                        <td class="muted"><?= htmlspecialchars($f['fecha_emision'] ?? '—') ?></td>
-                        <td><?= htmlspecialchars($f['proveedor_nombre'] ?? 'Sin proveedor') ?></td>
-                        <td style="font-family:monospace;white-space:nowrap;"><?= htmlspecialchars((string) ($f['consecutivo_completo'] ?? '—')) ?></td>
-                        <td>
+                        <td class="muted" data-col="fecha"><?= htmlspecialchars($f['fecha_emision'] ?? '—') ?></td>
+                        <td data-col="proveedor"><?= htmlspecialchars($f['proveedor_nombre'] ?? 'Sin proveedor') ?></td>
+                        <td style="font-family:monospace;white-space:nowrap;" data-col="consecutivo"><?= htmlspecialchars((string) ($f['consecutivo_completo'] ?? '—')) ?></td>
+                        <td data-col="numero">
                             <span style="font-weight:700;color:var(--navy);">
                                 <?= htmlspecialchars((string) ($f['numero_factura_asistente'] ?? $f['consecutivo_completo'] ?? '—')) ?>
                             </span>
                         </td>
-                        <td><?= htmlspecialchars((string) ($f['moneda'] ?? '')) ?></td>
-                        <td class="right"><?= number_format((float)($f['subtotal'] ?? 0), 2) ?></td>
-                        <td class="right"><?= number_format((float)($f['iva'] ?? 0), 2) ?></td>
-                        <td class="right" style="font-weight:700;"><?= number_format((float)($f['total'] ?? 0), 2) ?></td>
+                        <td data-col="moneda"><?= htmlspecialchars((string) ($f['moneda'] ?? '')) ?></td>
+                        <td class="right" data-col="subtotal"><?= number_format((float)($f['subtotal'] ?? 0), 2) ?></td>
+                        <td class="right" data-col="iva"><?= number_format((float)($f['iva'] ?? 0), 2) ?></td>
+                        <td class="right" style="font-weight:700;" data-col="total"><?= number_format((float)($f['total'] ?? 0), 2) ?></td>
                     <?php /*
                      * El saldo no es del comprobante: un XML dice cuánto se
                      * facturó, no cuánto queda por pagar. Sale del registro
@@ -482,15 +505,15 @@ else: ?>
                     $debeAlgo = $hayEnganche && (float) $saldoErp > 0.005;
                     $docErp = trim((string) ($f['documento_erp'] ?? ''));
                     ?>
-                    <td class="right" style="white-space:nowrap;<?= $debeAlgo ? '' : 'color:var(--text-muted);' ?>"
+                    <td class="right" data-col="saldo" style="white-space:nowrap;<?= $debeAlgo ? '' : 'color:var(--text-muted);' ?>"
                         title="<?= $hayEnganche
-                            ? 'Saldo de ' . htmlspecialchars($docErp) . ', el documento del ERP con el que está enganchado'
-                            : 'Este comprobante todavía no está enganchado a ningún documento del ERP' ?>">
+                            ? 'Saldo de ' . htmlspecialchars($docErp) . ', el documento del sistema con el que está enganchado'
+                            : 'Este comprobante todavía no está enganchado a ningún documento del sistema' ?>">
                         <?php if (!$hayEnganche): ?>sin enganche
                         <?php elseif ($debeAlgo): ?><?= number_format((float) $saldoErp, 2) ?>
                         <?php else: ?>sin saldo<?php endif; ?>
                     </td>
-                        <td style="white-space:nowrap;">
+                        <td data-col="pdf" style="white-space:nowrap;">
                             <?php if (!empty($f['archivo_perdido'])): ?>
                             <?php
                             // Se archivó y desapareció de la carpeta compartida.
@@ -509,7 +532,16 @@ else: ?>
                             <span class="badge" style="background:#fef3c7;color:#92400e;">Pendiente</span>
                             <?php endif; ?>
                         </td>
-                        <td><?= !empty($f['correo_cuenta_id']) ? 'Correo' : 'Carga XML' ?></td>
+                        <td data-col="origen"><?= !empty($f['correo_cuenta_id']) ? 'Correo' : 'Carga XML' ?></td>
+
+                        <?php /*
+                         * Lo que el comprobante trae y no se enseñaba, con el
+                         * mismo valor con el que bajaría al Excel: apagadas de
+                         * fábrica, pero DIBUJADAS, que es lo que permite
+                         * encenderlas sin volver a pedir la página.
+                         */ ?>
+                        <?= Columnas::celdasExtra('facturas', $f) ?>
+
                         <td style="white-space:nowrap;">
                             <?php /*
                              * data-ficha: el detalle se abre en un cuadro
@@ -568,14 +600,14 @@ else: ?>
 <?php endif; // fin de "ya se eligió proveedor" ?>
 
 <!--
-  Aquí estaba el lápiz para asignar o cambiar la semana de una factura a mano.
-  Salió porque la semana dejó de ser algo que se elige: una factura pertenece a
-  la semana del pago en el que está su fila del ERP. Cambiarla por fuera ya no
+  Aquí estaba el lápiz para asignar o cambiar el pago de una factura a mano.
+  Salió porque el pago dejó de ser algo que se elige: una factura pertenece a
+  el pago del pago en el que está su fila del ERP. Cambiarla por fuera ya no
   la metía en ningún pago —el emparejamiento va por consecutivo, no por
-  semana— y encima podía sacar su XML y su PDF de la carpeta del pago, porque
-  esa carpeta se decide comparando la semana del comprobante con la del pago.
-  Para mover una factura de semana se saca o se mete en el pago que
-  corresponda, desde Pagos semanales.
+  pago— y encima podía sacar su XML y su PDF de la carpeta del pago, porque
+  esa carpeta se decide comparando el pago del comprobante con la del pago.
+  Para mover una factura de pago se saca o se mete en el pago que
+  corresponda, desde Pagos.
 -->
 
 <script>

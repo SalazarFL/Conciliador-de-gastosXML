@@ -35,6 +35,13 @@ $router->get('/home', 'HomeController@index');
 // DiagnosticoController, SociedadesController, UsuariosController—, porque
 // comparten helpers con el resto de su módulo.
 $router->get('/configuracion', 'ConfiguracionController@index');
+$router->post('/configuracion/proveedores/previa', 'ConfiguracionController@previaProveedores');
+$router->post('/configuracion/proveedores/importar', 'ConfiguracionController@importarProveedores');
+$router->post('/configuracion/proveedores/listar', 'ConfiguracionController@listarProveedores');
+$router->post('/configuracion/proveedores/opciones', 'ConfiguracionController@opcionesProveedor');
+$router->post('/configuracion/proveedores/guardar', 'ConfiguracionController@guardarProveedor');
+$router->post('/configuracion/proveedores/eliminar', 'ConfiguracionController@eliminarProveedor');
+$router->post('/configuracion/proveedores/ignorar', 'ConfiguracionController@ignorarProveedor');
 
 // --- AVISOS (la campana de la barra superior) ---
 // Lo que no puede vivir en un toast de siete segundos: las decisiones que
@@ -42,8 +49,12 @@ $router->get('/configuracion', 'ConfiguracionController@index');
 $router->get('/avisos', 'NotificacionesController@index');
 $router->get('/avisos/resumen', 'NotificacionesController@resumen');
 $router->post('/avisos/cerrar', 'NotificacionesController@cerrar');
-$router->post('/avisos/codigo/confirmar', 'NotificacionesController@confirmarCodigo');
-$router->post('/avisos/codigo/liberar', 'NotificacionesController@liberarCodigo');
+// Los comprobantes de proveedores sin código se sacaron de la campana y se
+// atienden desde Correo: ver Notificacion::FUERA_DE_LA_CAMPANA.
+$router->post('/avisos/proveedor/sin-codigo', 'NotificacionesController@sinCodigo');
+$router->post('/avisos/proveedor/opciones', 'NotificacionesController@opcionesCodigo');
+$router->post('/avisos/proveedor/codigo', 'NotificacionesController@codigoNuevo');
+$router->post('/avisos/proveedor/ignorar', 'NotificacionesController@ignorarProveedor');
 
 // --- DIAGNÓSTICO DE LA INSTALACIÓN ---
 // La aplicación corre en la computadora de cada persona: esta página dice qué
@@ -61,9 +72,11 @@ $router->post('/sociedades/crear', 'SociedadesController@crear');
 $router->post('/sociedades/editar/{id}', 'SociedadesController@editar');
 $router->post('/sociedades/eliminar/{id}', 'SociedadesController@eliminar');
 $router->post('/sociedades/activar/{id}', 'SociedadesController@activar');
+$router->post('/sociedades/almacen/{id}', 'SociedadesController@almacen');
 
 // --- RUTAS DE FACTURAS XML ---
 $router->get('/facturas', 'FacturasController@index');
+$router->get('/facturas/exportar', 'FacturasController@exportar');
 $router->post('/facturas/subir', 'FacturasController@subir');
 $router->post('/facturas/cola/iniciar', 'FacturasController@colaIniciar');
 $router->post('/facturas/cola/agregar', 'FacturasController@colaAgregar');
@@ -73,6 +86,7 @@ $router->get('/facturas/ver/{id}', 'FacturasController@ver');
 
 // --- RUTAS DE NOTAS DE CRÉDITO XML ---
 $router->get('/notas-xml', 'NotasXmlController@index');
+$router->get('/notas-xml/exportar', 'NotasXmlController@exportar');
 $router->post('/notas-xml/subir', 'NotasXmlController@subir');
 $router->get('/notas-xml/ver/{id}', 'NotasXmlController@ver');
 // La ficha del comprobante en JSON: el cuadro que se abre sobre el listado
@@ -124,21 +138,22 @@ $router->post('/correo/general/reanudar', 'CorreoController@generalReanudar');
 $router->post('/correo/general/cancelar', 'CorreoController@generalCancelar');
 
 // --- RUTAS DE SEGUIMIENTO (la cola única de trabajo) ---
-// Junta notas de crédito y pago semanal: lo que no tiene XML, lo que no tiene
+// Junta notas de crédito y pago: lo que no tiene XML, lo que no tiene
 // PDF y lo que no cuadra, con la gestión de cada renglón.
 $router->get('/seguimiento', 'SeguimientoController@index');
 $router->post('/seguimiento/actualizar', 'SeguimientoController@actualizar');
 $router->get('/seguimiento/detalle', 'SeguimientoController@detalle');
 $router->get('/seguimiento/exportar', 'SeguimientoController@exportar');
 
-// --- RUTAS DE FACTURAS POR PAGAR (listado del pago semanal) ---
+// --- RUTAS DE FACTURAS POR PAGAR (listado del pago) ---
 $router->get('/por-pagar', 'PorPagarController@index');
 $router->post('/por-pagar/subir', 'PorPagarController@subir');
 $router->post('/por-pagar/previsualizar', 'PorPagarController@previsualizar');
+$router->get('/por-pagar/progreso', 'PorPagarController@progreso');
 $router->post('/por-pagar/comparar-listado', 'PorPagarController@compararListado');
 $router->post('/por-pagar/actualizar-listado', 'PorPagarController@actualizarListado');
 $router->post('/por-pagar/verificar/{id}', 'PorPagarController@verificar');
-$router->post('/por-pagar/semana/borrar/{id}', 'PorPagarController@borrarSemana');
+$router->post('/por-pagar/pago/borrar/{id}', 'PorPagarController@borrarPago');
 $router->post('/por-pagar/factura/quitar/{id}', 'PorPagarController@quitarFactura');
 $router->get('/por-pagar/exportar', 'PorPagarController@exportar');
 $router->get('/por-pagar/sin-coincidencia', 'PorPagarController@sinCoincidencia');
@@ -154,11 +169,13 @@ $router->post('/facturas-erp/incidencias/restaurar', 'FacturasErpController@rest
 $router->get('/facturas-erp/revision', 'FacturasErpController@revision');
 $router->post('/facturas-erp/revision/guardar', 'FacturasErpController@guardarRevision');
 $router->post('/facturas-erp/revision/descartar', 'FacturasErpController@descartarRevision');
+$router->post('/facturas-erp/revision/enredo', 'FacturasErpController@resolverEnredo');
 $router->post('/facturas-erp/revision/olvidar', 'FacturasErpController@olvidarRevision');
 $router->get('/facturas-erp/exportar', 'FacturasErpController@exportar');
 
 // --- RUTAS DE NOTAS DE CRÉDITO (listados por período) ---
 $router->get('/notas-credito', 'NotasCreditoController@index');
+$router->get('/notas-credito/exportar', 'NotasCreditoController@exportar');
 $router->post('/notas-credito/previa', 'NotasCreditoController@previsualizar');
 $router->post('/notas-credito/subir', 'NotasCreditoController@subir');
 $router->get('/notas-credito/buscar', 'NotasCreditoController@buscar');
@@ -174,6 +191,7 @@ $router->post('/notas-credito/revision/olvidar', 'NotasCreditoController@olvidar
 
 // --- RUTAS DE DEVOLUCIONES (reportes PDF del ERP ↔ NC electrónicas) ---
 $router->get('/devoluciones', 'DevolucionesController@index');
+$router->get('/devoluciones/exportar', 'DevolucionesController@exportar');
 $router->post('/devoluciones/subir', 'DevolucionesController@subir');
 $router->get('/devoluciones/detalle/{id}', 'DevolucionesController@detalle');
 $router->post('/devoluciones/verificar', 'DevolucionesController@verificar');
@@ -189,23 +207,42 @@ $router->get('/devoluciones/pdf/{id}', 'DevolucionesController@pdf');
 //
 // Conciliación cruzaba las facturas XML contra un listado de "gastos" cargado
 // aparte, y Gastos existía solo para alimentarla. Ese cruce lo hace hoy el pago
-// semanal contra Facturas ERP, que es el registro real de la empresa y no un
+// contra Facturas ERP, que es el registro real de la empresa y no un
 // archivo suelto; las tres tablas de aquella época (conciliaciones,
 // conciliacion_corridas, gastos_consolidados, gastos_raw) quedaron en cero
 // filas, o sea que el flujo nunca llegó a usarse en serio.
 //
 // Reportes exportaba justamente esas tres cosas: conciliación, gastos y un
 // listado de facturas. Lo que hoy se exporta sale de cada módulo, con los
-// filtros de ese módulo (pago semanal, notas de crédito, seguimiento,
+// filtros de ese módulo (pago, notas de crédito, seguimiento,
 // facturas ERP), que es donde la gente ya está mirando los datos.
 
-// --- RUTAS DE USUARIOS (solo admin) ---
+// --- RUTAS DE USUARIOS (quien administre usuarios) ---
 $router->get('/usuarios',              'UsuariosController@index');
 $router->get('/usuarios/crear',        'UsuariosController@crear');
 $router->post('/usuarios/crear',       'UsuariosController@crear');
 $router->get('/usuarios/editar/{id}',  'UsuariosController@editar');
 $router->post('/usuarios/editar/{id}', 'UsuariosController@editar');
 $router->post('/usuarios/eliminar/{id}', 'UsuariosController@eliminar');
+
+// --- RUTAS DE ROLES (qué puede hacer cada quien) ---
+// El catálogo de permisos vive en config/permisos.php, no en la base: un
+// permiso solo significa algo si hay una ruta que lo exige. Lo que se guarda
+// aquí es el reparto —qué permisos tiene cada rol—, que es lo que cambia.
+$router->get('/roles',                'RolesController@index');
+$router->get('/roles/crear',          'RolesController@crear');
+$router->post('/roles/crear',         'RolesController@crear');
+$router->get('/roles/editar/{id}',    'RolesController@editar');
+$router->post('/roles/editar/{id}',   'RolesController@editar');
+$router->post('/roles/eliminar/{id}', 'RolesController@eliminar');
+
+// --- BITÁCORA DE ACTIVIDAD (quién hizo qué) ---
+// Una sola línea de tiempo: lo que registra el enrutador desde ahora y el
+// rastro que cada módulo ya venía dejando en sus propias tablas.
+$router->get('/bitacora',              'BitacoraController@index');
+$router->get('/bitacora/detalle/{id}', 'BitacoraController@detalleRenglon');
+$router->get('/bitacora/exportar',     'BitacoraController@exportar');
+$router->post('/bitacora/depurar',     'BitacoraController@depurar');
 
 // Las dos rutas de API que había —buscar proveedores y estadísticas— no las
 // llamaba ninguna pantalla: quedaron de una versión anterior. Cada módulo

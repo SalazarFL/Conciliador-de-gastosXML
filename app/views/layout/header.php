@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <?php // app.js lo pone en cada POST de la pantalla: ver app/core/Csrf.php. ?>
+    <meta name="csrf-token" content="<?= htmlspecialchars(Csrf::token()) ?>">
     <title><?= htmlspecialchars($title ?? 'Nexo Fiscal') ?></title>
 
     <!-- Font Awesome -->
@@ -54,13 +56,15 @@ $pageLabels = [
     'facturas'     => 'Facturas · Carga XML',
     'facturas-erp' => 'Facturas',
     'correo'       => 'Correo',
-    'por-pagar'    => 'Pagos semanales',
+    'por-pagar'    => 'Pagos',
     'notas-credito'=> 'Notas de crédito',
     // Devoluciones sigue teniendo su título: la pantalla existe y se llega
     // por la URL, lo que se retiró es la entrada del menú.
     'devoluciones' => 'Devoluciones',
     'notas-xml'    => 'Notas de crédito · Carga XML',
     'usuarios'     => 'Gestión de Usuarios',
+    'roles'        => 'Roles y permisos',
+    'bitacora'     => 'Bitácora de actividad',
     'diagnostico'  => 'Diagnóstico de la instalación',
     'avisos'       => 'Avisos',
     'configuracion'=> 'Configuración',
@@ -81,6 +85,25 @@ foreach ($pageLabels as $seg => $label) {
 if (!empty($tituloPagina)) {
     $currentLabel = (string) $tituloPagina;
 }
+
+/*
+ * Qué ofrece el menú.
+ *
+ * Esconder un módulo no es lo que protege —de eso se encarga el enrutador,
+ * que comprueba el permiso aunque se escriba la dirección a mano—, pero sí es
+ * lo que hace que el sistema se entienda: un menú con seis entradas que
+ * devuelven "no tienes permiso" no informa de nada y parece averiado.
+ *
+ * La sección de Configuración se ofrece si se puede entrar a CUALQUIERA de
+ * sus secciones, no solo con 'configuracion.ver': ahí dentro viven usuarios,
+ * roles, bitácora y respaldo, cada uno con su propio dueño.
+ */
+$puedeVerMenu = fn(string $permiso): bool => Permisos::puede($permiso);
+$puedeConfiguracion = Permisos::puedeAlguno([
+    'configuracion.ver', 'usuarios.ver', 'usuarios.administrar',
+    'roles.administrar', 'bitacora.ver', 'respaldo.administrar',
+    'empresas.administrar', 'correo.configurar', 'configuracion.archivo',
+]);
 
 // Sociedad activa: algunos controladores ya la cargan para su propia vista
 // (Home, Correo, Por-pagar); en las demás páginas se busca aquí para que
@@ -126,6 +149,7 @@ if (!isset($sociedadActiva)) {
 
         <!-- Navegación -->
         <nav class="sidebar-nav">
+            <?php if ($puedeVerMenu('seguimiento.ver')): ?>
             <div class="sidebar-section-label">Trabajo del día</div>
 
             <a href="<?= $baseUrl ?>/seguimiento" class="<?= navActive('seguimiento', $uriClean) ?>"
@@ -133,19 +157,29 @@ if (!isset($sociedadActiva)) {
                 <span class="nav-icon"><i class="fas fa-list-check"></i></span>
                 <span class="nav-label">Seguimiento</span>
             </a>
+            <?php endif; ?>
 
+            <?php $hayModulos = Permisos::puedeAlguno([
+                'por_pagar.ver', 'notas_credito.ver', 'correo.ver', 'facturas_erp.ver',
+            ]); ?>
+            <?php if ($hayModulos): ?>
             <div class="sidebar-section-label" style="margin-top:16px;">Módulos</div>
+            <?php endif; ?>
 
-            <a href="<?= $baseUrl ?>/por-pagar" class="<?= navActive('por-pagar', $uriClean) ?>" title="Pagos semanales">
+            <?php if ($puedeVerMenu('por_pagar.ver')): ?>
+            <a href="<?= $baseUrl ?>/por-pagar" class="<?= navActive('por-pagar', $uriClean) ?>" title="Pagos">
                 <span class="nav-icon"><i class="fas fa-file-invoice-dollar"></i></span>
-                <span class="nav-label">Pagos semanales</span>
+                <span class="nav-label">Pagos</span>
             </a>
+            <?php endif; ?>
 
+            <?php if ($puedeVerMenu('notas_credito.ver')): ?>
             <a href="<?= $baseUrl ?>/notas-credito" class="<?= navActive('notas-credito', $uriClean) ?>"
                title="Notas de crédito">
                 <span class="nav-icon"><i class="fas fa-file-circle-minus"></i></span>
                 <span class="nav-label">Notas de crédito</span>
             </a>
+            <?php endif; ?>
 
             <?php /*
              * Devoluciones no se ofrece por ahora: el módulo está completo y
@@ -156,16 +190,20 @@ if (!isset($sociedadActiva)) {
              *   <a href="/devoluciones" ...>Devoluciones</a>
              */ ?>
 
+            <?php if ($puedeVerMenu('correo.ver')): ?>
             <a href="<?= $baseUrl ?>/correo" class="<?= navActive('correo', $uriClean) ?>" title="Correo">
                 <span class="nav-icon"><i class="fas fa-envelope-open-text"></i></span>
                 <span class="nav-label">Correo</span>
             </a>
+            <?php endif; ?>
 
+            <?php if ($puedeVerMenu('facturas_erp.ver')): ?>
             <a href="<?= $baseUrl ?>/facturas-erp" class="<?= navActive('facturas-erp', $uriClean) ?>"
                title="Las facturas de la empresa">
                 <span class="nav-icon"><i class="fas fa-file-invoice-dollar"></i></span>
                 <span class="nav-label">Facturas</span>
             </a>
+            <?php endif; ?>
 
             <?php /*
              * Las dos pantallas de carga de comprobantes tienen su propia
@@ -173,29 +211,52 @@ if (!isset($sociedadActiva)) {
              * Notas de crédito, y por eso ambas entradas se marcaban activas a
              * la vez: ahora cada módulo se marca solo por su propia ruta.
              */ ?>
+            <?php if (Permisos::puedeAlguno(['facturas_xml.ver', 'notas_xml.ver'])): ?>
             <div class="sidebar-section-label" style="margin-top:16px;">XML</div>
+            <?php endif; ?>
 
+            <?php if ($puedeVerMenu('facturas_xml.ver')): ?>
             <a href="<?= $baseUrl ?>/facturas" class="<?= navActive('facturas', $uriClean) ?>"
                title="Carga y consulta de los comprobantes XML de facturas">
                 <span class="nav-icon"><i class="fas fa-file-code"></i></span>
                 <span class="nav-label">Facturas XML</span>
             </a>
+            <?php endif; ?>
 
+            <?php if ($puedeVerMenu('notas_xml.ver')): ?>
             <a href="<?= $baseUrl ?>/notas-xml" class="<?= navActive('notas-xml', $uriClean) ?>"
                title="Carga y consulta de los comprobantes XML de notas de crédito">
                 <span class="nav-icon"><i class="fas fa-file-import"></i></span>
                 <span class="nav-label">Notas XML</span>
             </a>
+            <?php endif; ?>
 
+            <?php if ($puedeConfiguracion || $puedeVerMenu('bitacora.ver') || $puedeVerMenu('diagnostico.ver')): ?>
             <div class="sidebar-section-label" style="margin-top:16px;">Administración</div>
+            <?php endif; ?>
+
             <?php // Todo lo que se ajusta vive en una sola pantalla; el
                   // engranaje de la barra superior lleva a la misma. ?>
+            <?php if ($puedeConfiguracion): ?>
             <a href="<?= $baseUrl ?>/configuracion" class="<?= navActive('configuracion', $uriClean) ?>"
-               title="Carpeta de XML y PDF, cuentas de correo, empresas y respaldo">
+               title="Carpeta de XML y PDF, cuentas de correo, empresas, usuarios, roles y respaldo">
                 <span class="nav-icon"><i class="fas fa-gear"></i></span>
                 <span class="nav-label">Configuración</span>
             </a>
-            <?php if (!empty($_SESSION['user_is_admin'])): ?>
+            <?php endif; ?>
+
+            <?php // La bitácora tiene entrada propia además de su sección en
+                  // Configuración: quien audita entra aquí varias veces al día
+                  // y no tiene por qué pasar por los ajustes cada vez. ?>
+            <?php if ($puedeVerMenu('bitacora.ver')): ?>
+            <a href="<?= $baseUrl ?>/bitacora" class="<?= navActive('bitacora', $uriClean) ?>"
+               title="Quién hizo qué, y cuándo">
+                <span class="nav-icon"><i class="fas fa-clock-rotate-left"></i></span>
+                <span class="nav-label">Actividad</span>
+            </a>
+            <?php endif; ?>
+
+            <?php if ($puedeVerMenu('diagnostico.ver')): ?>
             <a href="<?= $baseUrl ?>/diagnostico" class="<?= navActive('diagnostico', $uriClean) ?>"
                title="Revisar la instalación de esta computadora">
                 <span class="nav-icon"><i class="fas fa-stethoscope"></i></span>
@@ -263,6 +324,28 @@ if (!isset($sociedadActiva)) {
                 <?php endif; ?>
 
                 <?php /*
+                 * Comprobantes sin código: el botón vive aquí, al lado de los
+                 * modos, porque no pertenece a ninguno de los dos. Estos avisos
+                 * se sacaron de la campana —ver Notificacion::FUERA_DE_LA_CAMPANA—
+                 * porque llegan a decenas y tapaban lo que sí urgía; el trabajo
+                 * de catalogarlos se hace de corrido, mirando la lista entera,
+                 * y por eso tiene su propia puerta en la pantalla donde
+                 * aparecen. El panel que abre está en app/views/correo/index.php.
+                 */
+                if (isset($modoCorreo) && strpos($uriClean, '/correo') !== false
+                    && $puedeVerMenu('avisos.ver')): ?>
+                <button type="button" id="btn-sin-codigo" class="btn btn-outline btn-sm"
+                        style="white-space:nowrap;"
+                        title="Comprobantes que llegaron de proveedores que el sistema todavía no conoce">
+                    <i class="fas fa-user-tag"></i> Comprobantes sin código
+                    <span id="sin-codigo-badge" class="badge badge-navy"
+                          style="font-size:9px;padding:1px 5px;margin-left:2px;<?= (int) ($sinCodigoPendientes ?? 0) > 0 ? '' : 'display:none;' ?>">
+                        <?= (int) ($sinCodigoPendientes ?? 0) ?>
+                    </span>
+                </button>
+                <?php endif; ?>
+
+                <?php /*
                  * El modo de Seguimiento, en el mismo sitio y por la misma
                  * razón que el de Correo: no es un filtro dentro de la cola,
                  * es de qué cola se está hablando. Sistema persigue lo que le
@@ -276,7 +359,7 @@ if (!isset($sociedadActiva)) {
                 if (isset($modoSeguimiento) && strpos($uriClean, '/seguimiento') !== false): ?>
                 <div style="display:flex;align-items:center;gap:5px;padding-left:9px;
                             border-left:1px solid var(--border-light);"
-                     title="Sistema: qué le falta a los registros del ERP. Correo: qué comprobantes XML no están todavía en el ERP.">
+                     title="Sistema: qué le falta a las facturas que ya están registradas. Correo: qué comprobantes llegaron y todavía no están registrados.">
                     <?php foreach ([
                         'sistema' => ['fa-database',           'Sistema'],
                         'correo'  => ['fa-envelope-open-text', 'Correo'],
@@ -311,8 +394,13 @@ if (!isset($sociedadActiva)) {
                       // cambiar de buzón ya no lo detiene ni lo esconde.
                       // Fuera del modo Descargas este renglón además lo hace
                       // avanzar; dentro de él manda el motor de esa pantalla.
+                      //
+                      // Solo para quien tenga correo: sin permiso, su latido
+                      // chocaría con la guardia del enrutador cada minuto, en
+                      // todas las pantallas, para no enseñar nada.
                 $enModoDescargas = isset($modoCorreo) && $modoCorreo === 'descargas'
                                    && strpos($uriClean, '/correo') !== false; ?>
+                <?php if ($puedeVerMenu('correo.ver')): ?>
                 <a href="<?= $baseUrl ?>/correo?modo=descargas" id="descargaChip"
                    class="topbar-action" style="display:none;align-items:center;gap:6px;
                           font-size:11.5px;color:var(--navy);text-decoration:none;font-weight:600;
@@ -399,7 +487,9 @@ if (!isset($sociedadActiva)) {
                     });
                 })();
                 </script>
+                <?php endif; ?>
 
+                <?php if ($puedeVerMenu('avisos.ver')): ?>
                 <!-- Campana de avisos. Va junto al engranaje porque son la
                      misma clase de cosa: no pertenecen a la pantalla que se
                      está mirando, sino al sistema.
@@ -517,16 +607,19 @@ if (!isset($sociedadActiva)) {
                     cargar();
                 })();
                 </script>
+                <?php endif; ?>
 
+                <?php if ($puedeConfiguracion): ?>
                 <a href="<?= $baseUrl ?>/configuracion"
                    class="topbar-action"
                    style="font-size:11.5px;color:#0C2461;text-decoration:none;background:<?= $enConfiguracion ? '#eef3fb' : 'transparent' ?>;display:flex;align-items:center;gap:4px;padding:3px 8px;border:1px solid #c3d0e8;border-radius:7px;font-weight:600;transition:background .2s;"
                    onmouseover="this.style.background='#eef3fb'"
                    onmouseout="this.style.background='<?= $enConfiguracion ? '#eef3fb' : 'transparent' ?>'"
                    <?= $enConfiguracion ? 'aria-current="page"' : '' ?>
-                   title="Configuración: carpeta de XML y PDF, cuentas de correo, empresas y respaldo">
+                   title="Configuración: carpeta de XML y PDF, cuentas de correo, empresas, usuarios y roles">
                     <i class="fas fa-gear"></i>
                 </a>
+                <?php endif; ?>
                 <?php if ($sociedadActiva): ?>
                 <span class="topbar-society" style="font-size:11.5px;color:var(--navy);background:var(--gold-pale);border:1px solid var(--gold-light);border-radius:999px;padding:3px 8px;display:flex;align-items:center;gap:5px;font-weight:600;"
                       title="Sociedad activa">
@@ -534,9 +627,14 @@ if (!isset($sociedadActiva)) {
                     <?= htmlspecialchars($sociedadActiva['nombre']) ?>
                 </span>
                 <?php endif; ?>
-                <span class="topbar-user" style="font-size:11.5px;color:#4a5568;display:flex;align-items:center;gap:5px;">
+                <?php // El rol se lee junto al nombre: saber con qué permisos
+                      // se está trabajando explica por qué un botón no está,
+                      // sin tener que ir a preguntar. ?>
+                <span class="topbar-user" style="font-size:11.5px;color:#4a5568;display:flex;align-items:center;gap:5px;"
+                      title="Tu rol: <?= htmlspecialchars(Permisos::nombreRol()) ?>">
                     <i class="fas fa-user-circle" style="color:#0C2461;font-size:14px;"></i>
                     <?= htmlspecialchars($_SESSION['user_nombre'] ?? $_SESSION['user_username'] ?? '') ?>
+                    <span style="color:#94A3B8;font-size:10.5px;">· <?= htmlspecialchars(Permisos::nombreRol()) ?></span>
                 </span>
                 <a href="<?= $baseUrl ?>/logout"
                    class="topbar-action"
@@ -572,7 +670,7 @@ if (!isset($sociedadActiva)) {
              * Lista con título propio. Las dos de arriba nacieron para la
              * carga de archivos y llevan su título puesto ("Ya existían", "Con
              * error"); esta la titula quien la manda, porque no todo lo que
-             * hay que enumerar es un archivo que falló. La usa el pago semanal
+             * hay que enumerar es un archivo que falló. La usa el pago
              * para nombrar las facturas que no llegaron a su carpeta.
              */
             $avisoLista   = is_array($det['aviso_lista'] ?? null) ? $det['aviso_lista'] : [];

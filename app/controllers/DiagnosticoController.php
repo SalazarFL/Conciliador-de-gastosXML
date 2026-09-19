@@ -24,7 +24,10 @@ class DiagnosticoController extends Controller
     {
         $this->render('diagnostico/index', [
             'informe' => (new Diagnostico())->ejecutar(),
-            'esAdmin' => !empty($_SESSION['user_is_admin']),
+            // La tarjeta del respaldo se ofrece a quien tenga ese permiso,
+            // no a "el administrador": son dos cosas separables desde que hay
+            // roles, y el endpoint comprueba lo mismo.
+            'esAdmin' => Permisos::puede('respaldo.administrar'),
         ]);
     }
 
@@ -301,8 +304,8 @@ POWERSHELL;
     private function soloAdminJson()
     {
         if (session_status() === PHP_SESSION_NONE) session_start();
-        if (empty($_SESSION['user_is_admin'])) {
-            $this->json(['ok' => false, 'message' => 'Solo un administrador puede generar respaldos.'], 403);
+        if (!Permisos::puede('respaldo.administrar')) {
+            $this->json(['ok' => false, 'message' => 'Tu rol no permite generar respaldos de la base.'], 403);
         }
     }
 }

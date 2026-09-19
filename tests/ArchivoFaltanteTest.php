@@ -6,7 +6,7 @@
  * documento ni mande diez mil identificadores en cada revisión: el organizador
  * corre cada pocos minutos sobre el archivo entero, y esto se ejecuta siempre.
  *
- * Y sobre todo, que fuera de lo revisado no se toque nada. Revisar una semana
+ * Y sobre todo, que fuera de lo revisado no se toque nada. Revisar un pago
  * no dice nada de los documentos de las demás; borrarles la marca porque no
  * aparecieron en esa lista sería decir que su archivo está, sin haberlo mirado.
  */
@@ -73,7 +73,7 @@ assertArchivoFaltante(strpos($limpio->consultas[0]['sql'], 'NOT IN') === false
     'y la limpieza alcanza a todo lo revisado');
 
 // ── Muchos faltantes ───────────────────────────────────────────────────────
-// Un pago semanal entero son cientos de documentos; el marcado va por grupos
+// Un pago entero son cientos de documentos; el marcado va por grupos
 // para no armar una consulta con mil parámetros.
 $muchos = new FacturaMarcaFalsa();
 $muchos->marcarArchivosFaltantes(range(1, 1200), []);

@@ -64,8 +64,8 @@ try {
     $ins->execute([$marca . ' B', '3198000000002']);
     $socB = (int) $pdo->lastInsertId();
 
-    $pdo->prepare('INSERT INTO usuarios (nombre, username, email, password_hash, activo) VALUES (?, ?, ?, ?, 1)')
-        ->execute([$marca, $marca . '_u', $marca . '@test.local', 'x']);
+    $pdo->prepare('INSERT INTO usuarios (nombre, username, cedula, password_hash, activo) VALUES (?, ?, ?, ?, 1)')
+        ->execute([$marca, $marca . '_u', '900000002', 'x']);
     $usuarioId = (int) $pdo->lastInsertId();
 
     $modelo = new Sociedad();

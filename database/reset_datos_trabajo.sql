@@ -53,10 +53,11 @@ TRUNCATE TABLE notas_credito_lineas;
 TRUNCATE TABLE notas_credito_listados;
 TRUNCATE TABLE notas_credito_cargas;
 
--- ── Pago semanal ─────────────────────────────────────────────────────
-TRUNCATE TABLE porpagar_facturas;          -- líneas (legado: hoy son ERP)
-TRUNCATE TABLE porpagar_listados;          -- los listados subidos
-TRUNCATE TABLE semanas;                    -- las semanas y su carpeta
+-- ── Pagos ────────────────────────────────────────────────────────────
+-- `porpagar_facturas` y `porpagar_listados` son de dos etapas anteriores: las
+-- líneas propias del pago (hoy son las filas del ERP) y la ficha separada del
+-- listado (hoy es el propio pago). Se vacían solo si todavía existen.
+TRUNCATE TABLE pagos;                      -- los pagos, su fecha y su carpeta
 
 -- ── Cola de trabajo ──────────────────────────────────────────────────
 TRUNCATE TABLE seguimiento_bitacora;

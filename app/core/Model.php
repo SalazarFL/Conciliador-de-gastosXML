@@ -231,9 +231,21 @@ class Model
     {
         $logFile = dirname(__DIR__, 2) . '/storage/logs/app.log';
         $timestamp = date('Y-m-d H:i:s');
-        $paramsStr = json_encode($params);
+        // Los parámetros ayudan a entender qué falló, pero una consulta a
+        // correo_cuentas los lleva la contraseña del buzón: el log lo lee
+        // cualquiera con acceso al equipo y se copia en los respaldos.
+        $paramsStr = self::mencionaSecreto((string) $sql)
+            ? '[' . count((array) $params) . ' parámetro(s) omitido(s): la consulta lleva credenciales]'
+            : json_encode($params);
         $logMessage = "[{$timestamp}] DB ERROR: {$error}\nSQL: {$sql}\nParams: {$paramsStr}\n\n";
-        
+
         file_put_contents($logFile, $logMessage, FILE_APPEND);
+    }
+
+    /** ¿Esta consulta lleva credenciales entre sus parámetros? */
+    private static function mencionaSecreto($sql)
+    {
+        return stripos($sql, 'correo_cuentas') !== false
+            || stripos($sql, 'password') !== false;
     }
 }

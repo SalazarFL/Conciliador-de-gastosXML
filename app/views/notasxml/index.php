@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/../../helpers/Columnas.php';
 $baseUrl = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 $notas = $notas ?? [];
 $proveedoresFiltro = is_array($proveedoresFiltro ?? null) ? $proveedoresFiltro : [];
@@ -20,6 +21,14 @@ $filtrosActivos = 0;
 foreach ([$desde ?? '', $hasta ?? '', $buscar ?? '', $proveedor ?? ''] as $valorFiltro) {
     if ((string) $valorFiltro !== '') { $filtrosActivos++; }
 }
+
+// Exportar lleva puestos los mismos buscadores; la lista de columnas se la
+// pega app.js, que es quien sabe cuáles están encendidas.
+$urlExportarNotas = $baseUrl . '/notas-xml/exportar?' . http_build_query(array_filter([
+    'desde' => $desde ?? '', 'hasta' => $hasta ?? '',
+    'buscar' => $buscar ?? '', 'proveedor' => $proveedor ?? '',
+    'monto' => $importes['monto'] ?? '', 'saldo' => $importes['saldo'] ?? '',
+], 'strlen'));
 ?>
 <div class="card" style="margin-bottom:10px;">
     <div class="card-header" style="flex-wrap:wrap;">
@@ -119,6 +128,11 @@ else: ?>
             <?php if ($filtrosActivos): ?>
             <a class="btn btn-outline btn-sm" href="<?= htmlspecialchars($urlLimpiarNotas) ?>"><i class="fas fa-broom"></i> Limpiar</a>
             <?php endif; ?>
+            <a class="btn btn-outline btn-sm" href="<?= htmlspecialchars($urlExportarNotas) ?>"
+               data-exportar="notasxml"
+               title="Bajar a Excel lo que estás viendo: estos filtros y estas columnas">
+                <i class="fas fa-file-excel"></i> Exportar
+            </a>
         </div>
     </form>
     <div class="filter-results">
@@ -137,15 +151,32 @@ else: ?>
     ];
     include __DIR__ . '/../partials/documento-no-esta.php';
     ?>
-    <div style="overflow-x:auto;margin-top:8px;"><table class="data-table">
-        <thead><tr><th>Fecha</th><th>Proveedor</th><th>Consecutivo</th><th>Número</th><th>Moneda</th><th class="right">Subtotal</th><th class="right">IVA</th><th class="right">Total</th><th class="right">Saldo</th><th>PDF</th><th>Origen</th><th></th></tr></thead>
+    <?php $columnasListado = 'notasxml'; include __DIR__ . '/../partials/columnas.php'; ?>
+    <div style="overflow-x:auto;margin-top:8px;"><table class="data-table" data-listado="notasxml">
+        <?php // Mismas columnas que Comprobantes XML, y con los mismos
+              // identificadores: son la misma tabla mirada por tipo. ?>
+        <thead><tr>
+            <th data-col="fecha">Fecha</th>
+            <th data-col="proveedor">Proveedor</th>
+            <th data-col="consecutivo">Consecutivo</th>
+            <th data-col="numero">Número</th>
+            <th data-col="moneda">Moneda</th>
+            <th class="right" data-col="subtotal">Subtotal</th>
+            <th class="right" data-col="iva">IVA</th>
+            <th class="right" data-col="total">Total</th>
+            <th class="right" data-col="saldo">Saldo</th>
+            <th data-col="pdf">PDF</th>
+            <th data-col="origen">Origen</th>
+            <?= Columnas::cabecerasExtra('notasxml') ?>
+            <th data-columnas-boton></th>
+        </tr></thead>
         <tbody>
-        <?php if (empty($notas)): ?><tr><td colspan="12" style="text-align:center;padding:18px;color:var(--text-muted);">No hay notas XML para este rango.</td></tr><?php endif; ?>
+        <?php if (empty($notas)): ?><tr><td colspan="20" style="text-align:center;padding:18px;color:var(--text-muted);">No hay notas XML para este rango.</td></tr><?php endif; ?>
         <?php foreach ($notas as $n): ?>
         <tr>
-            <td><?= htmlspecialchars($n['fecha_emision']) ?></td><td><?= htmlspecialchars($n['proveedor_nombre'] ?? '—') ?></td>
-            <td style="font-family:monospace;white-space:nowrap;"><?= htmlspecialchars($n['consecutivo_completo']) ?></td><td><strong><?= htmlspecialchars($n['numero_factura_asistente']) ?></strong></td>
-            <td><?= htmlspecialchars($n['moneda']) ?></td><td class="right"><?= number_format((float)$n['subtotal'],2) ?></td><td class="right"><?= number_format((float)$n['iva'],2) ?></td><td class="right"><strong><?= number_format((float)$n['total'],2) ?></strong></td>
+            <td data-col="fecha"><?= htmlspecialchars($n['fecha_emision']) ?></td><td data-col="proveedor"><?= htmlspecialchars($n['proveedor_nombre'] ?? '—') ?></td>
+            <td style="font-family:monospace;white-space:nowrap;" data-col="consecutivo"><?= htmlspecialchars($n['consecutivo_completo']) ?></td><td data-col="numero"><strong><?= htmlspecialchars($n['numero_factura_asistente']) ?></strong></td>
+            <td data-col="moneda"><?= htmlspecialchars($n['moneda']) ?></td><td class="right" data-col="subtotal"><?= number_format((float)$n['subtotal'],2) ?></td><td class="right" data-col="iva"><?= number_format((float)$n['iva'],2) ?></td><td class="right" data-col="total"><strong><?= number_format((float)$n['total'],2) ?></strong></td>
                     <?php /*
                      * El saldo no es del comprobante: un XML dice cuánto se
                      * facturó, no cuánto queda por pagar. Sale del registro
@@ -157,15 +188,15 @@ else: ?>
                     $debeAlgo = $hayEnganche && (float) $saldoErp > 0.005;
                     $docErp = trim((string) ($n['documento_erp'] ?? ''));
                     ?>
-                    <td class="right" style="white-space:nowrap;<?= $debeAlgo ? '' : 'color:var(--text-muted);' ?>"
+                    <td class="right" data-col="saldo" style="white-space:nowrap;<?= $debeAlgo ? '' : 'color:var(--text-muted);' ?>"
                         title="<?= $hayEnganche
-                            ? 'Saldo de ' . htmlspecialchars($docErp) . ', el documento del ERP con el que está enganchado'
-                            : 'Este comprobante todavía no está enganchado a ningún documento del ERP' ?>">
+                            ? 'Saldo de ' . htmlspecialchars($docErp) . ', el documento del sistema con el que está enganchado'
+                            : 'Este comprobante todavía no está enganchado a ningún documento del sistema' ?>">
                         <?php if (!$hayEnganche): ?>sin enganche
                         <?php elseif ($debeAlgo): ?><?= number_format((float) $saldoErp, 2) ?>
                         <?php else: ?>sin saldo<?php endif; ?>
                     </td>
-            <td style="white-space:nowrap;">
+            <td data-col="pdf" style="white-space:nowrap;">
                 <?php if (!empty($n['archivo_perdido'])): ?>
                 <?php
                 // Se archivó y ya no está: la marca desmiente a "Disponible"
@@ -180,7 +211,12 @@ else: ?>
                 <?php elseif (!empty($n['archivo_pdf_ok'])): ?><span class="badge badge-green">Disponible</span>
                 <?php else: ?><span class="badge" style="background:#fef3c7;color:#92400e;">Pendiente</span><?php endif; ?>
             </td>
-            <td><?= !empty($n['correo_cuenta_id']) ? 'Correo' : 'Carga XML' ?></td>
+            <td data-col="origen"><?= !empty($n['correo_cuenta_id']) ? 'Correo' : 'Carga XML' ?></td>
+
+            <?php // Lo que el comprobante trae y no se enseñaba, con el mismo
+                  // valor con el que bajaría al Excel. ?>
+            <?= Columnas::celdasExtra('notasxml', $n) ?>
+
             <td style="white-space:nowrap;"><a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/notas-xml/ver/<?= (int)$n['id'] ?>" data-ficha="<?= (int)$n['id'] ?>" title="Ver la ficha del documento"><i class="fas fa-eye"></i></a> <?php if (!empty($n['archivo_xml_ok'])): ?><a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/documentos/xml/<?= (int)$n['id'] ?>" target="_blank" data-ventana="XML" data-ventana-titulo="<?= htmlspecialchars((string) $n['numero_factura_asistente']) ?>" title="Ver XML"><i class="fas fa-code"></i></a><?php endif; ?><?php if (!empty($n['archivo_pdf_ok'])): ?> <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/documentos/pdf/<?= (int)$n['id'] ?>" target="_blank" data-ventana="PDF" data-ventana-titulo="<?= htmlspecialchars((string) $n['numero_factura_asistente']) ?>" title="Ver PDF"><i class="fas fa-file-pdf"></i></a><?php endif; ?></td>
         </tr>
         <?php endforeach; ?>

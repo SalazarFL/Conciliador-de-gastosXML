@@ -9,7 +9,7 @@
  *
  * Cuándo se usa: cuando una carpeta de documentos se borró o se movió y sus
  * archivos ya no están en ninguna parte. La fila conserva todo lo que importa
- * —proveedor, montos, fechas, semana de pago, hash— y solo pierde el "dónde
+ * —proveedor, montos, fechas, pago de pago, hash— y solo pierde el "dónde
  * está", que de todos modos apuntaba al vacío. Así el sistema dice "sin
  * archivo" en vez de mandar a una carpeta inexistente.
  *
@@ -124,7 +124,7 @@ if ($conservadas > 0) {
 if (!$aplicar) {
     echo "\nNada se cambió. Vuelve a correrlo con --aplicar si el resumen te cuadra.\n";
 } else {
-    echo "\nListo. Los documentos siguen en la base con sus montos, fechas y semana;\n"
+    echo "\nListo. Los documentos siguen en la base con sus montos, fechas y pago;\n"
        . "lo único que se borró es una ubicación que ya no llevaba a ninguna parte.\n"
        . "Si algún día aparece un respaldo, copia los archivos a la carpeta compartida y corre:\n"
        . "  php cli/organizar_documentos.php --completo\n";

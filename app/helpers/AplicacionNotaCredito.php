@@ -114,7 +114,7 @@ class AplicacionNotaCredito
      * En qué situación está una nota. $factura es la fila del ERP a la que
      * apunta, o null si no se encontró.
      */
-    public static function estado($clase, $documento, $saldoNota, array $factura = null)
+    public static function estado($clase, $documento, $saldoNota, ?array $factura = null)
     {
         if (!in_array((string) $clase, self::CLASES_CON_FACTURA, true)) {
             return self::NO_APLICA;

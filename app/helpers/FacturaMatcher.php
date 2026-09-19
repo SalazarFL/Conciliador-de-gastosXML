@@ -8,7 +8,7 @@
  *
  * Nacieron en el viejo módulo de Conciliación y se sacaron aquí para
  * compartirlas. Ese módulo ya no existe; hoy las usan las notas de crédito,
- * las devoluciones y el número corto del pago semanal —el único caso que le
+ * las devoluciones y el número corto del pago —el único caso que le
  * queda al pago, porque cuando el ERP trae consecutivo el cruce es una
  * igualdad y no pasa por acá—.
  */

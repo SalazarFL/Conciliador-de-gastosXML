@@ -31,6 +31,10 @@ storage/sessions/
 # Locks de procesos (runtime)
 storage/locks/
 
+# Documentos bajados del almacén para lo que necesita un archivo de verdad
+# (ZIP, pdftotext). Son copias de comprobantes reales: nunca se versionan.
+storage/tmp/
+
 # PDFs de devoluciones archivados por la app (runtime)
 storage/devoluciones/
 

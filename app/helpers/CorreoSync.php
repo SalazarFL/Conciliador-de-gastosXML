@@ -57,16 +57,48 @@ class CorreoSync
      * Es el patrón de lectores y escritores, con los buzones de lectores.
      */
 
+    /**
+     * Dónde viven los candados: junto al índice, salvo que alguien reapunte.
+     *
+     * Reapuntarlos es para probarlos. Un candado se prueba con procesos de
+     * verdad —flock entre dos manijas del mismo proceso no se comporta igual—,
+     * y si esos procesos usaran los candados de producción, la prueba mediría
+     * quién más está sincronizando en esa máquina: la tarea programada corre
+     * 290 s de cada 300, así que casi siempre hay una sincronización viva
+     * reteniendo el candado general, y la prueba del mantenimiento fallaba por
+     * eso y no por el candado. Con su propio directorio la prueba mide el
+     * candado y nada más.
+     */
+    private static $dirCandados = null;
+
+    /** @param string $ruta Directorio propio; '' vuelve al de producción. */
+    public static function usarDirectorioCandados($ruta)
+    {
+        $ruta = rtrim((string) $ruta, "/\\");
+        self::$dirCandados = $ruta === '' ? null : $ruta;
+    }
+
+    private static function dirCandados()
+    {
+        if (self::$dirCandados === null) {
+            return MailFetcher::storagePath();
+        }
+        if (!is_dir(self::$dirCandados)) {
+            @mkdir(self::$dirCandados, 0777, true);
+        }
+        return self::$dirCandados;
+    }
+
     /** El candado general. Compartido entre sincronizaciones. */
     public static function rutaLock()
     {
-        return MailFetcher::storagePath() . DIRECTORY_SEPARATOR . 'sync_auto.lock';
+        return self::dirCandados() . DIRECTORY_SEPARATOR . 'sync_auto.lock';
     }
 
     /** El candado de un buzón. Exclusivo: es la reserva de ese buzón. */
     public static function rutaLockCuenta($cuentaId)
     {
-        return MailFetcher::storagePath() . DIRECTORY_SEPARATOR
+        return self::dirCandados() . DIRECTORY_SEPARATOR
              . 'sync_cuenta_' . (int) $cuentaId . '.lock';
     }
 

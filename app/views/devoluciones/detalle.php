@@ -72,7 +72,7 @@ if (!empty($dev['advertencias'])) {
             <?php endif; ?>
         </div>
         <?php else: ?>
-        <div><strong>Estado ERP / Usuario:</strong><br><?= htmlspecialchars(trim((string) $dev['estado_erp'] . ' · ' . (string) $dev['usuario_erp'], ' ·')) ?></div>
+        <div><strong>Estado en el sistema / Usuario:</strong><br><?= htmlspecialchars(trim((string) $dev['estado_erp'] . ' · ' . (string) $dev['usuario_erp'], ' ·')) ?></div>
         <?php if (!empty($dev['observaciones'])): ?><div><strong>Observaciones:</strong><br><?= htmlspecialchars((string) $dev['observaciones']) ?></div><?php endif; ?>
         <?php endif; ?>
     </div>

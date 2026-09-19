@@ -24,11 +24,11 @@ function assertNav($condicion, $mensaje)
 }
 
 /** El pago, que solo tiene que decir cómo se llama. */
-class PorPagarFalso
+class PagoFalso
 {
-    public function getListado($id)
+    public function findById($id)
     {
-        return ['id' => (int) $id, 'nombre' => 'Pago 7', 'semana_nombre' => 'Semana 30'];
+        return ['id' => (int) $id, 'nombre' => 'Pago 7', 'fecha_pago' => '2026-09-03'];
     }
 }
 
@@ -80,7 +80,7 @@ assertNav(count($sinRespaldo) === 2, 'el pago de prueba tiene dos facturas sin r
 
 $erp = new FacturaErpFalso($lineas);
 $modelo = function ($nombre) use ($erp) {
-    return $nombre === 'FacturaErp' ? $erp : new PorPagarFalso();
+    return $nombre === 'FacturaErp' ? $erp : new PagoFalso();
 };
 
 // ── Se llega con los filtros del checklist puestos ───────────────────
@@ -107,13 +107,13 @@ assertNav(strpos($ctx['params'], 'ctx_f_estado=sin_respaldo') !== false
     && strpos($ctx['params'], 'ctx_lista=7') !== false,
     'pasar al siguiente con las flechas no rearma otra lista');
 assertNav(strpos($ctx['volver'], 'estado=sin_respaldo') !== false
-    && strpos($ctx['volver'], 'listado_id=7') !== false,
+    && strpos($ctx['volver'], 'pago_id=7') !== false,
     '"Volver" cae en el checklist tal como se dejó');
 
 // ── Sin filtros, el pago entero, como antes ──────────────────────────
 $erpTodo = new FacturaErpFalso($lineas);
 $modeloTodo = function ($nombre) use ($erpTodo) {
-    return $nombre === 'FacturaErp' ? $erpTodo : new PorPagarFalso();
+    return $nombre === 'FacturaErp' ? $erpTodo : new PagoFalso();
 };
 $ctxTodo = NavegacionDocumentos::desde([
     'ctx' => 'pago', 'ctx_lista' => 7, 'ctx_item' => '1',
@@ -127,7 +127,7 @@ $muchas = [];
 for ($i = 1; $i <= NavegacionDocumentos::TOPE + 40; $i++) { $muchas[] = $linea($i, 'sin_respaldo'); }
 $erpMuchas = new FacturaErpFalso($muchas);
 $modeloMuchas = function ($nombre) use ($erpMuchas) {
-    return $nombre === 'FacturaErp' ? $erpMuchas : new PorPagarFalso();
+    return $nombre === 'FacturaErp' ? $erpMuchas : new PagoFalso();
 };
 $ctxMuchas = NavegacionDocumentos::desde([
     'ctx' => 'pago', 'ctx_lista' => 7, 'ctx_item' => '1',

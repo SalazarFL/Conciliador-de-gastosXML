@@ -16,7 +16,7 @@ $val = function(string $key) use ($old, $usuario): string {
 $tituloPagina = 'Editar a ' . $usuario['nombre'];
 ?>
 
-<div class="card" style="max-width:560px;">
+<div class="card" style="max-width:720px;">
     <div class="card-header">
         <div class="card-title" style="margin-right:auto;">
             <i class="fas fa-user-edit" style="margin-right:6px;color:var(--gold);"></i>Datos del usuario
@@ -49,9 +49,10 @@ $tituloPagina = 'Editar a ' . $usuario['nombre'];
             </div>
 
             <div>
-                <label class="form-label-inline">Correo electrónico <span style="color:#e53e3e">*</span></label>
-                <input type="email" name="email" class="form-control-inline"
-                       value="<?= $val('email') ?>" placeholder="correo@ejemplo.com" required>
+                <label class="form-label-inline">Cédula <span style="color:#e53e3e">*</span></label>
+                <input type="text" name="cedula" class="form-control-inline"
+                       value="<?= $val('cedula') ?>" placeholder="Solo números"
+                       inputmode="numeric" required>
             </div>
 
         </div>
@@ -76,25 +77,31 @@ $tituloPagina = 'Editar a ' . $usuario['nombre'];
             </div>
         </div>
 
+        <?php
+        /*
+         * El rol y las empresas. La casilla de "Administrador" desapareció:
+         * administrador es quien tiene un rol marcado como tal, y así no puede
+         * haber alguien con la casilla puesta y un rol que no administra nada.
+         */
+        include __DIR__ . '/../partials/acceso-usuario.php';
+        ?>
+
         <?php if (!$isSelf): ?>
         <div style="display:flex;gap:9px;margin-top:10px;padding-top:9px;border-top:1px solid var(--border-light,#E4ECF7);">
             <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:13px;color:var(--navy);">
                 <input type="checkbox" name="activo" value="1"
                        <?= (!empty($old) ? !empty($old['activo']) : (bool)$usuario['activo']) ? 'checked' : '' ?>
                        style="width:16px;height:16px;accent-color:var(--gold);">
-                <span><strong>Cuenta activa</strong></span>
-            </label>
-            <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:13px;color:var(--navy);">
-                <input type="checkbox" name="is_admin" value="1"
-                       <?= (!empty($old) ? !empty($old['is_admin']) : (bool)$usuario['is_admin']) ? 'checked' : '' ?>
-                       style="width:16px;height:16px;accent-color:var(--gold);">
-                <span><strong>Administrador</strong></span>
+                <span><strong>Cuenta activa</strong>
+                    <span style="font-size:12px;color:var(--text-muted);">(si se desactiva, no puede entrar)</span>
+                </span>
             </label>
         </div>
         <?php else: ?>
         <p style="margin-top:10px;font-size:11.5px;color:var(--text-muted);">
             <i class="fas fa-info-circle" style="color:var(--gold);"></i>
-            No puedes cambiar tu propio rol ni desactivar tu cuenta.
+            No puedes cambiar tu propio rol ni desactivar tu cuenta: quedarías fuera
+            de esta misma pantalla y solo se arreglaría desde la base de datos.
         </p>
         <?php endif; ?>
 

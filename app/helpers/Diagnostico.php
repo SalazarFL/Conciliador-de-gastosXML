@@ -32,6 +32,9 @@ class Diagnostico
         ['correo_incidencias', 'descartada', 'database/migration_correo_incidencias_descarte.sql'],
         ['correo_incidencias_descartes', null, 'database/migration_correo_incidencias_descarte.sql'],
         ['facturas_xml', 'archivo_faltante_en', 'database/migration_archivo_faltante.sql'],
+        ['sociedades', 'almacen_documentos', 'database/migration_almacen_graph.sql'],
+        ['facturas_xml', 'almacen', 'database/migration_almacen_graph.sql'],
+        ['devoluciones', 'almacen', 'database/migration_almacen_graph.sql'],
     ];
 
     private $pdo;
@@ -49,7 +52,8 @@ class Diagnostico
              $this->baseDeDatos()],
             $this->esquema(),
             [$this->carpetaCompartida(), $this->escrituraEnCarpeta(), $this->rutasAbsolutas(),
-             $this->documentosDentroDelProyecto(), $this->archivosFaltantes()]
+             $this->documentosDentroDelProyecto(), $this->archivosFaltantes()],
+            $this->sharepoint()
         );
 
         $peor = 'ok';
@@ -336,11 +340,19 @@ class Diagnostico
     private function archivosFaltantes()
     {
         try {
-            $filas = $this->pdo()->query(
-                "SELECT ruta_xml FROM facturas_xml
-                 WHERE ruta_xml IS NOT NULL AND ruta_xml <> ''
-                 ORDER BY id DESC LIMIT 200"
-            )->fetchAll(PDO::FETCH_COLUMN);
+            // Con la fila entera y no solo la ruta: dónde está cada documento
+            // lo dicen su columna `almacen` y su sociedad, y esta consulta no
+            // pasa por los modelos que lo resuelven solos al leer.
+            // Solo los de disco: los de SharePoint serían doscientas llamadas
+            // a la red, y de esos se ocupa la revisión de SharePoint.
+            $pdo = $this->pdo();
+            $conAlmacen = $this->existeColumna($pdo, 'facturas_xml', 'almacen');
+            $filas = $pdo->query(
+                'SELECT ruta_xml, sociedad_id' . ($conAlmacen ? ', almacen' : '') . " FROM facturas_xml
+                 WHERE ruta_xml IS NOT NULL AND ruta_xml <> ''"
+                 . ($conAlmacen ? " AND almacen IS NULL AND ruta_xml NOT LIKE 'sharepoint:%'" : '') . '
+                 ORDER BY id DESC LIMIT 200'
+            )->fetchAll(PDO::FETCH_ASSOC);
         } catch (Throwable $e) {
             return $this->resultado('Documentos recientes en disco', 'aviso',
                 'No se pudo revisar: ' . $e->getMessage(), '');
@@ -352,7 +364,8 @@ class Diagnostico
         }
 
         $faltan = 0;
-        foreach ($filas as $ruta) {
+        foreach ($filas as $fila) {
+            $ruta = RutaDocumento::hidratarFila($fila, ['ruta_xml'])['ruta_xml'];
             if (!RutaDocumento::existe($ruta)) {
                 $faltan++;
             }
@@ -374,6 +387,99 @@ class Diagnostico
                   . "compartida, esto vuelve a ubicarlos sin moverlos:\n"
                   . '  php cli/organizar_documentos.php')
         );
+    }
+
+    /**
+     * Las empresas que archivan en SharePoint: si esta computadora llega a la
+     * biblioteca, si la tarea que la vigila sigue corriendo y si quedó algo
+     * atascado. Sin ninguna empresa allá, no dice nada: no es ruido que
+     * alguien tenga que aprender a ignorar.
+     *
+     * Pregunta a SharePoint UNA vez (el nombre de la biblioteca). Lo demás lo
+     * sabe la base.
+     */
+    private function sharepoint()
+    {
+        try {
+            $pdo = $this->pdo();
+            if (!$this->existeColumna($pdo, 'sociedades', 'almacen_documentos')) {
+                return [];
+            }
+            $empresas = $pdo->query("SELECT nombre FROM sociedades WHERE almacen_documentos = 'sharepoint' ORDER BY nombre")
+                ->fetchAll(PDO::FETCH_COLUMN);
+            $documentos = $this->existeColumna($pdo, 'facturas_xml', 'almacen')
+                ? (int) $pdo->query("SELECT COUNT(*) FROM facturas_xml WHERE almacen = 'sharepoint'")->fetchColumn()
+                : 0;
+        } catch (Throwable $e) {
+            return [$this->resultado('SharePoint', 'aviso', 'No se pudo revisar: ' . $e->getMessage(), '')];
+        }
+        if (!$empresas && $documentos === 0) {
+            return [];
+        }
+
+        require_once __DIR__ . '/AlmacenEnGraph.php';
+        $revisiones = [];
+        $quienes = $empresas ? implode(', ', $empresas) : 'ninguna empresa, pero hay documentos allá';
+
+        // 1. ¿Esta computadora llega?
+        if (!AlmacenDocumentos::disponible(AlmacenEnGraph::TIPO)) {
+            $revisiones[] = $this->resultado('SharePoint en esta computadora', 'error',
+                'Sin credenciales. Archivan en SharePoint: ' . $quienes . " ({$documentos} documentos)",
+                "Esta computadora no puede abrir ni guardar esos documentos. Copia la plantilla y completa los datos:\n"
+                . "  copy app\\config\\graph.ejemplo.php app\\config\\local.graph.php\n"
+                . 'El secreto lo tiene quien administra la aplicación en Microsoft Entra ID; no se manda por correo ni por chat.');
+        } else {
+            try {
+                $biblioteca = AlmacenDocumentos::tipo(AlmacenEnGraph::TIPO)->probar();
+                $revisiones[] = $this->resultado('SharePoint en esta computadora', 'ok',
+                    'Conectada a la biblioteca "' . $biblioteca . '". Archivan allá: ' . $quienes
+                    . " ({$documentos} documentos)", '');
+            } catch (Throwable $e) {
+                $revisiones[] = $this->resultado('SharePoint en esta computadora', 'error',
+                    'No contesta: ' . $e->getMessage(),
+                    "Prueba la conexión paso a paso con:\n  php cli/probar_sharepoint.php\n"
+                    . 'Si dice que falta un certificado raíz, revisa curl.cainfo en php.ini y reinicia Apache.');
+            }
+        }
+
+        // 2. ¿La vigila alguien?
+        try {
+            $avisos = [];
+            $ultima = $this->existeTabla($pdo, 'almacen_delta')
+                ? $pdo->query("SELECT actualizado_en FROM almacen_delta WHERE almacen = 'sharepoint'")->fetchColumn()
+                : false;
+            if (!$ultima) {
+                $avisos[] = 'la revisión de la biblioteca nunca corrió';
+            } elseif (time() - strtotime((string) $ultima) > 3600) {
+                $avisos[] = 'la revisión de la biblioteca no corre desde ' . $ultima;
+            }
+            $atascados = $this->existeTabla($pdo, 'almacen_pendientes')
+                ? (int) $pdo->query('SELECT COUNT(*) FROM almacen_pendientes WHERE intentos >= 20')->fetchColumn()
+                : 0;
+            if ($atascados > 0) {
+                $avisos[] = $atascados . ' borrado(s) en SharePoint que no se pudieron hacer después de 20 intentos';
+            }
+            $sinArchivo = (int) $pdo->query("SELECT COUNT(*) FROM facturas_xml
+                WHERE almacen = 'sharepoint' AND archivo_faltante_en IS NOT NULL")->fetchColumn();
+            $migracion = $this->existeTabla($pdo, 'almacen_migracion')
+                ? (int) $pdo->query("SELECT COUNT(*) FROM almacen_migracion WHERE estado IN ('error', 'conflicto')")->fetchColumn()
+                : 0;
+            if ($migracion > 0) {
+                $avisos[] = $migracion . ' archivo(s) de una migración a SharePoint con error o conflicto';
+            }
+            $revisiones[] = $this->resultado('Vigilancia de SharePoint', $avisos ? 'aviso' : 'ok',
+                ($avisos ? ucfirst(implode('; ', $avisos)) . '. ' : 'La tarea programada revisa la biblioteca. ')
+                    . $sinArchivo . ' documento(s) de SharePoint marcados sin archivo.',
+                $avisos
+                    ? "Revisa que la tarea programada de correo esté corriendo en alguna PC con credenciales. Detalle:\n"
+                      . "  php cli/organizar_documentos.php --sharepoint --dry-run\n"
+                      . "  php cli/migrar_documentos_a_graph.php --sociedad=N   (si hay una migración)\n"
+                      . 'Los borrados atascados están en la tabla almacen_pendientes, con su error.'
+                    : '');
+        } catch (Throwable $e) {
+            $revisiones[] = $this->resultado('Vigilancia de SharePoint', 'aviso', 'No se pudo revisar: ' . $e->getMessage(), '');
+        }
+        return $revisiones;
     }
 
     // ── Apoyo ─────────────────────────────────────────────────────────

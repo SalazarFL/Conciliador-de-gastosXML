@@ -60,13 +60,13 @@ assertSeguimientoFiltro(strpos($modelo->sqlFilas, 'l.saldo AS saldo') !== false,
 assertSeguimientoFiltro(strpos($modelo->sqlFilas, 'COALESCE(pe.saldo_pago, pe.saldo) AS saldo') !== false,
     'el saldo del renglón sale de la factura del ERP, no de una copia');
 
-// El pago semanal dejó de alimentar documentos: solo marca cuáles facturas se
-// pagan esta semana. Si la cola volviera a entrar por él, una factura sin
+// El pago dejó de alimentar documentos: solo marca cuáles facturas se
+// pagan este pago. Si la cola volviera a entrar por él, una factura sin
 // respaldo que nadie metió todavía en un pago no aparecería nunca.
 assertSeguimientoFiltro(strpos($modelo->sqlFilas, "'factura' AS origen") !== false,
     'el origen de la factura del ERP se llama factura');
-assertSeguimientoFiltro(strpos($modelo->sqlFilas, 'LEFT JOIN porpagar_listados li') !== false,
-    'el pago semanal es contexto opcional, no la puerta de entrada');
+assertSeguimientoFiltro(strpos($modelo->sqlFilas, 'LEFT JOIN pagos li') !== false,
+    'el pago es contexto opcional, no la puerta de entrada');
 assertSeguimientoFiltro(strpos($modelo->sqlFilas, 'li.estado') === false,
     'no se lee el estado del pago: los pagos ya no se cierran y la columna no siempre existe');
 
@@ -95,8 +95,11 @@ assertSeguimientoFiltro($modelo->paramsFilas === [
     '%1200%', '%75.50%',
     'falta_pdf',
 ], 'los filtros se envían como parámetros en el orden correcto');
-assertSeguimientoFiltro($modelo->paramsConteo === $modelo->paramsFilas,
-    'conteo y filas usan exactamente los mismos filtros');
+// El total ya no se cuenta en otra consulta que podría filtrar distinto: viaja
+// en la misma que trae las filas, así que no puede contar otra cosa.
+assertSeguimientoFiltro(strpos($modelo->sqlFilas, 'COUNT(*) OVER () AS total_filas') !== false
+    && $modelo->sqlConteo === '',
+    'conteo y filas salen de la misma consulta, con los mismos filtros');
 
 // ── Las pestañas son estados ────────────────────────────────────────────────
 

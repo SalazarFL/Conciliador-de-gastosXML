@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/../../helpers/Columnas.php';
 $baseUrl = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 $devoluciones = $devoluciones ?? [];
 $resumen = $resumen ?? ['pendiente' => 0, 'sin_nc' => 0, 'parcial' => 0, 'verificada' => 0, 'total' => 0];
@@ -107,18 +108,36 @@ $labelTipo = function ($tipo) {
         <div class="filter-actions">
             <button class="btn btn-primary btn-sm" type="submit"><i class="fas fa-search"></i> Buscar</button>
             <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/devoluciones?limpiar=1"><i class="fas fa-broom"></i> Limpiar</a>
+            <?php // Los mismos filtros que están puestos; las columnas se las
+                  // pega app.js, que sabe cuáles se están viendo. ?>
+            <a class="btn btn-outline btn-sm" data-exportar="devoluciones"
+               href="<?= $baseUrl ?>/devoluciones/exportar?<?= htmlspecialchars(http_build_query(array_filter([
+                   'tipo' => $filtros['tipo'], 'estado' => $filtros['estado'],
+                   'proveedor' => $filtros['proveedor'], 'q' => $filtros['q'],
+                   'monto' => $filtros['monto'],
+               ], static function ($v) { return (string) $v !== ''; }))) ?>"
+               title="Bajar a Excel lo que estás viendo: estos filtros y estas columnas">
+                <i class="fas fa-file-excel"></i> Exportar
+            </a>
         </div>
     </form>
 
-    <div style="overflow-x:auto;margin-top:8px;"><table class="data-table">
+    <?php $columnasListado = 'devoluciones'; include __DIR__ . '/../partials/columnas.php'; ?>
+    <div style="overflow-x:auto;margin-top:8px;"><table class="data-table" data-listado="devoluciones">
         <thead><tr>
-            <th>Fecha</th><th>Tipo</th><th>N°</th><th>Proveedor</th><th>Factura (boleta)</th>
-            <th class="right">Monto</th>
-            <th class="right">NC esperadas</th><th>Vínculos</th><th>Estado</th><th></th>
+            <th data-col="fecha">Fecha</th><th data-col="tipo">Tipo</th><th data-col="numero">N°</th>
+            <th data-col="proveedor">Proveedor</th><th data-col="factura">Factura (boleta)</th>
+            <th class="right" data-col="monto">Monto</th>
+            <th class="right" data-col="esperadas">NC esperadas</th>
+            <th data-col="vinculos">Vínculos</th><th data-col="estado">Estado</th>
+            <?php // Lo que el reporte del ERP trae y no cabía: dónde se hizo,
+                  // quién la hizo, qué se anotó y cuánto se devolvió. ?>
+            <?= Columnas::cabecerasExtra('devoluciones') ?>
+            <th data-columnas-boton></th>
         </tr></thead>
         <tbody>
         <?php if (empty($devoluciones)): ?>
-        <tr><td colspan="10" style="text-align:center;padding:18px;color:var(--text-muted);">No hay reportes importados con estos filtros.</td></tr>
+        <tr><td colspan="20" style="text-align:center;padding:18px;color:var(--text-muted);">No hay reportes importados con estos filtros.</td></tr>
         <?php endif; ?>
         <?php foreach ($devoluciones as $d): ?>
         <?php
@@ -137,20 +156,21 @@ $labelTipo = function ($tipo) {
             if ((float) $d['nc_esperada_costo'] > 0) { $montos[] = 'Costo: ' . number_format((float) $d['nc_esperada_costo'], 2); }
         ?>
         <tr>
-            <td style="white-space:nowrap;"><?= htmlspecialchars((string) $d['fecha']) ?></td>
-            <td><?= $labelTipo((string) $d['tipo']) ?></td>
-            <td><strong><?= htmlspecialchars((string) $d['numero']) ?></strong></td>
-            <td><?= htmlspecialchars((string) ($d['proveedor_local'] ?: $d['proveedor_nombre_erp'] ?: '—')) ?></td>
-            <td style="font-family:monospace;white-space:nowrap;"><?= htmlspecialchars((string) ($d['numero_factura'] ?: '—')) ?></td>
-            <td class="right" style="white-space:nowrap;<?= $montoDevolucion > 0 ? '' : 'color:var(--text-muted);' ?>">
+            <td style="white-space:nowrap;" data-col="fecha"><?= htmlspecialchars((string) $d['fecha']) ?></td>
+            <td data-col="tipo"><?= $labelTipo((string) $d['tipo']) ?></td>
+            <td data-col="numero"><strong><?= htmlspecialchars((string) $d['numero']) ?></strong></td>
+            <td data-col="proveedor"><?= htmlspecialchars((string) ($d['proveedor_local'] ?: $d['proveedor_nombre_erp'] ?: '—')) ?></td>
+            <td style="font-family:monospace;white-space:nowrap;" data-col="factura"><?= htmlspecialchars((string) ($d['numero_factura'] ?: '—')) ?></td>
+            <td class="right" data-col="monto" style="white-space:nowrap;<?= $montoDevolucion > 0 ? '' : 'color:var(--text-muted);' ?>">
                 <?= $montoDevolucion > 0 ? number_format($montoDevolucion, 2) : '—' ?>
             </td>
-            <td class="right" style="white-space:nowrap;"><?= $montos ? implode('<br>', $montos) : '—' ?></td>
-            <td style="white-space:nowrap;">
+            <td class="right" style="white-space:nowrap;" data-col="esperadas"><?= $montos ? implode('<br>', $montos) : '—' ?></td>
+            <td style="white-space:nowrap;" data-col="vinculos">
                 <?php if ((int) $d['matches_confirmados'] > 0): ?><span class="badge badge-green"><?= (int) $d['matches_confirmados'] ?> ✓</span><?php endif; ?>
                 <?php if ((int) $d['matches_sugeridos'] > 0): ?><span class="badge" style="background:#fef3c7;color:#92400e;"><?= (int) $d['matches_sugeridos'] ?> ?</span><?php endif; ?>
             </td>
-            <td><?= $badgeEstado((string) $d['estado']) ?></td>
+            <td data-col="estado"><?= $badgeEstado((string) $d['estado']) ?></td>
+            <?= Columnas::celdasExtra('devoluciones', $d) ?>
             <td style="white-space:nowrap;">
                 <?php /*
                  * El detalle de una devolución no es una ficha que se lee: es

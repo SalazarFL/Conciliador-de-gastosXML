@@ -18,13 +18,38 @@ require_once __DIR__ . '/../helpers/FacturasErpCsvParser.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 require_once __DIR__ . '/../helpers/AlcanceProveedor.php';
 require_once __DIR__ . '/../helpers/BusquedaImporte.php';
+require_once __DIR__ . '/../helpers/Columnas.php';
 
 class FacturasErpController extends Controller
 {
+    /** Cuántas facturas del ERP caben en un Excel de una sentada. */
+    const TOPE_EXPORTACION = 5000;
+
     public function __construct() { $this->requireAuth(); }
 
     public function index()
     {
+        // Un enredo sin resolver cierra el listado. No es rigor por gusto:
+        // mientras esté ahí, el listado que se ve NO es el reporte —le faltan
+        // las filas apartadas— y todo lo que se decida mirándolo se decide
+        // sobre plata que el sistema sabe que existe y todavía no colocó.
+        // Dejarlo pasar con un aviso al pie sería pedirle a alguien que
+        // recuerde un pendiente mientras trabaja con el dato incompleto.
+        if (($enredos = $this->enredosSinResolver()) > 0) {
+            $this->redirectWithMessage(
+                $this->url('/facturas-erp/revision'),
+                $enredos === 1
+                    ? 'La última carga dejó un enredo sin resolver: hay filas del reporte que no se '
+                      . 'distinguen entre sí. Decidí cuál entra para poder seguir con el listado.'
+                    : sprintf(
+                        'La última carga dejó %d enredos sin resolver: hay filas del reporte que no '
+                        . 'se distinguen entre sí. Decidilos para poder seguir con el listado.',
+                        $enredos
+                    ),
+                'warning'
+            );
+        }
+
         $this->recordarFiltros('facturas_erp', [
             'q', 'proveedor', 'sucursal', 'origen', 'estado',
             'desde', 'hasta', 'solo_saldo', 'monto', 'saldo',
@@ -72,7 +97,6 @@ class FacturasErpController extends Controller
             // visita para cifras que nadie usaba para decidir nada.
             'opciones' => $modelo->opcionesFiltro(),
             'proveedoresFiltro' => ProveedorCatalogo::opciones($modelo->proveedoresParaFiltro()),
-            'cargas' => $modelo->cargas(10),
             'ultimaCarga' => $modelo->ultimaCarga(),
             'incidenciasAbiertas' => $modelo->contarIncidencias(['severidad' => 'alerta']),
             'incidenciasTotal' => $modelo->contarIncidencias([]),
@@ -106,6 +130,10 @@ class FacturasErpController extends Controller
         $this->render('facturaserp.revision', [
             'titulo' => 'Líneas en revisión · Facturas',
             'modulo' => 'facturas-erp',
+            // Los enredos van aparte y primero: son los que tienen el listado
+            // cerrado, y mezclarlos con las líneas sueltas escondería lo único
+            // que hay que resolver para poder seguir.
+            'enredos' => $bandeja->enredosPendientes((int) $sociedad['id']),
             'pendientes' => $bandeja->pendientes((int) $sociedad['id']),
             'resueltas' => $bandeja->resueltas((int) $sociedad['id'], 50),
             'memoria' => $bandeja->memoria((int) $sociedad['id']),
@@ -221,6 +249,171 @@ class FacturasErpController extends Controller
         } catch (Throwable $e) {
             $this->redirectWithMessage($volver, 'No se pudo descartar: ' . $e->getMessage(), 'error');
         }
+    }
+
+    /**
+     * Resuelve un enredo entero: varias filas del reporte que quedaron
+     * indistinguibles entre sí.
+     *
+     * Se decide en grupo y no de a una porque la pregunta es comparativa —de
+     * estas, cuál entra— y contestarla mirando una sola fila no se puede: las
+     * filas son idénticas. Hay dos salidas legítimas, y cuál corresponde
+     * depende de algo que el archivo no dice:
+     *
+     *   elegir   El reporte imprimió la misma factura dos veces. Entra la
+     *            marcada y las demás se descartan.
+     *   numerar  Son facturas distintas que el ERP dejó sin número. Cada una
+     *            recibe el suyo y entran todas, que es lo único que no pierde
+     *            plata cuando de verdad eran dos.
+     */
+    public function resolverEnredo()
+    {
+        if (!$this->isPost()) {
+            $this->redirect($this->url('/facturas-erp/revision'));
+        }
+        $volver = $this->url('/facturas-erp/revision');
+
+        try {
+            $sociedad = $this->loadModel('Sociedad')->getActiva();
+            if (!$sociedad) {
+                throw new Exception('No hay una sociedad activa.');
+            }
+
+            $bandeja = $this->bandeja();
+            $lineas = $bandeja->lineasDelGrupo((int) $sociedad['id'], (string) $this->post('grupo', ''));
+            if (count($lineas) < 2) {
+                throw new Exception('Ese enredo ya no está esperando: puede que alguien más lo haya resuelto.');
+            }
+
+            $mensaje = $this->post('modo', '') === 'numerar'
+                ? $this->enredoNumerando($lineas, $sociedad, $bandeja)
+                : $this->enredoEligiendo($lineas, $sociedad, $bandeja);
+
+            $this->engancharComprobantes($this->loadModel('FacturaErp'));
+            $this->redirectWithMessage($volver, $mensaje, 'success');
+        } catch (Throwable $e) {
+            $this->redirectWithMessage($volver, 'No se pudo resolver el enredo: ' . $e->getMessage(), 'error');
+        }
+    }
+
+    /** "De estas filas, la buena es esta": entra una y las otras se descartan. */
+    private function enredoEligiendo(array $lineas, array $sociedad, $bandeja)
+    {
+        $elegida = (int) $this->post('elegida', 0);
+        $ids = array_map('intval', array_column($lineas, 'id'));
+        if (!in_array($elegida, $ids, true)) {
+            throw new Exception('Marcá cuál de las filas es la que entra.');
+        }
+
+        $recordar = $this->post('recordar', '') !== '';
+        $modelo = $this->loadModel('FacturaErp');
+        $usuarioId = $_SESSION['usuario_id'] ?? null;
+        $nota = 'Fila repetida en el reporte: entró otra del mismo grupo.';
+        $descartadas = 0;
+
+        // Primero la que entra, que es lo único que puede fallar: si la
+        // inserción no pasa, el enredo queda intacto y se puede reintentar.
+        // Al revés —descartando primero— un fallo dejaría el grupo a medias y
+        // sin nadie adentro, que es la forma de trabarlo para siempre.
+        foreach ($lineas as $linea) {
+            if ((int) $linea['id'] !== $elegida) {
+                continue;
+            }
+            $campos = is_array($linea['campos'] ?? null) ? $linea['campos'] : [];
+            $id = $modelo->insertarDesdeRevision($campos, (int) $sociedad['id'], $linea['carga_id']);
+            $bandeja->marcarIncluida($linea['id'], $campos, $id, $usuarioId);
+            if ($recordar) {
+                $bandeja->recordar(
+                    (int) $sociedad['id'],
+                    $linea,
+                    'incluir',
+                    $campos,
+                    'Elegida entre varias filas iguales del reporte.',
+                    $usuarioId
+                );
+            }
+        }
+
+        foreach ($lineas as $linea) {
+            if ((int) $linea['id'] === $elegida) {
+                continue;
+            }
+            $bandeja->marcarDescartada($linea['id'], $nota, $usuarioId);
+            if ($recordar) {
+                $bandeja->recordar((int) $sociedad['id'], $linea, 'descartar', [], $nota, $usuarioId);
+            }
+            $descartadas++;
+        }
+
+        return sprintf(
+            'Enredo resuelto: entró la fila %d y se descartaron las otras %d.%s',
+            (int) $this->filaDe($lineas, $elegida),
+            $descartadas,
+            $recordar ? ' La próxima carga lo va a resolver sola.' : ''
+        );
+    }
+
+    /** "Son distintas": cada una recibe su número y entran todas. */
+    private function enredoNumerando(array $lineas, array $sociedad, $bandeja)
+    {
+        // Primero se validan los números de todas y solo después se escribe
+        // nada: meter la primera y morir en la segunda dejaría el enredo a
+        // medias, que es peor que no haberlo tocado.
+        $numeros = [];
+        foreach ($lineas as $linea) {
+            $numero = trim((string) $this->post('documento_' . (int) $linea['id'], ''));
+            if ($numero === '') {
+                throw new Exception(
+                    'Falta el número de la fila ' . (int) $linea['fila_origen']
+                    . '. Si no las podés numerar, elegí cuál entra.'
+                );
+            }
+            if (in_array($numero, $numeros, true)) {
+                throw new Exception(
+                    'El número ' . $numero . ' está repetido: si dos filas llevan el mismo, '
+                    . 'siguen sin distinguirse.'
+                );
+            }
+            $numeros[(int) $linea['id']] = $numero;
+        }
+
+        $recordar = $this->post('recordar', '') !== '';
+        $modelo = $this->loadModel('FacturaErp');
+        $usuarioId = $_SESSION['usuario_id'] ?? null;
+
+        foreach ($lineas as $linea) {
+            $campos = is_array($linea['campos'] ?? null) ? $linea['campos'] : [];
+            $campos['documento'] = $numeros[(int) $linea['id']];
+            $id = $modelo->insertarDesdeRevision($campos, (int) $sociedad['id'], $linea['carga_id']);
+            $bandeja->marcarIncluida($linea['id'], $campos, $id, $usuarioId);
+            if ($recordar) {
+                $bandeja->recordar(
+                    (int) $sociedad['id'],
+                    $linea,
+                    'incluir',
+                    $campos,
+                    'Numerada a mano para distinguirla de las filas iguales.',
+                    $usuarioId
+                );
+            }
+        }
+
+        return sprintf(
+            'Enredo resuelto: las %d filas entraron con su propio número.%s',
+            count($lineas),
+            $recordar ? ' La próxima carga las va a numerar sola.' : ''
+        );
+    }
+
+    /** La fila del archivo de la que salió una línea, para poder nombrarla. */
+    private function filaDe(array $lineas, $id)
+    {
+        foreach ($lineas as $linea) {
+            if ((int) $linea['id'] === (int) $id) {
+                return (int) $linea['fila_origen'];
+            }
+        }
+        return 0;
     }
 
     /** Olvida una decisión recordada: la línea vuelve a preguntarse. */
@@ -402,7 +595,7 @@ class FacturasErpController extends Controller
      * Vista previa (POST, JSON): dice qué haría la carga sin hacer nada.
      *
      * Facturas era el único listado que se aplicaba a ciegas. Notas de crédito
-     * y el pago semanal ya se miran antes de confirmar, y acá hacía más falta
+     * y el pago ya se miran antes de confirmar, y acá hacía más falta
      * que en ninguno: este archivo mueve de una vez el saldo de miles de
      * facturas, y hasta ahora la única forma de saber cuáles había movido era
      * aplicarlo y leer el mensaje después.
@@ -416,6 +609,7 @@ class FacturasErpController extends Controller
         if (!$this->isPost()) {
             $this->json(['ok' => false, 'message' => 'Método no permitido.'], 405);
         }
+        $this->exigirListadoProveedores();
 
         require_once __DIR__ . '/../helpers/FileUploader.php';
         $config = require __DIR__ . '/../config/config.php';
@@ -450,7 +644,7 @@ class FacturasErpController extends Controller
             // El mismo reparto que hará la carga —leer la memoria no escribe—,
             // para que el conteo de la pantalla ya incluya las líneas que van a
             // entrar rescatadas y no aparezcan de sorpresa después.
-            $reparto = $this->repartirRevision($resultado['revision'], (int) $sociedad['id']);
+            $reparto = $this->repartirRevision($resultado['revision'], (int) $sociedad['id'], $resultado['facturas']);
             $resultado = FacturasErpCsvParser::conFacturasRescatadas($resultado, $reparto['facturas']);
 
             $modelo = $this->loadModel('FacturaErp');
@@ -559,6 +753,7 @@ class FacturasErpController extends Controller
         if (!$this->isPost()) {
             $this->redirect($this->url('/facturas-erp'));
         }
+        $this->exigirListadoProveedores($this->url('/facturas-erp'));
 
         try {
             $archivo = $this->archivoAAplicar();
@@ -581,8 +776,8 @@ class FacturasErpController extends Controller
 
             // El reporte del ERP no dice a qué empresa pertenece, así que se
             // sella con la sociedad seleccionada al subirlo. Sin esto, dos
-            // empresas compartirían saldos y el cierre semanal de una podría
-            // emparejar contra una factura de la otra.
+            // empresas compartirían saldos y un pago de una podría emparejar
+            // contra una factura de la otra.
             $sociedad = $this->loadModel('Sociedad')->getActiva();
             if (!$sociedad) {
                 $this->redirectWithMessage(
@@ -598,7 +793,7 @@ class FacturasErpController extends Controller
             // importar: las que ya tienen una corrección guardada entran con
             // ella, las que ya se dijo que no van se descartan solas, y el
             // resto queda preguntando en la bandeja.
-            $reparto = $this->repartirRevision($resultado['revision'], (int) $sociedad['id']);
+            $reparto = $this->repartirRevision($resultado['revision'], (int) $sociedad['id'], $resultado['facturas']);
             $resultado = FacturasErpCsvParser::conFacturasRescatadas($resultado, $reparto['facturas']);
 
             $modelo = $this->loadModel('FacturaErp');
@@ -616,6 +811,14 @@ class FacturasErpController extends Controller
                 (int) ($r['carga_id'] ?? 0) ?: null
             );
             $this->bandeja()->marcarMemoriaAplicada($reparto['memoria_ids']);
+
+            // Un enredo que esta carga ya no trae se arregló en el ERP: se
+            // retira solo. Si no, subir el reporte corregido —que es la otra
+            // forma legítima de resolverlo— dejaría el listado cerrado igual.
+            $revividos = $this->bandeja()->retirarEnredosAusentes(
+                (int) $sociedad['id'],
+                array_column($resultado['revision'], 'firma')
+            );
 
             $enganche = $this->engancharComprobantes($modelo);
             // Pagar una factura mueve su saldo, y con eso cambia la situación
@@ -658,6 +861,13 @@ class FacturasErpController extends Controller
                     number_format($pendientes, 0, ',', '.')
                 );
             }
+            if ($revividos > 0) {
+                $mensaje .= sprintf(
+                    ' %s fila(s) que estaban trabadas ya no vienen en el reporte: el enredo se '
+                    . 'arregló en el origen y se retiró solo.',
+                    number_format($revividos, 0, ',', '.')
+                );
+            }
 
             // El reporte cierra con un "Total General": si el saldo leído lo
             // reproduce, la importación está confirmada de punta a punta.
@@ -687,6 +897,24 @@ class FacturasErpController extends Controller
 
             if ($pendientes > 0 && $tipo === 'success') {
                 $tipo = 'warning';
+            }
+
+            // Un enredo se resuelve ahora, no cuando alguien se acuerde. El
+            // reporte acaba de entrar incompleto —esas filas quedaron fuera— y
+            // quien lo cargó es quien tiene el archivo fresco en la cabeza: la
+            // carga termina en la bandeja, no en el listado.
+            if (($enredos = $this->enredosSinResolver()) > 0) {
+                $mensaje .= sprintf(
+                    ' Falta decidir %s: hay filas del reporte que no se distinguen entre sí y '
+                    . 'quedaron fuera del listado hasta que digas cuál entra.',
+                    $enredos === 1 ? 'un enredo' : $enredos . ' enredos'
+                );
+                $this->redirectWithMessage(
+                    $this->url('/facturas-erp/revision'),
+                    $mensaje,
+                    'warning',
+                    $detalles
+                );
             }
 
             $this->redirectWithMessage($this->url('/facturas-erp'), $mensaje, $tipo, $detalles);
@@ -740,6 +968,23 @@ class FacturasErpController extends Controller
         }
     }
 
+    /**
+     * Cuántos enredos están trabando el listado.
+     *
+     * A diferencia del conteo de pendientes, este sí puede cerrar la pantalla,
+     * así que un fallo devuelve 0: si la consulta no se puede hacer, el
+     * castigo no puede ser dejar a nadie sin listado.
+     */
+    private function enredosSinResolver()
+    {
+        try {
+            $sociedad = $this->loadModel('Sociedad')->getActiva();
+            return $sociedad ? $this->bandeja()->contarEnredos((int) $sociedad['id']) : 0;
+        } catch (Throwable $e) {
+            return 0;
+        }
+    }
+
     /** La bandeja de líneas en revisión de este módulo. */
     private function bandeja()
     {
@@ -758,8 +1003,17 @@ class FacturasErpController extends Controller
      * Una corrección recordada que ya no valida —porque el reporte cambió lo
      * suficiente— no se fuerza: vuelve a la bandeja con el motivo, que es
      * preferible a meter al listado un dato que no se sostiene.
+     *
+     * Tampoco entra una corrección que choque de identidad con lo que ya se
+     * leyó del archivo. Las filas que van a la bandeja por ser indistinguibles
+     * entre sí llegan con el mismo documento vacío en las dos, y si a las dos
+     * se les recordó la misma corrección volverían a ser la misma factura: la
+     * carga entera moriría contra la unicidad de la tabla, con un error de
+     * base de datos en vez de una pregunta.
+     *
+     * @param array $yaLeidas Las facturas que el archivo sí pudo leer.
      */
-    private function repartirRevision(array $lineas, $sociedadId)
+    private function repartirRevision(array $lineas, $sociedadId, array $yaLeidas = [])
     {
         if (!$lineas) {
             return ['facturas' => [], 'pendientes' => [], 'descartadas' => 0, 'memoria_ids' => []];
@@ -770,10 +1024,20 @@ class FacturasErpController extends Controller
         $facturas = [];
         $memoriaIds = [];
         $pendientes = $reparto['pendientes'];
+        $tomadas = array_flip(array_column($yaLeidas, 'clave'));
 
         foreach ($reparto['corregidas'] as $linea) {
             try {
-                $facturas[] = FacturaErp::sanearDesdeRevision($linea['campos']);
+                $factura = FacturaErp::sanearDesdeRevision($linea['campos']);
+                if (isset($tomadas[$factura['clave']])) {
+                    $linea['motivo'] = 'La corrección guardada la deja con la misma identidad que otra '
+                        . 'factura de este mismo archivo. Ponle un número de documento que la distinga. '
+                        . $linea['motivo'];
+                    $pendientes[] = $linea;
+                    continue;
+                }
+                $tomadas[$factura['clave']] = true;
+                $facturas[] = $factura;
                 $memoriaIds[] = $linea['memoria_id'] ?? 0;
             } catch (Throwable $e) {
                 $linea['motivo'] = 'La corrección guardada ya no sirve para esta línea ('
@@ -796,8 +1060,8 @@ class FacturasErpController extends Controller
      * Faltaba esta mitad. El sistema sabía enganchar un XML que llega con la
      * factura que ya estaba —lo hace XmlDocumentImporter al importarlo—, pero
      * no al revés: cargar el reporte del ERP teniendo los comprobantes en la
-     * base dejaba todo en "sin respaldo" hasta que alguien armara un pago
-     * semanal, que era el único lugar donde corría el emparejador.
+     * base dejaba todo en "sin respaldo" hasta que alguien armara un pago,
+     * que era el único lugar donde corría el emparejador.
      *
      * No se acota a las filas de esta carga: alcanza a toda factura sin
      * comprobante, así que la primera corrida también recoge lo que quedó atrás
@@ -812,36 +1076,43 @@ class FacturasErpController extends Controller
             require_once __DIR__ . '/../helpers/PorPagarVerificador.php';
             return PorPagarVerificador::engancharSinRespaldo($modelo, $this->loadModel('Factura'));
         } catch (Throwable $e) {
-            // La próxima carga lo reintenta, y el pago semanal lo cubre igual.
+            // La próxima carga lo reintenta, y el pago lo cubre igual.
             return ['enganchadas' => 0, 'revisadas' => 0];
         }
     }
 
-    /** Exporta lo que está viendo el usuario, respetando los filtros activos. */
+    /**
+     * El listado en Excel: los mismos filtros y las mismas columnas.
+     *
+     * Bajaba un CSV con doce columnas fijas —y el botón hasta llevaba icono de
+     * CSV— mientras la pantalla enseñaba cinco. Ahora las doce se pueden
+     * encender en la tabla, y el archivo trae las que estén encendidas.
+     */
     public function exportar()
     {
-        $modelo = $this->loadModel('FacturaErp');
-        $filas = $modelo->listar($this->filtros(), 5000, 0);
-
-        $nombre = 'facturas_erp_' . date('Ymd_His') . '.csv';
-        header('Content-Type: text/csv; charset=UTF-8');
-        header('Content-Disposition: attachment; filename="' . $nombre . '"');
-
-        $out = fopen('php://output', 'w');
-        fwrite($out, "\xEF\xBB\xBF"); // BOM para que Excel respete los acentos
-        fputcsv($out, ['Proveedor', 'Nombre', 'Sucursal', 'Documento', 'Fecha',
-                       'Vence', 'Compra', 'Moneda', 'Monto', 'Saldo', 'Estado', 'Semana'], ',', '"', '\\');
-        foreach ($filas as $f) {
-            fputcsv($out, [
-                $f['proveedor_codigo'], $f['proveedor_nombre'], $f['sucursal'],
-                $f['documento'], $f['fecha_emision'], $f['fecha_vence'],
-                $f['origen'], $f['moneda'], $f['monto'], $f['saldo'],
-                ($f['estado'] ?? 'pendiente') === 'asignada_semana' ? 'Asignada a una semana' : 'Pendiente',
-                $f['semana_nombre'] ?? '',
-            ], ',', '"', '\\');
+        // Con un enredo abierto el listado no está completo, y un Excel es
+        // justo lo que sale de la aplicación y se usa lejos de ella: para
+        // cuando se note que faltaban filas, el archivo ya circuló.
+        if ($this->enredosSinResolver() > 0) {
+            $this->redirectWithMessage(
+                $this->url('/facturas-erp/revision'),
+                'No se puede exportar mientras haya un enredo sin resolver: al listado le faltan '
+                . 'las filas que quedaron esperando decisión.',
+                'warning'
+            );
         }
-        fclose($out);
-        exit;
+
+        try {
+            $filas = $this->loadModel('FacturaErp')->listar($this->filtros(), self::TOPE_EXPORTACION, 0);
+            Columnas::descargar('facturaserp', $filas, $this->get('cols', ''));
+        } catch (Throwable $e) {
+            $this->registrarFallo('exportar las facturas del ERP', $e);
+            $this->redirectWithMessage(
+                $this->url('/facturas-erp'),
+                'No se pudo generar el Excel: ' . $e->getMessage(),
+                'error'
+            );
+        }
     }
 
     private function filtros()

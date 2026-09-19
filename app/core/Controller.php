@@ -4,8 +4,27 @@
  * Proporciona métodos comunes para renderizado y redirección
  */
 
+// Quién puede qué. Se carga aquí para que cualquier controlador y cualquier
+// vista puedan preguntar sin acordarse de incluir nada.
+require_once __DIR__ . '/Permisos.php';
+require_once __DIR__ . '/Csrf.php';
+
 class Controller
 {
+    /**
+     * Corta con 403 si el POST no salió de una pantalla de la aplicación.
+     *
+     * El enrutador ya lo comprueba para todas las rutas; las acciones que
+     * escriben en bloque lo repiten para no depender de por dónde se las
+     * llame. Ver Csrf.
+     */
+    protected function exigirPeticionPropia(): void
+    {
+        if (Csrf::motivoRechazo() !== null) {
+            $this->json(['ok' => false, 'error' => 'csrf', 'message' => Csrf::MENSAJE], 403);
+        }
+    }
+
     /**
      * Renderizar vista
      */
@@ -144,6 +163,37 @@ class Controller
     }
 
     /**
+     * El portón: sin listado de proveedores no se importa nada.
+     *
+     * Una factura que entra antes que la lista se empareja a ciegas —por el
+     * parecido del nombre, que fue como una factura terminó con el
+     * comprobante de otro proveedor— y después figura respaldada, que es
+     * justamente el estado que nadie vuelve a revisar. Así que el orden no es
+     * una recomendación: primero la lista, después todo lo demás.
+     *
+     * Corta la petición. Devuelve JSON o redirige según lo que se le pida, y
+     * es lo último que hace: quien la llama no tiene que comprobar nada.
+     *
+     * @param string $volverA URL a la que devolver; si va vacía, responde JSON.
+     */
+    protected function exigirListadoProveedores($volverA = '')
+    {
+        require_once __DIR__ . '/../models/ProveedorCodigoErp.php';
+        if (ProveedorCodigoErp::hayListado()) {
+            return;
+        }
+
+        $aviso = 'Primero hay que cargar el listado de proveedores. Sin él no se sabe de quién es '
+               . 'cada código, y lo que se importe ahora se emparejaría a ciegas. '
+               . 'Está en Configuración → Proveedores del sistema.';
+
+        if ($volverA === '') {
+            $this->json(['ok' => false, 'sin_listado' => true, 'message' => $aviso], 409);
+        }
+        $this->redirectWithMessage($volverA, $aviso, 'error');
+    }
+
+    /**
      * Validar request GET
      */
     protected function isGet()
@@ -197,23 +247,23 @@ class Controller
     }
 
     /**
-     * Semana de trabajo activa, compartida entre módulos (Carga XML, Correo,
-     * Facturas por pagar). Se guarda en sesión para que al pasar de un módulo
-     * a otro se recuerde la última semana elegida. 0 = "Sin semana".
+     * El pago con el que se está trabajando, compartido entre módulos (Carga
+     * XML, Correo, Facturas por pagar). Se guarda en sesión para que al pasar
+     * de un módulo a otro se recuerde el último elegido. 0 = "Sin pago".
      */
-    protected function semanaActiva(): int
+    protected function pagoActivo(): int
     {
         if (session_status() === PHP_SESSION_NONE) session_start();
-        return max(0, (int) ($_SESSION['semana_activa'] ?? 0));
+        return max(0, (int) ($_SESSION['pago_activo'] ?? 0));
     }
 
     /**
-     * Fijar la semana de trabajo activa compartida (0 = "Sin semana").
+     * Fijar el pago con el que se trabaja (0 = "Sin pago").
      */
-    protected function setSemanaActiva($semanaId): void
+    protected function setPagoActivo($pagoId): void
     {
         if (session_status() === PHP_SESSION_NONE) session_start();
-        $_SESSION['semana_activa'] = max(0, (int) $semanaId);
+        $_SESSION['pago_activo'] = max(0, (int) $pagoId);
     }
 
     /**
@@ -224,7 +274,7 @@ class Controller
      * se pasa por otra pantalla. Lo guardado es de ESE módulo: los filtros de
      * Facturas XML no se meten en Seguimiento, porque "estado" o "qué falta"
      * no significan lo mismo en cada uno. Lo único compartido sigue siendo la
-     * semana de trabajo, que sí es la misma pregunta en todos lados.
+     * pago, que sí es la misma pregunta en todos lados.
      *
      * Se llama al principio del index(), antes de leer nada: rellena $_GET con
      * lo recordado y el resto del controlador sigue leyendo con get() sin
@@ -242,7 +292,7 @@ class Controller
      * forma de olvidar, y por eso borra lo guardado en vez de resucitarlo.
      *
      * $claves lleva solo los filtros de la barra. Lo que elige QUÉ se está
-     * viendo —el listado, la importación, la carga, la semana— se queda fuera:
+     * viendo —el listado, la importación, la carga, el pago— se queda fuera:
      * son contextos a los que se llega por un enlace, y recordarlos dejaría a
      * alguien mirando el listado de hace tres días sin ningún control en
      * pantalla que le diga por qué.
@@ -266,7 +316,7 @@ class Controller
          * Una visita de paso no cambia lo que este módulo recuerda.
          *
          * Con 'ctx' se llega buscando el electrónico de UN documento, desde el
-         * pago semanal o desde la cola de seguimiento: el buscador trae el
+         * pago o desde la cola de seguimiento: el buscador trae el
          * número de ese documento, no un criterio que la persona haya elegido
          * para este listado. Guardarlo dejaría la pantalla filtrada por una
          * factura suelta la próxima vez que se abra desde el menú.
@@ -357,12 +407,59 @@ class Controller
 
     /**
      * Requerir sesión de administrador — redirige a inicio si no es admin
+     *
+     * Sigue existiendo para las pantallas que son de administración enteras.
+     * Para lo demás, requirePermiso() dice exactamente qué hace falta, que es
+     * lo que permite armar roles intermedios: "puede cargar el reporte pero
+     * no borrar pagos" no se puede expresar con un sí/no de administrador.
      */
     protected function requireAdmin(): void
     {
         $this->requireAuth();
-        if (empty($_SESSION['user_is_admin'])) {
+        if (!Permisos::esAdmin()) {
             $this->redirect($this->url('/'));
         }
+    }
+
+    /**
+     * Exigir un permiso concreto dentro de una acción.
+     *
+     * La comprobación de la ruta ya la hizo el enrutador; esto es para lo que
+     * una ruta sola no distingue: un mismo POST que según lo que traiga
+     * borra o solo edita, o una pantalla que ofrece dos cosas distintas.
+     */
+    protected function requirePermiso(string $permiso): void
+    {
+        $this->requireAuth();
+        if (!Permisos::puede($permiso)) {
+            if ($this->esPeticionJson()) {
+                $this->json([
+                    'ok'      => false,
+                    'error'   => 'sin_permiso',
+                    'message' => 'No tienes permiso para esta acción.',
+                ], 403);
+            }
+            $this->redirectWithMessage(
+                $this->url('/'),
+                'No tienes permiso para esa acción: ' . Permisos::etiqueta($permiso) . '.',
+                'error'
+            );
+        }
+    }
+
+    /** Preguntar sin cortar, para decidir si se dibuja un botón. */
+    protected function puede(string $permiso): bool
+    {
+        return Permisos::puede($permiso);
+    }
+
+    /** Una llamada de fondo espera JSON; una pantalla espera HTML. */
+    private function esPeticionJson(): bool
+    {
+        if (strtolower($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'xmlhttprequest') {
+            return true;
+        }
+        $modo = strtolower($_SERVER['HTTP_SEC_FETCH_MODE'] ?? '');
+        return $modo !== '' && $modo !== 'navigate';
     }
 }

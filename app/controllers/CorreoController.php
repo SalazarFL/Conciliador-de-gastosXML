@@ -2,10 +2,24 @@
 /**
  * Controlador de captura de facturas desde el correo (IMAP).
  *
- * Flujo: buscar() baja XML/PDF del buzón a la bandeja (correo_bandeja);
- * el usuario selecciona filas y importar() las manda a la cola de
- * importación existente. Los PDF quedan nombrados con el número de su
- * factura en storage/correo/pdf/, listos para el renombrador FE_.
+ * Flujo: los XML y PDF del buzón bajan a la bandeja (correo_bandeja), que es
+ * una zona de paso. De ahí salen por tres caminos, según quién los trajo:
+ *
+ *   Tarea programada   La entrada automática mete al sistema lo que está
+ *                      limpio, en el acto. Ver capturarMensajeAutomatico() y
+ *                      app/helpers/EntradaAutomatica.php.
+ *
+ *   Modo Descargas     Igual, pero para un buzón entero y a petición de
+ *                      alguien. Ver procesarTandaLote().
+ *
+ *   A mano             importar() manda las filas marcadas a la cola de
+ *                      importación. Es el camino de lo que la entrada
+ *                      automática apartó —rechazado por Hacienda, de otra
+ *                      cédula, lo que falló— y el único si esa entrada está
+ *                      apagada.
+ *
+ * Los PDF quedan nombrados con el número de su factura, listos para el
+ * renombrador FE_.
  */
 
 require_once __DIR__ . '/../helpers/MailFetcher.php';
@@ -13,7 +27,9 @@ require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 require_once __DIR__ . '/../helpers/DocumentoArchivo.php';
 require_once __DIR__ . '/../helpers/NavegacionDocumentos.php';
 require_once __DIR__ . '/../helpers/RutaDocumento.php';
+require_once __DIR__ . '/../helpers/AlmacenDocumentos.php';
 require_once __DIR__ . '/../helpers/XmlDocumentImporter.php';
+require_once __DIR__ . '/../helpers/EntradaAutomatica.php';
 require_once __DIR__ . '/../helpers/PaqueteDocumentos.php';
 
 class CorreoController extends Controller
@@ -26,7 +42,7 @@ class CorreoController extends Controller
      * recorrido crece con el buzón: hoy son 138 mil correos y con 42 buzones
      * serán casi dos millones.
      *
-     * Medio año cubre de sobra lo que se persigue en un ciclo de pago semanal
+     * Medio año cubre de sobra lo que se persigue en un ciclo de pago
      * y es la cuarta parte del índice. Si el documento es más viejo, la
      * segunda vuelta lo encuentra igual; lo único que se paga es buscar dos
      * veces de vez en cuando, nunca una respuesta equivocada.
@@ -146,7 +162,7 @@ class CorreoController extends Controller
 
         /*
          * Tarjeta del documento que se está buscando: si se llegó con el botón
-         * "Buscar el electrónico" —del pago semanal o de la cola de
+         * "Buscar el electrónico" —del pago o de la cola de
          * seguimiento—, se muestran sus datos con flechas para recorrer esa
          * lista sin volver al otro módulo.
          *
@@ -187,6 +203,21 @@ class CorreoController extends Controller
                 'carpeta' => (string) $c['carpeta'],
             ];
         }, $cuentas);
+
+        /*
+         * El número del botón "Comprobantes sin código".
+         *
+         * Estos avisos ya no van a la campana —ver Notificacion::FUERA_DE_LA_CAMPANA—:
+         * llegaban a decenas y tapaban lo que sí urgía. Se atienden desde aquí,
+         * que es la pantalla donde se está cuando aparecen. Si la consulta falla,
+         * el botón sale sin número y la pantalla entra igual.
+         */
+        $sinCodigoPendientes = 0;
+        try {
+            $sinCodigoPendientes = $this->loadModel('Notificacion')
+                ->contarPorTipo('proveedor_sin_codigo');
+        } catch (Throwable $e) {
+        }
 
         $loteGeneral = null;
         try {
@@ -240,6 +271,7 @@ class CorreoController extends Controller
             'carpetasCorreo'  => $carpetasCorreo,
             'modoCorreo'      => $modo,
             'loteGeneral'     => $loteGeneral,
+            'sinCodigoPendientes' => $sinCodigoPendientes,
         ]);
     }
 
@@ -366,14 +398,27 @@ class CorreoController extends Controller
         } else {
             // Búsqueda instantánea contra el índice local (MySQL),
             // limitada a la cuenta de correo elegida
-            if ($indice->contarTotal() === 0) {
+            $enElIndice = $indice->contarTotal();
+            if ($enElIndice === 0) {
                 // Primer uso: construir el índice ahora
                 @set_time_limit(300);
                 try {
                     $this->ejecutarSincronizacion($config, $indice);
+                    $enElIndice = $indice->contarTotal();
                 } catch (Throwable $e) {
                     $this->json(['ok' => false, 'message' => 'No fue posible construir el índice del buzón: ' . $e->getMessage()], 500);
                 }
+            }
+
+            // Una página más allá de la última se acota a la última. Nadie la
+            // pide a mano, pero ?pagina=10000 en la URL sobre tres correos
+            // mandaba un OFFSET 4999500 al índice, que la base recorre entero
+            // para no devolver nada. El total del índice es la cota: ninguna
+            // búsqueda puede devolver más filas que las que hay.
+            $ultimaPagina = max(1, (int) ceil($enElIndice / $porPagina));
+            if ($pagina > $ultimaPagina) {
+                $pagina = $ultimaPagina;
+                $offset = ($pagina - 1) * $porPagina;
             }
 
             $digitos = [];
@@ -475,7 +520,7 @@ class CorreoController extends Controller
                  * buzón: con 42 buzones son casi dos millones de correos.
                  *
                  * Medio año cubre de sobra lo que se persigue en un ciclo de
-                 * pago semanal, y es una cuarta parte del índice. Cuando el
+                 * pago, y es una cuarta parte del índice. Cuando el
                  * documento es más viejo, la segunda vuelta lo encuentra
                  * igual: nunca se contesta "no está" por haber mirado poco,
                  * solo se paga dos veces de vez en cuando.
@@ -797,8 +842,8 @@ class CorreoController extends Controller
      */
     private function deduplicarCorreosBusqueda(array $correos)
     {
-        $unicos = [];
-        foreach ($correos as $correo) {
+        $porLlave = [];
+        foreach ($correos as $posicion => $correo) {
             $timestamp = (int) ($correo['timestamp'] ?? 0);
             if ($timestamp <= 0) {
                 $llave = (string) ($correo['carpeta'] ?? '') . ':uid:' . (int) ($correo['uid'] ?? 0);
@@ -814,12 +859,63 @@ class CorreoController extends Controller
                     $normalizar($correo['asunto'] ?? ''),
                 ]);
             }
+            $porLlave[$llave][] = $posicion;
+        }
 
-            if (!isset($unicos[$llave])) {
-                $unicos[$llave] = $correo;
+        $conservadas = [];
+        foreach ($porLlave as $posiciones) {
+            if (count($posiciones) === 1) {
+                $conservadas[] = $posiciones[0];
+                continue;
+            }
+
+            // Varias filas con la misma carpeta, segundo, remitente y asunto.
+            // Si comparten la numeración del buzón (UIDVALIDITY) son correos
+            // DISTINTOS: los sistemas de facturación mandan ráfagas —tres
+            // "Comprobante electrónico" a las 10:00:00, uno por factura— y
+            // colapsarlas escondía dos facturas. Lo que sí es el mismo correo
+            // repetido es la misma fila vista con dos numeraciones, porque el
+            // buzón renumeró y el índice guardó ambas.
+            $porNumeracion = [];
+            foreach ($posiciones as $posicion) {
+                $porNumeracion[$this->uidvalidityDeCorreo($correos[$posicion])][] = $posicion;
+            }
+            // Sin numeración conocida (0) no hay con qué distinguirlos: se
+            // tratan como el mismo correo repetido, que es lo que se veía
+            // antes de que el índice guardara la clave.
+            if (isset($porNumeracion[0])) {
+                $porNumeracion[0] = array_slice($porNumeracion[0], 0, 1);
+            }
+            krsort($porNumeracion, SORT_NUMERIC); // a igualdad, la numeración más reciente
+
+            $elegidas = [];
+            foreach ($porNumeracion as $grupo) {
+                if (count($grupo) > count($elegidas)) {
+                    $elegidas = $grupo;
+                }
+            }
+            foreach ($elegidas as $posicion) {
+                $conservadas[] = $posicion;
             }
         }
-        return array_values($unicos);
+
+        sort($conservadas); // el orden en que venían
+        $resultado = [];
+        foreach ($conservadas as $posicion) {
+            $resultado[] = $correos[$posicion];
+        }
+        return $resultado;
+    }
+
+    /** La numeración del buzón a la que pertenece un correo del índice. */
+    private function uidvalidityDeCorreo(array $correo)
+    {
+        if (isset($correo['uidvalidity'])) {
+            return (int) $correo['uidvalidity'];
+        }
+        // La clave es "c{cuenta}:{uidvalidity}:{uid}" (MailFetcher::claveMensaje).
+        $partes = explode(':', (string) ($correo['clave'] ?? ''));
+        return count($partes) >= 3 ? (int) $partes[count($partes) - 2] : 0;
     }
 
     /** Lista las carpetas IMAP para el navegador lateral. */
@@ -1167,6 +1263,9 @@ class CorreoController extends Controller
         try {
             $cuentaId = (int) $this->post('cuenta_id', 0);
             $config = $this->configCuenta($cuentaId);
+            if (!$config) {
+                throw new InvalidArgumentException('La cuenta seleccionada no está configurada.');
+            }
             $cuentaId = (int) ($config['cuenta_id'] ?? $cuentaId);
             [$desde, $hasta] = $this->rangoGeneral();
             $correo = $this->correoBusquedaGeneral();
@@ -1181,7 +1280,7 @@ class CorreoController extends Controller
                 'correo_busqueda' => $correo,
             ]);
         } catch (Throwable $e) {
-            $this->json(['ok' => false, 'message' => $e->getMessage()], 422);
+            $this->responderFallo('estimar la descarga masiva de correo', $e);
         }
     }
 
@@ -1192,15 +1291,15 @@ class CorreoController extends Controller
             $cuentaId = (int) $this->post('cuenta_id', 0);
             $config = $this->configCuenta($cuentaId);
             if (!$config || !MailFetcher::configurado($config)) {
-                throw new RuntimeException('La cuenta seleccionada no está configurada.');
+                throw new InvalidArgumentException('La cuenta seleccionada no está configurada.');
             }
             $cuentaId = (int) ($config['cuenta_id'] ?? $cuentaId);
             [$desde, $hasta] = $this->rangoGeneral();
             $correo = $this->correoBusquedaGeneral();
             $sociedad = $this->loadModel('Sociedad')->getActiva();
-            if (!$sociedad) { throw new RuntimeException('Selecciona una sociedad activa antes de iniciar.'); }
+            if (!$sociedad) { throw new InvalidArgumentException('Selecciona una sociedad activa antes de iniciar.'); }
             $raiz = trim((string) ($this->configLocal()['carpeta_destino'] ?? ''));
-            if ($raiz === '') { throw new RuntimeException('Configura la carpeta raíz desde el engranaje de Correo.'); }
+            if ($raiz === '') { throw new InvalidArgumentException('Configura la carpeta raíz desde el engranaje de Correo.'); }
             new DocumentoArchivo($raiz); // valida creación y escritura antes de crear el lote
 
             // Actualización breve y best-effort; el lote también incluye los
@@ -1240,8 +1339,56 @@ class CorreoController extends Controller
             $lote = $this->loadModel('CorreoLote')->iniciar((int) $lote['id']);
             $this->json(['ok' => true, 'lote' => $lote]);
         } catch (Throwable $e) {
+            $this->responderFallo('crear el lote de descarga masiva', $e);
+        }
+    }
+
+    /**
+     * El error de una acción, dicho para la persona.
+     *
+     * Los rechazos de la propia aplicación —lo que valida el controlador
+     * (InvalidArgumentException) y lo que reportan el buzón o la carpeta
+     * destino (RuntimeException)— traen un mensaje escrito para quien usa la
+     * pantalla y se muestran tal cual. Lo demás se anota en el log y la
+     * pantalla recibe un mensaje genérico: antes llegaba al navegador el
+     * SQLSTATE con el nombre de la columna, que no le sirve a quien trabaja y
+     * sí a quien quiera conocer la estructura por dentro. PDOException se
+     * nombra aparte porque hereda de RuntimeException.
+     *
+     * Es el mismo criterio de SeguimientoController::responderFallo().
+     */
+    private function responderFallo(string $donde, Throwable $e): never
+    {
+        if (!$e instanceof PDOException
+            && ($e instanceof InvalidArgumentException || $e instanceof RuntimeException)) {
             $this->json(['ok' => false, 'message' => $e->getMessage()], 422);
         }
+        $this->registrarFallo($donde, $e);
+        $this->json(['ok' => false, 'message' => self::MENSAJE_FALLO], 500);
+    }
+
+    private const MENSAJE_FALLO = 'No se pudo completar por un problema del sistema. '
+        . 'Inténtalo de nuevo en un momento; si se repite, avisa a quien mantiene Nexo Fiscal.';
+
+    /**
+     * El lote que dice el formulario, solo si es de la empresa en curso.
+     *
+     * CorreoLote::get() busca por id a secas, porque el trabajador de cli/ hace
+     * avanzar los lotes de todas las empresas y no tiene sesión con la cual
+     * acotarse. Aquí el id llega de afuera, así que la pertenencia se comprueba
+     * antes de dejar mirar, pausar o cancelar nada.
+     */
+    private function loteDeLaSociedad($id)
+    {
+        $lote = $this->loadModel('CorreoLote')->get((int) $id);
+        if (!$lote) {
+            return null;
+        }
+        $sociedad = (int) (Sociedad::seleccionadaIdActual());
+        if ($sociedad > 0 && (int) ($lote['sociedad_id'] ?? 0) !== $sociedad) {
+            return null;
+        }
+        return $lote;
     }
 
     public function generalEstado()
@@ -1249,7 +1396,7 @@ class CorreoController extends Controller
         if (!$this->isPost()) { $this->json(['ok' => false, 'message' => 'Metodo no permitido.'], 405); }
         $id = (int) $this->post('lote_id', 0);
         $modelo = $this->loadModel('CorreoLote');
-        $lote = $modelo->get($id);
+        $lote = $this->loteDeLaSociedad($id);
         if (!$lote) { $this->json(['ok' => false, 'message' => 'Lote no encontrado.'], 404); }
         $this->json(['ok' => true, 'lote' => $lote, 'incidencias' => $modelo->incidencias($id, 20)]);
     }
@@ -1337,7 +1484,9 @@ class CorreoController extends Controller
             $r = $modelo->descartarIncidencias(
                 $ids,
                 (string) $this->post('motivo', ''),
-                $_SESSION['user_id'] ?? null
+                $_SESSION['user_id'] ?? null,
+                true,
+                (int) $config['cuenta_id']
             );
             $this->json([
                 'ok' => true,
@@ -1359,11 +1508,15 @@ class CorreoController extends Controller
             $this->json(['ok' => false, 'message' => 'Metodo no permitido.'], 405);
         }
         try {
+            $config = $this->configCuenta((int) $this->post('cuenta_id', 0));
+            if (!$config) {
+                throw new InvalidArgumentException('La cuenta seleccionada no está configurada.');
+            }
             $ids = $this->idsRecibidos();
             if (!$ids) {
                 $this->json(['ok' => false, 'message' => 'No se indicó ninguna incidencia.'], 422);
             }
-            $r = $this->loadModel('CorreoLote')->restaurarIncidencias($ids);
+            $r = $this->loadModel('CorreoLote')->restaurarIncidencias($ids, (int) $config['cuenta_id']);
             $this->json([
                 'ok' => true,
                 'restauradas' => (int) $r['restauradas'],
@@ -1380,6 +1533,13 @@ class CorreoController extends Controller
         @set_time_limit(300);
         $loteId = (int) $this->post('lote_id', 0);
         $limit = max(1, min(10, (int) $this->post('limit', 2)));
+
+        // El id llega de afuera: sin esto, un POST con el id de un lote de otra
+        // empresa devuelve su buzón, su cédula y sus incidencias, y lo hace
+        // avanzar. El resto de acciones del lote ya pasaban por aquí.
+        if (!$this->loteDeLaSociedad($loteId)) {
+            $this->json(['ok' => false, 'message' => 'Lote no encontrado.'], 404);
+        }
 
         $r = $this->procesarTandaLote($loteId, $limit, 25);
         if (empty($r['ok'])) {
@@ -1503,6 +1663,10 @@ class CorreoController extends Controller
             // El lote manda: ya nació con su sociedad y el worker corre sin sesión.
             ? new MailFetcher($this->configCuenta((int) $lote['cuenta_id'], false))
             : $fetcherCompartido;
+        // La marca de "ya procesado" es de cada empresa, y la del lote es la
+        // que manda: el worker de cli/ corre sin sesión, donde "la empresa en
+        // curso" es la primera activa y no la dueña del lote.
+        $fetcher->usarSociedad((int) $lote['sociedad_id']);
         try {
             if ($fetcherPropio || !$fetcher->estaConectado()) { $fetcher->conectar(); }
         } catch (Throwable $e) {
@@ -1527,6 +1691,7 @@ class CorreoController extends Controller
                 $lotes->incidencia($loteId, $reintentar[0], 'conexion', $e->getMessage());
                 $lotes->devolverAPendiente($reintentar);
             }
+            $lotes->cerrarTanda($loteId);
             if ($fetcherPropio) { $fetcher->cerrar(); }
             return ['ok' => false, 'lote' => $lotes->get($loteId), 'procesados_ahora' => 0, 'incidencias' => [],
                     'message' => $e->getMessage(), 'status' => 500];
@@ -1552,6 +1717,9 @@ class CorreoController extends Controller
             $resumen = ['estado' => 'completado', 'importados' => 0, 'duplicados' => 0, 'pdf_pendientes' => 0, 'detalle' => ''];
             try {
                 $mensaje = $fetcher->extraerMensaje((int) $item['uid'], (string) $item['carpeta']);
+                foreach (($mensaje['avisos'] ?? []) as $aviso) {
+                    $lotes->incidencia($loteId, (int) $item['id'], 'adjunto_descartado', $aviso, ['uid' => (int) $item['uid']]);
+                }
                 if (empty($mensaje['xmls']) && empty($mensaje['pdfs'])) {
                     $resumen['estado'] = 'omitido';
                     $resumen['detalle'] = 'Sin XML/PDF adjuntos.';
@@ -1568,7 +1736,7 @@ class CorreoController extends Controller
                         $lotes->incidencia($loteId, (int) $item['id'], $tipoIncidencia, $error, ['uid' => (int) $item['uid']]);
                     }
                     foreach (($captura['archivos_huerfanos'] ?? []) as $huerfano) {
-                        if (is_string($huerfano) && is_file($huerfano)) { @unlink($huerfano); }
+                        if (is_string($huerfano) && $huerfano !== '') { AlmacenDocumentos::de($huerfano)->borrar($huerfano); }
                     }
 
                     foreach (($captura['filas'] ?? []) as $ref) {
@@ -1617,10 +1785,13 @@ class CorreoController extends Controller
             $lotes->finalizarItem((int) $item['id'], $resumen);
             $procesadosAhora++;
         }
+        // Los contadores del lote, una vez por tanda. Recalcularlos por correo
+        // costaba cinco subconsultas por cada uno.
+        $lotes->cerrarTanda($loteId);
         if ($fetcherCompartido === null) { $fetcher->cerrar(); }
         if ($notasNuevas > 0) { $this->revalidarNotasGeneral((int) $lote['sociedad_id']); }
 
-        // Cruzar contra los pagos semanales cuesta millones de comparaciones
+        // Cruzar contra los pagos cuesta millones de comparaciones
         // de texto, así que se hace UNA vez —al terminar el lote— y no en
         // cada tanda. Una vez completado, las llamadas siguientes salen antes
         // de llegar aquí, así que no se repite.
@@ -1647,7 +1818,11 @@ class CorreoController extends Controller
     {
         if (!$this->isPost()) { $this->json(['ok' => false, 'message' => 'Metodo no permitido.'], 405); }
         try {
-            $lote = $this->loadModel('CorreoLote')->cambiarEstado((int) $this->post('lote_id', 0), $estado);
+            $id = (int) $this->post('lote_id', 0);
+            if ($this->loteDeLaSociedad($id) === null) {
+                $this->json(['ok' => false, 'message' => 'Lote no encontrado.'], 404);
+            }
+            $lote = $this->loadModel('CorreoLote')->cambiarEstado($id, $estado);
             $this->json(['ok' => true, 'lote' => $lote]);
         } catch (Throwable $e) { $this->json(['ok' => false, 'message' => $e->getMessage()], 422); }
     }
@@ -1656,11 +1831,23 @@ class CorreoController extends Controller
     {
         $desde = trim((string) $this->post('fecha_desde', ''));
         $hasta = trim((string) $this->post('fecha_hasta', ''));
-        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $desde) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $hasta)
+        // checkdate y no solo el patrón: "2026-02-30" tiene la forma de una
+        // fecha, pero strtotime lo corre al 2 de marzo y la descarga acababa
+        // cubriendo un rango que nadie pidió.
+        if (!$this->fechaQueExiste($desde) || !$this->fechaQueExiste($hasta)
             || strtotime($hasta) < strtotime($desde)) {
             throw new InvalidArgumentException('Indica un rango de fechas válido.');
         }
         return [$desde, $hasta];
+    }
+
+    /** Una fecha aaaa-mm-dd que existe en el calendario. */
+    private function fechaQueExiste($valor)
+    {
+        if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', (string) $valor, $m)) {
+            return false;
+        }
+        return checkdate((int) $m[2], (int) $m[3], (int) $m[1]);
     }
 
     private function correoBusquedaGeneral()
@@ -1676,7 +1863,7 @@ class CorreoController extends Controller
     {
         foreach (['archivo_xml', 'archivo_pdf'] as $campo) {
             $ruta = (string) ($fila[$campo] ?? '');
-            if ($ruta !== '' && is_file($ruta)) { @unlink($ruta); }
+            if ($ruta !== '') { AlmacenDocumentos::de($ruta)->borrar($ruta); }
         }
     }
 
@@ -1690,7 +1877,7 @@ class CorreoController extends Controller
     }
 
     /**
-     * Cruza contra los pagos semanales las facturas que acaban de entrar.
+     * Cruza contra los pagos las facturas que acaban de entrar.
      *
      * Existía la mitad de notas de crédito y faltaba esta. Sin ella, importar
      * desde Correo dejaba las líneas del listado "sin respaldo" aunque su XML
@@ -1698,7 +1885,7 @@ class CorreoController extends Controller
      * Pagar y darle a "Verificar de nuevo", y quien importaba no tenía forma
      * de saber que hacía falta.
      *
-     * No se acota a una semana porque las facturas que llegan por correo no
+     * No se acota a un pago porque las facturas que llegan por correo no
      * traen ninguna asignada; cualquier listado puede completarse con ellas.
      * Nunca lanza: la importación ya terminó bien y esto es un extra.
      */
@@ -1804,7 +1991,7 @@ class CorreoController extends Controller
             $filasValidas = [];
             foreach ($filas as $fila) {
                 $rutaXml = (string) ($fila['archivo_xml'] ?? '');
-                if ($rutaXml === '' || !is_file($rutaXml)) {
+                if ($rutaXml === '' || !RutaDocumento::existe($rutaXml)) {
                     continue;
                 }
 
@@ -1823,13 +2010,13 @@ class CorreoController extends Controller
                 $this->json(['ok' => false, 'message' => 'Las filas seleccionadas no tienen XML pendiente de importar (¿ya se importaron o falta el archivo?).'], 422);
             }
 
-            // Importar ya no pide semana. La semana de un comprobante se
+            // Importar ya no pide pago. El pago de un comprobante se
             // deduce: al guardarlo, el importador busca su factura en el
             // listado del ERP por el consecutivo, y si esa factura está en un
-            // pago semanal, el comprobante hereda esa semana y el pago se
+            // pago, el comprobante hereda ese pago y el pago se
             // actualiza solo. Elegirla a mano era una decisión que nadie tenía
             // por qué tomar —y equivocarse dejaba la factura fuera del pago—.
-            $semanaId = null;
+            $pagoId = null;
 
             require_once __DIR__ . '/../helpers/InvoiceImportQueue.php';
             $service = new InvoiceImportQueue();
@@ -1838,7 +2025,7 @@ class CorreoController extends Controller
             $inicio = $service->iniciarImportacion([
                 'archivo_origen' => 'Correo ' . date('d/m/Y H:i'),
                 'total_esperado' => count($rutas),
-                'semana_id' => $semanaId,
+                'pago_id' => $pagoId,
                 'tipo_documento' => 'FE',
                 'cedula_receptor' => $sociedadActiva['cedula'] ?? '',
                 'sociedad_id' => (int) ($sociedadActiva['id'] ?? 0),
@@ -1849,21 +2036,27 @@ class CorreoController extends Controller
 
             $bandejaModel->marcarImportadas($idsValidos, $importacionId);
 
-            // La cola ya tiene su copia del XML. El PDF temporal se conserva
-            // hasta que XmlDocumentImporter archive el par y confirme la BD.
+            // La cola tomó el XML y el PDF donde están, en la bandeja, y los
+            // borra ella cuando XmlDocumentImporter archive el par y confirme
+            // la BD. Borrarlos acá le quitaría el archivo a la importación.
             $avisosPendientes = [];
             if ((int) $resultado['uploaded_count'] === count($filasValidas)) {
                 foreach ($filasValidas as $fila) {
-                    if (!empty($fila['archivo_xml']) && is_file($fila['archivo_xml'])) {
-                        @unlink($fila['archivo_xml']);
-                    }
-                    if (empty($fila['archivo_pdf']) || !is_file($fila['archivo_pdf'])) {
+                    if (empty($fila['archivo_pdf']) || !RutaDocumento::existe($fila['archivo_pdf'])) {
                         $avisosPendientes[] = 'Factura ' . ($fila['numero_corto'] ?? '')
                             . ': el XML se archivará y el PDF quedará pendiente.';
                     }
                 }
             }
 
+            // archivos_guardados va en 0 a propósito: archivar el par
+            // renombrado ya no es cosa de aquí. Lo hace XmlDocumentImporter
+            // cuando la cola procesa cada XML, y lo deja en la carpeta del mes
+            // que corresponde (ver docs/ALMACENAMIENTO_DOCUMENTOS.md). Aquí
+            // vivían 50 líneas que copiaban el par a la carpeta destino a mano
+            // y que NUNCA corrían: json() termina la petición. La pantalla
+            // prometía "archivos renombrados en la carpeta" y nadie los
+            // escribía.
             $this->json([
                 'ok' => true,
                 'importacion_id' => $importacionId,
@@ -1874,80 +2067,19 @@ class CorreoController extends Controller
                 'avisos' => array_slice($avisosPendientes, 0, 10),
                 'estado' => $resultado['estado'],
             ]);
-
-            // Dejar el XML + PDF de cada factura importada, ya renombrados
-            // (FE_/NC_PROVEEDOR_ddmmyy_numero), en la carpeta configurada ⚙.
-            // Cada factura debe dejar su PAR completo: cualquier archivo que
-            // no llegue a la carpeta (copia fallida o PDF inexistente)
-            // genera un aviso que la vista muestra al terminar.
-            $archivosGuardados = 0;
-            $avisoCarpeta = '';
-            $avisos = [];
-            $carpetaDestino = trim((string) ($this->configLocal()['carpeta_destino'] ?? ''));
-
-            if ($carpetaDestino === '') {
-                $avisoCarpeta = 'Configura la carpeta destino (⚙) para guardar los XML/PDF renombrados.';
-            } elseif (!is_dir($carpetaDestino) && !@mkdir($carpetaDestino, 0777, true) && !is_dir($carpetaDestino)) {
-                $avisoCarpeta = 'No se pudo abrir la carpeta destino "' . $carpetaDestino . '".';
-            } else {
-                foreach ($filasValidas as $fila) {
-                    $nombre = $this->nombreArchivoBandeja($fila);
-                    $etiqueta = trim((string) ($fila['numero_corto'] ?? ''));
-                    if ($etiqueta === '') {
-                        $etiqueta = $this->nombreOriginal((string) $fila['archivo_xml']);
-                    }
-
-                    $xmlOk = @copy((string) $fila['archivo_xml'], $carpetaDestino . DIRECTORY_SEPARATOR . $nombre . '.xml');
-                    if ($xmlOk) {
-                        $archivosGuardados++;
-                    } else {
-                        $avisos[] = 'Factura ' . $etiqueta . ': NO se pudo copiar el XML a la carpeta destino.';
-                    }
-
-                    $rutaPdf = (string) ($fila['archivo_pdf'] ?? '');
-                    $pdfOk = true; // sin PDF no hay nada que copiar ni que retener
-                    if ($rutaPdf !== '' && is_file($rutaPdf)) {
-                        $pdfOk = @copy($rutaPdf, $carpetaDestino . DIRECTORY_SEPARATOR . $nombre . '.pdf');
-                        if ($pdfOk) {
-                            $archivosGuardados++;
-                        } else {
-                            $avisos[] = 'Factura ' . $etiqueta . ': NO se pudo copiar el PDF a la carpeta destino.';
-                        }
-                    } else {
-                        $avisos[] = 'Factura ' . $etiqueta . ': quedó sin PDF en la carpeta (el correo no traía PDF emparejado; solo se guardó el XML).';
-                    }
-
-                    // Con el par renombrado ya en la carpeta destino, los
-                    // originales de storage sobran: el contenido del XML
-                    // queda en la BD y la cola importa desde SU copia.
-                    // Si alguna copia falló (o no hay carpeta configurada),
-                    // no se borra nada.
-                    if ($xmlOk && $pdfOk) {
-                        @unlink((string) $fila['archivo_xml']);
-                        if ($rutaPdf !== '' && is_file($rutaPdf)) {
-                            @unlink($rutaPdf);
-                        }
-                    }
-                }
-            }
-
-            $this->json([
-                'ok' => true,
-                'importacion_id' => $importacionId,
-                'encoladas' => (int) $resultado['uploaded_count'],
-                'archivos_guardados' => $archivosGuardados,
-                'carpeta_destino' => $carpetaDestino,
-                'aviso_carpeta' => $avisoCarpeta,
-                'avisos' => array_slice($avisos, 0, 10),
-                'estado' => $resultado['estado'],
-            ]);
         } catch (Throwable $e) {
             $this->json(['ok' => false, 'message' => 'No fue posible encolar la importación: ' . $e->getMessage()], 500);
         }
     }
 
     /**
-     * Descarta filas de la bandeja: borra su XML, conserva el PDF (POST, JSON).
+     * Descarta filas de la bandeja: borra su XML y su PDF (POST, JSON).
+     *
+     * Antes el PDF se quedaba, y como la fila ya no aparecía en ningún lado
+     * era un archivo que nadie iba a volver a encontrar ni a borrar. Lo que
+     * hay en la bandeja es la copia de trabajo de lo que bajó del correo: el
+     * original sigue en el buzón, y desmarcarlo como procesado (abajo) es lo
+     * que permite volver a traerlo si se descartó por error.
      */
     public function descartar()
     {
@@ -1972,11 +2104,18 @@ class CorreoController extends Controller
 
             $idsValidos = [];
             $clavesCorreo = [];
+            $rutas = [];
+            $rutasPorFila = [];
             foreach ($filas as $fila) {
-                $idsValidos[] = (int) $fila['id'];
-                $rutaXml = (string) ($fila['archivo_xml'] ?? '');
-                if ($rutaXml !== '' && is_file($rutaXml)) {
-                    @unlink($rutaXml);
+                $id = (int) $fila['id'];
+                $idsValidos[] = $id;
+                $rutasPorFila[$id] = [];
+                foreach (['archivo_xml', 'archivo_pdf'] as $campo) {
+                    $ruta = (string) ($fila[$campo] ?? '');
+                    if ($ruta !== '') {
+                        $rutas[$ruta] = true;
+                        $rutasPorFila[$id][] = $ruta;
+                    }
                 }
                 // uid_correo es la misma clave usada en correo_procesados
                 $clave = (string) ($fila['uid_correo'] ?? '');
@@ -1985,15 +2124,50 @@ class CorreoController extends Controller
                 }
             }
 
+            // Primero la fila, después el archivo: si el borrado falla a
+            // medias, queda un archivo suelto y no una fila que apunta a nada.
+            $enUso = $bandejaModel->rutasEnUsoFuera(array_keys($rutas), $idsValidos);
             $descartadas = $bandejaModel->marcarDescartadas($idsValidos);
 
-            // Desmarcar los correos de origen como procesados: al eliminar
-            // de la bandeja, el correo debe poder procesarse otra vez.
-            if (!empty($clavesCorreo)) {
-                MailFetcher::desmarcarProcesados(array_keys($clavesCorreo));
+            // Borrar los archivos de las filas que ESTE descarte se llevó, no
+            // los de todas las que se pidieron: si alguien importó una de
+            // ellas entre la lectura y la escritura, el UPDATE ya no la tocó y
+            // sus archivos siguen haciendo falta.
+            $confirmadas = $descartadas === count($idsValidos)
+                ? $idsValidos
+                : array_map('intval', array_column($bandejaModel->getByIds($idsValidos, 'descartada'), 'id'));
+
+            $noBorrados = 0;
+            $porBorrar = [];
+            foreach ($confirmadas as $id) {
+                foreach (($rutasPorFila[$id] ?? []) as $ruta) {
+                    $porBorrar[$ruta] = true;
+                }
+            }
+            foreach (array_keys($porBorrar) as $ruta) {
+                if (isset($enUso[$ruta]) || !RutaDocumento::existe($ruta)) {
+                    continue;
+                }
+                if (!AlmacenDocumentos::de($ruta)->borrar($ruta)) {
+                    $noBorrados++;
+                }
             }
 
-            $this->json(['ok' => true, 'descartadas' => (int) $descartadas]);
+            // Desmarcar los correos de origen como procesados: al eliminar
+            // de la bandeja, el correo debe poder procesarse otra vez. Solo
+            // para ESTA empresa: si la otra ya lo trabajó, eso es asunto suyo.
+            if (!empty($clavesCorreo)) {
+                MailFetcher::desmarcarProcesados(
+                    array_keys($clavesCorreo),
+                    Sociedad::seleccionadaIdActual()
+                );
+            }
+
+            $this->json([
+                'ok' => true,
+                'descartadas' => (int) $descartadas,
+                'no_borrados' => $noBorrados,
+            ]);
         } catch (Throwable $e) {
             $this->json(['ok' => false, 'message' => 'No fue posible descartar: ' . $e->getMessage()], 500);
         }
@@ -2098,8 +2272,8 @@ class CorreoController extends Controller
     {
         foreach ($bandejaModel->purgarYaExisten() as $fila) {
             foreach ([$fila['archivo_xml'] ?? '', $fila['archivo_pdf'] ?? ''] as $ruta) {
-                if ($ruta !== '' && is_file($ruta)) {
-                    @unlink($ruta);
+                if ($ruta !== '') {
+                    AlmacenDocumentos::de($ruta)->borrar($ruta);
                 }
             }
         }
@@ -2116,21 +2290,47 @@ class CorreoController extends Controller
      * la factura esté aceptada; si Hacienda la rechazó, la factura queda
      * en la bandeja como 'rechazada' y no se puede importar.
      */
-    /** Punto compartido con el worker: captura, pero nunca importa. */
-    public function capturarMensajeParaRevision(array $mensaje, $cuentaId,
-                                                 array $sociedadesPermitidas = [])
+    /**
+     * Punto compartido con la tarea programada: saca los comprobantes de un
+     * correo y, si le pasan una EntradaAutomatica, los mete al sistema en el
+     * acto en vez de dejarlos esperando en la Bandeja.
+     *
+     * Los dos modos capturan igual —la Bandeja sigue siendo la zona de paso, y
+     * lo rechazado por Hacienda o de otra cédula se queda ahí en los dos
+     * casos—. Lo que cambia es qué pasa con lo limpio.
+     *
+     * Y cambia también qué tipos se capturan. Con entrada automática entran
+     * facturas y notas de crédito, cada una a su listado. Sin ella se
+     * capturan solo facturas, como siempre: la importación manual de la
+     * Bandeja encola todo como 'FE', así que una nota que esperara ahí se
+     * importaría con el tipo equivocado.
+     *
+     * @param EntradaAutomatica|null $entrada
+     * @param array $correo  carpeta, uidvalidity, uid y fecha del mensaje
+     */
+    public function capturarMensajeAutomatico(array $mensaje, $cuentaId,
+                                              array $sociedadesPermitidas = [],
+                                              $entrada = null, array $correo = [])
     {
-        return $this->procesarMensaje(
+        $automatica = $entrada instanceof EntradaAutomatica;
+
+        $captura = $this->procesarMensaje(
             $mensaje,
             $this->loadModel('CorreoBandeja'),
             $this->loadModel('Factura'),
             (int) $cuentaId,
-            ['FE'],
+            $automatica ? EntradaAutomatica::TIPOS : ['FE'],
             '',
             0,
             $sociedadesPermitidas,
             'automatica'
         );
+
+        $captura['entrada'] = $automatica
+            ? $entrada->ingresar($captura, array_merge($correo, ['cuenta_id' => (int) $cuentaId]))
+            : null;
+
+        return $captura;
     }
 
     private function procesarMensaje(array $mensaje, $bandejaModel, $facturaModel,
@@ -2345,7 +2545,7 @@ class CorreoController extends Controller
 
             // Si el mismo correo ya se capturó, se reemplazan sus temporales y
             // se reactiva la fila. La deduplicación se decide después, al
-            // importar contra la semana elegida, no al abrir el correo.
+            // importar contra el pago elegido, no al abrir el correo.
             $filaPrevia = $factura['hash_xml'] !== ''
                 ? $bandejaModel->getPorUidHash($mensaje['clave'], $factura['hash_xml'])
                 : null;
@@ -2378,13 +2578,20 @@ class CorreoController extends Controller
             }
 
             // Mover el XML de tmp/ a la bandeja (nombre con prefijo removible
-            // "__"). La bandeja vive en la carpeta compartida: la fila que se
-            // crea abajo la ve todo el grupo, así que el archivo también tiene
-            // que estar donde todos lleguen.
+            // "__"). La bandeja vive donde archiva la empresa del comprobante
+            // —la carpeta compartida o SharePoint—: la fila que se crea abajo
+            // la ve todo el grupo, así que el archivo también tiene que estar
+            // donde todos lleguen. Una carpeta por mes, para que no acumule
+            // miles de archivos en un solo lugar.
             $nombreSeguro = preg_replace('/[^A-Za-z0-9._-]+/', '_', $adjunto['nombre']);
-            $rutaXml = RutaDocumento::carpetaTrabajo('BANDEJA/xml') . DIRECTORY_SEPARATOR . uniqid('correo_', true) . '__' . $nombreSeguro;
-            if (!rename($adjunto['ruta'], $rutaXml)) {
-                $resultado['errores'][] = 'No se pudo guardar el XML "' . $adjunto['nombre'] . '".';
+            try {
+                $rutaXml = RutaDocumento::carpetaTrabajo('BANDEJA/xml/' . RutaDocumento::delMes(), $sociedadFacturaId)
+                    . DIRECTORY_SEPARATOR . uniqid('correo_', true) . '__' . $nombreSeguro;
+                AlmacenDocumentos::de($rutaXml)->adoptar($rutaXml, $adjunto['ruta']);
+            } catch (Throwable $e) {
+                // El motivo va en el aviso: con SharePoint no es lo mismo "no
+                // hay red" que "esta PC no tiene credenciales".
+                $resultado['errores'][] = 'No se pudo guardar el XML "' . $adjunto['nombre'] . '": ' . $e->getMessage();
                 continue;
             }
 
@@ -2400,11 +2607,15 @@ class CorreoController extends Controller
                     @unlink($pdfPorIndice[$idx]['ruta']);
                 } else {
                     $numero = $factura['numero_corto'] !== '' ? $factura['numero_corto'] : pathinfo($nombreSeguro, PATHINFO_FILENAME);
-                    $rutaPdf = RutaDocumento::carpetaTrabajo('BANDEJA/pdf') . DIRECTORY_SEPARATOR
-                        . uniqid('correo_pdf_', true) . '__' . $numero . '.pdf';
-                    if (rename($pdfPorIndice[$idx]['ruta'], $rutaPdf)) {
+                    try {
+                        $rutaPdf = RutaDocumento::carpetaTrabajo('BANDEJA/pdf/' . RutaDocumento::delMes(), $sociedadFacturaId)
+                            . DIRECTORY_SEPARATOR . uniqid('correo_pdf_', true) . '__' . $numero . '.pdf';
+                        AlmacenDocumentos::de($rutaPdf)->adoptar($rutaPdf, $pdfPorIndice[$idx]['ruta']);
                         $resultado['pdfs_guardados']++;
-                    } else {
+                    } catch (Throwable $e) {
+                        // El documento sigue adelante sin PDF: el XML es el
+                        // comprobante, y quedarse sin la factura entera por no
+                        // haber podido guardar su representación sería peor.
                         $rutaPdf = null;
                         $resultado['errores'][] = 'La factura ' . $etiquetaFactura
                             . ' quedó SIN PDF: no se pudo guardar "'
@@ -2443,12 +2654,17 @@ class CorreoController extends Controller
                 ];
                 $bandejaModel->revivir((int) $filaPrevia['id'], $datosFila);
                 $filaId = (int) $filaPrevia['id'];
+                // Si la fila estaba importada y su importación todavía espera
+                // en la cola, la cola apunta a estos archivos (no los copia):
+                // ese ítem va a fallar con "no se encontró". No se pierde
+                // nada —la fila revivida trae el MISMO XML en su archivo
+                // nuevo y vuelve a quedar pendiente—, y dejar los viejos
+                // sería acumular basura en la bandeja.
                 foreach ($rutasAnteriores as $rutaAnterior) {
                     if ($rutaAnterior !== ''
                         && $rutaAnterior !== $rutaXml
-                        && $rutaAnterior !== (string) $rutaPdf
-                        && is_file($rutaAnterior)) {
-                        @unlink($rutaAnterior);
+                        && $rutaAnterior !== (string) $rutaPdf) {
+                        AlmacenDocumentos::de($rutaAnterior)->borrar($rutaAnterior);
                     }
                 }
             } else {
@@ -2489,8 +2705,15 @@ class CorreoController extends Controller
                 continue;
             }
             $nombreSeguro = preg_replace('/[^A-Za-z0-9._-]+/', '_', $pdf['nombre']);
-            $destino = RutaDocumento::carpetaTrabajo('BANDEJA/sin-identificar') . DIRECTORY_SEPARATOR . uniqid('pdf_', true) . '__' . $nombreSeguro;
-            if (rename($pdf['ruta'], $destino)) {
+            $guardado = true;
+            try {
+                $destino = RutaDocumento::carpetaTrabajo('BANDEJA/sin-identificar/' . RutaDocumento::delMes(), $sociedadIdDestino)
+                    . DIRECTORY_SEPARATOR . uniqid('pdf_', true) . '__' . $nombreSeguro;
+                AlmacenDocumentos::de($destino)->adoptar($destino, $pdf['ruta']);
+            } catch (Throwable $e) {
+                $guardado = false;
+            }
+            if ($guardado) {
                 $resultado['pdfs_sin_identificar']++;
                 $resultado['archivos_huerfanos'][] = $destino;
 
@@ -2553,7 +2776,7 @@ class CorreoController extends Controller
     // Configuración: elegir el alcance, ver qué haría y confirmar.
     //
     // Salieron porque no había nada que decidir. La carpeta de un documento la
-    // deciden su fecha de emisión y su tipo —que no cambian nunca— y su semana
+    // deciden su fecha de emisión y su tipo —que no cambian nunca— y su pago
     // de pago; no hay dos respuestas posibles que justifiquen mirar una lista
     // antes de aceptarla. Lo que sí había era una pantalla más que alguien
     // tenía que acordarse de visitar para que el archivo quedara en su sitio, y
@@ -2561,7 +2784,7 @@ class CorreoController extends Controller
     //
     // Ahora lo acomoda la tarea programada (cli/sync_correo.php), como mucho
     // cada quince minutos y solo sobre documentos registrados. Nunca borra:
-    // mueve el par a la carpeta de su mes y COPIA a la del pago semanal. Para
+    // mueve el par a la carpeta de su mes y COPIA a la del pago. Para
     // forzarlo a mano sigue estando `php cli/organizar_documentos.php
     // --forzar-orden`.
 
@@ -2597,6 +2820,7 @@ class CorreoController extends Controller
             'activo'          => !empty($cfg['activo']),
             'intervalo_min'   => max(1, min(1440, (int) ($cfg['intervalo_min'] ?? 10))),
             'capturar_nuevos' => !empty($cfg['capturar_nuevos']),
+            'entrada_automatica' => EntradaAutomatica::activa(is_array($cfg) ? $cfg : []),
             'max_correos_corrida' => max(1, min(200, (int) ($cfg['max_correos_corrida'] ?? 20))),
             'max_intentos'    => max(1, min(10, (int) ($cfg['max_intentos'] ?? 3))),
             'cola_captura'    => $cola,
@@ -2632,6 +2856,19 @@ class CorreoController extends Controller
         );
         $maxCorreos = max(1, min(200, (int) $this->post('max_correos_corrida', 20)));
         $maxIntentos = max(1, min(10, (int) $this->post('max_intentos', 3)));
+        // Que lo capturado entre solo al sistema. Es lo normal: si la petición
+        // no dice nada —una pantalla vieja en caché— se conserva lo guardado.
+        $entradaAutomatica = in_array(
+            strtolower(trim((string) $this->post(
+                'entrada_automatica',
+                EntradaAutomatica::activa(
+                    is_array($this->configLocal()['auto_sync'] ?? null)
+                        ? $this->configLocal()['auto_sync'] : []
+                ) ? '1' : '0'
+            ))),
+            ['1', 'true', 'on', 'si', 'sí'],
+            true
+        );
         /*
          * Cuántas copias del sincronizador corren a la vez. El tope de 12 no
          * es del sistema sino del servidor de correo: pasarse de conexiones
@@ -2728,6 +2965,7 @@ class CorreoController extends Controller
             'activo'               => true,
             'intervalo_min'        => $intervalo,
             'capturar_nuevos'      => $capturarNuevos,
+            'entrada_automatica'   => $entradaAutomatica,
             'max_correos_corrida'  => $maxCorreos,
             'max_intentos'         => $maxIntentos,
             'trabajadores'         => $trabajadores,
@@ -2742,10 +2980,14 @@ class CorreoController extends Controller
             'intervalo_min' => $intervalo,
             'capturar_nuevos' => $capturarNuevos,
             'php'           => $php,
+            'entrada_automatica' => $entradaAutomatica,
             'message'       => 'Automatización activada cada ' . $intervalo . ' min. '
-                . ($capturarNuevos
-                    ? 'Los correos nuevos quedarán en la Bandeja hasta que una persona los importe.'
-                    : 'Solo se actualizará el índice.'),
+                . (!$capturarNuevos
+                    ? 'Solo se actualizará el índice.'
+                    : ($entradaAutomatica
+                        ? 'Los comprobantes nuevos entrarán solos al sistema; en la Bandeja quedará '
+                            . 'lo que haya que revisar.'
+                        : 'Los correos nuevos quedarán en la Bandeja hasta que una persona los importe.')),
         ]);
     }
 
@@ -2975,8 +3217,8 @@ POWERSHELL;
     /**
      * Elige la cuenta con la que se trabaja (POST, JSON).
      */
-    // Recordar la semana elegida en la bandeja se fue con el selector: la
-    // bandeja ya no pregunta a qué semana va lo que se importa, porque cada
+    // Recordar el pago elegido en la bandeja se fue con el selector: la
+    // bandeja ya no pregunta a qué pago va lo que se importa, porque cada
     // comprobante la hereda de su factura del ERP.
 
     public function cuentaUsar()
@@ -3814,18 +4056,38 @@ POWERSHELL;
             return null;
         }
 
-        $usuario = (string) ($config['usuario'] ?? '');
-        $arroba = strpos($usuario, '@');
-        if ($arroba > 2) {
-            $usuario = substr($usuario, 0, 2) . str_repeat('•', max(3, $arroba - 2)) . substr($usuario, $arroba);
-        }
-
         return [
             'host' => (string) ($config['host'] ?? ''),
-            'usuario' => $usuario,
+            'usuario' => $this->enmascararUsuario((string) ($config['usuario'] ?? '')),
             'carpeta' => (string) ($config['carpeta'] ?? 'INBOX'),
             'dias_atras' => (int) ($config['dias_atras'] ?? 14),
             'solo_no_leidos' => !empty($config['solo_no_leidos']),
         ];
+    }
+
+    /**
+     * El usuario del buzón, a medio tapar.
+     *
+     * Se enmascara SIEMPRE: antes solo si la arroba estaba más allá del
+     * segundo carácter, así que "ab@empresa.cr" y un usuario sin arroba
+     * ("contabilidad01") salían completos a la pantalla.
+     */
+    private function enmascararUsuario($usuario)
+    {
+        $usuario = (string) $usuario;
+        if ($usuario === '') {
+            return '';
+        }
+
+        $arroba = mb_strpos($usuario, '@', 0, 'UTF-8');
+        $local = $arroba === false ? $usuario : mb_substr($usuario, 0, $arroba, 'UTF-8');
+        $dominio = $arroba === false ? '' : mb_substr($usuario, $arroba, null, 'UTF-8');
+
+        $largo = mb_strlen($local, 'UTF-8');
+        $visibles = $largo > 2 ? 2 : ($largo > 1 ? 1 : 0);
+
+        return mb_substr($local, 0, $visibles, 'UTF-8')
+            . str_repeat('•', max(3, $largo - $visibles))
+            . $dominio;
     }
 }

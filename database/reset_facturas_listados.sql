@@ -26,9 +26,9 @@ DELETE FROM importacion_items;         -- cola de importación de XML
 DELETE FROM importaciones;             -- lotes de importación
 DELETE FROM facturas_xml;              -- facturas importadas
 
--- Listados de facturas por pagar (líneas primero)
-DELETE FROM porpagar_facturas;         -- líneas de los listados
-DELETE FROM porpagar_listados;         -- listados del pago semanal
+-- Los pagos: sus facturas son filas de facturas_erp marcadas, no líneas
+-- propias, así que acá solo se borra la cabecera.
+DELETE FROM pagos;                     -- los pagos y su archivo
 
 -- Correos: liberar lo procesado para poder volver a buscarlo e importarlo
 DELETE FROM correo_bandeja;            -- bandeja de revisión del correo
@@ -38,8 +38,7 @@ DELETE FROM correo_procesados;         -- marcas de correos ya procesados
 ALTER TABLE importacion_items  AUTO_INCREMENT = 1;
 ALTER TABLE importaciones      AUTO_INCREMENT = 1;
 ALTER TABLE facturas_xml       AUTO_INCREMENT = 1;
-ALTER TABLE porpagar_facturas  AUTO_INCREMENT = 1;
-ALTER TABLE porpagar_listados  AUTO_INCREMENT = 1;
+ALTER TABLE pagos              AUTO_INCREMENT = 1;
 ALTER TABLE correo_bandeja     AUTO_INCREMENT = 1;
 ALTER TABLE correo_procesados  AUTO_INCREMENT = 1;
 

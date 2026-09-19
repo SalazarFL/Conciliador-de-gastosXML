@@ -47,12 +47,12 @@ assertAlcance(!AlcanceProveedor::pidioTodos([AlcanceProveedor::PARAM => ['todos'
 
 // ── Persiguiendo un documento no se pregunta ───────────────────────────────
 // Se llega con el botón "buscar en los XML cargados" de la cola de
-// seguimiento o del pago semanal: la tarjeta ya dice qué documento se busca y
+// seguimiento o del pago: la tarjeta ya dice qué documento se busca y
 // el buscador trae su número. Preguntar aquí sería cortar el camino.
 assertAlcance(!AlcanceProveedor::hayQuePreguntar(['ctx' => 'seguimiento'], ''),
     'viniendo de la cola de seguimiento no se pregunta');
 assertAlcance(!AlcanceProveedor::hayQuePreguntar(['ctx' => 'pago', 'ctx_item' => '12'], ''),
-    'ni viniendo del pago semanal');
+    'ni viniendo del pago');
 assertAlcance(!AlcanceProveedor::hayQuePreguntar(['pp_listado' => '5'], ''),
     'ni por los enlaces viejos del pago, que siguen andando');
 assertAlcance(!AlcanceProveedor::hayQuePreguntar(['ctx_item' => 'factura:40'], ''),

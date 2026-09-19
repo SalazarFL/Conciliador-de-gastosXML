@@ -8,8 +8,8 @@
  * viajen con prefijo para no pisarle al listado destino los suyos, que se
  * llaman igual.
  *
- * También cubre el fallo que dejó la tarjeta invisible durante semanas: se
- * pedían las líneas al pago semanal, que dejó de tenerlas cuando la línea pasó
+ * También cubre el fallo que dejó la tarjeta invisible durante pagos: se
+ * pedían las líneas al pago, que dejó de tenerlas cuando la línea pasó
  * a ser la factura del ERP. El Error caía en un catch y no salía la tarjeta.
  */
 require_once __DIR__ . '/../app/core/Model.php';
@@ -27,12 +27,12 @@ function assertNavDoc($condicion, $mensaje)
 
 // ── Dobles: contestan lo justo, sin base ────────────────────────────────────
 
-class NavPorPagarFalso
+class NavPagoFalso
 {
-    public function getListado($id)
+    public function findById($id)
     {
         return $id === 5
-            ? ['id' => 5, 'nombre' => 'Pago Semana 33', 'semana_nombre' => 'Semana 33']
+            ? ['id' => 5, 'nombre' => 'Pago 33', 'fecha_pago' => '2026-09-03']
             : null;
     }
 }
@@ -93,7 +93,7 @@ $erp = new NavFacturaErpFalso();
 $seg = new NavSeguimientoFalso();
 $cargar = static function ($nombre) use ($erp, $seg) {
     switch ($nombre) {
-        case 'PorPagar':    return new NavPorPagarFalso();
+        case 'Pago':        return new NavPagoFalso();
         case 'FacturaErp':  return $erp;
         case 'Seguimiento': return $seg;
         case 'Sociedad':    return new NavSociedadFalsa();
@@ -109,7 +109,7 @@ assertNavDoc(NavegacionDocumentos::desde([], $cargar, $BASE) === null,
 assertNavDoc(NavegacionDocumentos::desde(['ctx' => 'inventado'], $cargar, $BASE) === null,
     'un origen que no existe no arma tarjeta');
 
-// ── El pago semanal ─────────────────────────────────────────────────────────
+// ── El pago ─────────────────────────────────────────────────────────
 $nav = NavegacionDocumentos::desde(
     ['ctx' => 'pago', 'ctx_lista' => 5, 'ctx_item' => '12'], $cargar, $BASE);
 
@@ -132,7 +132,7 @@ assertNavDoc($nav['items'][0]['sucursal'] === 'BM Centro San Vito',
     'la sucursal del checklist llega a la tarjeta');
 assertNavDoc($nav['items'][1]['sucursal'] === '',
     'y una fila que no la trae no tumba la tarjeta: queda vacía');
-assertNavDoc(strpos($nav['volver'], '/por-pagar?listado_id=5') !== false,
+assertNavDoc(strpos($nav['volver'], '/por-pagar?pago_id=5') !== false,
     'el enlace de regreso vuelve al pago del que se vino');
 
 // El nombre viejo de los parámetros sigue valiendo: anda en enlaces guardados.
@@ -256,7 +256,7 @@ assertNavDoc($contexto === [
 assertNavDoc(!isset($contexto['q']) && !isset($contexto['pagina']),
     'y sin arrastrar lo que es de la pantalla: sus filtros los pone su barra');
 
-// Los enlaces viejos, que nombraban el pago semanal.
+// Los enlaces viejos, que nombraban el pago.
 $viejo = NavegacionDocumentos::contextoDeLaUrl(['pp_listado' => '5', 'pp_linea' => '11']);
 assertNavDoc($viejo === ['pp_listado' => '5', 'pp_linea' => '11'],
     'los parámetros viejos del pago también se conservan');

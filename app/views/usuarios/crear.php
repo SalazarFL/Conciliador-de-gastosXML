@@ -8,7 +8,7 @@ $error   = $error ?? null;
 $tituloPagina = 'Nuevo usuario';
 ?>
 
-<div class="card" style="max-width:560px;">
+<div class="card" style="max-width:720px;">
     <div class="card-header">
         <div class="card-title" style="margin-right:auto;">
             <i class="fas fa-user-plus" style="margin-right:6px;color:var(--gold);"></i>Datos del usuario
@@ -42,10 +42,10 @@ $tituloPagina = 'Nuevo usuario';
             </div>
 
             <div>
-                <label class="form-label-inline">Correo electrónico <span style="color:#e53e3e">*</span></label>
-                <input type="email" name="email" class="form-control-inline"
-                       value="<?= htmlspecialchars($old['email'] ?? '') ?>"
-                       placeholder="correo@ejemplo.com" required>
+                <label class="form-label-inline">Cédula <span style="color:#e53e3e">*</span></label>
+                <input type="text" name="cedula" class="form-control-inline"
+                       value="<?= htmlspecialchars($old['cedula'] ?? '') ?>"
+                       placeholder="Solo números" inputmode="numeric" required>
             </div>
 
             <div>
@@ -62,18 +62,24 @@ $tituloPagina = 'Nuevo usuario';
 
         </div>
 
+        <?php
+        /*
+         * El rol y las empresas. Ya no hay casilla de "Administrador": lo es
+         * quien tenga un rol marcado como tal. Tener las dos cosas permitía
+         * dejar a alguien con la casilla puesta y un rol que no administra
+         * nada —una contradicción que después nadie sabía interpretar.
+         */
+        include __DIR__ . '/../partials/acceso-usuario.php';
+        ?>
+
         <div style="display:flex;gap:9px;margin-top:10px;padding-top:9px;border-top:1px solid var(--border-light,#E4ECF7);">
             <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:13px;color:var(--navy);">
                 <input type="checkbox" name="activo" value="1"
                        <?= isset($old['activo']) || empty($old) ? 'checked' : '' ?>
                        style="width:16px;height:16px;accent-color:var(--gold);">
-                <span><strong>Cuenta activa</strong></span>
-            </label>
-            <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:13px;color:var(--navy);">
-                <input type="checkbox" name="is_admin" value="1"
-                       <?= !empty($old['is_admin']) ? 'checked' : '' ?>
-                       style="width:16px;height:16px;accent-color:var(--gold);">
-                <span><strong>Administrador</strong> <span style="font-size:12px;color:var(--text-muted);">(acceso a Gestión de Usuarios)</span></span>
+                <span><strong>Cuenta activa</strong>
+                    <span style="font-size:12px;color:var(--text-muted);">(si se desactiva, no puede entrar)</span>
+                </span>
             </label>
         </div>
 

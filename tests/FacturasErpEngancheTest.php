@@ -2,7 +2,7 @@
 /**
  * Cargar el reporte del ERP le busca comprobante a lo que no lo tiene.
  *
- * Hasta ahora el emparejador solo corría dentro de un pago semanal, así que
+ * Hasta ahora el emparejador solo corría dentro de un pago, así que
  * subir el reporte con los XML ya en la base dejaba todo en "sin respaldo"
  * hasta que alguien armara el pago. Esta es la vuelta contraria de
  * `engancharXml`: la factura que llega y busca el comprobante que ya estaba.
@@ -29,7 +29,7 @@ class ErpEngancheFalso
 {
     public $filas;
     public $escrito = [];
-    public $semanasSincronizadas = [];
+    public $pagosSincronizados = [];
 
     public function __construct(array $filas) { $this->filas = $filas; }
 
@@ -60,9 +60,9 @@ class ErpEngancheFalso
         return count($filas);
     }
 
-    public function sincronizarSemanaXml($listadoId)
+    public function sincronizarPagoXml($listadoId)
     {
-        $this->semanasSincronizadas[] = (int) $listadoId;
+        $this->pagosSincronizados[] = (int) $listadoId;
         return 1;
     }
 }
@@ -81,7 +81,7 @@ function filaErp($id, $documento, $proveedor, $monto, $opciones = [])
         'proveedor_codigo' => '', 'proveedor_nombre' => $proveedor,
         'monto' => $monto, 'saldo' => $monto, 'saldo_pago' => $monto,
         'factura_xml_id' => null, 'estado' => 'sin_respaldo', 'diferencia' => null,
-        'match_manual' => 0, 'porpagar_listado_id' => null,
+        'match_manual' => 0, 'pago_id' => null,
     ], $opciones);
 }
 
@@ -105,8 +105,8 @@ assertEnganche($r['enganchadas'] === 1, 'la factura del ERP encuentra el XML que
 assertEnganche($erp->escrito[1]['factura_xml_id'] === 100, 'engancha el comprobante correcto');
 assertEnganche($erp->escrito[1]['estado_respaldo'] === 'respaldada', 'con el monto al colón queda respaldada');
 
-// ── Sin pago semanal de por medio: no hace falta armar la semana ──
-assertEnganche($erp->semanasSincronizadas === [], 'una factura fuera de un pago no sincroniza semanas');
+// ── Sin pago de por medio: no hace falta armar el pago ──
+assertEnganche($erp->pagosSincronizados === [], 'una factura fuera de un pago no sincroniza pagos');
 
 // ── El monto que no cuadra no impide el enganche: lo clasifica ────
 $erp = new ErpEngancheFalso([filaErp(1, $A, 'AGENCIAS JOP S.A.', 50000.00)]);
@@ -152,14 +152,14 @@ assertEnganche($r['enganchadas'] === 1, 'engancha la que tiene comprobante');
 assertEnganche($r['revisadas'] === 2, 'y revisa las dos');
 assertEnganche(!isset($erp->escrito[2]), 'la que no tiene XML no se reescribe como sin respaldo');
 
-// ── La factura que ya está en un pago le hereda la semana al XML ──
+// ── La factura que ya está en un pago le hereda el pago al XML ──
 $erp = new ErpEngancheFalso([
-    filaErp(1, $A, 'AGENCIAS JOP S.A.', 50000.00, ['porpagar_listado_id' => 7]),
+    filaErp(1, $A, 'AGENCIAS JOP S.A.', 50000.00, ['pago_id' => 7]),
 ]);
 PorPagarVerificador::engancharSinRespaldo($erp, new FacturasEngancheFalso([
     filaXml(100, $A, 'AGENCIAS JOP S.A.', 50000.00),
 ]));
-assertEnganche($erp->semanasSincronizadas === [7], 'sincroniza la semana del pago al que pertenece');
+assertEnganche($erp->pagosSincronizados === [7], 'sincroniza el pago del pago al que pertenece');
 
 // ── Recorre todas las tandas, no solo la primera ──────────────────
 $filas = [];

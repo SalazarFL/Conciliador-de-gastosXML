@@ -14,5 +14,5 @@ $retorno = $retorno ?? ['url' => $baseUrl . '/notas-xml', 'titulo' => 'Volver a 
         <div><div style="font-size:10.5px;font-weight:700;color:var(--text-muted);text-transform:uppercase;"><?= htmlspecialchars($label) ?></div><div style="color:var(--navy);word-break:break-word;"><?= htmlspecialchars((string)$value) ?></div></div>
     <?php endforeach; ?>
     </div>
-    <div style="padding:0 12px 10px;display:flex;gap:7px;flex-wrap:wrap;"><a class="btn btn-primary" target="_blank" href="<?= $baseUrl ?>/documentos/xml/<?= (int)$n['id'] ?>"><i class="fas fa-code"></i> Visualizar XML</a><?php if (!empty($n['ruta_pdf']) && is_file($n['ruta_pdf'])): ?><a class="btn btn-outline" target="_blank" href="<?= $baseUrl ?>/documentos/pdf/<?= (int)$n['id'] ?>"><i class="fas fa-file-pdf"></i> Visualizar PDF</a><?php endif; ?></div>
+    <div style="padding:0 12px 10px;display:flex;gap:7px;flex-wrap:wrap;"><a class="btn btn-primary" target="_blank" href="<?= $baseUrl ?>/documentos/xml/<?= (int)$n['id'] ?>"><i class="fas fa-code"></i> Visualizar XML</a><?php if (!empty($n['ruta_pdf']) && RutaDocumento::existe($n['ruta_pdf'])): ?><a class="btn btn-outline" target="_blank" href="<?= $baseUrl ?>/documentos/pdf/<?= (int)$n['id'] ?>"><i class="fas fa-file-pdf"></i> Visualizar PDF</a><?php endif; ?></div>
 </div>

@@ -43,12 +43,116 @@ class Sociedad extends Model
         } catch (Throwable $e) {
             // Sin permisos de DDL: la migración manual la crea
         }
+
+        // Dónde se archivan los documentos nuevos de la sociedad. Es una
+        // tabla de una fila por empresa: agregarla acá no cuesta nada, y si
+        // el usuario de la base no puede, database/migration_almacen_graph.sql.
+        try {
+            $this->execute("ALTER TABLE {$this->table}
+                ADD COLUMN IF NOT EXISTS `almacen_documentos` VARCHAR(10) NOT NULL DEFAULT 'disco' AFTER `cedula`");
+        } catch (Throwable $e) {
+            // Sin la columna todas siguen en disco: ver almacenesPorSociedad().
+        }
     }
 
+    /** Dónde puede vivir lo nuevo de una sociedad. */
+    public const ALMACENES = ['disco' => 'Carpeta compartida', 'sharepoint' => 'SharePoint'];
+
+    /**
+     * [sociedad_id => almacén] de las que NO están en disco.
+     *
+     * Solo las que se apartan de lo de siempre: con todas en disco, que es
+     * hoy, la respuesta es una lista vacía. Sin la columna también, y eso es
+     * exactamente lo que significa no haber corrido la migración.
+     */
+    public function almacenesPorSociedad()
+    {
+        try {
+            $filas = $this->fetchAll("SELECT id, almacen_documentos FROM {$this->table}
+                                      WHERE almacen_documentos <> 'disco'") ?: [];
+        } catch (Throwable $e) {
+            return [];
+        }
+        $mapa = [];
+        foreach ($filas as $fila) {
+            $mapa[(int) $fila['id']] = (string) $fila['almacen_documentos'];
+        }
+        return $mapa;
+    }
+
+    /**
+     * Cambia dónde se archiva lo nuevo de una sociedad.
+     *
+     * Se niega a pasar a un almacén que ESTA máquina no puede usar: el ajuste
+     * es de todas las PC y la credencial es de cada una. Quien lo cambia
+     * tiene que poder comprobar, en el momento, que funciona.
+     *
+     * Esto NO mueve los documentos que ya están: cada uno sigue donde dice su
+     * fila. Pasar lo existente es cli/migrar_documentos_a_graph.php.
+     */
+    public function definirAlmacen($id, $almacen)
+    {
+        $almacen = strtolower(trim((string) $almacen));
+        if (!isset(self::ALMACENES[$almacen])) {
+            throw new InvalidArgumentException('Almacén desconocido: ' . $almacen);
+        }
+        require_once __DIR__ . '/../helpers/AlmacenDocumentos.php';
+        if (!AlmacenDocumentos::disponible($almacen)) {
+            throw new RuntimeException('Esta computadora no tiene configurado ' . self::ALMACENES[$almacen]
+                . ': falta app/config/local.graph.php. Haz el cambio desde una que sí lo tenga.');
+        }
+        // Cada documento anota en su fila dónde quedó. Sin esa columna, lo que
+        // se archive en SharePoint se leería como de disco: perdido.
+        if ($almacen !== 'disco' && !$this->fetchColumn(
+            "SELECT 1 FROM information_schema.COLUMNS
+              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'facturas_xml' AND COLUMN_NAME = 'almacen' LIMIT 1"
+        )) {
+            throw new RuntimeException('Antes hay que correr database/migration_almacen_graph.sql en la base.');
+        }
+        $this->execute("UPDATE {$this->table} SET almacen_documentos = ? WHERE id = ?", [$almacen, (int) $id]);
+        AlmacenDocumentos::olvidarAjustes();
+        return true;
+    }
+
+    /**
+     * Las empresas que esta persona puede ver.
+     *
+     * Filtra por lo que el administrador le asignó (usuario_sociedades). Sin
+     * asignación, o siendo administrador, salen todas —ver
+     * Permisos::sociedadesPermitidas()—. El filtro está aquí y no en cada
+     * pantalla porque este método lo llaman el selector de Inicio, la
+     * configuración y la barra superior: hacerlo tres veces sería olvidarlo
+     * una.
+     */
     public function getAll()
     {
-        $sql = "SELECT * FROM {$this->table} ORDER BY activa DESC, nombre ASC";
-        return $this->fetchAll($sql) ?: [];
+        $sql = "SELECT * FROM {$this->table}";
+        $params = [];
+
+        $permitidas = [];
+        try {
+            $permitidas = Permisos::sociedadesPermitidas();
+        } catch (Throwable $e) {
+            // Sin poder resolver permisos se listan todas, que es como se
+            // comportaba antes: el filtro no puede dejar a nadie sin empresa.
+        }
+
+        if ($permitidas) {
+            $sql .= ' WHERE id IN (' . implode(',', array_fill(0, count($permitidas), '?')) . ')';
+            $params = $permitidas;
+        }
+
+        return $this->fetchAll($sql . ' ORDER BY activa DESC, nombre ASC', $params) ?: [];
+    }
+
+    /**
+     * TODAS las empresas, sin filtrar por quién mira. La usa la pantalla que
+     * reparte accesos: para poder asignarle a alguien una empresa hay que
+     * poder verla, aunque quien reparte no trabaje con ella.
+     */
+    public function getTodas()
+    {
+        return $this->fetchAll("SELECT * FROM {$this->table} ORDER BY activa DESC, nombre ASC") ?: [];
     }
 
     /**

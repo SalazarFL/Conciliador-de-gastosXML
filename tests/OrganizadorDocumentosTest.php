@@ -104,9 +104,9 @@ $diffXml = $entrada . DIRECTORY_SEPARATOR . 'FE_DIFERENCIA.xml';
 $diffPdf = $entrada . DIRECTORY_SEPARATOR . 'FE_DIFERENCIA.pdf';
 $sinMatchXml = $entrada . DIRECTORY_SEPARATOR . 'FE_SIN_MATCH.xml';
 $sinMatchPdf = $entrada . DIRECTORY_SEPARATOR . 'FE_SIN_MATCH.pdf';
-$semanalXml = $entrada . DIRECTORY_SEPARATOR . 'FE_PAGO_SEMANAL.xml';
-$semanalPdf = $entrada . DIRECTORY_SEPARATOR . 'FE_PAGO_SEMANAL.pdf';
-$semanalIncompletaXml = $entrada . DIRECTORY_SEPARATOR . 'FE_PAGO_INCOMPLETO.xml';
+$pagoXml = $entrada . DIRECTORY_SEPARATOR . 'FE_PAGO_SEMANAL.xml';
+$pagoPdf = $entrada . DIRECTORY_SEPARATOR . 'FE_PAGO_SEMANAL.pdf';
+$pagoIncompletaXml = $entrada . DIRECTORY_SEPARATOR . 'FE_PAGO_INCOMPLETO.xml';
 $ncSolo = $entrada . DIRECTORY_SEPARATOR . 'NC_SIN_PDF.xml';
 // Un documento ya archivado con la Ñ en su nombre: el acomodo vuelve a
 // limpiar el nombre en cada corrida, y ese barrido se la comía.
@@ -115,8 +115,8 @@ $eniePdf = $entrada . DIRECTORY_SEPARATOR . 'FE_COMPAÑIA_RIO_JAVA_170726_000169
 file_put_contents($feXml, $xmlFactura); file_put_contents($fePdf, '%PDF par');
 file_put_contents($diffXml, $xmlFactura); file_put_contents($diffPdf, '%PDF diferencia');
 file_put_contents($sinMatchXml, $xmlFactura); file_put_contents($sinMatchPdf, '%PDF sin match');
-file_put_contents($semanalXml, $xmlFactura); file_put_contents($semanalPdf, '%PDF semanal');
-file_put_contents($semanalIncompletaXml, $xmlFactura);
+file_put_contents($pagoXml, $xmlFactura); file_put_contents($pagoPdf, '%PDF semanal');
+file_put_contents($pagoIncompletaXml, $xmlFactura);
 file_put_contents($ncSolo, $xmlNc);
 file_put_contents($enieXml, $xmlFactura); file_put_contents($eniePdf, '%PDF eñe');
 
@@ -139,13 +139,13 @@ $xmlBandeja = $bandeja . DIRECTORY_SEPARATOR . 'FE_SIN_IMPORTAR.xml';
 file_put_contents($xmlBandeja, $xmlFactura);
 
 $modelo = new FacturaOrganizadorFalsa([
-    1 => ['id'=>1, 'tipo_documento'=>'FE', 'fecha_emision'=>'2026-07-20', 'ruta_xml'=>$feXml, 'ruta_pdf'=>$fePdf, 'con_diferencia'=>0, 'coincide_registro'=>1],
-    2 => ['id'=>2, 'tipo_documento'=>'NC', 'fecha_emision'=>'2026-07-20', 'ruta_xml'=>$ncSolo, 'ruta_pdf'=>null, 'con_diferencia'=>0, 'coincide_registro'=>1],
-    3 => ['id'=>3, 'tipo_documento'=>'FE', 'fecha_emision'=>'2026-07-20', 'ruta_xml'=>$diffXml, 'ruta_pdf'=>$diffPdf, 'con_diferencia'=>1, 'coincide_registro'=>0],
-    4 => ['id'=>4, 'tipo_documento'=>'FE', 'fecha_emision'=>'2026-07-20', 'ruta_xml'=>$sinMatchXml, 'ruta_pdf'=>$sinMatchPdf, 'con_diferencia'=>0, 'coincide_registro'=>0],
-    5 => ['id'=>5, 'tipo_documento'=>'FE', 'fecha_emision'=>'2026-07-20', 'numero_factura_asistente'=>'0000000167', 'proveedor_nombre'=>'PROVEEDOR', 'ruta_xml'=>$semanalXml, 'ruta_pdf'=>$semanalPdf, 'con_diferencia'=>1, 'coincide_registro'=>0, 'pago_semanal'=>1, 'carpeta_pago'=>'Pago semana 31'],
-    8 => ['id'=>8, 'tipo_documento'=>'FE', 'fecha_emision'=>'2026-07-20', 'numero_factura_asistente'=>'00016987', 'proveedor_nombre'=>'COMPAÑIA RIO JAVA', 'ruta_xml'=>$enieXml, 'ruta_pdf'=>$eniePdf, 'con_diferencia'=>0, 'coincide_registro'=>1],
-    6 => ['id'=>6, 'tipo_documento'=>'FE', 'fecha_emision'=>'2026-07-20', 'numero_factura_asistente'=>'0000000168', 'proveedor_nombre'=>'FERRETERIA EL CLAVO', 'ruta_xml'=>$semanalIncompletaXml, 'ruta_pdf'=>null, 'con_diferencia'=>0, 'coincide_registro'=>1, 'pago_semanal'=>1, 'carpeta_pago'=>'Pago semana 31'],
+    1 => ['id'=>1, 'tipo_documento'=>'FE', 'sociedad_nombre'=>'EMPRESA DE PRUEBA', 'fecha_emision'=>'2026-07-20', 'ruta_xml'=>$feXml, 'ruta_pdf'=>$fePdf, 'con_diferencia'=>0, 'coincide_registro'=>1],
+    2 => ['id'=>2, 'tipo_documento'=>'NC', 'sociedad_nombre'=>'EMPRESA DE PRUEBA', 'fecha_emision'=>'2026-07-20', 'ruta_xml'=>$ncSolo, 'ruta_pdf'=>null, 'con_diferencia'=>0, 'coincide_registro'=>1],
+    3 => ['id'=>3, 'tipo_documento'=>'FE', 'sociedad_nombre'=>'EMPRESA DE PRUEBA', 'fecha_emision'=>'2026-07-20', 'ruta_xml'=>$diffXml, 'ruta_pdf'=>$diffPdf, 'con_diferencia'=>1, 'coincide_registro'=>0],
+    4 => ['id'=>4, 'tipo_documento'=>'FE', 'sociedad_nombre'=>'EMPRESA DE PRUEBA', 'fecha_emision'=>'2026-07-20', 'ruta_xml'=>$sinMatchXml, 'ruta_pdf'=>$sinMatchPdf, 'con_diferencia'=>0, 'coincide_registro'=>0],
+    5 => ['id'=>5, 'tipo_documento'=>'FE', 'sociedad_nombre'=>'EMPRESA DE PRUEBA', 'fecha_emision'=>'2026-07-20', 'numero_factura_asistente'=>'0000000167', 'proveedor_nombre'=>'PROVEEDOR', 'ruta_xml'=>$pagoXml, 'ruta_pdf'=>$pagoPdf, 'con_diferencia'=>1, 'coincide_registro'=>0, 'en_pago'=>1, 'carpeta_pago'=>'Pago 31'],
+    8 => ['id'=>8, 'tipo_documento'=>'FE', 'sociedad_nombre'=>'EMPRESA DE PRUEBA', 'fecha_emision'=>'2026-07-20', 'numero_factura_asistente'=>'00016987', 'proveedor_nombre'=>'COMPAÑIA RIO JAVA', 'ruta_xml'=>$enieXml, 'ruta_pdf'=>$eniePdf, 'con_diferencia'=>0, 'coincide_registro'=>1],
+    6 => ['id'=>6, 'tipo_documento'=>'FE', 'sociedad_nombre'=>'EMPRESA DE PRUEBA', 'fecha_emision'=>'2026-07-20', 'numero_factura_asistente'=>'0000000168', 'proveedor_nombre'=>'FERRETERIA EL CLAVO', 'ruta_xml'=>$pagoIncompletaXml, 'ruta_pdf'=>null, 'con_diferencia'=>0, 'coincide_registro'=>1, 'en_pago'=>1, 'carpeta_pago'=>'Pago 31'],
 ]);
 
 try {
@@ -160,10 +160,13 @@ try {
     // árbol viejo, colgado de la raíz, así que de paso comprueba la mudanza:
     // un archivo local de antes del cambio se acomoda solo en la primera
     // corrida y no deja el esqueleto de carpetas atrás.
+    // Y dentro de SISTEMA, la carpeta de la empresa del documento: el árbol
+    // separa las empresas del grupo igual que las separan los listados.
     $sistema = $root . DIRECTORY_SEPARATOR . 'SISTEMA';
-    $julioFacturas = $sistema . DIRECTORY_SEPARATOR . '2026' . DIRECTORY_SEPARATOR . '07 JULIO'
+    $empresa = $sistema . DIRECTORY_SEPARATOR . 'EMPRESA DE PRUEBA';
+    $julioFacturas = $empresa . DIRECTORY_SEPARATOR . '2026' . DIRECTORY_SEPARATOR . '07 JULIO'
         . DIRECTORY_SEPARATOR . 'Facturas';
-    $julioNotas = $sistema . DIRECTORY_SEPARATOR . '2026' . DIRECTORY_SEPARATOR . '07 JULIO'
+    $julioNotas = $empresa . DIRECTORY_SEPARATOR . '2026' . DIRECTORY_SEPARATOR . '07 JULIO'
         . DIRECTORY_SEPARATOR . 'Notas de crédito';
 
     assertOrganizador(dirname($modelo->filas[1]['ruta_xml']) === $julioFacturas,
@@ -184,27 +187,27 @@ try {
     // mes. Antes se mudaba ahí dentro, y entonces esa carpeta era el único
     // ejemplar: borrarla —que es lo que se hace cuando el pago ya se
     // entregó— se llevaba el respaldo de todos sus documentos.
-    $carpetaSemanal = $root . DIRECTORY_SEPARATOR . 'PAGOS SEMANALES' . DIRECTORY_SEPARATOR . 'Pago semana 31';
+    $carpetaPago = $root . DIRECTORY_SEPARATOR . 'PAGOS' . DIRECTORY_SEPARATOR . 'Pago 31';
     assertOrganizador(dirname($modelo->filas[5]['ruta_xml']) === $julioFacturas,
         'la base apunta al original del mes, no a la copia de entrega');
     assertOrganizador(is_file($modelo->filas[5]['ruta_xml']) && is_file($modelo->filas[5]['ruta_pdf']),
         'el original sigue en la carpeta del mes');
-    assertOrganizador(is_file($carpetaSemanal . DIRECTORY_SEPARATOR . 'FE_PROVEEDOR_200726_00000167.xml'),
+    assertOrganizador(is_file($carpetaPago . DIRECTORY_SEPARATOR . 'FE_PROVEEDOR_200726_00000167.xml'),
         'el XML de la copia conserva tipo, proveedor y fecha con ocho dígitos');
-    assertOrganizador(is_file($carpetaSemanal . DIRECTORY_SEPARATOR . 'FE_PROVEEDOR_200726_00000167.pdf'),
+    assertOrganizador(is_file($carpetaPago . DIRECTORY_SEPARATOR . 'FE_PROVEEDOR_200726_00000167.pdf'),
         'el PDF de la copia conserva tipo, proveedor y fecha con ocho dígitos');
-    assertOrganizador(($resumen['copias_pago'] ?? 0) === 1, 'contabiliza la copia dejada en el pago semanal');
-    assertOrganizador(($resumen['pago_semanal'] ?? 0) === 1, 'contabiliza el par entregado al pago semanal');
+    assertOrganizador(($resumen['copias_pago'] ?? 0) === 1, 'contabiliza la copia dejada en el pago');
+    assertOrganizador(($resumen['en_pago'] ?? 0) === 1, 'contabiliza el par entregado al pago');
 
     // Borrar la carpeta de pago ya no le quita el respaldo a nadie: el
     // documento sigue completo y la siguiente corrida repone la copia.
-    unlink($carpetaSemanal . DIRECTORY_SEPARATOR . 'FE_PROVEEDOR_200726_00000167.xml');
-    unlink($carpetaSemanal . DIRECTORY_SEPARATOR . 'FE_PROVEEDOR_200726_00000167.pdf');
+    unlink($carpetaPago . DIRECTORY_SEPARATOR . 'FE_PROVEEDOR_200726_00000167.xml');
+    unlink($carpetaPago . DIRECTORY_SEPARATOR . 'FE_PROVEEDOR_200726_00000167.pdf');
     assertOrganizador(is_file($modelo->filas[5]['ruta_xml']),
         'borrar la carpeta de entrega no toca el documento');
     $repuesta = (new OrganizadorDocumentos($root, $modelo))->ejecutar(false, false);
-    assertOrganizador(is_file($carpetaSemanal . DIRECTORY_SEPARATOR . 'FE_PROVEEDOR_200726_00000167.xml')
-        && is_file($carpetaSemanal . DIRECTORY_SEPARATOR . 'FE_PROVEEDOR_200726_00000167.pdf'),
+    assertOrganizador(is_file($carpetaPago . DIRECTORY_SEPARATOR . 'FE_PROVEEDOR_200726_00000167.xml')
+        && is_file($carpetaPago . DIRECTORY_SEPARATOR . 'FE_PROVEEDOR_200726_00000167.pdf'),
         'la siguiente corrida repone la copia de entrega borrada');
     assertOrganizador(($repuesta['copias_pago'] ?? 0) === 1, 'y la cuenta como copia nueva');
 
@@ -217,7 +220,7 @@ try {
     // para entregar respaldos, y sin PDF no hay nada que entregar.
     assertOrganizador(dirname($modelo->filas[6]['ruta_xml']) === $julioFacturas,
         'un match semanal sin PDF se queda en la carpeta del mes');
-    assertOrganizador(!is_file($carpetaSemanal . DIRECTORY_SEPARATOR . 'FE_PROVEEDOR_200726_00000167_DUP.xml'),
+    assertOrganizador(!is_file($carpetaPago . DIRECTORY_SEPARATOR . 'FE_PROVEEDOR_200726_00000167_DUP.xml'),
         'y no deja copia en la carpeta de pago');
 
     // Pero no se va en silencio. Que la carpeta tenga menos archivos que el
@@ -239,14 +242,26 @@ try {
         count(array_filter($incompletos, fn($d) => (int) $d['documento_id'] !== 6)) === 0,
         'la NC suelta sin PDF no se reporta: no es de ningún pago'
     );
-    assertOrganizador(DocumentoArchivo::normalizarCarpetaPago('../Semana: 31') === 'Semana 31', 'limpia recorridos y caracteres inválidos del nombre de carpeta');
+    assertOrganizador(DocumentoArchivo::normalizarCarpetaPago('../Pago: 31') === 'Pago 31', 'limpia recorridos y caracteres inválidos del nombre de carpeta');
     assertOrganizador(is_file(dirname($modelo->filas[1]['ruta_xml']) . DIRECTORY_SEPARATOR . basename($modelo->filas[1]['ruta_pdf'])), 'el par comparte carpeta');
-    assertOrganizador(count(glob($julioFacturas . DIRECTORY_SEPARATOR . 'FE_PENDIENTE.*')) === 2, 'el par externo se archiva por su fecha');
-    assertOrganizador(is_file($julioNotas . DIRECTORY_SEPARATOR . 'NC_EXTERNA_SIN_PDF.xml'), 'la NC externa sin PDF se archiva con las notas de crédito');
+    /*
+     * El par externo no está en la base, así que su empresa se deduce del
+     * receptor del XML. El de esta prueba no corresponde a ninguna empresa
+     * registrada, y entonces va a SIN EMPRESA: separado de las dos, que es lo
+     * que hay que revisar, y no revuelto con los documentos de una de ellas.
+     */
+    $sinEmpresa = $sistema . DIRECTORY_SEPARATOR . 'SIN EMPRESA' . DIRECTORY_SEPARATOR . '2026'
+        . DIRECTORY_SEPARATOR . '07 JULIO' . DIRECTORY_SEPARATOR . 'Facturas';
+    assertOrganizador(count(glob($sinEmpresa . DIRECTORY_SEPARATOR . 'FE_PENDIENTE.*')) === 2,
+        'el par externo se archiva por su fecha, y aparte hasta saber de quién es');
+    $sinEmpresaNotas = $sistema . DIRECTORY_SEPARATOR . 'SIN EMPRESA' . DIRECTORY_SEPARATOR . '2026'
+        . DIRECTORY_SEPARATOR . '07 JULIO' . DIRECTORY_SEPARATOR . 'Notas de crédito';
+    assertOrganizador(is_file($sinEmpresaNotas . DIRECTORY_SEPARATOR . 'NC_EXTERNA_SIN_PDF.xml'),
+        'la NC externa sin PDF se archiva con las notas de crédito, también aparte');
     assertOrganizador(count(glob($sistema . DIRECTORY_SEPARATOR . '2026' . DIRECTORY_SEPARATOR . '07 JULIO' . DIRECTORY_SEPARATOR . 'IGNORADOS' . DIRECTORY_SEPARATOR . 'MENSAJE HACIENDA SOLO' . DIRECTORY_SEPARATOR . '*.xml')) === 1, 'separa el MensajeHacienda aislado');
     assertOrganizador(is_file($sistema . DIRECTORY_SEPARATOR . 'LEEME - NO MODIFICAR.txt'), 'deja la advertencia dentro de SISTEMA');
     assertOrganizador(!is_dir($root . DIRECTORY_SEPARATOR . '2026'), 'no deja el árbol vacío de donde se mudaron los archivos');
-    assertOrganizador(is_dir($root . DIRECTORY_SEPARATOR . 'PAGOS SEMANALES'), 'la carpeta de entrega sigue en la raíz, fuera de SISTEMA');
+    assertOrganizador(is_dir($root . DIRECTORY_SEPARATOR . 'PAGOS'), 'la carpeta de entrega sigue en la raíz, fuera de SISTEMA');
     assertOrganizador(is_file($xmlBandeja), 'no archiva lo que está en tránsito dentro de _TRABAJO');
     // La Ñ sobrevive al acomodo. El organizador vuelve a limpiar el nombre en
     // cada corrida, y su barrido dejaba fuera la Ñ: deshacía en el primer
@@ -261,7 +276,7 @@ try {
 
     assertOrganizador(($resumen['errores'] ?? 1) === 0, 'termina sin errores');
     // Con la base en el servidor, una consulta por documento agotaba el tiempo
-    // de la petición al ordenar una semana entera (cientos de documentos).
+    // de la petición al ordenar un pago entero (cientos de documentos).
     assertOrganizador(count($modelo->lotes) === 1 && array_sum($modelo->lotes) === ($resumen['movidos'] ?? 0),
         'anota las ubicaciones de una sola vez, no con una consulta por documento');
 
@@ -283,7 +298,7 @@ try {
     file_put_contents($xmlManual, $xmlManualContenido);
     file_put_contents($pdfManual, '%PDF manual unico');
     $modelo->filas[7] = [
-        'id'=>7, 'tipo_documento'=>'FE', 'fecha_emision'=>'2026-07-20',
+        'id'=>7, 'tipo_documento'=>'FE', 'sociedad_nombre'=>'EMPRESA DE PRUEBA', 'fecha_emision'=>'2026-07-20',
         'ruta_xml'=>$xmlManual, 'ruta_pdf'=>$pdfManual,
         'hash_xml'=>hash_file('sha256', $xmlManual), 'hash_pdf'=>hash_file('sha256', $pdfManual),
         'con_diferencia'=>0, 'coincide_registro'=>1,
@@ -341,7 +356,7 @@ try {
         'la previsualización tampoco toca la base de datos');
 
     $modelo->filas[8] = [
-        'id'=>8, 'tipo_documento'=>'FE', 'fecha_emision'=>'2026-07-20',
+        'id'=>8, 'tipo_documento'=>'FE', 'sociedad_nombre'=>'EMPRESA DE PRUEBA', 'fecha_emision'=>'2026-07-20',
         'ruta_xml'=>$root . DIRECTORY_SEPARATOR . 'NO_EXISTE.xml', 'ruta_pdf'=>null,
         'hash_xml'=>str_repeat('a', 64), 'hash_pdf'=>null,
         'con_diferencia'=>0, 'coincide_registro'=>1,
@@ -357,7 +372,7 @@ try {
     // empresa: lo único que no se puede permitir es que se lleve un archivo por
     // delante. Se compara el árbol entero antes y después —por nombre y
     // tamaño— y no puede faltar ninguno. Aparecer sí: las copias de entrega
-    // del pago semanal.
+    // del pago.
     $antesDeOrdenar = huellaArbolOrganizador($root);
     (new OrganizadorDocumentos($root, $modelo))->ejecutar(false, true);
     $despuesDeOrdenar = huellaArbolOrganizador($root);

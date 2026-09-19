@@ -5,9 +5,9 @@
  *
  * Se prueba sin base de datos: lo que importa aquí es que los parsers
  * rescaten la fila en vez de tirarla, y que una corrección guardada se pueda
- * volver a aplicar cuando el reporte de la semana siguiente traiga la misma
+ * volver a aplicar cuando el reporte del pago siguiente traiga la misma
  * fila con otro saldo. Eso último es lo que decide si la bandeja es útil o
- * un impuesto semanal.
+ * un impuesto de cada pago.
  */
 
 require_once __DIR__ . '/../app/helpers/LineaRevision.php';
@@ -86,27 +86,27 @@ foreach ($notas['revision'] as $r) {
 // ------------------------------------------------------------------
 //
 // Es la condición para que recordar sirva de algo: el reporte se vuelve a
-// subir completo cada semana y el saldo de una factura baja cada vez que se
+// subir completo cada pago y el saldo de una factura baja cada vez que se
 // le abona. Una firma que incluyera los importes no reconocería nunca la
 // misma línea dos veces.
 
-$semana1 = ['', 'NC 4946', '21/06/2026', 'ENTRADA-B', 'CRC', '2,000.00', '500.00'];
-$semana2 = ['', 'NC 4946', '21/06/2026', 'ENTRADA-B', 'CRC', '2,000.00', '0.00'];
+$pago1 = ['', 'NC 4946', '21/06/2026', 'ENTRADA-B', 'CRC', '2,000.00', '500.00'];
+$pago2 = ['', 'NC 4946', '21/06/2026', 'ENTRADA-B', 'CRC', '2,000.00', '0.00'];
 $otra    = ['', 'NC 4947', '21/06/2026', 'ENTRADA-B', 'CRC', '2,000.00', '500.00'];
 
 assertRevIgual(
-    LineaRevision::firma('notas_credito', $semana1, '140000002'),
-    LineaRevision::firma('notas_credito', $semana2, '140000002'),
+    LineaRevision::firma('notas_credito', $pago1, '140000002'),
+    LineaRevision::firma('notas_credito', $pago2, '140000002'),
     'la misma fila con otro saldo conserva su firma'
 );
 assertRev(
-    LineaRevision::firma('notas_credito', $semana1, '140000002')
+    LineaRevision::firma('notas_credito', $pago1, '140000002')
         !== LineaRevision::firma('notas_credito', $otra, '140000002'),
     'dos documentos distintos no pueden compartir firma'
 );
 assertRev(
-    LineaRevision::firma('notas_credito', $semana1, '140000002')
-        !== LineaRevision::firma('notas_credito', $semana1, '140000999'),
+    LineaRevision::firma('notas_credito', $pago1, '140000002')
+        !== LineaRevision::firma('notas_credito', $pago1, '140000999'),
     'la misma fila en otro proveedor es otra línea'
 );
 
@@ -114,7 +114,7 @@ assertRev(
 // 3. Reaplicar una corrección: se relee la columna, no se repite el número
 // ------------------------------------------------------------------
 //
-// Guardar los valores pelados serviría una sola vez. La semana siguiente la
+// Guardar los valores pelados serviría una sola vez. El pago siguiente la
 // fila viene con el saldo ya cambiado, y reponer el saldo viejo sería
 // escribir en el listado un dato falso. Por eso se guarda además de qué
 // celda salió cada cosa.
@@ -125,21 +125,21 @@ $corregido = [
     'monto' => '2000.00',             // sale de la celda 5
     'saldo' => '500.00',              // sale de la celda 6
 ];
-$mapa = LineaRevision::mapaDeCampos($corregido, $semana1);
+$mapa = LineaRevision::mapaDeCampos($corregido, $pago1);
 
 assertRevIgual(null, $mapa['documento'], 'lo escrito a mano no se ata a ninguna celda');
 assertRevIgual(2, $mapa['fecha'], 'la fecha se reconoce aunque el formato difiera');
 assertRevIgual(5, $mapa['monto'], 'el monto se reconoce con separador de miles');
 assertRevIgual(6, $mapa['saldo'], 'el saldo se reconoce');
 
-$memoria = ['campos' => $corregido, 'celdas' => $semana1, 'mapa' => $mapa];
+$memoria = ['campos' => $corregido, 'celdas' => $pago1, 'mapa' => $mapa];
 
-$igual = LineaRevision::reaplicar($memoria, $semana1);
+$igual = LineaRevision::reaplicar($memoria, $pago1);
 assertRevIgual('500.00', $igual['saldo'], 'la fila idéntica se resuelve tal cual');
 
-$nueva = LineaRevision::reaplicar($memoria, $semana2);
+$nueva = LineaRevision::reaplicar($memoria, $pago2);
 assertRev($nueva !== null, 'la fila con otro saldo se puede resolver');
-assertRevIgual('0.00', $nueva['saldo'], 'el saldo se relee del archivo de esta semana');
+assertRevIgual('0.00', $nueva['saldo'], 'el saldo se relee del archivo de este pago');
 assertRevIgual('2,000.00', $nueva['monto'], 'el monto también se relee de su columna');
 assertRevIgual('NC- 4946', $nueva['documento'], 'lo escrito a mano se repone tal cual');
 

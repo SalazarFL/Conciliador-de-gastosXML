@@ -727,6 +727,51 @@ body.app-dialog-open { overflow: hidden; }
   white-space: pre-line;
 }
 
+.app-dialog-message[hidden],
+.app-dialog-body[hidden],
+.app-dialog-error[hidden] { display: none; }
+
+/* Formularios dentro del diálogo (AppDialog.form): alineados con el título */
+.app-dialog-body { padding: 4px 18px 14px 65px; font-size: 12.5px; color: var(--text); }
+.app-dialog-error {
+  margin: -4px 18px 12px 65px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  background: var(--miss-bg);
+  color: var(--miss);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.dlg-campos { display: grid; gap: 11px; }
+.dlg-campo label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: .2px;
+}
+.dlg-campo label .opcional { font-weight: 500; color: var(--text-light); }
+.dlg-campo .form-control { width: 100%; font-size: 13px; padding: 7px 10px; }
+.dlg-campo .form-control.mono { font-family: ui-monospace, Consolas, monospace; letter-spacing: .3px; }
+.dlg-campo .form-control.is-invalido { border-color: #E5A0A0; box-shadow: 0 0 0 3px rgba(180, 35, 24, .08); }
+.dlg-ayuda { margin-top: 4px; font-size: 11px; line-height: 1.4; color: var(--text-muted); }
+.dlg-ayuda.alerta { color: var(--warn); }
+
+/* Dato que se muestra y no se edita (el código, al corregir su cédula) */
+.dlg-fijo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: #F7FAFF;
+}
+.dlg-fijo-codigo { font-family: ui-monospace, Consolas, monospace; font-size: 13px; font-weight: 800; color: var(--navy); }
+.dlg-fijo-nombre { min-width: 0; font-size: 12px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .app-dialog-actions {
   display: flex;
   justify-content: flex-end;
@@ -748,6 +793,8 @@ body.app-dialog-open { overflow: hidden; }
   .app-dialog { border-radius: 13px; }
   .app-dialog-head { padding: 17px 44px 6px 14px; }
   .app-dialog-message { padding: 6px 14px 14px; }
+  .app-dialog-body { padding: 4px 14px 14px; }
+  .app-dialog-error { margin: -4px 14px 12px; }
   .app-dialog-actions { padding: 9px; }
   .app-dialog-actions .btn { flex: 1; }
 }
@@ -2963,9 +3010,11 @@ body.correo-resizing * { pointer-events: none; }
 /* ══════════════════════════════
    CONFIGURACIÓN (/configuracion)
 
-   Una pantalla larga con índice al lado. El índice es lo que la vuelve
-   navegable: sin él, "¿dónde se cambia la carpeta?" se contesta bajando a
-   ciegas por una lista de tarjetas.
+   Un menú de temas a la izquierda y UNA sección abierta a la derecha. Antes
+   las nueve se apilaban en una página larguísima: cambiar la carpeta obligaba
+   a pasar por encima de los buzones y las empresas, y el respaldo quedaba tres
+   pantallas más abajo. Cada tema es ahora su propia ventana —empieza arriba,
+   termina donde termina— y el menú dice qué hay sin tener que bajar a mirarlo.
 ══════════════════════════════ */
 .cfg-shell {
   display: grid;
@@ -3043,10 +3092,25 @@ body.correo-resizing * { pointer-events: none; }
 
 .cfg-nav-vacio { padding: 10px 9px; font-size: 11.5px; color: var(--text-light); }
 
-.cfg-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.cfg-nav-lista { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 
-/* El ancla no puede quedar debajo de la barra superior fija */
-.cfg-section { scroll-margin-top: calc(var(--topbar-h) + 14px); }
+.cfg-main { min-width: 0; }
+
+/* Una sección a la vez. Las cerradas no se descargan ni se vacían: siguen en
+   la página con su estado —lo que se escribió en un campo, la cuenta que se
+   estaba editando— esperando a que se vuelva a ellas. */
+.cfg-section { display: none; }
+
+.cfg-section.is-activa {
+  display: block;
+  animation: cfg-abre .16s ease-out;
+}
+
+
+@keyframes cfg-abre {
+  from { opacity: 0; transform: translateY(5px); }
+  to   { opacity: 1; transform: none; }
+}
 
 .cfg-card {
   background: var(--card);
@@ -3328,17 +3392,271 @@ body.correo-resizing * { pointer-events: none; }
 .cfg-arbol-tag.no-tocar { background: #fee2e2; color: #b91c1c; }
 .cfg-arbol-tag.para-trabajar { background: #dcfce7; color: #15803d; }
 
+/* ── Proveedores del sistema: resumen, pestañas y tablas ─────────────── */
+.cat-resumen {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 10px 14px 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.cat-resumen b { color: var(--navy); font-weight: 800; }
+.cat-punto { color: var(--text-light); }
+
+.cat-ayuda { font-size: 11.5px; color: var(--text-muted); }
+.cat-resumen .cat-ayuda { margin-left: auto; }
+.cat-ayuda summary {
+  cursor: pointer;
+  color: var(--navy-light);
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.cat-ayuda summary::-webkit-details-marker { display: none; }
+.cat-ayuda summary:hover { text-decoration: underline; }
+.cat-ayuda[open] { flex-basis: 100%; margin-left: 0; }
+.cat-ayuda > div {
+  margin-top: 7px;
+  padding: 8px 11px;
+  background: #F7FAFF;
+  border: 1px solid var(--border-light);
+  border-radius: 7px;
+  line-height: 1.5;
+}
+.cat-ayuda p { margin: 0; }
+.cat-ayuda p + p { margin-top: 5px; }
+
+.cat-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 10px 14px 0;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.cat-tabs::-webkit-scrollbar { display: none; }
+.cat-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 11px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.cat-tabs button i { font-size: 11.5px; opacity: .7; }
+.cat-tabs button:hover { color: var(--navy); }
+.cat-tabs button.is-activa { color: var(--navy); border-bottom-color: var(--gold); }
+.cat-tabs button.is-activa i { opacity: 1; color: var(--gold-dark); }
+
+.cat-tab-n {
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: var(--border-light);
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-align: center;
+}
+.cat-tab-n.alerta { background: var(--warn-bg); color: var(--warn); }
+.cat-tab-n.vacia { background: var(--border-light); color: var(--text-light); }
+
+.cat-panel { padding: 12px 14px 14px; }
+
+.cat-panel-barra {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-bottom: 10px;
+}
+.cat-panel-nota {
+  flex: 1 1 320px;
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.cat-filtro { font-size: 12px; padding: 5px 9px; max-width: 260px; }
+.cat-carga { font-size: 12px; color: var(--text-muted); }
+
+.cat-tabla-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+}
+.cat-tabla { width: 100%; border-collapse: collapse; font-size: 12px; }
+.cat-tabla th {
+  padding: 6px 10px;
+  background: #F7FAFF;
+  border-bottom: 1px solid var(--border-light);
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .3px;
+  text-align: left;
+  white-space: nowrap;
+}
+.cat-tabla td {
+  padding: 7px 10px;
+  border-top: 1px solid var(--border-light);
+  vertical-align: middle;
+  color: var(--text);
+}
+.cat-tabla tbody tr:first-child td { border-top: none; }
+.cat-tabla tbody tr:hover td { background: #FAFCFF; }
+.cat-tabla .num { text-align: right; white-space: nowrap; }
+.cat-tabla .accion { text-align: right; white-space: nowrap; width: 1%; }
+.cat-tabla .mono, .cat-sub.mono { font-family: ui-monospace, Consolas, monospace; }
+
+.cat-nombre { font-weight: 600; color: var(--navy); }
+.cat-sub { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+
+.cat-asignar { display: inline-flex; align-items: center; gap: 5px; }
+
+/* El buscador de códigos se abre debajo de la fila del proveedor */
+.cat-tabla tr.is-eligiendo td { background: #F2F6FD; }
+.cat-tabla tr.cat-elegir-fila td { border-top: none; padding: 0 10px 10px; background: #F2F6FD; }
+.cat-tabla tr.cat-elegir-fila:hover td { background: #F2F6FD; }
+.cat-elegir {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 2px 8px rgba(12, 36, 97, .06);
+  overflow: hidden;
+}
+.cat-elegir-barra {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border-light);
+}
+.cat-elegir-barra > i { color: var(--text-light); font-size: 12px; }
+.cat-elegir-barra .form-control {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  box-shadow: none;
+  padding: 4px 2px;
+  font-size: 12.5px;
+  background: transparent;
+}
+.cat-elegir-barra .form-control:focus { outline: none; box-shadow: none; }
+.cat-elegir-titulo {
+  padding: 6px 12px 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .3px;
+  color: var(--text-muted);
+}
+.cat-opciones { max-height: 280px; overflow-y: auto; padding: 0 5px 5px; }
+.cat-opciones-vacio { padding: 10px 8px; font-size: 12px; color: var(--text-muted); }
+.cat-opcion {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+}
+.cat-opcion:hover, .cat-opcion:focus-visible { background: #EEF3FC; outline: none; }
+.cat-opcion[disabled] { opacity: .5; cursor: default; }
+.cat-opcion-codigo {
+  flex: 0 0 92px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--navy);
+}
+.cat-opcion-nombre { flex: 1; min-width: 0; font-size: 12px; color: var(--text); }
+.cat-opcion-nombre small { display: block; font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+.cat-opcion .badge { flex-shrink: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 600px) {
+  .cat-opcion { flex-wrap: wrap; gap: 3px 10px; }
+  .cat-opcion-codigo { flex-basis: auto; }
+  .cat-opcion-nombre { flex-basis: 100%; order: 3; }
+}
+.cat-descartar {
+  border: none;
+  background: none;
+  padding: 3px 4px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.cat-descartar:hover { color: var(--miss); text-decoration: underline; }
+
+.cat-iconos { display: inline-flex; gap: 4px; }
+.cat-iconos .btn { padding: 3px 7px; }
+
+.cat-pie {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 9px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.cat-paginas { display: inline-flex; align-items: center; gap: 7px; }
+.cat-paginas .btn { padding: 3px 8px; }
+
+.cat-pasos {
+  margin: 0 0 12px;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text);
+}
+.cat-pasos li + li { margin-top: 4px; }
+.cat-subir {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: #F7FAFF;
+}
+
 @media (max-width: 980px) {
   .cfg-shell { grid-template-columns: minmax(0, 1fr); }
 
-  /* El índice pasa a ser una tira de fichas arriba: sigue diciendo qué hay */
+  /* El menú pasa a ser una tira de pestañas arriba: sigue diciendo qué hay */
   .cfg-nav {
     position: static;
     flex-direction: row;
-    overflow-x: auto;
     gap: 5px;
     padding: 7px;
   }
+  /* Es la tira de pestañas la que se desliza, no la tarjeta que la contiene */
+  .cfg-nav-lista { flex-direction: row; gap: 5px; flex: 1; overflow-x: auto; }
   .cfg-nav a { border-left: none; border-bottom: 3px solid transparent; white-space: nowrap; }
   .cfg-nav a.active { border-left: none; border-bottom-color: var(--gold); }
   .cfg-nav-buscar { display: none; }
@@ -3500,3 +3818,238 @@ body.correo-resizing * { pointer-events: none; }
 .importe-puesto { color: var(--gold-dark); font-size: 15px; line-height: 0; vertical-align: middle; }
 
 .importe-ayuda { margin-top: 3px; font-size: 10.5px; color: var(--text-light); }
+
+
+/* ══════════════════════════════
+   MENÚ DE CLIC DERECHO EN LOS LISTADOS
+   Las mismas acciones que ya tiene la fila, pero donde está el puntero y con
+   su nombre escrito. Lo arma app.js leyendo los botones del renglón: aquí no
+   hay nada que saber de ningún módulo.
+══════════════════════════════ */
+.menu-fila {
+  position: fixed;
+  /* Sobre la ficha (2950) y bajo los diálogos (3000): desde una opción se
+     puede pedir una confirmación, y esa va encima de todo. */
+  z-index: 2960;
+  top: 0;
+  left: 0;
+  min-width: 210px;
+  max-width: 340px;
+  max-height: 78vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+  background: #fff;
+  border: 1px solid var(--border-light);
+  border-radius: 9px;
+  box-shadow: 0 12px 30px rgba(15, 30, 60, .20);
+  outline: none;
+  animation: menu-fila-entra .09s ease-out;
+}
+
+@keyframes menu-fila-entra {
+  from { opacity: 0; transform: scale(.97); }
+  to   { opacity: 1; transform: none; }
+}
+
+.menu-fila-titulo {
+  padding: 5px 8px 7px;
+  margin-bottom: 3px;
+  border-bottom: 1px solid var(--border-light);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.menu-fila-opcion {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu-fila-opcion:hover,
+.menu-fila-opcion:focus { background: #EEF3FC; outline: none; }
+
+.menu-fila-icono {
+  flex: none;
+  width: 15px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--navy);
+}
+
+.menu-fila-texto { flex: 1; min-width: 0; }
+
+/* Sobre qué fila está abierto. La tabla se sigue viendo entera detrás del
+   menú, y sin esta marca no se sabe cuál de treinta renglones va a recibir la
+   acción. Va en las celdas y no en la fila porque el color de la fila lo pinta
+   su estado —vencida, marcada— y ahí no se distinguiría. */
+.data-table tbody tr.is-menu-abierto > td,
+.table tbody tr.is-menu-abierto > td { background: #EEF3FC; }
+.cfg-item.is-menu-abierto { background: #EEF3FC; }
+
+@media (max-width: 640px) {
+  .menu-fila { max-width: 92vw; }
+}
+
+
+/* ══════════════════════════════
+   QUÉ COLUMNAS SE VEN
+   El botón de la esquina de la tabla y su lista de casillas. Lo arma app.js
+   leyendo las cabeceras; el catálogo vive en app/config/columnas.php.
+══════════════════════════════ */
+
+/* En la esquina, no en medio: es una cabecera, y lo que se lee ahí son los
+   nombres de las columnas. Sin fondo mientras nadie lo busca. */
+.cols-boton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-light);
+  font-size: 12px;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: background .12s, color .12s, border-color .12s;
+}
+
+.data-table thead:hover .cols-boton { color: var(--text-muted); }
+.cols-boton:hover,
+.cols-boton:focus-visible {
+  background: #fff;
+  border-color: var(--border);
+  color: var(--navy);
+  outline: none;
+}
+
+.cols-panel {
+  position: fixed;
+  /* Bajo el menú del clic derecho (2960) y sobre todo lo de la página: se
+     abre desde la cabecera, que en varios listados va pegada arriba. */
+  z-index: 2400;
+  top: 0;
+  left: 0;
+  width: 232px;
+  max-height: 76vh;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid var(--border-light);
+  border-radius: 9px;
+  box-shadow: 0 12px 30px rgba(15, 30, 60, .20);
+  overflow: hidden;
+}
+
+.cols-titulo {
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--border-light);
+  background: #FBFCFE;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.cols-lista {
+  padding: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.cols-opcion {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.cols-opcion:hover { background: #EEF3FC; }
+.cols-opcion input { cursor: pointer; flex: none; }
+.cols-opcion span { min-width: 0; overflow-wrap: anywhere; }
+.cols-nombre { flex: 1; }
+
+/* La frase que dice que se puede arrastrar. Va escrita y no como icono
+   porque arrastrar no se descubre solo: quien no lo sabe no lo prueba. */
+.cols-pista {
+  padding: 5px 11px 0;
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+/* El agarre. Es el ancho de la fila el que arrastra —la fila entera lleva
+   draggable— pero el signo es lo que lo anuncia. */
+.cols-agarre {
+  flex: none;
+  color: #B6C4D8;
+  font-size: 13px;
+  line-height: 1;
+  cursor: grab;
+  user-select: none;
+}
+.cols-opcion:hover .cols-agarre { color: var(--navy-light, #173E8A); }
+
+/* Mientras viaja: se deja ver dónde estaba sin que el hueco se cierre de
+   golpe, que es lo que hace perder de vista lo que se está moviendo. */
+.cols-arrastrando {
+  opacity: .45;
+  background: #EEF3FC;
+  cursor: grabbing;
+}
+.cols-arrastrando .cols-agarre { cursor: grabbing; }
+
+/* La última encendida no se puede apagar: la casilla se vuelve a marcar sola
+   y este parpadeo es la explicación, que un aviso escrito sería demasiado
+   para algo que se entiende de una vez. */
+.cols-rebote { animation: cols-rebote .4s ease-out; }
+@keyframes cols-rebote {
+  0%, 100% { background: transparent; }
+  30%      { background: var(--miss-bg); }
+}
+
+.cols-pie {
+  display: flex;
+  gap: 6px;
+  padding: 7px 9px;
+  border-top: 1px solid var(--border-light);
+  background: #FBFCFE;
+}
+
+.cols-accion {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--navy);
+  cursor: pointer;
+}
+
+.cols-accion:hover { background: #EEF3FC; border-color: var(--navy-light); }

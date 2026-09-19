@@ -3,7 +3,7 @@
  * Detalle de una factura electrónica.
  *
  * Se llega acá desde cuatro sitios —el listado de comprobantes, el checklist
- * del pago semanal, una devolución y las notas de crédito—, así que el botón
+ * del pago, una devolución y las notas de crédito—, así que el botón
  * de arriba dice "Volver" y lleva a donde se venía, no a un listado fijo (ver
  * app/helpers/Retorno.php).
  *

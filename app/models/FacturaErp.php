@@ -29,8 +29,8 @@ class FacturaErp extends Model
 {
     // El reporte del ERP no dice a qué empresa pertenece, así que la sociedad
     // se pregunta al cargarlo y las filas la heredan de su carga. Acotar aquí
-    // es lo que impide que el cierre semanal de una sociedad empareje contra
-    // una factura del ERP de otra.
+    // es lo que impide que un pago de una sociedad empareje contra una
+    // factura del ERP de otra.
     use AlcanceSociedad;
 
     protected $table = 'facturas_erp';
@@ -58,6 +58,7 @@ class FacturaErp extends Model
         $this->execute("CREATE TABLE IF NOT EXISTS facturas_erp_cargas (
             `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
             `archivo_origen` VARCHAR(255) NOT NULL,
+            `sociedad_id` INT UNSIGNED NULL DEFAULT NULL,
             `impreso_en` DATETIME NULL DEFAULT NULL,
             `rango_texto` VARCHAR(255) NULL DEFAULT NULL,
             `filas_leidas` INT UNSIGNED NOT NULL DEFAULT 0,
@@ -72,7 +73,8 @@ class FacturaErp extends Model
             `usuario_id` INT UNSIGNED NULL DEFAULT NULL,
             `creado_en` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (`id`),
-            KEY `idx_creado` (`creado_en`)
+            KEY `idx_creado` (`creado_en`),
+            KEY `idx_facturas_erp_cargas_sociedad` (`sociedad_id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
         // Historial de problemas detectados en cada carga. Vive aparte de las
@@ -113,6 +115,7 @@ class FacturaErp extends Model
         // otra vez exactamente la misma incidencia.
         $this->execute("CREATE TABLE IF NOT EXISTS facturas_erp_descartes (
             `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `sociedad_id` INT UNSIGNED NULL DEFAULT NULL,
             `firma` VARCHAR(220) NOT NULL,
             `tipo` VARCHAR(30) NOT NULL DEFAULT '',
             `proveedor_codigo` VARCHAR(30) NOT NULL DEFAULT '',
@@ -122,13 +125,14 @@ class FacturaErp extends Model
             `usuario_id` INT UNSIGNED NULL DEFAULT NULL,
             `creado_en` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (`id`),
-            UNIQUE KEY `uk_firma` (`firma`),
+            UNIQUE KEY `uk_firma` (`sociedad_id`, `firma`),
             KEY `idx_tipo` (`tipo`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
         $this->execute("CREATE TABLE IF NOT EXISTS facturas_erp (
             `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
             `clave` VARCHAR(190) NOT NULL,
+            `sociedad_id` INT UNSIGNED NULL DEFAULT NULL,
             `proveedor_codigo` VARCHAR(30) NOT NULL,
             `proveedor_nombre` VARCHAR(255) NOT NULL,
             `sucursal` VARCHAR(120) NOT NULL DEFAULT '',
@@ -146,10 +150,9 @@ class FacturaErp extends Model
             `carga_id` INT UNSIGNED NULL DEFAULT NULL,
             `carga_cambio_id` INT UNSIGNED NULL DEFAULT NULL,
             `saldo_cambiado_en` DATETIME NULL DEFAULT NULL,
-            `estado` ENUM('pendiente','asignada_semana') NOT NULL DEFAULT 'pendiente',
-            `semana_id` INT UNSIGNED NULL DEFAULT NULL,
-            `porpagar_listado_id` INT UNSIGNED NULL DEFAULT NULL,
-            `asignada_semana_en` DATETIME NULL DEFAULT NULL,
+            `estado` ENUM('pendiente','asignada_pago') NOT NULL DEFAULT 'pendiente',
+            `pago_id` INT UNSIGNED NULL DEFAULT NULL,
+            `asignada_pago_en` DATETIME NULL DEFAULT NULL,
             `factura_xml_id` INT UNSIGNED NULL DEFAULT NULL,
             `estado_respaldo` ENUM('sin_respaldo','respaldada','con_diferencia') NOT NULL DEFAULT 'sin_respaldo',
             `diferencia` DECIMAL(18,2) NULL DEFAULT NULL,
@@ -158,17 +161,23 @@ class FacturaErp extends Model
             `match_manual` TINYINT(1) NOT NULL DEFAULT 0,
             `creado_en` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (`id`),
-            UNIQUE KEY `uk_clave` (`clave`),
+            /*
+             * La clave es proveedor|documento|fecha: identifica una factura
+             * DENTRO de una empresa, no en toda la base. Con la unicidad
+             * puesta solo sobre ella, cargar el reporte de una segunda
+             * sociedad que trae una factura ya existente en la primera
+             * reventaba el INSERT y tumbaba la carga entera.
+             */
+            UNIQUE KEY `uk_clave` (`sociedad_id`, `clave`),
             KEY `idx_proveedor` (`proveedor_codigo`),
             KEY `idx_saldo` (`saldo`),
             KEY `idx_numero_corto` (`numero_corto`),
             KEY `idx_documento` (`documento`),
             KEY `idx_sucursal` (`sucursal`),
             KEY `idx_estado` (`estado`),
-            KEY `idx_semana` (`semana_id`),
-            KEY `idx_porpagar_listado` (`porpagar_listado_id`),
+            KEY `idx_pago` (`pago_id`),
             KEY `idx_factura_xml` (`factura_xml_id`),
-            KEY `idx_estado_respaldo` (`porpagar_listado_id`, `estado_respaldo`)
+            KEY `idx_estado_respaldo` (`pago_id`, `estado_respaldo`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
         $this->agregarColumnasFaltantes();
@@ -183,6 +192,14 @@ class FacturaErp extends Model
         $pendientes = [
             'facturas_erp_cargas' => [
                 'incidencias' => "ADD COLUMN `incidencias` INT UNSIGNED NOT NULL DEFAULT 0 AFTER `cuadre_ok`",
+                // Las escribe importar() desde que hay más de una empresa; sin
+                // declararlas aquí, una instalación nueva fallaba al cargar el
+                // primer reporte y solo la migración manual la salvaba.
+                'sociedad_id' => "ADD COLUMN `sociedad_id` INT UNSIGNED NULL DEFAULT NULL AFTER `archivo_origen`,
+                                  ADD KEY `idx_facturas_erp_cargas_sociedad` (`sociedad_id`)",
+            ],
+            'facturas_erp_descartes' => [
+                'sociedad_id' => "ADD COLUMN `sociedad_id` INT UNSIGNED NULL DEFAULT NULL AFTER `id`",
             ],
             'facturas_erp_incidencias' => [
                 'firma' => "ADD COLUMN `firma` VARCHAR(220) NOT NULL DEFAULT '' AFTER `detalle`, ADD KEY `idx_firma` (`firma`)",
@@ -192,25 +209,27 @@ class FacturaErp extends Model
                 'motivo' => "ADD COLUMN `motivo` VARCHAR(255) NULL DEFAULT NULL AFTER `descartada_por`",
             ],
             'facturas_erp' => [
-                'estado' => "ADD COLUMN `estado` ENUM('pendiente','asignada_semana') NOT NULL DEFAULT 'pendiente' AFTER `saldo_cambiado_en`, ADD KEY `idx_estado` (`estado`)",
-                'semana_id' => "ADD COLUMN `semana_id` INT UNSIGNED NULL DEFAULT NULL AFTER `estado`, ADD KEY `idx_semana` (`semana_id`)",
-                'porpagar_listado_id' => "ADD COLUMN `porpagar_listado_id` INT UNSIGNED NULL DEFAULT NULL AFTER `semana_id`, ADD KEY `idx_porpagar_listado` (`porpagar_listado_id`)",
-                'asignada_semana_en' => "ADD COLUMN `asignada_semana_en` DATETIME NULL DEFAULT NULL AFTER `porpagar_listado_id`",
+                'estado' => "ADD COLUMN `estado` ENUM('pendiente','asignada_pago') NOT NULL DEFAULT 'pendiente' AFTER `saldo_cambiado_en`, ADD KEY `idx_estado` (`estado`)",
+                'pago_id' => "ADD COLUMN `pago_id` INT UNSIGNED NULL DEFAULT NULL AFTER `estado`, ADD KEY `idx_pago` (`pago_id`)",
+                'asignada_pago_en' => "ADD COLUMN `asignada_pago_en` DATETIME NULL DEFAULT NULL AFTER `pago_id`",
                 // Foto del saldo al entrar al pago. El saldo del ERP baja a
                 // cero cuando la factura se paga, y volver a cargar el reporte
-                // después de pagar dejaría la semana entera en ₡0 sin que
+                // después de pagar dejaría el pago entero en ₡0 sin que
                 // nadie la hubiera tocado. Esto no es copiar el archivo: es el
                 // saldo del propio ERP en el momento en que se decidió pagarlo.
-                'saldo_pago' => "ADD COLUMN `saldo_pago` DECIMAL(18,2) NULL DEFAULT NULL AFTER `asignada_semana_en`",
-                // El respaldo electrónico vive acá desde que el pago semanal
+                'saldo_pago' => "ADD COLUMN `saldo_pago` DECIMAL(18,2) NULL DEFAULT NULL AFTER `asignada_pago_en`",
+                // El respaldo electrónico vive acá desde que el pago
                 // dejó de copiar las facturas a una tabla propia: la factura
                 // del ERP es la fila, y el XML que la respalda es un dato suyo.
-                'factura_xml_id' => "ADD COLUMN `factura_xml_id` INT UNSIGNED NULL DEFAULT NULL AFTER `asignada_semana_en`, ADD KEY `idx_factura_xml` (`factura_xml_id`)",
-                'estado_respaldo' => "ADD COLUMN `estado_respaldo` ENUM('sin_respaldo','respaldada','con_diferencia') NOT NULL DEFAULT 'sin_respaldo' AFTER `factura_xml_id`, ADD KEY `idx_estado_respaldo` (`porpagar_listado_id`, `estado_respaldo`)",
+                'factura_xml_id' => "ADD COLUMN `factura_xml_id` INT UNSIGNED NULL DEFAULT NULL AFTER `asignada_pago_en`, ADD KEY `idx_factura_xml` (`factura_xml_id`)",
+                'estado_respaldo' => "ADD COLUMN `estado_respaldo` ENUM('sin_respaldo','respaldada','con_diferencia') NOT NULL DEFAULT 'sin_respaldo' AFTER `factura_xml_id`, ADD KEY `idx_estado_respaldo` (`pago_id`, `estado_respaldo`)",
                 'diferencia' => "ADD COLUMN `diferencia` DECIMAL(18,2) NULL DEFAULT NULL AFTER `estado_respaldo`",
                 'score_numero' => "ADD COLUMN `score_numero` DECIMAL(5,1) NULL DEFAULT NULL AFTER `diferencia`",
                 'score_proveedor' => "ADD COLUMN `score_proveedor` DECIMAL(5,1) NULL DEFAULT NULL AFTER `score_numero`",
                 'match_manual' => "ADD COLUMN `match_manual` TINYINT(1) NOT NULL DEFAULT 0 AFTER `score_proveedor`",
+                'sociedad_id' => "ADD COLUMN `sociedad_id` INT UNSIGNED NULL DEFAULT NULL AFTER `clave`,
+                                  ADD KEY `idx_facturas_erp_sociedad` (`sociedad_id`),
+                                  ADD KEY `idx_facturas_erp_sociedad_doc` (`sociedad_id`, `documento`)",
             ],
         ];
 
@@ -224,6 +243,49 @@ class FacturaErp extends Model
                 if ($existe === 0) {
                     $this->execute("ALTER TABLE `{$tabla}` {$sql}");
                 }
+            }
+        }
+
+        $this->acotarUnicosPorSociedad();
+    }
+
+    /**
+     * Las dos unicidades que se escribieron cuando había una sola empresa.
+     *
+     * `clave` (proveedor|documento|fecha) y `firma` de un descarte identifican
+     * algo DENTRO de una empresa. Mientras la unicidad no incluyera la
+     * sociedad, cargar el reporte de una segunda empresa que trajera una
+     * factura ya existente en la primera hacía fallar el INSERT y tumbaba la
+     * carga completa, y un descarte hecho en una empresa silenciaba la misma
+     * incidencia en la otra.
+     *
+     * Se rehacen solo si siguen siendo de una columna: pasar dos veces por
+     * aquí no cuesta nada más que la consulta a information_schema.
+     */
+    private function acotarUnicosPorSociedad()
+    {
+        $indices = [
+            'facturas_erp' => ['uk_clave', '(`sociedad_id`, `clave`)'],
+            'facturas_erp_descartes' => ['uk_firma', '(`sociedad_id`, `firma`)'],
+        ];
+
+        foreach ($indices as $tabla => [$indice, $columnas]) {
+            $partes = (int) $this->fetchColumn(
+                "SELECT COUNT(*) FROM information_schema.STATISTICS
+                  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?",
+                [$tabla, $indice]
+            );
+            if ($partes !== 1) {
+                continue;  // no existe todavía, o ya está acotado
+            }
+            try {
+                $this->execute(
+                    "ALTER TABLE `{$tabla}` DROP INDEX `{$indice}`,
+                     ADD UNIQUE KEY `{$indice}` {$columnas}"
+                );
+            } catch (Throwable $e) {
+                // Sin permisos de DDL queda para la migración manual; el
+                // módulo sigue funcionando con una sola empresa.
             }
         }
     }
@@ -332,7 +394,7 @@ class FacturaErp extends Model
         try {
             $this->insertarNuevas($nuevas, $cargaId, $sociedadId);
             $this->actualizarCambiadas($cambios, $cargaId);
-            $this->registrarIncidencias($incidencias, $cargaId);
+            $this->registrarIncidencias($incidencias, $cargaId, $sociedadId);
             $this->execute(
                 "UPDATE facturas_erp_cargas
                     SET insertadas = ?, actualizadas = ?, sin_cambio = ?, incidencias = ?
@@ -471,10 +533,10 @@ class FacturaErp extends Model
      * antes entran directamente marcadas como descartadas: quedan en el
      * historial (la carga las detectó) pero no vuelven a molestar.
      */
-    private function registrarIncidencias(array $incidencias, $cargaId)
+    private function registrarIncidencias(array $incidencias, $cargaId, $sociedadId = 0)
     {
         require_once __DIR__ . '/../helpers/FacturasErpCsvParser.php';
-        $descartadas = $this->firmasDescartadas();
+        $descartadas = $this->firmasDescartadas($sociedadId);
 
         foreach (array_chunk($incidencias, self::LOTE_INSERT) as $lote) {
             $marcas = [];
@@ -514,11 +576,25 @@ class FacturaErp extends Model
         }
     }
 
-    /** firma => motivo, de todo lo descartado permanentemente. */
-    private function firmasDescartadas()
+    /**
+     * firma => motivo, de lo descartado permanentemente EN ESTA EMPRESA.
+     *
+     * Sin acotar, un descarte hecho en una empresa entraba callando la misma
+     * incidencia en la otra: la firma es proveedor+documento y se repite entre
+     * empresas del mismo grupo, que le compran a los mismos proveedores.
+     */
+    private function firmasDescartadas($sociedadId = 0)
     {
+        $sociedadId = (int) $sociedadId > 0 ? (int) $sociedadId : $this->sociedadId();
+        $params = [];
+        $sql = 'SELECT firma, motivo FROM facturas_erp_descartes WHERE 1=1';
+        if ($sociedadId > 0) {
+            $sql .= ' AND sociedad_id = ?';
+            $params[] = $sociedadId;
+        }
+
         $out = [];
-        foreach ($this->fetchAll("SELECT firma, motivo FROM facturas_erp_descartes") as $f) {
+        foreach ($this->fetchAll($sql, $params) as $f) {
             $out[$f['firma']] = $f['motivo'];
         }
         return $out;
@@ -716,7 +792,7 @@ class FacturaErp extends Model
     }
 
     // ------------------------------------------------------------------
-    // Pago semanal: la factura del ERP ES la línea del pago
+    // Pago: la factura del ERP ES la línea del pago
     // ------------------------------------------------------------------
 
     /**
@@ -728,7 +804,7 @@ class FacturaErp extends Model
     {
         $params = [];
         $sql = "SELECT id, documento, numero_corto, proveedor_nombre, fecha_emision,
-                       monto, saldo, semana_id, porpagar_listado_id
+                       monto, saldo, pago_id
                   FROM facturas_erp
                  WHERE tipo IN ('F','FE','FACT')"
              . $this->condicionSociedad('', $params);
@@ -736,14 +812,14 @@ class FacturaErp extends Model
     }
 
     /**
-     * Marca facturas del ERP como el pago de una semana.
+     * Marca facturas del ERP como el pago de un pago.
      *
      * Es lo único que hace "cargar un listado" desde que el pago dejó de tener
      * facturas propias: el archivo dice cuáles, y acá quedan marcadas. No se
      * copia ni un dato del archivo — si el saldo del archivo no coincide con
      * el del ERP, manda el ERP y la carga lo reporta.
      */
-    public function asignarAPago(array $ids, $semanaId, $listadoId)
+    public function asignarAPago(array $ids, $pagoId)
     {
         $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
         if (!$ids) {
@@ -753,11 +829,11 @@ class FacturaErp extends Model
         foreach (array_chunk($ids, self::LOTE_INSERT) as $tanda) {
             $asignadas += (int) $this->execute(
                 "UPDATE facturas_erp
-                    SET estado = 'asignada_semana', semana_id = ?, porpagar_listado_id = ?,
-                        asignada_semana_en = NOW(),
+                    SET estado = 'asignada_pago', pago_id = ?,
+                        asignada_pago_en = NOW(),
                         saldo_pago = COALESCE(saldo_pago, saldo)
                   WHERE id IN (" . implode(',', array_fill(0, count($tanda), '?')) . ')',
-                array_merge([(int) $semanaId, (int) $listadoId], $tanda)
+                array_merge([(int) $pagoId], $tanda)
             );
         }
         return $asignadas;
@@ -768,13 +844,13 @@ class FacturaErp extends Model
      *
      * `saldo_pago` es el saldo del momento en que la factura entró a un pago,
      * y manda mientras ese pago exista —si no, pagarla la borraría de la cola
-     * aunque su respaldo siguiera faltando—. Cuando se mueve a otra semana el
-     * congelado que traía es el de la semana que la soltó, y puede tener
-     * semanas de viejo: se descongela para que asignarAPago() vuelva a
+     * aunque su respaldo siguiera faltando—. Cuando se mueve a otro pago el
+     * congelado que traía es el del pago que la soltó, y puede tener
+     * pagos de viejo: se descongela para que asignarAPago() vuelva a
      * congelar el saldo de hoy, que es contra el que se está pagando ahora.
      *
      * Va aparte de asignarAPago() a propósito: dentro habría que decidir a
-     * partir del `porpagar_listado_id` que ese mismo UPDATE está pisando, y
+     * partir del `pago_id` que ese mismo UPDATE está pisando, y
      * eso depende del orden de las asignaciones del SET.
      */
     public function descongelarSaldoPago(array $ids)
@@ -801,7 +877,7 @@ class FacturaErp extends Model
      * dentro del pago y fuera de él no significa nada. El XML no se toca —
      * sigue existiendo y vuelve a estar disponible—.
      */
-    public function quitarDePago(array $ids, $listadoId)
+    public function quitarDePago(array $ids, $pagoId)
     {
         $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
         if (!$ids) {
@@ -811,23 +887,23 @@ class FacturaErp extends Model
         foreach (array_chunk($ids, self::LOTE_INSERT) as $tanda) {
             $quitadas += (int) $this->execute(
                 "UPDATE facturas_erp
-                    SET estado = 'pendiente', semana_id = NULL, porpagar_listado_id = NULL,
-                        asignada_semana_en = NULL, saldo_pago = NULL, factura_xml_id = NULL,
+                    SET estado = 'pendiente', pago_id = NULL,
+                        asignada_pago_en = NULL, saldo_pago = NULL, factura_xml_id = NULL,
                         estado_respaldo = 'sin_respaldo', diferencia = NULL,
                         score_numero = NULL, score_proveedor = NULL, match_manual = 0
-                  WHERE porpagar_listado_id = ?
+                  WHERE pago_id = ?
                     AND id IN (" . implode(',', array_fill(0, count($tanda), '?')) . ')',
-                array_merge([(int) $listadoId], $tanda)
+                array_merge([(int) $pagoId], $tanda)
             );
         }
         return $quitadas;
     }
 
     /** Las facturas del pago con el XML que las respalda: el checklist. */
-    public function getFacturasPago($listadoId, array $filtros = [])
+    public function getFacturasPago($pagoId, array $filtros = [])
     {
-        $where = ['e.porpagar_listado_id = ?'];
-        $params = [(int) $listadoId];
+        $where = ['e.pago_id = ?'];
+        $params = [(int) $pagoId];
 
         $q = trim((string) ($filtros['q'] ?? ''));
         if ($q !== '') {
@@ -905,6 +981,7 @@ class FacturaErp extends Model
                        x.consecutivo_completo AS xml_consecutivo,
                        x.total AS xml_total, x.fecha_emision AS xml_fecha,
                        x.ruta_xml, x.ruta_pdf, x.estado_pdf,
+                       x.sociedad_id,   -- de qué sociedad es el documento: sin eso no se sabe en qué almacén buscarlo
                        " . EstadoArchivo::columnaRecuperable('x.') . " AS recuperable,
                        p.razon_social AS xml_proveedor
                   FROM facturas_erp e
@@ -917,7 +994,7 @@ class FacturaErp extends Model
     }
 
     /** Lo mínimo para emparejar: sin las columnas pesadas ni los JOIN. */
-    public function getFacturasPagoParaMatching($listadoId)
+    public function getFacturasPagoParaMatching($pagoId)
     {
         // `proveedor_codigo` viaja porque es la llave de la guarda de cédula:
         // con él, el emparejador puede preguntar si el emisor del comprobante
@@ -927,21 +1004,21 @@ class FacturaErp extends Model
                     COALESCE(saldo_pago, saldo) AS saldo_pago,
                     factura_xml_id, estado_respaldo AS estado, diferencia, match_manual
                FROM facturas_erp
-              WHERE porpagar_listado_id = ?
+              WHERE pago_id = ?
               ORDER BY id ASC",
-            [(int) $listadoId]
+            [(int) $pagoId]
         ) ?: [];
     }
 
     public function getFacturaPago($id)
     {
+        $params = [(int) $id];
         $fila = $this->fetchOne(
-            "SELECT e.*, e.estado_respaldo AS estado_respaldo,
-                    l.semana_id AS listado_semana_id
+            'SELECT e.*, e.estado_respaldo AS estado_respaldo
                FROM facturas_erp e
-               LEFT JOIN porpagar_listados l ON l.id = e.porpagar_listado_id
-              WHERE e.id = ? LIMIT 1",
-            [(int) $id]
+              WHERE e.id = ?'
+            . $this->condicionSociedad('e.', $params) . ' LIMIT 1',
+            $params
         );
         return $fila ?: null;
     }
@@ -985,14 +1062,14 @@ class FacturaErp extends Model
         );
     }
 
-    public function resumenRespaldoPago($listadoId)
+    public function resumenRespaldoPago($pagoId)
     {
         $resumen = [];
         $filas = $this->fetchAll(
             "SELECT estado_respaldo AS estado, COUNT(*) AS n,
                     COALESCE(SUM(COALESCE(saldo_pago, saldo)), 0) AS monto
-               FROM facturas_erp WHERE porpagar_listado_id = ? GROUP BY estado_respaldo",
-            [(int) $listadoId]
+               FROM facturas_erp WHERE pago_id = ? GROUP BY estado_respaldo",
+            [(int) $pagoId]
         ) ?: [];
         foreach ($filas as $fila) {
             $resumen[$fila['estado']] = (int) $fila['n'];
@@ -1007,7 +1084,7 @@ class FacturaErp extends Model
      * Es la mitad que le faltaba a `engancharXml`. Aquella resuelve el XML que
      * llega y busca su factura; esta alimenta el caso contrario —la factura que
      * llega y busca el XML que ya estaba—, que era el que dejaba el reporte del
-     * ERP entero sin cruzar hasta que alguien armara un pago semanal.
+     * ERP entero sin cruzar hasta que alguien armara un pago.
      *
      * No se acota a una carga ni a un pago a propósito: `factura_xml_id` es de
      * la fila, no del pago, así que cualquier factura sin comprobante es
@@ -1025,7 +1102,7 @@ class FacturaErp extends Model
         $sql = "SELECT id, documento, numero_corto, proveedor_codigo, proveedor_nombre,
                        monto, saldo, COALESCE(saldo_pago, saldo) AS saldo_pago,
                        factura_xml_id, estado_respaldo AS estado, diferencia,
-                       match_manual, porpagar_listado_id
+                       match_manual, pago_id
                   FROM facturas_erp
                  WHERE id > ?
                    AND factura_xml_id IS NULL
@@ -1058,12 +1135,12 @@ class FacturaErp extends Model
     /**
      * Engancha un comprobante recién importado con su factura del ERP.
      *
-     * Es la pieza por la que el correo dejó de pedir semana. Antes, quien
-     * importaba un XML tenía que saber a qué semana pertenecía y decirlo; si se
+     * Es la pieza por la que el correo dejó de pedir pago. Antes, quien
+     * importaba un XML tenía que saber a qué pago pertenecía y decirlo; si se
      * equivocaba o lo dejaba en blanco, la factura quedaba fuera del pago y
      * alguien tenía que ir a buscarla. Ahora el XML busca su fila en el ERP por
      * el consecutivo —una igualdad, no un parecido—, y si esa fila ya está en
-     * un pago semanal, el comprobante hereda la semana y el pago se pone al día
+     * un pago, el comprobante hereda el pago y el pago se pone al día
      * solo. No hay nada que elegir porque no hay nada que decidir.
      *
      * Devuelve qué pasó, para que quien importe lo pueda contar.
@@ -1123,13 +1200,13 @@ class FacturaErp extends Model
             ]
         );
 
-        // Si la factura ya estaba en un pago, el comprobante hereda su semana:
+        // Si la factura ya estaba en un pago, el comprobante hereda su pago:
         // de ahí la lee el organizador para llevarlo a la carpeta del pago.
-        $semanaId = (int) ($erp['semana_id'] ?? 0);
-        if ($semanaId > 0) {
+        $pagoId = (int) ($erp['pago_id'] ?? 0);
+        if ($pagoId > 0) {
             $this->execute(
-                'UPDATE facturas_xml SET semana_id = ? WHERE id = ? AND (semana_id IS NULL OR semana_id <> ?)',
-                [$semanaId, $xmlId, $semanaId]
+                'UPDATE facturas_xml SET pago_id = ? WHERE id = ? AND (pago_id IS NULL OR pago_id <> ?)',
+                [$pagoId, $xmlId, $pagoId]
             );
         }
 
@@ -1138,57 +1215,52 @@ class FacturaErp extends Model
             'factura_erp_id' => (int) $erp['id'],
             'estado_respaldo' => $estado,
             'diferencia' => $diferencia,
-            'semana_id' => $semanaId ?: null,
-            'listado_id' => (int) ($erp['porpagar_listado_id'] ?? 0) ?: null,
-            'en_pago' => !empty($erp['porpagar_listado_id']),
+            'pago_id' => $pagoId ?: null,
+            'listado_id' => (int) ($erp['pago_id'] ?? 0) ?: null,
+            'en_pago' => !empty($erp['pago_id']),
         ];
     }
 
     /**
-     * XML de la semana del pago que no respaldan ninguna de sus facturas.
+     * XML del pago del pago que no respaldan ninguna de sus facturas.
      *
      * Alimenta el botón "Sin coincidencia": son comprobantes que se importaron
      * y quedaron sueltos, casi siempre porque el número del ERP y el del XML no
      * se cruzaron. Se ofrecen para vincular a mano.
      */
-    public function getXmlSinCoincidencia($listadoId)
+    public function getXmlSinCoincidencia($pagoId)
     {
-        $params = [(int) $listadoId, (int) $listadoId];
+        $params = [(int) $pagoId, (int) $pagoId];
         $sql = "SELECT x.id, x.numero_factura_asistente, x.consecutivo_completo, x.total,
                        x.fecha_emision, p.razon_social AS proveedor_nombre
                   FROM facturas_xml x
                   LEFT JOIN proveedores p ON p.id = x.proveedor_id
-                  JOIN porpagar_listados l ON l.id = ?
                  WHERE (x.tipo_documento IS NULL OR x.tipo_documento = 'FE')
-                   AND x.semana_id = l.semana_id
+                   AND x.pago_id = ?
                    AND NOT EXISTS (SELECT 1 FROM facturas_erp e
-                                    WHERE e.porpagar_listado_id = ?
+                                    WHERE e.pago_id = ?
                                       AND e.factura_xml_id = x.id)"
              . $this->condicionSociedad('x.', $params) . "
                  ORDER BY p.razon_social ASC, x.id ASC";
         return $this->fetchAll($sql, $params) ?: [];
     }
 
-    /** Pagos con facturas todavía sin respaldo, los más recientes. */
+    /**
+     * Pagos con facturas todavía sin respaldo, los más recientes.
+     *
+     * Antes esto salía de recorrer la tabla de listados preguntando por cada
+     * uno si le faltaba algo. Ahora la pregunta se le hace a las facturas
+     * directamente, que son las que lo saben: el pago es una columna suya.
+     */
     public function idsPagosConFaltantes($limite = 3)
     {
         $filas = $this->fetchAll(
-            "SELECT l.id
-               FROM porpagar_listados l
-              WHERE EXISTS (SELECT 1 FROM facturas_erp e
-                             WHERE e.porpagar_listado_id = l.id
-                               AND e.estado_respaldo = 'sin_respaldo')
-              ORDER BY l.id DESC
+            "SELECT DISTINCT pago_id AS id
+               FROM facturas_erp
+              WHERE pago_id IS NOT NULL
+                AND estado_respaldo = 'sin_respaldo'
+              ORDER BY pago_id DESC
               LIMIT " . max(1, (int) $limite)
-        ) ?: [];
-        return array_values(array_map('intval', array_column($filas, 'id')));
-    }
-
-    public function idsPagosDeSemana($semanaId)
-    {
-        $filas = $this->fetchAll(
-            "SELECT id FROM porpagar_listados WHERE semana_id = ? ORDER BY id DESC",
-            [(int) $semanaId]
         ) ?: [];
         return array_values(array_map('intval', array_column($filas, 'id')));
     }
@@ -1197,51 +1269,48 @@ class FacturaErp extends Model
     public function pagoDeFactura($erpId)
     {
         $fila = $this->fetchOne(
-            "SELECT l.id, l.semana_id
-               FROM facturas_erp e
-               JOIN porpagar_listados l ON l.id = e.porpagar_listado_id
-              WHERE e.id = ? LIMIT 1",
+            "SELECT pago_id AS id
+               FROM facturas_erp
+              WHERE id = ? AND pago_id IS NOT NULL LIMIT 1",
             [(int) $erpId]
         );
         return $fila ?: null;
     }
 
-    public function contarPago($listadoId)
+    public function contarPago($pagoId)
     {
         return (int) $this->fetchColumn(
-            'SELECT COUNT(*) FROM facturas_erp WHERE porpagar_listado_id = ?',
-            [(int) $listadoId]
+            'SELECT COUNT(*) FROM facturas_erp WHERE pago_id = ?',
+            [(int) $pagoId]
         );
     }
 
     /**
-     * Pasa la semana del pago a los XML que lo respaldan.
+     * Pasa el pago del pago a los XML que lo respaldan.
      *
-     * La semana del comprobante dejó de ser algo que alguien elige al
+     * El pago del comprobante dejó de ser algo que alguien elige al
      * importarlo: se deduce del pago al que pertenece la factura del ERP que
      * respalda. Sigue viviendo en facturas_xml porque de ahí la lee el
      * organizador para saber a qué carpeta de pago va el par XML/PDF.
      */
-    public function sincronizarSemanaXml($listadoId)
+    public function sincronizarPagoXml($pagoId)
     {
         return $this->execute(
             "UPDATE facturas_xml x
                JOIN facturas_erp e ON e.factura_xml_id = x.id
-               JOIN porpagar_listados l ON l.id = e.porpagar_listado_id
-                SET x.semana_id = l.semana_id
-              WHERE e.porpagar_listado_id = ?
-                AND l.semana_id IS NOT NULL
-                AND (x.semana_id IS NULL OR x.semana_id <> l.semana_id)",
-            [(int) $listadoId]
+                SET x.pago_id = e.pago_id
+              WHERE e.pago_id = ?
+                AND (x.pago_id IS NULL OR x.pago_id <> e.pago_id)",
+            [(int) $pagoId]
         );
     }
 
     /**
-     * Suelta la semana de los XML que ya no respaldan nada de este pago.
-     * Es la mitad que falta de sincronizarSemanaXml: sin ella, una factura
-     * quitada del pago se quedaría en la carpeta semanal para siempre.
+     * Suelta el pago de los XML que ya no respaldan nada de este pago.
+     * Es la mitad que falta de sincronizarPagoXml: sin ella, una factura
+     * quitada del pago se quedaría en su carpeta para siempre.
      */
-    public function soltarSemanaXml(array $xmlIds)
+    public function soltarPagoXml(array $xmlIds)
     {
         $xmlIds = array_values(array_unique(array_filter(array_map('intval', $xmlIds))));
         if (!$xmlIds) {
@@ -1252,11 +1321,11 @@ class FacturaErp extends Model
             $marcas = implode(',', array_fill(0, count($tanda), '?'));
             $sueltas += (int) $this->execute(
                 "UPDATE facturas_xml x
-                    SET x.semana_id = NULL
+                    SET x.pago_id = NULL
                   WHERE x.id IN ({$marcas})
                     AND NOT EXISTS (SELECT 1 FROM facturas_erp e
                                      WHERE e.factura_xml_id = x.id
-                                       AND e.porpagar_listado_id IS NOT NULL)",
+                                       AND e.pago_id IS NOT NULL)",
                 $tanda
             );
         }
@@ -1264,12 +1333,12 @@ class FacturaErp extends Model
     }
 
     /** IDs de los XML que respaldan este pago, para reordenar sus archivos. */
-    public function idsXmlDePago($listadoId)
+    public function idsXmlDePago($pagoId)
     {
         $filas = $this->fetchAll(
             'SELECT DISTINCT factura_xml_id AS id FROM facturas_erp
-              WHERE porpagar_listado_id = ? AND factura_xml_id IS NOT NULL',
-            [(int) $listadoId]
+              WHERE pago_id = ? AND factura_xml_id IS NOT NULL',
+            [(int) $pagoId]
         ) ?: [];
         return array_values(array_map('intval', array_column($filas, 'id')));
     }
@@ -1446,9 +1515,9 @@ class FacturaErp extends Model
     /**
      * ¿Qué factura del ERP corresponde a un XML recién importado?
      *
-     * Es la vía por la que el correo dejó de pedir semana: se busca la factura
+     * Es la vía por la que el correo dejó de pedir pago: se busca la factura
      * del ERP por el consecutivo del XML —o por su número corto— y, si esa
-     * factura ya está en un pago semanal, el XML hereda la semana y el pago se
+     * factura ya está en un pago, el XML hereda el pago y el pago se
      * actualiza solo. Se devuelven las candidatas; quien llama decide con el
      * monto, que es lo único que puede separar dos facturas con el mismo
      * número de emisores distintos.
@@ -1483,7 +1552,7 @@ class FacturaErp extends Model
 
         $sql = "SELECT e.id, e.documento, e.numero_corto, e.proveedor_codigo, e.proveedor_nombre,
                        e.monto, e.saldo,
-                       e.semana_id, e.porpagar_listado_id, e.factura_xml_id
+                       e.pago_id, e.pago_id, e.factura_xml_id
                   FROM facturas_erp e
                  WHERE e.tipo IN ('F','FE','FACT') AND (" . implode(' OR ', $condiciones) . ')'
              . $this->condicionSociedad('e.', $params) . '
@@ -1493,9 +1562,9 @@ class FacturaErp extends Model
 
 
     /**
-     * De las dos llaves que puede traer un número del pago semanal, cuál es.
+     * De las dos llaves que puede traer un número del pago, cuál es.
      *
-     * El listado del pago semanal escribe el documento de dos formas según de
+     * El listado del pago escribe el documento de dos formas según de
      * dónde lo exportaron:
      *
      *   FACT-00200001010000045587-1377   consecutivo electrónico + correlativo
@@ -1550,10 +1619,10 @@ class FacturaErp extends Model
     /**
      * Cuáles de esos números NO están en ningún listado de facturas del ERP.
      *
-     * La regla del negocio es que el pago semanal no inventa facturas: paga
+     * La regla del negocio es que el pago no inventa facturas: paga
      * las que el ERP ya reportó. Se comprueba al cargar y no al cerrar —donde
      * ya existía— porque enterarse al final significa haber emparejado una
-     * semana entera antes de descubrir que faltaba cargar el reporte.
+     * pago entera antes de descubrir que faltaba cargar el reporte.
      *
      * Una sola consulta y comparación en memoria: son miles de líneas contra
      * miles de facturas y la base está a 100 ms por consulta.
@@ -1587,7 +1656,7 @@ class FacturaErp extends Model
             // documento no mide veinte dígitos, y así son uno de cada cuatro
             // renglones del ERP (números cortos de proveedor: 1002, 7606,
             // 0000666409). Leyéndola quedaban fuera del índice y el pago
-            // semanal los denunciaba como ausentes estando cargados.
+            // los denunciaba como ausentes estando cargados.
             $corto = trim((string) $fila['numero_corto']);
             if ($corto === '') {
                 $corto = $doc;
@@ -1631,7 +1700,7 @@ class FacturaErp extends Model
 
         return $this->fetchAll(
             "SELECT facturas_erp.*,
-                    (SELECT s.nombre FROM semanas s WHERE s.id = facturas_erp.semana_id) AS semana_nombre
+                    (SELECT s.nombre FROM pagos s WHERE s.id = facturas_erp.pago_id) AS pago_nombre
                FROM facturas_erp {$where}
               ORDER BY saldo DESC, proveedor_nombre ASC, fecha_emision ASC
               LIMIT {$limite} OFFSET {$offset}",
@@ -1645,7 +1714,7 @@ class FacturaErp extends Model
         $fila = $this->fetchOne(
             "SELECT COUNT(*) AS facturas,
                     SUM(CASE WHEN saldo > 0 THEN 1 ELSE 0 END) AS con_saldo,
-                    SUM(CASE WHEN estado = 'asignada_semana' THEN 1 ELSE 0 END) AS asignadas_semana,
+                    SUM(CASE WHEN estado = 'asignada_pago' THEN 1 ELSE 0 END) AS asignadas_pago,
                     COALESCE(SUM(monto), 0) AS monto,
                     COALESCE(SUM(saldo), 0) AS saldo,
                     COUNT(DISTINCT proveedor_codigo) AS proveedores
@@ -1655,7 +1724,7 @@ class FacturaErp extends Model
         return [
             'facturas' => (int) ($fila['facturas'] ?? 0),
             'con_saldo' => (int) ($fila['con_saldo'] ?? 0),
-            'asignadas_semana' => (int) ($fila['asignadas_semana'] ?? 0),
+            'asignadas_pago' => (int) ($fila['asignadas_pago'] ?? 0),
             'monto' => (float) ($fila['monto'] ?? 0),
             'saldo' => (float) ($fila['saldo'] ?? 0),
             'proveedores' => (int) ($fila['proveedores'] ?? 0),
@@ -1692,7 +1761,7 @@ class FacturaErp extends Model
             $cond[] = 'origen = ?';
             $params[] = (string) $f['origen'];
         }
-        if (!empty($f['estado']) && in_array($f['estado'], ['pendiente', 'asignada_semana'], true)) {
+        if (!empty($f['estado']) && in_array($f['estado'], ['pendiente', 'asignada_pago'], true)) {
             $cond[] = 'estado = ?';
             $params[] = (string) $f['estado'];
         }
@@ -1732,12 +1801,20 @@ class FacturaErp extends Model
      * y lo agrupa el catálogo, porque un proveedor puede tener más de un
      * código y este listado no es el único que lo filtra.
      */
+    /**
+     * Lo que ofrece el desplegable de sucursales. Acotado como el listado que
+     * filtra: sin esto, la empresa nueva abría el módulo vacío pero con las
+     * sucursales de la otra en el selector.
+     */
     public function opcionesFiltro()
     {
+        $params = [];
         return [
             'sucursales' => $this->fetchAll(
-                "SELECT sucursal, COUNT(*) AS n FROM facturas_erp
-                  GROUP BY sucursal ORDER BY sucursal ASC"
+                'SELECT sucursal, COUNT(*) AS n FROM facturas_erp WHERE 1=1'
+                . $this->condicionSociedad('', $params)
+                . ' GROUP BY sucursal ORDER BY sucursal ASC',
+                $params
             ),
         ];
     }
@@ -1763,8 +1840,8 @@ class FacturaErp extends Model
         ) ?: [];
     }
 
-    /** Proveedores y sucursales de un pago semanal, para su checklist. */
-    public function dimensionesPago($listadoId)
+    /** Proveedores y sucursales de un pago, para su checklist. */
+    public function dimensionesPago($pagoId)
     {
         $filas = $this->fetchAll(
             "SELECT e.proveedor_codigo AS codigo, MAX(e.proveedor_nombre) AS nombre,
@@ -1772,9 +1849,9 @@ class FacturaErp extends Model
                FROM facturas_erp e
                LEFT JOIN facturas_xml x ON x.id = e.factura_xml_id
                LEFT JOIN proveedores p ON p.id = x.proveedor_id
-              WHERE e.porpagar_listado_id = ?
+              WHERE e.pago_id = ?
               GROUP BY e.proveedor_codigo, COALESCE(e.sucursal, '')",
-            [(int) $listadoId]
+            [(int) $pagoId]
         ) ?: [];
 
         $sucursales = [];
@@ -1844,6 +1921,19 @@ class FacturaErp extends Model
         $cond = [];
         $params = [];
 
+        /*
+         * La incidencia no lleva sociedad propia: la hereda de la carga que la
+         * detectó. Se acota por ahí y no por el LEFT JOIN de incidencias(),
+         * porque contarIncidencias() consulta la tabla sola y porque una
+         * condición sobre la tabla unida convertiría ese LEFT JOIN en INNER y
+         * escondería las incidencias cuya carga ya no está.
+         */
+        $sociedadId = $this->sociedadId();
+        if ($sociedadId > 0) {
+            $cond[] = 'i.carga_id IN (SELECT id FROM facturas_erp_cargas WHERE sociedad_id = ?)';
+            $params[] = $sociedadId;
+        }
+
         // Por omisión solo se ven las vigentes; 'descartadas' muestra las
         // ocultas y 'todas' no filtra por este criterio.
         $ver = (string) ($f['ver'] ?? 'vigentes');
@@ -1898,6 +1988,14 @@ class FacturaErp extends Model
         }
         $motivo = mb_substr(trim((string) $motivo), 0, 255);
         $marcas = implode(',', array_fill(0, count($ids), '?'));
+        $sociedadId = $this->sociedadId();
+
+        // El "alcanza a las cargas anteriores" que hay más abajo se queda
+        // dentro de la empresa en curso: la firma es proveedor+documento y las
+        // empresas del grupo le compran a los mismos proveedores.
+        $mismaSociedad = $sociedadId > 0
+            ? ' AND carga_id IN (SELECT id FROM facturas_erp_cargas WHERE sociedad_id = ?)'
+            : '';
 
         $this->begin();
         try {
@@ -1920,18 +2018,27 @@ class FacturaErp extends Model
                 foreach ($filas as $f) {
                     // Alcanza también a las apariciones de cargas anteriores:
                     // si algo ya no interesa, no interesa en ninguna carga.
+                    $params = [
+                        $usuarioId !== null ? (int) $usuarioId : null,
+                        $motivo !== '' ? $motivo : null,
+                        $f['firma'],
+                    ];
+                    if ($mismaSociedad !== '') {
+                        $params[] = $sociedadId;
+                    }
                     $this->execute(
                         "UPDATE facturas_erp_incidencias
                             SET descartada = 1, descartada_en = NOW(), descartada_por = ?, motivo = ?
-                          WHERE firma = ? AND descartada = 0",
-                        [$usuarioId !== null ? (int) $usuarioId : null, $motivo !== '' ? $motivo : null, $f['firma']]
+                          WHERE firma = ? AND descartada = 0" . $mismaSociedad,
+                        $params
                     );
                     $this->execute(
                         "INSERT INTO facturas_erp_descartes
-                            (firma, tipo, proveedor_codigo, proveedor_nombre, documento, motivo, usuario_id)
-                         VALUES (?,?,?,?,?,?,?)
+                            (sociedad_id, firma, tipo, proveedor_codigo, proveedor_nombre, documento, motivo, usuario_id)
+                         VALUES (?,?,?,?,?,?,?,?)
                          ON DUPLICATE KEY UPDATE motivo = VALUES(motivo), usuario_id = VALUES(usuario_id)",
-                        [$f['firma'], $f['tipo'], $f['proveedor_codigo'], $f['proveedor_nombre'],
+                        [$sociedadId > 0 ? $sociedadId : null,
+                         $f['firma'], $f['tipo'], $f['proveedor_codigo'], $f['proveedor_nombre'],
                          $f['documento'], $motivo !== '' ? $motivo : null,
                          $usuarioId !== null ? (int) $usuarioId : null]
                     );
@@ -1955,6 +2062,13 @@ class FacturaErp extends Model
             return ['restauradas' => 0];
         }
         $marcas = implode(',', array_fill(0, count($ids), '?'));
+        $sociedadId = $this->sociedadId();
+
+        // Simétrico al descarte: levantarlo aquí no puede destapar lo que otra
+        // empresa decidió callar.
+        $mismaSociedad = $sociedadId > 0
+            ? ' AND carga_id IN (SELECT id FROM facturas_erp_cargas WHERE sociedad_id = ?)'
+            : '';
 
         $this->begin();
         try {
@@ -1964,12 +2078,16 @@ class FacturaErp extends Model
             ), 'firma');
 
             foreach ($firmas as $firma) {
-                $this->execute("DELETE FROM facturas_erp_descartes WHERE firma = ?", [$firma]);
+                $this->execute(
+                    'DELETE FROM facturas_erp_descartes WHERE firma = ?'
+                    . ($sociedadId > 0 ? ' AND sociedad_id = ?' : ''),
+                    $sociedadId > 0 ? [$firma, $sociedadId] : [$firma]
+                );
                 $this->execute(
                     "UPDATE facturas_erp_incidencias
                         SET descartada = 0, descartada_en = NULL, descartada_por = NULL, motivo = NULL
-                      WHERE firma = ?",
-                    [$firma]
+                      WHERE firma = ?" . $mismaSociedad,
+                    $sociedadId > 0 ? [$firma, $sociedadId] : [$firma]
                 );
             }
             $this->execute(
@@ -2022,17 +2140,33 @@ class FacturaErp extends Model
         ) ?: [];
     }
 
+    /**
+     * Las cargas de ESTA empresa. Sin acotar, una empresa recién registrada
+     * abría el módulo con el historial de otra: sus filas nunca se mezclaron
+     * —cada una queda sellada con su sociedad_id—, pero la pantalla las leía
+     * todas y parecía que la empresa nueva ya traía reportes cargados.
+     */
     public function cargas($limite = 20)
     {
         $limite = max(1, min(100, (int) $limite));
+        $params = [];
         return $this->fetchAll(
-            "SELECT * FROM facturas_erp_cargas ORDER BY id DESC LIMIT {$limite}"
+            'SELECT * FROM facturas_erp_cargas WHERE 1=1'
+            . $this->condicionSociedad('', $params)
+            . " ORDER BY id DESC LIMIT {$limite}",
+            $params
         );
     }
 
     public function ultimaCarga()
     {
-        return $this->fetchOne("SELECT * FROM facturas_erp_cargas ORDER BY id DESC LIMIT 1");
+        $params = [];
+        return $this->fetchOne(
+            'SELECT * FROM facturas_erp_cargas WHERE 1=1'
+            . $this->condicionSociedad('', $params)
+            . ' ORDER BY id DESC LIMIT 1',
+            $params
+        );
     }
 
     // ------------------------------------------------------------------

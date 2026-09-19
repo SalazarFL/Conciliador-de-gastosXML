@@ -1,17 +1,22 @@
 <?php
 /**
- * La guarda de cédula del emparejador del pago semanal.
+ * La guarda de cédula, ahora que hay catálogo.
  *
  * Lo que protege: el consecutivo de veinte dígitos NO es único a nivel país
  * —lo arma cada emisor empezando en 1— así que dos proveedores pueden
  * compartirlo. Sin guarda, `buscarXml()` se llevaba el primero de la lista y
  * el comprobante correcto, que estaba más abajo, se perdía.
  *
+ * Lo que cambió: antes la equivalencia código↔cédula se DEDUCÍA de las
+ * facturas que cuadraban de monto, con contadores, conflictos y un estado de
+ * "disputa" en el que la guarda se abstenía. Todo eso suplía un dato que no
+ * se tenía. Ahora el catálogo del ERP lo trae escrito, así que la regla es
+ * binaria: o la cédula del emisor es la del código, o no.
+ *
  * Usa códigos y cédulas sintéticos (99xxxxxxx) para no tocar datos reales, y
  * borra lo suyo al terminar.
  */
 require_once __DIR__ . '/../app/core/Model.php';
-require_once __DIR__ . '/../app/models/Notificacion.php';
 require_once __DIR__ . '/../app/models/ProveedorCodigoErp.php';
 
 function assertGuarda($condicion, $mensaje)
@@ -20,7 +25,15 @@ function assertGuarda($condicion, $mensaje)
         fwrite(STDERR, "FAIL: {$mensaje}\n");
         exit(1);
     }
-    echo "  ok  {$mensaje}\n";
+}
+
+function assertGuardaIgual($esperado, $actual, $mensaje)
+{
+    if ($esperado !== $actual) {
+        fwrite(STDERR, "FAIL: {$mensaje}\nEsperado: " . var_export($esperado, true)
+            . "\nActual: " . var_export($actual, true) . "\n");
+        exit(1);
+    }
 }
 
 $config = require __DIR__ . '/../app/config/database.php';
@@ -30,119 +43,147 @@ try {
         [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]
     );
 } catch (Throwable $e) {
-    fwrite(STDERR, "SKIP: sin base de datos (" . $e->getMessage() . ")\n");
+    echo "SKIP: ProveedorCodigoErpGuarda (sin base de datos disponible)\n";
     exit(0);
 }
 
-$CODIGO_FUERTE = '99000001';   // el mapa lo sabe con muchas confirmaciones
-$CODIGO_DEBIL  = '99000002';   // el mapa lo sabe con una sola
+// Una sociedad con dos puntos de venta, y un proveedor ajeno.
+$COD_1 = '990000001';
+$COD_2 = '990000002';   // mismo dueño que COD_1, otro punto de venta
+$COD_FUERA = '990000009';   // no se da de alta en el catálogo
 $CEDULA_A = '9990000001';
 $CEDULA_B = '9990000002';
 
-$limpiar = function () use ($pdo, $CODIGO_FUERTE, $CODIGO_DEBIL, $CEDULA_A, $CEDULA_B) {
-    $pdo->exec("DELETE FROM proveedor_codigo_conflictos WHERE proveedor_codigo IN ('{$CODIGO_FUERTE}','{$CODIGO_DEBIL}')");
-    $pdo->exec("DELETE FROM proveedor_codigo_erp WHERE proveedor_codigo IN ('{$CODIGO_FUERTE}','{$CODIGO_DEBIL}')");
-    $pdo->exec("DELETE FROM notificaciones WHERE firma LIKE 'codigo_proveedor|99%'");
-    $pdo->exec("DELETE FROM proveedores WHERE rfc IN ('{$CEDULA_A}','{$CEDULA_B}')");
+$limpiar = function () use ($pdo, $COD_1, $COD_2, $COD_FUERA, $CEDULA_A, $CEDULA_B) {
+    $pdo->prepare('DELETE FROM proveedor_codigo_erp WHERE proveedor_codigo IN (?,?,?)')
+        ->execute([$COD_1, $COD_2, $COD_FUERA]);
+    $pdo->prepare('DELETE FROM proveedor_cedula_ignorada WHERE cedula IN (?,?)')
+        ->execute([$CEDULA_A, $CEDULA_B]);
+    $pdo->prepare('DELETE FROM proveedores WHERE rfc IN (?,?)')->execute([$CEDULA_A, $CEDULA_B]);
+    ProveedorCodigoErp::olvidarMapa();
 };
 $limpiar();
 
-// Dos proveedores de prueba.
-$crearProveedor = function ($rfc, $nombre) use ($pdo) {
-    $pdo->prepare('INSERT INTO proveedores (rfc, razon_social, razon_social_normalizada) VALUES (?, ?, ?)')
-        ->execute([$rfc, $nombre, strtoupper($nombre)]);
-    return (int) $pdo->lastInsertId();
-};
-$provA = $crearProveedor($CEDULA_A, 'PROVEEDOR PRUEBA A');
-$provB = $crearProveedor($CEDULA_B, 'PROVEEDOR PRUEBA B');
+try {
+    $mapa = new ProveedorCodigoErp();
 
-$mapa = new ProveedorCodigoErp();
+    // ── Sin catálogo, la guarda no opina ───────────────────────────────
+    //
+    // La red de seguridad: en una instalación a la que todavía no se le cargó
+    // el listado del ERP, "el código no está" y "no hay catálogo" son cosas
+    // distintas, y la segunda no autoriza a rechazar nada.
+    $hayCatalogo = (int) $pdo->query('SELECT COUNT(*) n FROM proveedor_codigo_erp')->fetch()['n'] > 0;
+    if (!$hayCatalogo) {
+        assertGuardaIgual('desconocido', ProveedorCodigoErp::veredicto($COD_1, 1),
+            'sin catálogo cargado la guarda se abstiene');
+    }
 
-// ── El mapa sabe, y sabe bien ──────────────────────────────────────
-$pdo->prepare("INSERT INTO proveedor_codigo_erp
-        (proveedor_codigo, proveedor_id, cedula, nombre_erp, veces_confirmado, origen)
-     VALUES (?, ?, ?, 'PRUEBA FUERTE', 20, 'cosecha')")
-    ->execute([$CODIGO_FUERTE, $provA, $CEDULA_A]);
-$pdo->prepare("INSERT INTO proveedor_codigo_erp
-        (proveedor_codigo, proveedor_id, cedula, nombre_erp, veces_confirmado, origen)
-     VALUES (?, ?, ?, 'PRUEBA DEBIL', 1, 'cosecha')")
-    ->execute([$CODIGO_DEBIL, $provA, $CEDULA_A]);
-ProveedorCodigoErp::olvidarMapa();
+    // ── Dos códigos, una cédula ────────────────────────────────────────
+    //
+    // Es el caso real: una sociedad con varios puntos de venta tiene un código
+    // por punto y una sola cédula. Los dos tienen que emparejar con sus XML.
+    $r = $mapa->guardarCodigo($COD_1, $CEDULA_A, 'PUNTO DE VENTA UNO');
+    assertGuarda($r['ok'], 'se puede dar de alta un código a mano: ' . $r['message']);
+    $r = $mapa->guardarCodigo($COD_2, $CEDULA_A, 'PUNTO DE VENTA DOS');
+    assertGuarda($r['ok'], 'y otro código de la misma cédula');
+    $r = $mapa->guardarCodigo('990000003', $CEDULA_B, 'PROVEEDOR AJENO');
+    assertGuarda($r['ok'], 'y uno de otra cédula');
+    $pdo->prepare('DELETE FROM proveedor_codigo_erp WHERE proveedor_codigo = ?')->execute(['990000003']);
 
-echo "\nVeredictos\n";
-assertGuarda(ProveedorCodigoErp::veredicto($CODIGO_FUERTE, $provA) === 'propio',
-    'el emisor que corresponde al código se acepta');
-assertGuarda(ProveedorCodigoErp::veredicto($CODIGO_FUERTE, $provB) === 'ajeno',
-    'el emisor de otro proveedor se rechaza');
-assertGuarda(ProveedorCodigoErp::veredicto('99999999', $provA) === 'desconocido',
-    'un código que el mapa no conoce no se bloquea');
-assertGuarda(ProveedorCodigoErp::veredicto($CODIGO_FUERTE, 0) === 'desconocido',
-    'un XML sin emisor no se bloquea');
+    $provA = (int) $pdo->query("SELECT id FROM proveedores WHERE rfc = '{$CEDULA_A}'")->fetch()['id'];
+    $provB = (int) $pdo->query("SELECT id FROM proveedores WHERE rfc = '{$CEDULA_B}'")->fetch()['id'];
+    ProveedorCodigoErp::olvidarMapa();
 
-// ── Un veto sin monto que cuadre es rutina: ni avisa ni cede ───────
-echo "\nVeto rutinario (colisión de consecutivo)\n";
-$mapa->registrarVeto([
-    'codigo' => $CODIGO_FUERTE, 'proveedor_id_propuesto' => $provB,
-    'monto_cuadraba' => false,
-]);
-$fila = $pdo->query("SELECT en_disputa FROM proveedor_codigo_erp WHERE proveedor_codigo='{$CODIGO_FUERTE}'")->fetch();
-assertGuarda((int) $fila['en_disputa'] === 0, 'el mapa no cede');
-$avisos = (int) $pdo->query("SELECT COUNT(*) c FROM notificaciones WHERE firma LIKE 'codigo_proveedor|99%'")->fetch()['c'];
-assertGuarda($avisos === 0, 'no molesta a nadie');
+    // ── Los veredictos ─────────────────────────────────────────────────
+    //
+    // Dos códigos con la misma cédula ya no dan 'propio'. La cédula prueba que
+    // el comprobante salió de esa empresa y nada más: cuál de sus dos puntos
+    // lo emitió no está escrito en ninguna parte, y engancharlo al que venga
+    // primero es exactamente lo que hay que dejar de hacer.
+    assertGuardaIgual('compartido', ProveedorCodigoErp::veredicto($COD_1, $provA),
+        'con la cédula repartida entre dos códigos, la guarda no elige');
+    assertGuardaIgual('compartido', ProveedorCodigoErp::veredicto($COD_2, $provA),
+        'y tampoco por el otro lado');
+    assertGuardaIgual('ajeno', ProveedorCodigoErp::veredicto($COD_1, $provB),
+        'el emisor de otro proveedor se rechaza');
 
-// ── Con monto que cuadra sí avisa, pero el mapa firme aguanta ──────
-echo "\nVeto sospechoso sobre un mapa firme (20 confirmaciones)\n";
-$mapa->registrarVeto([
-    'codigo' => $CODIGO_FUERTE, 'proveedor_id_propuesto' => $provB,
-    'monto_cuadraba' => true,
-]);
-ProveedorCodigoErp::olvidarMapa();
-assertGuarda(ProveedorCodigoErp::veredicto($CODIGO_FUERTE, $provB) === 'ajeno',
-    'sigue rechazando: 20 confirmaciones no las tumba un dato');
-$aviso = $pdo->query("SELECT severidad, veces FROM notificaciones WHERE firma='codigo_proveedor|{$CODIGO_FUERTE}|{$provB}'")->fetch();
-assertGuarda($aviso !== false && $aviso['severidad'] === 'media', 'avisa, con severidad media');
+    // Con la cédula en un solo código sí identifica, que es el caso corriente:
+    // 1 653 de los 1 684 del listado real.
+    $pdo->prepare('DELETE FROM proveedor_codigo_erp WHERE proveedor_codigo = ?')->execute([$COD_2]);
+    ProveedorCodigoErp::olvidarMapa();
+    assertGuardaIgual('propio', ProveedorCodigoErp::veredicto($COD_1, $provA),
+        'con un solo código por cédula, el emisor que corresponde se acepta');
+    $mapa->guardarCodigo($COD_2, $CEDULA_A, 'PUNTO DE VENTA DOS');
+    ProveedorCodigoErp::olvidarMapa();
 
-// ── Empate: una confirmación contra una, el mapa se abstiene ───────
-echo "\nEmpate (el mapa tenía una sola confirmación)\n";
-$mapa->registrarVeto([
-    'codigo' => $CODIGO_DEBIL, 'proveedor_id_propuesto' => $provB,
-    'monto_cuadraba' => true,
-]);
-ProveedorCodigoErp::olvidarMapa();
-assertGuarda(ProveedorCodigoErp::veredicto($CODIGO_DEBIL, $provB) === 'desconocido',
-    'deja de bloquear: sin saber más, no puede vetar');
-$aviso = $pdo->query("SELECT severidad FROM notificaciones WHERE firma='codigo_proveedor|{$CODIGO_DEBIL}|{$provB}'")->fetch();
-assertGuarda($aviso !== false && $aviso['severidad'] === 'alta', 'avisa con severidad alta');
+    // El cambio de regla más importante de todos.
+    assertGuardaIgual('ajeno', ProveedorCodigoErp::veredicto($COD_FUERA, $provA),
+        'un código que el catálogo no tiene no empareja con nada');
 
-// ── El mismo hecho repetido es UN aviso ────────────────────────────
-echo "\nRepetición\n";
-$mapa->registrarVeto([
-    'codigo' => $CODIGO_FUERTE, 'proveedor_id_propuesto' => $provB, 'monto_cuadraba' => true,
-]);
-$fila = $pdo->query("SELECT COUNT(*) c, MAX(veces) v FROM notificaciones WHERE firma='codigo_proveedor|{$CODIGO_FUERTE}|{$provB}'")->fetch();
-assertGuarda((int) $fila['c'] === 1, 'no se duplica el renglón');
-assertGuarda((int) $fila['v'] === 2, 'sube el contador de veces');
+    assertGuardaIgual('desconocido', ProveedorCodigoErp::veredicto($COD_1, 0),
+        'un XML sin emisor no se puede juzgar');
+    assertGuardaIgual('desconocido', ProveedorCodigoErp::veredicto('', $provA),
+        'ni una línea sin código');
 
-// ── La persona manda sobre el contador ─────────────────────────────
-echo "\nConfirmación humana\n";
-assertGuarda($mapa->confirmarManual($CODIGO_FUERTE, $provB, 0), 'se guarda');
-ProveedorCodigoErp::olvidarMapa();
-assertGuarda(ProveedorCodigoErp::veredicto($CODIGO_FUERTE, $provB) === 'propio',
-    'el proveedor declarado a mano pasa a ser el bueno');
-assertGuarda(ProveedorCodigoErp::veredicto($CODIGO_FUERTE, $provA) === 'ajeno',
-    'y el anterior pasa a ser el ajeno');
+    // ── La pregunta al revés: ¿este comprobante es de alguien del ERP? ──
+    assertGuardaIgual(true, ProveedorCodigoErp::conoceCedula($CEDULA_A),
+        'una cédula del catálogo se conoce');
+    // El ERP a veces las imprime con guiones ("3-101-155686") y los XML nunca.
+    $conGuiones = substr($CEDULA_A, 0, 1) . '-' . substr($CEDULA_A, 1, 3) . '-' . substr($CEDULA_A, 4);
+    assertGuardaIgual(true, ProveedorCodigoErp::conoceCedula($conGuiones),
+        'los guiones no la vuelven otra cédula');
+    assertGuardaIgual(false, ProveedorCodigoErp::conoceCedula('9995550000'),
+        'una cédula que no está en ningún código, no');
 
-$mapa->cosechar([$CODIGO_FUERTE]);
-$fila = $pdo->query("SELECT cedula, origen FROM proveedor_codigo_erp WHERE proveedor_codigo='{$CODIGO_FUERTE}'")->fetch();
-assertGuarda($fila['origen'] === 'manual' && $fila['cedula'] === $CEDULA_B,
-    'la cosecha no pisa lo confirmado a mano');
+    // ── "Este proveedor no nos factura" ────────────────────────────────
+    //
+    // Sin dónde anotarlo, la misma pregunta volvería con cada comprobante que
+    // llegara de esa cédula.
+    $r = $mapa->ignorarCedula('9995550000', 'PUBLICIDAD S.A.', 'No nos factura');
+    assertGuarda($r['ok'], 'se puede mandar a callar una cédula');
+    ProveedorCodigoErp::olvidarMapa();
+    assertGuardaIgual(true, ProveedorCodigoErp::conoceCedula('9995550000'),
+        'una cédula ignorada cuenta como contestada: no se vuelve a preguntar');
 
-// ── Liberar sin decidir ────────────────────────────────────────────
-echo "\nLiberar sin decidir\n";
-$mapa->ponerEnDisputa($CODIGO_DEBIL, true);
-ProveedorCodigoErp::olvidarMapa();
-assertGuarda(ProveedorCodigoErp::veredicto($CODIGO_DEBIL, $provB) === 'desconocido',
-    'un código liberado no bloquea a nadie');
+    $mapa->dejarDeIgnorar('9995550000');
+    ProveedorCodigoErp::olvidarMapa();
+    assertGuardaIgual(false, ProveedorCodigoErp::conoceCedula('9995550000'),
+        'y se puede volver atrás');
 
-$limpiar();
-echo "\nProveedorCodigoErpGuardaTest: todo bien.\n";
+    // Darle un código a una cédula ignorada la saca del silencio: son dos
+    // respuestas a la misma pregunta y no pueden convivir.
+    $mapa->ignorarCedula($CEDULA_B, 'PROVEEDOR AJENO');
+    $mapa->guardarCodigo($COD_FUERA, $CEDULA_B, 'PROVEEDOR AJENO');
+    $n = $pdo->query("SELECT COUNT(*) n FROM proveedor_cedula_ignorada WHERE cedula = '{$CEDULA_B}'")->fetch()['n'];
+    assertGuardaIgual(0, (int) $n, 'darle un código deja sin efecto el "no procesar"');
+
+    // ── Corregir y borrar ──────────────────────────────────────────────
+    //
+    // Se saca antes el otro código de esa cédula: si no, al mudar COD_1 la
+    // cédula B queda con dos y el veredicto sería 'compartido', que es cierto
+    // pero no es lo que esta prueba quiere comprobar.
+    $mapa->eliminarCodigo($COD_FUERA);
+    $r = $mapa->guardarCodigo($COD_1, $CEDULA_B, 'CAMBIÓ DE DUEÑO');
+    assertGuarda($r['ok'], 'un código se puede corregir');
+    ProveedorCodigoErp::olvidarMapa();
+    assertGuardaIgual('propio', ProveedorCodigoErp::veredicto($COD_1, $provB),
+        'y desde entonces vale la cédula nueva');
+    assertGuardaIgual('ajeno', ProveedorCodigoErp::veredicto($COD_1, $provA),
+        'la vieja pasa a ser ajena');
+
+    $r = $mapa->eliminarCodigo($COD_1);
+    assertGuarda($r['ok'], 'un código se puede borrar');
+    ProveedorCodigoErp::olvidarMapa();
+    assertGuardaIgual('ajeno', ProveedorCodigoErp::veredicto($COD_1, $provB),
+        'y borrado deja de emparejar con nada');
+    assertGuarda(!$mapa->eliminarCodigo($COD_1)['ok'], 'borrar lo que no está lo dice');
+
+    // ── Lo que no se admite ────────────────────────────────────────────
+    assertGuarda(!$mapa->guardarCodigo('', $CEDULA_A)['ok'], 'sin código no se guarda');
+    assertGuarda(!$mapa->guardarCodigo('99000X', '123')['ok'], 'una cédula corta no se guarda');
+    assertGuarda(!$mapa->guardarCodigo('con espacio', $CEDULA_A)['ok'], 'un código con espacios tampoco');
+
+    echo "OK: ProveedorCodigoErpGuarda\n";
+} finally {
+    $limpiar();
+}

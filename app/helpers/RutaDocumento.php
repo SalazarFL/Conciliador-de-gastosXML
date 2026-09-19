@@ -68,6 +68,15 @@ class RutaDocumento
         if ($ruta === '') {
             return '';
         }
+        // Una dirección de otro almacén ('sharepoint:SISTEMA/…') se guarda
+        // CON su prefijo: la cadena dice sola dónde está el archivo, en
+        // cualquier tabla. Es lo que hace segura la bandeja y la cola, que no
+        // tienen columna `almacen`: si la empresa cambia de almacén con
+        // documentos en tránsito, cada uno se sigue buscando donde quedó.
+        $prefijo = self::prefijoDeAlmacen($ruta);
+        if ($prefijo !== '') {
+            return strtolower($prefijo) . self::normalizarRelativa(substr($ruta, strlen($prefijo)));
+        }
         if (!self::esAbsoluta($ruta)) {
             return self::normalizarRelativa($ruta);
         }
@@ -99,6 +108,10 @@ class RutaDocumento
         if (self::esAbsoluta($ruta)) {
             return self::normalizarSeparadores($ruta);
         }
+        // De otro almacén: no hay raíz de esta máquina que ponerle delante.
+        if (self::prefijoDeAlmacen($ruta) !== '') {
+            return $ruta;
+        }
 
         $raiz = self::raiz();
         if ($raiz === '') {
@@ -117,7 +130,7 @@ class RutaDocumento
     {
         require_once __DIR__ . '/AlmacenDocumentos.php';
 
-        return AlmacenDocumentos::actual()->existe($ruta);
+        return AlmacenDocumentos::de($ruta)->existe($ruta);
     }
 
     /**
@@ -141,7 +154,7 @@ class RutaDocumento
     {
         require_once __DIR__ . '/AlmacenDocumentos.php';
 
-        return AlmacenDocumentos::actual()->abrir($ruta);
+        return AlmacenDocumentos::de($ruta)->abrir($ruta);
     }
 
     /** Tamaño del documento en bytes, o null si no se sabe. */
@@ -149,7 +162,7 @@ class RutaDocumento
     {
         require_once __DIR__ . '/AlmacenDocumentos.php';
 
-        return AlmacenDocumentos::actual()->tamano($ruta);
+        return AlmacenDocumentos::de($ruta)->tamano($ruta);
     }
 
     /**
@@ -163,7 +176,7 @@ class RutaDocumento
     {
         require_once __DIR__ . '/AlmacenDocumentos.php';
 
-        return AlmacenDocumentos::actual()->rutaLocal($ruta);
+        return AlmacenDocumentos::de($ruta)->rutaLocal($ruta);
     }
 
     /** Devuelve lo que dio rutaLocal(). */
@@ -171,7 +184,44 @@ class RutaDocumento
     {
         require_once __DIR__ . '/AlmacenDocumentos.php';
 
-        AlmacenDocumentos::actual()->soltarLocal($rutaLocal);
+        // Un temporal es un archivo de esta máquina, así que su dirección no
+        // dice de qué almacén vino. Se le avisa a todos los que tengan
+        // temporales: solo el que lo dio lo reconoce.
+        AlmacenDocumentos::soltarEnTodos($rutaLocal);
+    }
+
+    /**
+     * Le pasa a $usar un archivo de esta máquina con el contenido de $ruta, y
+     * lo suelta al terminar pase lo que pase.
+     *
+     * Es la forma de pedir un archivo local sin poder olvidarse de devolverlo:
+     * el par rutaLocal()/soltarLocal() deja la devolución a cargo de quien
+     * llama, y una excepción en el medio se la saltea.
+     *
+     * Acepta las dos clases de ruta que circulan por el sistema. Un archivo que
+     * ya está en esta máquina —un adjunto recién bajado del correo, algo que
+     * subió una persona— se usa tal cual; uno del almacén se le pide al
+     * almacén. Así quien llama no tiene que saber de dónde vino lo que recibió.
+     *
+     * @return mixed Lo que devuelva $usar.
+     */
+    public static function conArchivoLocal($ruta, callable $usar)
+    {
+        $ruta = (string) $ruta;
+        if ($ruta !== '' && self::esAbsoluta($ruta) && is_file($ruta)) {
+            return $usar($ruta);
+        }
+
+        $local = self::rutaLocal($ruta);
+        if ($local === null) {
+            throw new RuntimeException('No se pudo leer ' . basename(str_replace('\\', '/', $ruta)) . '. '
+                . self::porQueNoSeLee($ruta));
+        }
+        try {
+            return $usar($local);
+        } finally {
+            self::soltarLocal($local);
+        }
     }
 
     /**
@@ -183,50 +233,66 @@ class RutaDocumento
     {
         require_once __DIR__ . '/AlmacenDocumentos.php';
 
-        return AlmacenDocumentos::actual()->porQueNoSeLee($ruta);
+        return AlmacenDocumentos::de($ruta)->porQueNoSeLee($ruta);
     }
 
-    /** Ruta absoluta a una subcarpeta de trabajo dentro de la raíz. */
-    public static function carpetaTrabajo($sub = '')
+    /**
+     * Una subcarpeta de _TRABAJO: lo que todavía no es un documento archivado
+     * —la bandeja del correo, la cola de importación—.
+     *
+     * Con $sociedadId, la del almacén de esa empresa. El material en tránsito
+     * tiene que estar donde lo alcancen todas las PC —una captura el correo y
+     * otra lo importa—, así que para una empresa en SharePoint la bandeja
+     * también está en SharePoint. Sin empresa, o con la empresa en disco, es
+     * la carpeta compartida de siempre.
+     *
+     * En SharePoint no se crea de antemano: la biblioteca crea las carpetas
+     * del camino al subir, y preguntar por ella costaría una llamada.
+     */
+    public static function carpetaTrabajo($sub = '', $sociedadId = null)
     {
+        require_once __DIR__ . '/AlmacenDocumentos.php';
+        $sub = trim(str_replace('\\', '/', (string) $sub), '/');
+        $relativa = self::TRABAJO . ($sub !== '' ? '/' . $sub : '');
+
+        if ($sociedadId !== null && (int) $sociedadId > 0) {
+            require_once __DIR__ . '/AlmacenEnDisco.php';
+            $almacen = AlmacenDocumentos::para((int) $sociedadId);
+            if (!$almacen instanceof AlmacenEnDisco) {
+                return $almacen->direccion($relativa);
+            }
+        }
+
         $raiz = self::raiz();
         if ($raiz === '') {
             throw new RuntimeException('Configura la carpeta compartida de documentos en Correo.');
         }
-        $ruta = $raiz . DIRECTORY_SEPARATOR . self::TRABAJO;
-        $sub = trim(str_replace('/', DIRECTORY_SEPARATOR, (string) $sub), '\\/');
-        if ($sub !== '') {
-            $ruta .= DIRECTORY_SEPARATOR . $sub;
-        }
-        if (!is_dir($ruta) && !@mkdir($ruta, 0777, true) && !is_dir($ruta)) {
-            throw new RuntimeException('No se pudo crear la carpeta de trabajo: ' . $ruta);
-        }
+        $ruta = $raiz . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relativa);
+        AlmacenDocumentos::de($ruta)->asegurarCarpeta($ruta);
+
         return $ruta;
     }
 
+    /** La subcarpeta del mes: una carpeta con miles de archivos se vuelve lenta, en disco y en SharePoint. */
+    public static function delMes()
+    {
+        return date('Y-m');
+    }
+
     /**
-     * ¿De verdad se puede escribir en esta carpeta?
+     * ¿De verdad se puede escribir?
      *
-     * No se usa is_writable(): en Windows contesta false para las carpetas que
-     * OneDrive sincroniza desde SharePoint. Vienen con el atributo de solo
-     * lectura —que en una carpeta no significa "no se puede escribir", sino
-     * que Windows la trata distinto— y encima son puntos de reanálisis, así
-     * que la comprobación de PHP falla aunque los permisos sí alcancen. La
-     * única respuesta fiable es intentar escribir un archivo y borrarlo.
+     * La respuesta depende de dónde vivan los documentos, así que la da el
+     * almacén. Con la carpeta compartida hay que comprobarlo escribiendo de
+     * verdad, porque is_writable() miente sobre las carpetas de OneDrive;
+     * contra SharePoint lo dice el permiso de la aplicación y no hace falta
+     * ensuciar la biblioteca con archivos de prueba.
      */
     public static function permiteEscritura($ruta)
     {
-        $ruta = trim((string) $ruta);
-        if ($ruta === '' || !is_dir($ruta)) {
-            return false;
-        }
-        $prueba = rtrim($ruta, '\\/') . DIRECTORY_SEPARATOR
-            . '.xmlconcilia_prueba_' . getmypid() . '_' . uniqid();
-        if (@file_put_contents($prueba, 'ok') === false) {
-            return false;
-        }
-        @unlink($prueba);
-        return true;
+        require_once __DIR__ . '/AlmacenDocumentos.php';
+
+        return AlmacenDocumentos::de($ruta)->permiteEscritura($ruta);
     }
 
     /** ¿La ruta apunta adentro de la carpeta compartida? */
@@ -267,19 +333,56 @@ class RutaDocumento
         return $filas;
     }
 
+    /**
+     * Es el único punto del sistema donde coinciden la ruta, el almacén de la
+     * fila y su sociedad: por eso se decide acá a qué almacén pertenece el
+     * documento y se le pide su dirección. En disco es la raíz de esta
+     * máquina más la ruta, como siempre; en SharePoint, la ruta tal cual. De
+     * acá en adelante la cadena que viaja ya dice a quién pertenece, y los
+     * que la reciben no tienen que saber de qué sociedad era.
+     */
     public static function hidratarFila($fila, array $campos)
     {
         if (!is_array($fila)) {
             return $fila;
         }
+        $almacen = null;
         foreach ($campos as $campo) {
             // array_key_exists y no isset: una ruta NULL debe quedarse NULL,
             // no convertirse en la raíz a secas.
             if (array_key_exists($campo, $fila) && is_string($fila[$campo]) && $fila[$campo] !== '') {
-                $fila[$campo] = self::absoluta($fila[$campo]);
+                // Guardada con prefijo, la ruta ya es la dirección: manda
+                // sobre la columna y sobre la sociedad, porque dice dónde
+                // están los bytes.
+                if (self::prefijoDeAlmacen($fila[$campo]) !== '') {
+                    continue;
+                }
+                if ($almacen === null) {
+                    require_once __DIR__ . '/AlmacenDocumentos.php';
+                    try {
+                        $almacen = AlmacenDocumentos::paraFila($fila);
+                    } catch (RuntimeException $e) {
+                        // La fila es de un almacén que esta PC no tiene. Un
+                        // listado no puede caerse por eso: la ruta queda como
+                        // está y ese documento, sin abrir.
+                        $almacen = false;
+                    }
+                }
+                if ($almacen !== false) {
+                    $fila[$campo] = $almacen->direccion($fila[$campo]);
+                }
             }
         }
         return $fila;
+    }
+
+    /** 'sharepoint:' si la dirección lo lleva, '' si es de disco. */
+    private static function prefijoDeAlmacen($ruta)
+    {
+        require_once __DIR__ . '/AlmacenDocumentos.php';
+        $tipo = AlmacenDocumentos::tipoDeDireccion($ruta);
+
+        return $tipo === '' ? '' : substr((string) $ruta, 0, strlen($tipo) + 1);
     }
 
     public static function esAbsoluta($ruta)

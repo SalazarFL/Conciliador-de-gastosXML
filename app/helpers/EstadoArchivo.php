@@ -19,6 +19,7 @@
  */
 
 require_once __DIR__ . '/RutaDocumento.php';
+require_once __DIR__ . '/AlmacenDocumentos.php';
 
 class EstadoArchivo
 {
@@ -33,10 +34,12 @@ class EstadoArchivo
         $rutaXml = trim((string) ($fila['ruta_xml'] ?? ''));
         $rutaPdf = trim((string) ($fila['ruta_pdf'] ?? ''));
 
-        // Se le pregunta al almacén, no al disco: los documentos pueden no
-        // estar en un disco. Ver AlmacenDocumentos.
-        $xmlOk = $rutaXml !== '' && RutaDocumento::existe($rutaXml);
-        $pdfOk = $rutaPdf !== '' && RutaDocumento::existe($rutaPdf);
+        // Se le pregunta al almacén de cada archivo, no al disco, y con la
+        // fila entera: esto corre en todos los listados, una vez por fila, y
+        // un almacén remoto lo contesta con lo que la fila ya sabe en vez de
+        // salir a la red doscientas veces por página. Ver AlmacenDocumentos.
+        $xmlOk = $rutaXml !== '' && AlmacenDocumentos::de($rutaXml)->existeEnFila($fila, 'ruta_xml');
+        $pdfOk = $rutaPdf !== '' && AlmacenDocumentos::de($rutaPdf)->existeEnFila($fila, 'ruta_pdf');
         $perdido = ($rutaXml !== '' && !$xmlOk) || ($rutaPdf !== '' && !$pdfOk);
 
         return [
@@ -45,9 +48,9 @@ class EstadoArchivo
             'perdido'     => $perdido,
             'recuperable' => $perdido && self::puedeBajarseDelCorreo($fila),
             'que_falta'   => self::queFalta($rutaXml, $xmlOk, $rutaPdf, $pdfOk),
-            // El par completo es lo que se puede entregar. La carpeta del pago
-            // semanal solo recibe pares: un documento al que le falta el PDF
-            // no sirve para respaldar un pago, así que no se copia.
+            // El par completo es lo que se puede entregar. La carpeta del
+            // pago solo recibe pares: un documento al que le falta el PDF no
+            // sirve para respaldarlo, así que no se copia.
             'entregable'  => $xmlOk && $pdfOk,
             // Y la otra mitad de la historia: lo que nunca llegó. `que_falta`
             // habla de lo que se archivó y desapareció —eso se recupera del

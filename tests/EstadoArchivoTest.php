@@ -2,7 +2,7 @@
 /**
  * Si el documento todavía tiene sus archivos.
  *
- * Es la pregunta que ahora hacen todos los módulos —pago semanal, seguimiento,
+ * Es la pregunta que ahora hacen todos los módulos —pago, seguimiento,
  * comprobantes, notas—, así que la respuesta tiene que ser la misma en todos.
  * Lo que se comprueba es la distinción que dio origen a esto: una fila sin
  * ruta nunca tuvo archivo y no es un faltante; una fila CON ruta y sin archivo
@@ -40,7 +40,7 @@ try {
     assertEstadoArchivo(!$historico['perdido'] && !$historico['recuperable'],
         'una fila sin ruta no cuenta como archivo perdido');
 
-    // Que no sea "perdido" no quiere decir que esté completo. El pago semanal
+    // Que no sea "perdido" no quiere decir que esté completo. El pago
     // no copia esta factura a su carpeta, y hasta ahora eso no se decía en
     // ningún lado porque `perdido` y `que_falta` callaban los dos.
     assertEstadoArchivo(!$historico['entregable'],

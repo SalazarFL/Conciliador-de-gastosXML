@@ -15,7 +15,7 @@
  * Lo que NO se pregunta:
  *
  *   - Cuando se llega persiguiendo un documento concreto desde la cola de
- *     seguimiento o desde el pago semanal. Ahí ya se sabe qué se busca, y
+ *     seguimiento o desde el pago. Ahí ya se sabe qué se busca, y
  *     poner una pregunta en medio del camino sería estorbar.
  *   - Cuando ya hay un proveedor puesto, venga de la URL o de lo que el
  *     módulo recuerda.
@@ -63,7 +63,7 @@ class AlcanceProveedor
      * ¿Se está de paso, persiguiendo el electrónico de un documento?
      *
      * Son los mismos parámetros con los que NavegacionDocumentos arma la
-     * tarjeta, incluidos los nombres viejos del pago semanal.
+     * tarjeta, incluidos los nombres viejos del pago.
      */
     private static function deCamino(array $get)
     {

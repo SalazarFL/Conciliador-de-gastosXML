@@ -144,7 +144,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         <?php
         /*
          * La tarjeta del documento que se busca. Es la misma de los listados
-         * de comprobantes: se llega acá desde el pago semanal o desde la cola
+         * de comprobantes: se llega acá desde el pago o desde la cola
          * de seguimiento, y se recorre esa lista sin volver al otro módulo.
          */
         include __DIR__ . '/../partials/tarjeta-documento.php';
@@ -253,13 +253,13 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             <span class="badge badge-navy" style="font-size:9px;padding:1px 5px;"><?= $pendientes ?></span>
             <?php endif; ?>
             <!--
-              Acá había un selector de semana. Importar una factura obligaba a
-              saber de antemano a qué semana pertenecía y a decirlo; si se
+              Acá había un selector de pago. Importar una factura obligaba a
+              saber de antemano a qué pago pertenecía y a decirlo; si se
               elegía mal o se dejaba en blanco, la factura quedaba fuera del
               pago y había que ir a buscarla. Ya no hace falta: al importar, el
-              comprobante encuentra su factura en el listado del ERP por el
-              consecutivo, y si esa factura está en un pago semanal hereda la
-              semana sola. No hay nada que elegir porque no hay nada que decidir.
+              comprobante encuentra su factura en el listado del sistema por el
+              consecutivo, y si esa factura está en un pago hereda la
+              pago sola. No hay nada que elegir porque no hay nada que decidir.
             -->
             <div class="correo-bandeja-acciones" style="margin-left:auto;display:flex;gap:3px;align-items:center;">
                 <input type="checkbox" id="cb-todas" title="Seleccionar todas" <?= empty($bandeja) ? 'disabled' : '' ?>>
@@ -284,7 +284,14 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             <?php if (empty($bandeja)): ?>
             <div class="correo-vacio-panel">
                 <i class="fas fa-inbox"></i>
-                Procesa correos o activa la captura automática para llenar la bandeja
+                <?php /*
+                 * Vacía es la respuesta correcta, no la falta de una: con la
+                 * entrada automática los comprobantes limpios ya entraron
+                 * solos y acá solo cae lo que hay que resolver a mano.
+                 */ ?>
+                Nada que revisar. Lo que llega limpio entra solo; acá cae lo que
+                Hacienda rechazó, lo que viene a nombre de otra cédula y lo que
+                no se pudo guardar.
             </div>
             <?php else: ?>
                 <?php foreach ($bandeja as $fila): ?>
@@ -300,7 +307,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                     </div>
                     <span class="bandeja-total"><?= number_format((float) ($fila['total'] ?? 0), 2) ?></span>
                     <?php if (($fila['origen'] ?? 'manual') === 'automatica'): ?>
-                    <i class="fas fa-robot" style="color:#7c3aed;" title="Capturada automáticamente; pendiente de revisión manual"></i>
+                    <i class="fas fa-robot" style="color:#7c3aed;" title="Llegó por la captura automática"></i>
                     <?php endif; ?>
                     <i class="fas fa-file-pdf"
                        style="color:<?= !empty($fila['archivo_pdf']) ? '#16a34a' : '#cbd5e1' ?>;"
@@ -494,7 +501,11 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     var MODO_CORREO = '<?= $modoCorreo ?>';
     var CHUNK_PROCESAR = 8;
     var BATCH_LIMIT = 10;
-    var CARPETAS_INICIALES = <?= json_encode(array_values($carpetasCorreo), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
+    // JSON_HEX_TAG: el nombre de una carpeta lo pone cualquiera con acceso al
+    // buzón, y sin escapar "<" un cierre de script metido en el nombre
+    // terminaría este bloque aquí mismo. (Ni siquiera dentro de un comentario
+    // se puede escribir esa etiqueta entera: el navegador la cierra igual.)
+    var CARPETAS_INICIALES = <?= json_encode(array_values($carpetasCorreo), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
 
     // ── Elementos ──
     var btnCargar    = document.getElementById('btn-cargar');
@@ -1923,7 +1934,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                 return;
             }
 
-            // Ya no se pregunta la semana: cada comprobante encuentra su
+            // Ya no se pregunta el pago: cada comprobante encuentra su
             // factura en el listado del ERP y hereda de ahí la que le toque.
 
             btnImportar.disabled = true;
@@ -1958,7 +1969,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                             setBar(15 + ((estado.progress_percent || 0) * 0.85));
                             elCounts.textContent =
                                 'Importadas: ' + (s.importado || 0) +
-                                ' · Ya en esta semana: ' + (s.duplicado || 0) +
+                                ' · Ya en este pago: ' + (s.duplicado || 0) +
                                 ' · Errores: ' + (s.error || 0) +
                                 ' · Pendientes: ' + (s.pendiente || 0);
 
@@ -1988,7 +1999,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
                     var html = '<i class="fas fa-check-circle" style="margin-right:5px;"></i>'
                         + '<strong>' + importadas + '</strong> factura' + (importadas !== 1 ? 's' : '') + ' importada' + (importadas !== 1 ? 's' : '')
-                        + (repetidas > 0 ? ' · ' + repetidas + ' ya estaba' + (repetidas !== 1 ? 'n' : '') + ' en esta semana' : '')
+                        + (repetidas > 0 ? ' · ' + repetidas + ' ya estaba' + (repetidas !== 1 ? 'n' : '') + ' en este pago' : '')
                         + (erroresImportacion > 0 ? ' · ' + erroresImportacion + ' con error' : '')
                         + (archivosGuardados > 0 ? ' · ' + archivosGuardados + ' archivo' + (archivosGuardados !== 1 ? 's' : '') + ' renombrado' + (archivosGuardados !== 1 ? 's' : '') + ' en la carpeta' : '')
                         + ' — <a href="' + BASE + '/facturas?importacion_id=' + importacionId + '" style="color:#166534;font-weight:700;">Ver en Facturas</a>';
@@ -2012,7 +2023,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                 })
                 .catch(function (err) {
                     setStatus('Error: ' + err.message);
-                    elDetail.textContent = 'Puedes reintentar: solo se bloquearán las facturas que ya estén en la semana seleccionada.';
+                    elDetail.textContent = 'Puedes reintentar: solo se bloquearán las facturas que ya estén en el pago seleccionada.';
                     btnImportar.disabled = false;
                     if (btnDescartar) btnDescartar.disabled = false;
                 });
@@ -2029,7 +2040,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                 return;
             }
             if (!(await AppDialog.confirm(
-                'Se descartarán ' + ids.length + ' fila' + (ids.length !== 1 ? 's' : '') + '. Los archivos XML se eliminarán; los PDF guardados se conservarán.',
+                'Se descartarán ' + ids.length + ' fila' + (ids.length !== 1 ? 's' : '') + '. Se eliminarán sus archivos XML y PDF.',
                 { title: 'Descartar filas seleccionadas', type: 'danger', confirmText: 'Descartar' }
             ))) {
                 return;
@@ -2039,7 +2050,11 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             postJson(BASE + '/correo/descartar', { ids: ids.join(',') })
                 .then(function (r) {
                     mostrarYRecargar('<i class="fas fa-check-circle" style="margin-right:5px;"></i>'
-                        + r.descartadas + ' fila' + (r.descartadas !== 1 ? 's' : '') + ' descartada' + (r.descartadas !== 1 ? 's' : '') + '.', true);
+                        + r.descartadas + ' fila' + (r.descartadas !== 1 ? 's' : '') + ' descartada' + (r.descartadas !== 1 ? 's' : '') + '.'
+                        + (r.no_borrados
+                            ? ' ' + r.no_borrados + ' archivo' + (r.no_borrados !== 1 ? 's' : '')
+                              + ' no se pudo borrar (puede estar abierto o sin permiso).'
+                            : ''), true);
                 })
                 .catch(function (err) {
                     AppDialog.alert(err.message, { title: 'No fue posible descartar', type: 'danger' });
@@ -2216,7 +2231,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 (function () {
     var BASE = '<?= $baseUrl ?>';
     var CUENTA = <?= (int) $cuentaActivaId ?>;
-    var lote = <?= json_encode($loteGeneral, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
+    var lote = <?= json_encode($loteGeneral, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
     var ejecutandoPeticion = false;
     var detenido = false;
     var estado = document.getElementById('general-estado');
@@ -2552,3 +2567,480 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 })();
 </script>
 <?php endif; ?>
+
+<?php /*
+ * Comprobantes sin código.
+ *
+ * Cuando llega un XML de una cédula que el sistema no conoce, el comprobante
+ * se guarda igual pero no se le puede buscar factura: falta saber con qué
+ * código lo tiene dado de alta el ERP. Antes cada uno de esos hechos abría un
+ * aviso en la campana, y en una semana de correo eran veinte renglones que
+ * tapaban los tres avisos que sí había que atender ese día.
+ *
+ * Ahora se guardan igual —misma firma, mismas dos salidas— pero se atienden
+ * acá, todos juntos y en la pantalla donde aparecen. Ver
+ * Notificacion::FUERA_DE_LA_CAMPANA.
+ *
+ * El código no se escribe: se elige de la lista, con el mismo buscador de
+ * Configuración → Proveedores. Es la misma pregunta hecha desde la otra punta
+ * —allá se le busca dueño a un código, acá se le busca código a un
+ * comprobante—, así que comparten catálogo, aspecto y la regla que sostiene
+ * todo: solo se puede elegir un código que exista.
+ */ ?>
+<style>
+/* El buscador se abre debajo de la fila, como en Configuración. Las clases
+   .cat-* son las mismas de allá (public/assets/css/styles.css); lo único que
+   hay que repetir es el fondo de la fila, que allá cuelga de .cat-tabla. */
+#modal-sin-codigo tr.is-eligiendo td { background:#F2F6FD; }
+#modal-sin-codigo tr.sc-elegir-fila td { border-top:none; padding:0 10px 10px; background:#F2F6FD; }
+#modal-sin-codigo tr.sc-elegir-fila:hover td { background:#F2F6FD; }
+</style>
+<div id="modal-sin-codigo" role="dialog" aria-modal="true" aria-labelledby="sin-codigo-titulo"
+     style="display:none;position:fixed;inset:0;background:rgba(12,36,97,.55);z-index:530;align-items:center;justify-content:center;padding:10px;">
+    <div style="background:#fff;border-radius:12px;width:min(1150px,97vw);height:min(760px,94vh);display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(12,36,97,.35);overflow:hidden;">
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 11px;border-bottom:1px solid var(--border);background:#f8fafc;">
+            <i class="fas fa-user-tag" style="color:var(--gold);"></i>
+            <div style="flex:1;min-width:0;">
+                <div id="sin-codigo-titulo" style="font-size:14px;font-weight:800;color:var(--navy);">Comprobantes sin código</div>
+                <div id="sin-codigo-resumen" style="font-size:10.5px;color:var(--text-muted);">Cargando…</div>
+            </div>
+            <button type="button" id="sin-codigo-cerrar" aria-label="Cerrar"
+                    style="background:none;border:none;font-size:24px;color:#64748b;cursor:pointer;line-height:1;padding:0 3px;">&times;</button>
+        </div>
+
+        <div style="padding:7px 11px;border-bottom:1px solid var(--border);font-size:11.5px;color:var(--text-muted);line-height:1.5;">
+            Estos comprobantes ya están guardados. Lo que falta es decir con qué código los conoce el
+            sistema, para que se les pueda buscar su factura. Si un proveedor no nos factura, márcalo
+            como no procesable y deja de preguntar por él.
+        </div>
+
+        <div style="display:flex;gap:6px;align-items:center;padding:7px 10px;border-bottom:1px solid var(--border);flex-wrap:wrap;">
+            <input type="text" id="sin-codigo-q" class="form-control" style="min-width:240px;flex:1;font-size:12px;"
+                   placeholder="Filtrar por nombre o cédula" autocomplete="off">
+            <select id="sin-codigo-ver" class="form-control" style="width:auto;min-width:170px;font-size:12px;">
+                <option value="pendiente">Pendientes</option>
+                <option value="resuelta">Ya resueltos</option>
+                <option value="descartada">Descartados</option>
+                <option value="todas">Todos</option>
+            </select>
+            <button type="button" id="sin-codigo-recargar" class="btn btn-outline btn-sm">
+                <i class="fas fa-rotate"></i> Actualizar
+            </button>
+        </div>
+
+        <div style="flex:1;min-height:0;overflow:auto;">
+            <table class="data-table" style="min-width:980px;">
+                <thead style="position:sticky;top:0;z-index:2;background:#f3f7fb;">
+                    <tr>
+                        <th>Proveedor</th>
+                        <th style="width:130px;">Cédula</th>
+                        <th class="center" style="width:110px;">Comprobantes</th>
+                        <th style="width:130px;">Desde</th>
+                        <th style="width:330px;">Qué hacer con él</th>
+                    </tr>
+                </thead>
+                <tbody id="sin-codigo-body">
+                    <tr><td colspan="5" style="padding:18px;text-align:center;color:var(--text-muted);">Cargando…</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+(function () {
+    'use strict';
+
+    var BASE = <?= json_encode($baseUrl) ?>;
+    var boton    = document.getElementById('btn-sin-codigo');
+    var modal    = document.getElementById('modal-sin-codigo');
+    var badge    = document.getElementById('sin-codigo-badge');
+    var cuerpo   = document.getElementById('sin-codigo-body');
+    var resumen  = document.getElementById('sin-codigo-resumen');
+    var filtro   = document.getElementById('sin-codigo-q');
+    var verSel   = document.getElementById('sin-codigo-ver');
+    var cerrar   = document.getElementById('sin-codigo-cerrar');
+    var recargar = document.getElementById('sin-codigo-recargar');
+
+    // Sin permiso de avisos el botón no se pinta: acá no hay nada que montar.
+    if (!boton || !modal) { return; }
+
+    // Lo último que trajo el servidor. El filtro de texto trabaja sobre esto y
+    // no sobre la base: son decenas de renglones, no miles, y teclear no tiene
+    // por qué costar un viaje.
+    var filas = [];
+    var pendientes = 0;
+
+    function post(ruta, datos) {
+        var cuerpoPeticion = new URLSearchParams();
+        Object.keys(datos || {}).forEach(function (k) { cuerpoPeticion.append(k, datos[k]); });
+        return fetch(BASE + ruta, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+            body: cuerpoPeticion.toString()
+        }).then(function (res) {
+            return res.json().catch(function () { return null; }).then(function (body) {
+                if (!res.ok || !body || body.ok === false) {
+                    throw new Error((body && body.message) || ('Error HTTP ' + res.status));
+                }
+                return body;
+            });
+        });
+    }
+
+    function escapar(valor) {
+        var div = document.createElement('div');
+        div.textContent = String(valor == null ? '' : valor);
+        return div.innerHTML;
+    }
+
+    function numero(n) {
+        return Number(n || 0).toLocaleString('es-CR');
+    }
+
+    function fecha(valor) {
+        var texto = String(valor || '');
+        if (texto.length < 16) { return texto || '—'; }
+        return texto.substring(8, 10) + '/' + texto.substring(5, 7) + '/' + texto.substring(0, 4)
+             + ' ' + texto.substring(11, 16);
+    }
+
+    function ponerBadge(n) {
+        pendientes = Math.max(0, Number(n) || 0);
+        if (!badge) { return; }
+        badge.textContent = pendientes;
+        badge.style.display = pendientes > 0 ? '' : 'none';
+    }
+
+    function ponerResumen() {
+        resumen.textContent = pendientes + ' esperando código · ' + filas.length + ' en la lista';
+    }
+
+    function visibles() {
+        var q = (filtro.value || '').trim().toLowerCase();
+        if (q === '') { return filas; }
+        return filas.filter(function (f) {
+            return String(f.nombre || '').toLowerCase().indexOf(q) !== -1
+                || String(f.cedula || '').toLowerCase().indexOf(q) !== -1;
+        });
+    }
+
+    function accionesDe(fila) {
+        if (fila.estado !== 'pendiente') {
+            var quien = fila.resuelta_por_nombre ? ' · ' + escapar(fila.resuelta_por_nombre) : '';
+            var motivo = fila.motivo
+                ? '<div style="font-size:10.5px;color:var(--text-muted);margin-top:3px;">'
+                  + escapar(fila.motivo) + '</div>'
+                : '';
+            return '<span class="badge" style="background:#e2e8f0;color:#475569;">'
+                 + (fila.estado === 'resuelta' ? 'Resuelto' : 'Descartado') + '</span>'
+                 + '<span style="font-size:10.5px;color:var(--text-muted);">' + quien + '</span>'
+                 + motivo;
+        }
+        return ''
+            + '<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">'
+            +   '<button type="button" class="btn btn-primary btn-sm sc-elegir" data-id="' + fila.id + '">'
+            +     '<i class="fas fa-list-ul"></i> Elegir código</button>'
+            +   '<button type="button" class="btn btn-outline btn-sm sc-ignorar" data-id="' + fila.id + '"'
+            +          ' title="No vuelve a preguntar por los comprobantes de esta cédula">'
+            +     '<i class="fas fa-ban"></i> No se procesa</button>'
+            +   '<button type="button" class="btn btn-outline btn-sm sc-descartar" data-id="' + fila.id + '"'
+            +          ' title="Sacarlo de la lista sin decidir nada">'
+            +     '<i class="fas fa-eye-slash"></i></button>'
+            + '</div>';
+    }
+
+    function pintar() {
+        var lista = visibles();
+        if (!lista.length) {
+            cuerpo.innerHTML = '<tr><td colspan="5" style="padding:22px;text-align:center;color:var(--text-muted);">'
+                + (filas.length ? 'Ningún proveedor coincide con ese filtro.'
+                                : 'No hay comprobantes esperando código.')
+                + '</td></tr>';
+            return;
+        }
+        cuerpo.innerHTML = lista.map(function (fila) {
+            return '<tr data-fila="' + fila.id + '">'
+                 + '<td style="font-weight:700;color:var(--navy);max-width:300px;overflow:hidden;'
+                 +     'text-overflow:ellipsis;white-space:nowrap;" title="' + escapar(fila.nombre) + '">'
+                 +   escapar(fila.nombre || '—') + '</td>'
+                 + '<td>' + escapar(fila.cedula) + '</td>'
+                 + '<td class="center">' + Number(fila.veces || 1) + '</td>'
+                 + '<td style="font-size:11.5px;color:var(--text-muted);">' + escapar(fecha(fila.creada_en)) + '</td>'
+                 + '<td>' + accionesDe(fila) + '</td>'
+                 + '</tr>';
+        }).join('');
+    }
+
+    function cargar() {
+        cuerpo.innerHTML = '<tr><td colspan="5" style="padding:18px;text-align:center;color:var(--text-muted);">'
+            + '<i class="fas fa-spinner fa-spin"></i> Cargando…</td></tr>';
+        return post('/avisos/proveedor/sin-codigo', { estado: verSel.value || 'pendiente' })
+            .then(function (r) {
+                filas = r.avisos || [];
+                ponerBadge(r.pendientes);
+                ponerResumen();
+                pintar();
+            })
+            .catch(function (e) {
+                cuerpo.innerHTML = '<tr><td colspan="5" style="padding:18px;text-align:center;color:#b91c1c;">'
+                    + escapar(e.message) + '</td></tr>';
+            });
+    }
+
+    function filaDe(id) {
+        for (var i = 0; i < filas.length; i++) {
+            if (Number(filas[i].id) === Number(id)) { return filas[i]; }
+        }
+        return null;
+    }
+
+    /* Decidido uno, se va de la lista y el número del botón baja. Recargar la
+       pantalla entera costaría volver a abrir el buzón por un renglón. */
+    function quitar(id) {
+        filas = filas.filter(function (f) { return Number(f.id) !== Number(id); });
+        ponerBadge(pendientes - 1);
+        ponerResumen();
+        pintar();
+    }
+
+    // ── Elegir el código ────────────────────────────────────────────────
+    //
+    // Se abre debajo de la fila y no en otra ventana: así se sigue viendo de
+    // quién es la cédula mientras se busca. Abre ya con los códigos cuyo
+    // nombre se parece al del proveedor, que es lo primero que uno escribiría.
+
+    function cerrarElegir() {
+        var abierta = cuerpo.querySelector('tr.sc-elegir-fila');
+        if (abierta) { abierta.remove(); }
+        cuerpo.querySelectorAll('tr.is-eligiendo').forEach(function (tr) {
+            tr.classList.remove('is-eligiendo');
+        });
+    }
+
+    function abrirElegir(botonFila) {
+        var id = botonFila.getAttribute('data-id');
+        var fila = filaDe(id);
+        if (!fila) { return; }
+
+        var abierta = cuerpo.querySelector('tr.sc-elegir-fila');
+        var eraLaMisma = abierta && abierta.getAttribute('data-id') === String(id);
+        cerrarElegir();
+        if (eraLaMisma) { return; }
+
+        var filaTr = botonFila.closest('tr');
+        var tr = document.createElement('tr');
+        tr.className = 'sc-elegir-fila';
+        tr.setAttribute('data-id', String(id));
+        tr.innerHTML = '<td colspan="5"><div class="cat-elegir">'
+            + '<div class="cat-elegir-barra">'
+            + '<i class="fas fa-magnifying-glass"></i>'
+            + '<input type="text" class="form-control" autocomplete="off"'
+            + ' placeholder="Buscar por código, nombre o cédula">'
+            + '<button type="button" class="cat-descartar" data-sc-cerrar title="Cerrar (Esc)">'
+            + '<i class="fas fa-xmark"></i></button></div>'
+            + '<div class="cat-elegir-titulo"></div>'
+            + '<div class="cat-opciones"></div></div></td>';
+        filaTr.classList.add('is-eligiendo');
+        filaTr.parentNode.insertBefore(tr, filaTr.nextSibling);
+
+        var input = tr.querySelector('input');
+        var espera = null;
+        var pedido = 0;
+
+        function pedir() {
+            var q = input.value.trim();
+            var n = ++pedido;
+            tr.querySelector('.cat-opciones').innerHTML =
+                '<div class="cat-opciones-vacio"><i class="fas fa-spinner fa-spin"></i> Buscando…</div>';
+            post('/avisos/proveedor/opciones', { buscar: q, nombre: fila.nombre || '' })
+                .then(function (r) {
+                    // Solo pinta la última búsqueda pedida: tecleando rápido
+                    // llegan respuestas fuera de orden y la lista se quedaba
+                    // mostrando las coincidencias de media palabra atrás.
+                    if (n !== pedido || !tr.isConnected) { return; }
+                    pintarOpciones(tr, r, q, fila);
+                })
+                .catch(function () {
+                    if (n !== pedido) { return; }
+                    tr.querySelector('.cat-opciones').innerHTML =
+                        '<div class="cat-opciones-vacio">No se pudo buscar. Probá de nuevo.</div>';
+                });
+        }
+
+        input.addEventListener('input', function () {
+            clearTimeout(espera);
+            espera = setTimeout(pedir, 250);
+        });
+        input.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cerrarElegir(); botonFila.focus(); return; }
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                var primera = tr.querySelector('[data-sc-opcion]');
+                if (primera) { primera.click(); }
+            }
+        });
+
+        input.focus();
+        pedir();
+    }
+
+    function pintarOpciones(tr, r, q, fila) {
+        var opciones = (r && r.opciones) || [];
+        var titulo = tr.querySelector('.cat-elegir-titulo');
+        var caja = tr.querySelector('.cat-opciones');
+        var nombre = fila.nombre || fila.cedula;
+
+        if (r && r.sugeridas) {
+            titulo.textContent = opciones.length
+                ? 'Códigos con un nombre parecido a «' + nombre + '»'
+                : 'No hay códigos con un nombre parecido. Buscá por código, nombre o cédula.';
+        } else {
+            titulo.textContent = opciones.length
+                ? numero(opciones.length) + (opciones.length === 1 ? ' código coincide' : ' códigos coinciden')
+                  + (opciones.length >= 30 ? ' (se muestran los primeros 30; afiná la búsqueda)' : '')
+                : 'Ningún código coincide con «' + q + '».';
+        }
+
+        var h = '';
+        opciones.forEach(function (o) {
+            var suyo = o.cedula && o.cedula === fila.cedula;
+            var estado = suyo
+                ? '<span class="badge badge-ok">Ya es de este proveedor</span>'
+                : (o.cedula
+                    ? '<span class="badge badge-warn" title="Si lo elegís, pasa a ser de este proveedor">'
+                      + 'Es de ' + escapar(o.razon_social || o.cedula) + '</span>'
+                    : '<span class="badge badge-green">Sin dueño</span>');
+            var detalle = [];
+            if (o.cedula) { detalle.push('cédula ' + o.cedula); }
+            if (o.facturas) { detalle.push(numero(o.facturas) + ' factura' + (o.facturas == 1 ? '' : 's') + ' en el ERP'); }
+
+            h += '<button type="button" class="cat-opcion" data-sc-opcion="' + escapar(o.codigo) + '"'
+               + ' data-cedula-actual="' + escapar(o.cedula || '') + '"'
+               + ' data-dueno="' + escapar(o.razon_social || o.nombre || '') + '">'
+               + '<span class="cat-opcion-codigo">' + escapar(o.codigo) + '</span>'
+               + '<span class="cat-opcion-nombre">' + escapar(o.nombre || o.razon_social || '(sin nombre)')
+               + (detalle.length ? '<small>' + escapar(detalle.join(' · ')) + '</small>' : '') + '</span>'
+               + estado + '</button>';
+        });
+
+        // Solo se elige entre códigos que existen. Escribir uno a mano dejaba
+        // pasar una cédula o un número mal copiado como código, y ese error no
+        // se ve hasta que una factura acepta el comprobante equivocado —que es
+        // justo lo que este aviso venía a evitar. Si el código no aparece, lo
+        // que falta es importar el listado del sistema.
+        caja.innerHTML = h || '<div class="cat-opciones-vacio">'
+            + (q === ''
+                ? 'Escribí parte del código, del nombre o de la cédula.'
+                : 'Solo se puede elegir un código que ya exista. Si el proveedor es nuevo, '
+                  + 'importá de nuevo el listado del sistema desde Configuración → Proveedores '
+                  + '→ «Importar listado».')
+            + '</div>';
+    }
+
+    async function elegirOpcion(opcion) {
+        var tr = opcion.closest('tr.sc-elegir-fila');
+        if (!tr) { return; }
+        var fila = filaDe(tr.getAttribute('data-id'));
+        if (!fila) { return; }
+
+        var codigo = opcion.getAttribute('data-sc-opcion');
+        var cedulaActual = opcion.getAttribute('data-cedula-actual') || '';
+
+        // Elegir un código que ya tiene dueño se lo quita a ese dueño: es la
+        // única elección de la lista que deshace algo, así que se avisa.
+        if (cedulaActual && cedulaActual !== fila.cedula) {
+            var dueno = opcion.getAttribute('data-dueno') || cedulaActual;
+            var seguir = await AppDialog.confirm(
+                'El código ' + codigo + ' hoy es de ' + dueno + ' (cédula ' + cedulaActual + ').\n\n'
+                + 'Si lo pasás a ' + (fila.nombre || fila.cedula) + ', sus facturas van a aceptar los '
+                + 'comprobantes de este proveedor y dejan de aceptar los de aquel.',
+                { title: 'Ese código ya tiene dueño', type: 'warning', confirmText: 'Pasarlo a este proveedor' }
+            );
+            if (!seguir) { return; }
+        }
+
+        tr.querySelectorAll('[data-sc-opcion]').forEach(function (x) { x.disabled = true; });
+        post('/avisos/proveedor/codigo', {
+            aviso_id: fila.id, codigo: codigo, cedula: fila.cedula, nombre: fila.nombre, existente: '1'
+        }).then(function (r) {
+            cerrarElegir();
+            quitar(fila.id);
+            // Dar de alta el código desatasca las facturas que se habían
+            // quedado sin con qué emparejar: vale la pena decir cuántas.
+            if (Number(r.reparadas) > 0) {
+                AppDialog.alert(r.reparadas + ' factura(s) que estaban sin respaldo acaban de '
+                    + 'encontrar su comprobante.', { title: 'Código ' + codigo + ' guardado', type: 'info' });
+            }
+        }).catch(function (e) {
+            tr.querySelectorAll('[data-sc-opcion]').forEach(function (x) { x.disabled = false; });
+            AppDialog.alert(e.message, { title: 'No se pudo guardar el código', type: 'danger' });
+        });
+    }
+
+    async function ignorar(id) {
+        var fila = filaDe(id);
+        if (!fila) { return; }
+        if (!(await AppDialog.confirm(
+            '¿Dejar de procesar los comprobantes de ' + (fila.nombre || fila.cedula) + '?\n\n'
+            + 'Los que ya entraron se quedan donde están, pero no se va a volver a preguntar por '
+            + 'esta cédula. Se puede deshacer desde Configuración → Proveedores del sistema.',
+            { title: 'Proveedor no procesable', type: 'warning', confirmText: 'No procesarlo' }
+        ))) { return; }
+
+        post('/avisos/proveedor/ignorar', { aviso_id: fila.id, cedula: fila.cedula, nombre: fila.nombre })
+            .then(function () { quitar(fila.id); })
+            .catch(function (e) {
+                AppDialog.alert(e.message, { title: 'No se pudo guardar', type: 'danger' });
+            });
+    }
+
+    function descartar(id) {
+        var fila = filaDe(id);
+        if (!fila) { return; }
+        post('/avisos/cerrar', { id: fila.id, estado: 'descartada' })
+            .then(function () { quitar(fila.id); })
+            .catch(function (e) {
+                AppDialog.alert(e.message, { title: 'No se pudo descartar', type: 'danger' });
+            });
+    }
+
+    function abrirModal() {
+        modal.style.display = 'flex';
+        cargar().then(function () { filtro.focus(); });
+    }
+
+    function cerrarModal() {
+        cerrarElegir();
+        modal.style.display = 'none';
+    }
+
+    boton.addEventListener('click', abrirModal);
+    cerrar.addEventListener('click', cerrarModal);
+    recargar.addEventListener('click', function () { cargar(); });
+    verSel.addEventListener('change', function () { cargar(); });
+    filtro.addEventListener('input', pintar);
+    modal.addEventListener('click', function (e) { if (e.target === modal) { cerrarModal(); } });
+    document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Escape' || modal.style.display !== 'flex') { return; }
+        // Primero cierra el buscador, después la ventana: dos escapes, dos
+        // pasos, que es lo que espera quien abrió el buscador por error.
+        if (cuerpo.querySelector('tr.sc-elegir-fila')) { cerrarElegir(); return; }
+        cerrarModal();
+    });
+
+    // Un solo oyente para toda la tabla: se repinta entera en cada cambio, así
+    // que enganchar cada botón sería volver a engancharlos todos cada vez.
+    cuerpo.addEventListener('click', function (e) {
+        var b = e.target.closest ? e.target.closest('button') : null;
+        if (!b) { return; }
+        if (b.hasAttribute('data-sc-opcion')) { elegirOpcion(b); return; }
+        if (b.hasAttribute('data-sc-cerrar')) { cerrarElegir(); return; }
+        var id = b.getAttribute('data-id');
+        if (b.classList.contains('sc-elegir')) { abrirElegir(b); }
+        else if (b.classList.contains('sc-ignorar')) { ignorar(id); }
+        else if (b.classList.contains('sc-descartar')) { descartar(id); }
+    });
+})();
+</script>

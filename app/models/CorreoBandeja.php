@@ -15,6 +15,9 @@ class CorreoBandeja extends Model
 
     protected $table = 'correo_bandeja';
 
+    /** Cuántas filas activas se traen y se pintan de una vez (ver getActivas). */
+    private const TOPE_ACTIVAS = 500;
+
     // El XML y el PDF capturados esperan en la carpeta compartida, no dentro
     // del proyecto: si esperaran en storage/ de una computadora, la fila
     // existiría para todos pero el archivo solo para quien abrió el correo.
@@ -62,16 +65,23 @@ class CorreoBandeja extends Model
      * debe enterarse de por qué. Las que ya están en el sistema ni siquiera
      * llegan a la bandeja (ver CorreoController::procesarMensaje).
      */
-    public function getActivas()
+    public function getActivas($limite = self::TOPE_ACTIVAS)
     {
         // Orden por id: lo último cargado a la bandeja aparece arriba,
         // sin importar la fecha del correo (una factura vieja recién
         // traída del buzón debe salir de primera).
+        //
+        // Con tope: lo rechazado por Hacienda y lo de otra cédula no se
+        // importa nunca y se queda ahí, así que sin él la bandeja es una lista
+        // que solo crece y que la vista pinta entera en cada carga. Los
+        // contadores de contarPorEstado() siguen diciendo cuántas hay en total.
+        $limite = max(1, min(2000, (int) $limite));
         $params = [];
         $sql = "SELECT * FROM {$this->table}
                 WHERE estado IN ('pendiente', 'rechazada', 'otra_cedula')"
              . $this->condicionSociedad('', $params) . "
-                ORDER BY id DESC";
+                ORDER BY id DESC
+                LIMIT {$limite}";
         return $this->fetchAll($sql, $params);
     }
 
@@ -129,14 +139,18 @@ class CorreoBandeja extends Model
 
     public function getPorUidHash($uidCorreo, $hashXml)
     {
-        $sql = "SELECT * FROM {$this->table} WHERE uid_correo = ? AND hash_xml = ? LIMIT 1";
-        return $this->fetchOne($sql, [(string) $uidCorreo, (string) $hashXml]);
+        $params = [(string) $uidCorreo, (string) $hashXml];
+        $sql = "SELECT * FROM {$this->table} WHERE uid_correo = ? AND hash_xml = ?"
+             . $this->condicionSociedad('', $params) . ' LIMIT 1';
+        return $this->fetchOne($sql, $params);
     }
 
     /**
      * Reactiva cualquier captura previa con los XML/PDF recién descargados.
-     * La tabla tiene UNIQUE (uid_correo, hash_xml), por eso reprocesar el
-     * mismo correo reutiliza la fila y la devuelve a estado pendiente.
+     * La tabla tiene UNIQUE (sociedad_id, uid_correo, hash_xml), por eso
+     * reprocesar el mismo correo desde la misma empresa reutiliza la fila y la
+     * devuelve a estado pendiente. Desde otra empresa abre la suya: el buzón
+     * puede ser compartido, la bandeja no.
      */
     public function revivir($id, $data)
     {
@@ -186,12 +200,91 @@ class CorreoBandeja extends Model
         return $this->actualizarEstado($ids, 'importada');
     }
 
+    /**
+     * Descartar se lleva los archivos (CorreoController::descartar), así que
+     * la fila, que queda como historial, suelta también las rutas: si las
+     * guardara, seguiría diciendo que tiene XML y PDF que ya no existen.
+     */
     public function marcarDescartadas(array $ids)
     {
-        return $this->actualizarEstado($ids, 'descartada');
+        $ids = array_values(array_filter(array_map('intval', $ids), function ($id) {
+            return $id > 0;
+        }));
+        if (empty($ids)) {
+            return 0;
+        }
+
+        // Solo lo que sigue en la bandeja: si alguien la importó mientras
+        // tanto, esta fila ya no es descartable y sus archivos no se tocan
+        // (ver actualizarEstado). Devuelve cuántas cambiaron de verdad.
+        $estados = ['pendiente', 'rechazada', 'otra_cedula'];
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $esperados = implode(',', array_fill(0, count($estados), '?'));
+        return $this->execute(
+            "UPDATE {$this->table}
+                SET estado = 'descartada', archivo_xml = NULL, archivo_pdf = NULL
+              WHERE id IN ({$placeholders}) AND estado IN ({$esperados})",
+            array_merge($ids, $estados)
+        );
     }
 
-    private function actualizarEstado(array $ids, $estado, $importacionId = null)
+    /**
+     * De estas rutas, las que alguna fila fuera de $excluirIds sigue usando.
+     *
+     * Cada captura guarda su propia copia con nombre único, así que lo normal
+     * es que no haya ninguna. Se pregunta igual antes de borrar: un archivo
+     * que se borra por error no se recupera, y el que comparte otra fila (o
+     * la bandeja de otra empresa) le hace falta a esa.
+     */
+    public function rutasEnUsoFuera(array $rutas, array $excluirIds)
+    {
+        $relativas = [];
+        foreach ($rutas as $ruta) {
+            $rel = RutaDocumento::relativa((string) $ruta);
+            if ($rel !== '' && $rel !== null) {
+                $relativas[$rel] = (string) $ruta;
+            }
+        }
+        $excluirIds = array_values(array_filter(array_map('intval', $excluirIds)));
+        if (empty($relativas)) {
+            return [];
+        }
+
+        $enRutas = implode(',', array_fill(0, count($relativas), '?'));
+        $sql = "SELECT archivo_xml, archivo_pdf FROM {$this->table}
+                 WHERE (archivo_xml IN ({$enRutas}) OR archivo_pdf IN ({$enRutas}))";
+        $params = array_merge(array_keys($relativas), array_keys($relativas));
+        if (!empty($excluirIds)) {
+            $sql .= ' AND id NOT IN (' . implode(',', array_fill(0, count($excluirIds), '?')) . ')';
+            $params = array_merge($params, $excluirIds);
+        }
+
+        $enUso = [];
+        // Sin hidratar: se compara contra lo guardado, que es la ruta relativa.
+        foreach ($this->query($sql, $params)->fetchAll() ?: [] as $fila) {
+            foreach (['archivo_xml', 'archivo_pdf'] as $campo) {
+                $rel = (string) ($fila[$campo] ?? '');
+                if (isset($relativas[$rel])) {
+                    $enUso[$relativas[$rel]] = true;
+                }
+            }
+        }
+        return $enUso;
+    }
+
+    /**
+     * Cambia el estado de unas filas, solo si siguen en el que se espera.
+     *
+     * Dos personas pueden tocar la misma factura a la vez —una la importa y
+     * otra la descarta— y cada pantalla trabaja con lo que vio al cargar. Sin
+     * la condición de estado ganaba el último UPDATE: podía quedar "importada"
+     * una fila cuyo XML y PDF ya se habían borrado. Ahora el que llega
+     * segundo no cambia nada y `execute` devuelve 0, que es lo que mira quien
+     * llama para decir "esa ya no estaba disponible".
+     *
+     * @param array|null $desde Estados admitidos; null = no condicionar.
+     */
+    private function actualizarEstado(array $ids, $estado, $importacionId = null, ?array $desde = ['pendiente'])
     {
         $ids = array_values(array_filter(array_map('intval', $ids), function ($id) {
             return $id > 0;
@@ -201,13 +294,20 @@ class CorreoBandeja extends Model
         }
 
         $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $condicion = '';
+        $esperados = [];
+        if ($desde !== null && $desde !== []) {
+            $esperados = array_values($desde);
+            $condicion = ' AND estado IN (' . implode(',', array_fill(0, count($esperados), '?')) . ')';
+        }
 
         if ($importacionId !== null) {
-            $sql = "UPDATE {$this->table} SET estado = ?, importacion_id = ? WHERE id IN ({$placeholders})";
-            $params = array_merge([(string) $estado, (int) $importacionId], $ids);
+            $sql = "UPDATE {$this->table} SET estado = ?, importacion_id = ?
+                     WHERE id IN ({$placeholders}){$condicion}";
+            $params = array_merge([(string) $estado, (int) $importacionId], $ids, $esperados);
         } else {
-            $sql = "UPDATE {$this->table} SET estado = ? WHERE id IN ({$placeholders})";
-            $params = array_merge([(string) $estado], $ids);
+            $sql = "UPDATE {$this->table} SET estado = ? WHERE id IN ({$placeholders}){$condicion}";
+            $params = array_merge([(string) $estado], $ids, $esperados);
         }
 
         return $this->execute($sql, $params);
@@ -253,11 +353,36 @@ class CorreoBandeja extends Model
                     importacion_id INT UNSIGNED NULL DEFAULT NULL,
                     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (id),
-                    UNIQUE KEY uk_uid_xml (uid_correo, hash_xml),
+                    /*
+                     * Con la empresa dentro, porque un buzón puede servir a
+                     * varias (correo_cuenta_sociedades). Sin ella, el primer
+                     * que revisara el buzón compartido se quedaba con la fila
+                     * del mensaje y la segunda empresa no lo veía llegar nunca
+                     * a su bandeja.
+                     */
+                    UNIQUE KEY uk_uid_xml (sociedad_id, uid_correo, hash_xml),
                     KEY idx_estado (estado)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci";
 
         $this->query($sql);
+
+        // Las bases ya instaladas traen la unicidad sin la empresa: se rehace
+        // una vez. Agregarle una columna solo puede aflojarla, así que no hay
+        // duplicados que resolver antes.
+        try {
+            $partes = (int) $this->fetchColumn(
+                "SELECT COUNT(*) FROM information_schema.STATISTICS
+                  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = 'uk_uid_xml'",
+                [$this->table]
+            );
+            if ($partes === 2) {
+                $this->query("ALTER TABLE {$this->table} DROP INDEX uk_uid_xml,
+                              ADD UNIQUE KEY uk_uid_xml (sociedad_id, uid_correo, hash_xml)");
+            }
+        } catch (Throwable $e) {
+            // Sin permisos de DDL queda para la migración manual.
+        }
+
         $tieneOrigen = (int) $this->fetchColumn(
             "SELECT COUNT(*) FROM information_schema.COLUMNS
              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = 'origen'",

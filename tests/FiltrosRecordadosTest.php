@@ -6,7 +6,7 @@
  * devuelva lo último que se filtró, que filtrar de nuevo mande —incluso para
  * vaciar un criterio—, que "Limpiar" olvide de verdad, y que lo guardado en
  * un módulo no se meta en otro, porque "estado" no significa lo mismo en la
- * cola de trabajo que en el pago semanal.
+ * cola de trabajo que en el pago.
  */
 require_once __DIR__ . '/../app/core/Controller.php';
 

@@ -95,8 +95,10 @@ class BuzonFalso
 
 $raiz = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'xmlconcilia_recuperador_' . bin2hex(random_bytes(5));
 // Lo archivado vive bajo SISTEMA: la carpeta que la aplicación administra
-// y que no se toca a mano (ver DocumentoArchivo).
-$mes = $raiz . DIRECTORY_SEPARATOR . 'SISTEMA' . DIRECTORY_SEPARATOR . '2026'
+// y que no se toca a mano (ver DocumentoArchivo). Y dentro, la de su empresa:
+// reponer un documento lo devuelve a la carpeta donde debió estar siempre.
+$mes = $raiz . DIRECTORY_SEPARATOR . 'SISTEMA' . DIRECTORY_SEPARATOR . 'EMPRESA DE PRUEBA'
+     . DIRECTORY_SEPARATOR . '2026'
      . DIRECTORY_SEPARATOR . '07 JULIO' . DIRECTORY_SEPARATOR . 'Facturas';
 $buzonDir = $raiz . DIRECTORY_SEPARATOR . '_correo';
 mkdir($mes, 0700, true);
@@ -122,6 +124,7 @@ $documento = [
     'consecutivo_completo' => '00100001010000000167',
     'numero_factura_asistente' => '00000167',
     'fecha_emision' => '2026-07-20',
+    'sociedad_nombre' => 'EMPRESA DE PRUEBA',
     'proveedor_nombre' => 'PROVEEDOR',
     'ruta_xml' => $rutaXml,
     'ruta_pdf' => $rutaPdf,

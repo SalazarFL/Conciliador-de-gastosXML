@@ -41,7 +41,7 @@ $r = Retorno::anterior(
 );
 assertRetorno($r['url'] === '/xmlconcilia/public/por-pagar?listado_id=7&estado=sin_respaldo',
     'vuelve al checklist del pago tal como estaba');
-assertRetorno($r['titulo'] === 'Volver al pago semanal', 'y el tooltip nombra la pantalla');
+assertRetorno($r['titulo'] === 'Volver al pago', 'y el tooltip nombra la pantalla');
 
 // ── Sin Referer: el destino por omisión ─────────────────────────
 // Pasa de verdad: un marcador guardado, un navegador que no lo manda.

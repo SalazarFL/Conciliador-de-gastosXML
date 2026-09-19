@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/../../helpers/Columnas.php';
 /**
  * Facturas: carga del reporte "Facturas por Proveedor" del ERP y listado en
  * columnas. El foco es el saldo pendiente, así que el filtro de saldo va
@@ -12,7 +13,6 @@ $baseUrl = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 $facturas = is_array($facturas ?? null) ? $facturas : [];
 $opciones = is_array($opciones ?? null) ? $opciones : ['sucursales' => []];
 $proveedoresFiltro = is_array($proveedoresFiltro ?? null) ? $proveedoresFiltro : [];
-$cargas = is_array($cargas ?? null) ? $cargas : [];
 $ultimaCarga = $ultimaCarga ?? null;
 $incidenciasTotal = (int) ($incidenciasTotal ?? 0);
 $incidenciasAbiertas = (int) ($incidenciasAbiertas ?? 0);
@@ -38,6 +38,8 @@ $queryFiltros = array_filter([
     'monto' => $filtros['monto'], 'saldo' => $filtros['saldo'],
 ], function ($v) { return $v !== '' && $v !== null; });
 
+// Las columnas se las pega app.js al enlace: quién las eligió lo sabe el
+// navegador, no el servidor.
 $urlExportar = $baseUrl . '/facturas-erp/exportar?' . http_build_query($queryFiltros);
 
 function feFecha($f)
@@ -65,7 +67,7 @@ function feMonto($v, $moneda = '')
     <div class="card-header mb-12" style="flex-wrap:wrap;">
         <div class="card-title">
             <i class="fas fa-file-arrow-up" style="margin-right:6px;color:var(--navy-light);"></i>
-            Cargar listado del ERP
+            Cargar listado del sistema
         </div>
         <a href="<?= $baseUrl ?>/facturas" class="btn btn-primary btn-sm" style="margin-left:auto;"
            title="Importar comprobantes XML">
@@ -83,8 +85,8 @@ function feMonto($v, $moneda = '')
     </div>
 
     <?php /*
-     * El CSV se mira antes de aplicarse, como en Notas de crédito y en el pago
-     * semanal. Este archivo mueve de una vez el saldo de miles de facturas: el
+     * El CSV se mira antes de aplicarse, como en Notas de crédito y en los
+     * pagos. Este archivo mueve de una vez el saldo de miles de facturas: el
      * botón dice "Vista previa" y no "Cargar" porque hasta que no se confirma
      * en el modal no se escribe nada.
      */ ?>
@@ -253,8 +255,9 @@ function feNombreArchivo(input) {
         }
         if (rev.pendientes) {
             avisos += '<div class="alert alert-warning" style="margin-bottom:10px;">' +
-                rev.pendientes + ' línea(s) no se pudieron leer y van a quedar en revisión, ' +
-                'para que decidas si entran. Ninguna se descarta sola.</div>';
+                rev.pendientes + ' línea(s) van a quedar en revisión, para que decidas si entran: ' +
+                'no se pudieron leer, o son iguales a otra del mismo archivo y no hay cómo ' +
+                'distinguirlas. Ninguna se descarta sola.</div>';
         }
         if (rev.rescatadas || rev.descartadas) {
             avisos += '<div class="alert alert-info" style="margin-bottom:10px;">' +
@@ -338,7 +341,7 @@ $elegirProv = [
     'accion'   => $baseUrl . '/facturas-erp',
     'opciones' => $proveedoresFiltro,
     'cuantos'  => $totalDelArchivo ?? null,
-    'que'      => 'facturas del ERP',
+    'que'      => 'facturas del sistema',
 ];
 include __DIR__ . '/../partials/elegir-proveedor.php';
 else: ?>
@@ -364,7 +367,7 @@ else: ?>
         </a>
         <?php endif; ?>
         <a href="<?= $baseUrl ?>/facturas-erp/incidencias" class="btn btn-outline btn-sm"
-           title="Problemas detectados al leer las cargas del reporte del ERP">
+           title="Problemas detectados al leer las cargas del reporte del sistema">
             <i class="fas fa-triangle-exclamation" style="margin-right:4px;<?= $incidenciasAbiertas > 0 ? 'color:var(--diff);' : '' ?>"></i>Incidencias
             <?php if ($incidenciasAbiertas > 0): ?>
             <span class="badge" style="font-size:10px;padding:1px 6px;margin-left:4px;background:#fee2e2;color:#991b1b;">
@@ -372,8 +375,10 @@ else: ?>
             </span>
             <?php endif; ?>
         </a>
-        <a href="<?= htmlspecialchars($urlExportar) ?>" class="btn btn-outline btn-sm">
-            <i class="fas fa-file-csv" style="margin-right:4px;"></i>Exportar
+        <a href="<?= htmlspecialchars($urlExportar) ?>" class="btn btn-outline btn-sm"
+           data-exportar="facturaserp"
+           title="Bajar a Excel lo que estás viendo: estos filtros y estas columnas">
+            <i class="fas fa-file-excel" style="margin-right:4px;"></i>Exportar
         </a>
     </div>
 
@@ -414,7 +419,7 @@ else: ?>
             <select name="estado" class="form-control">
                 <option value="">Todos</option>
                 <option value="pendiente" <?= $filtros['estado'] === 'pendiente' ? 'selected' : '' ?>>Pendiente</option>
-                <option value="asignada_semana" <?= $filtros['estado'] === 'asignada_semana' ? 'selected' : '' ?>>Asignada a una semana</option>
+                <option value="asignada_pago" <?= $filtros['estado'] === 'asignada_pago' ? 'selected' : '' ?>>Asignada a un pago</option>
             </select>
         </div>
         <div>
@@ -450,8 +455,9 @@ else: ?>
         </div>
     </form>
 
+    <?php $columnasListado = 'facturaserp'; include __DIR__ . '/../partials/columnas.php'; ?>
     <div style="overflow-x:auto;">
-        <table class="data-table fe-tabla" style="font-size:12.5px;min-width:820px;">
+        <table class="data-table fe-tabla" style="font-size:12.5px;min-width:820px;" data-listado="facturaserp">
             <?php /*
              * Cuatro columnas, no diez. Las seis que se fueron no llevaban un
              * dato que distinguiera una factura de otra, contado sobre las
@@ -462,7 +468,7 @@ else: ?>
              *   Moneda    Colones en el 100 % salvo un puñado. El símbolo se
              *             fue pegado al importe.
              *   Estado    "Pendiente" en el 91 %. Solo se marca el 9 % que ya
-             *             está asignado a una semana, con el nombre.
+             *             está asignado a un pago, con el nombre.
              *   Sucursal  Dos valores en total; va bajo el proveedor.
              *   Vence     Va bajo la fecha de emisión, que es de lo que habla.
              *   Monto     El mismo número que el saldo en el 39,6 %. El saldo
@@ -474,19 +480,26 @@ else: ?>
              */ ?>
             <thead>
                 <tr>
-                    <th>Documento</th>
-                    <th>Proveedor</th>
-                    <th>Fecha</th>
-                    <th class="right">Monto</th>
-                    <th class="right">Saldo</th>
+                    <th data-col="documento">Documento</th>
+                    <th data-col="proveedor">Proveedor</th>
+                    <th data-col="fecha">Fecha</th>
+                    <th class="right" data-col="monto">Monto</th>
+                    <th class="right" data-col="saldo">Saldo</th>
+                    <?php // Las seis que se habían retirado del listado por decir
+                          // siempre lo mismo siguen en la base, y ahora se pueden
+                          // volver a encender una por una desde la esquina. ?>
+                    <?= Columnas::cabecerasExtra('facturaserp') ?>
+                    <?php // Esta tabla no tiene columna de acciones, así que el
+                          // botón necesita su propia esquina. ?>
+                    <th style="width:1%;" data-columnas-boton></th>
                 </tr>
             </thead>
             <tbody>
                 <?php if (!$facturas): ?>
                 <tr>
-                    <td colspan="5" class="muted" style="text-align:center;padding:18px;">
+                    <td colspan="13" class="muted" style="text-align:center;padding:18px;">
                         <?= $total === 0 && !$queryFiltros
-                            ? 'Todavía no se ha cargado ningún listado. Subí el CSV del ERP para empezar.'
+                            ? 'Todavía no se ha cargado ningún listado. Subí el CSV del sistema para empezar.'
                             : 'Ninguna factura coincide con el filtro.' ?>
                     </td>
                 </tr>
@@ -502,7 +515,7 @@ else: ?>
                     $saldoNotas = 0.0;
                     foreach ($notasFactura as $nf) { $saldoNotas += (float) $nf['saldo']; }
 
-                    $asignada = ($f['estado'] ?? 'pendiente') === 'asignada_semana';
+                    $asignada = ($f['estado'] ?? 'pendiente') === 'asignada_pago';
                     // "Local" es el 100 % del listado: solo se marca lo que no lo es.
                     $importada = trim((string) $f['origen']) !== '' && $f['origen'] !== 'Local';
                     $montoAparte = abs((float) $f['monto'] - $saldo) >= 0.005;
@@ -511,7 +524,7 @@ else: ?>
                         && $f['fecha_vence'] < date('Y-m-d');
                 ?>
                 <tr>
-                    <td>
+                    <td data-col="documento">
                         <div style="font-family:ui-monospace,monospace;font-size:11.5px;font-weight:650;">
                             <?php if ($doc !== ''): ?>
                                 <?= htmlspecialchars($f['tipo']) ?>-<?= htmlspecialchars($doc) ?>
@@ -526,9 +539,9 @@ else: ?>
                         <div class="fe-sub">
                             <?php if ($asignada): ?>
                             <span class="badge badge-ok fe-badge-mini"
-                                  title="Ya entró a un pago semanal: su saldo está reservado">
+                                  title="Ya entró a un pago: su saldo está reservado">
                                 <i class="fas fa-calendar-check" style="margin-right:3px;"></i>
-                                <?= htmlspecialchars((string) ($f['semana_nombre'] ?: 'Asignada a una semana')) ?>
+                                <?= htmlspecialchars((string) ($f['pago_nombre'] ?: 'Asignada a un pago')) ?>
                             </span>
                             <?php endif; ?>
 
@@ -562,7 +575,7 @@ else: ?>
                         <?php endif; ?>
                     </td>
 
-                    <td>
+                    <td data-col="proveedor">
                         <?= htmlspecialchars($f['proveedor_nombre']) ?>
                         <div class="fe-sub">
                             <?= htmlspecialchars($f['proveedor_codigo']) ?><?php
@@ -571,7 +584,7 @@ else: ?>
                         </div>
                     </td>
 
-                    <td style="white-space:nowrap;">
+                    <td style="white-space:nowrap;" data-col="fecha">
                         <?= feFecha($f['fecha_emision']) ?>
                         <?php /*
                          * El vencimiento va debajo de la emisión, que es de lo
@@ -595,11 +608,11 @@ else: ?>
                      * costaron había que leer renglón por renglón cuál
                      * mostraba el suyo y cuál no.
                      */ ?>
-                    <td class="right" style="white-space:nowrap;">
+                    <td class="right" style="white-space:nowrap;" data-col="monto">
                         <?= feMonto($f['monto'], $f['moneda']) ?>
                     </td>
 
-                    <td class="right" style="white-space:nowrap;">
+                    <td class="right" style="white-space:nowrap;" data-col="saldo">
                         <span style="<?= $tieneSaldo ? 'font-weight:700;color:var(--warn);' : 'color:var(--text-muted);' ?>">
                             <?= $tieneSaldo ? feMonto($saldo, $f['moneda']) : 'sin saldo' ?>
                         </span>
@@ -612,6 +625,8 @@ else: ?>
                         <div class="fe-sub fe-sub-der" title="Ya tiene abonos: el saldo es menor que el monto">abonada</div>
                         <?php endif; ?>
                     </td>
+                    <?= Columnas::celdasExtra('facturaserp', $f) ?>
+                    <td></td>
                 </tr>
                 <?php endforeach; ?>
             </tbody>
@@ -636,58 +651,6 @@ else: ?>
     <?php endif; ?>
 </div>
 <?php endif; // fin de "ya se eligió proveedor" ?>
-
-<?php if ($cargas): ?>
-<!-- ── Historial de cargas ── -->
-<div class="card mt-20">
-    <div class="card-header mb-12">
-        <div class="card-title">
-            <i class="fas fa-clock-rotate-left" style="margin-right:6px;color:var(--navy-light);"></i>
-            Historial de cargas
-        </div>
-    </div>
-    <div style="overflow-x:auto;">
-        <table class="data-table" style="font-size:12px;min-width:860px;">
-            <thead>
-                <tr>
-                    <th>Archivo</th><th>Reporte impreso</th><th class="right">Leídas</th>
-                    <th class="right">Nuevas</th><th class="right">Actualizadas</th>
-                    <th class="right">Sin cambio</th><th>Cuadre</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($cargas as $c): ?>
-                <tr>
-                    <td>
-                        <?= htmlspecialchars((string) $c['archivo_origen']) ?>
-                        <div class="muted" style="font-size:10.5px;">
-                            subido <?= date('d/m/Y H:i', strtotime((string) $c['creado_en'])) ?>
-                        </div>
-                    </td>
-                    <td><?= !empty($c['impreso_en']) ? date('d/m/Y H:i', strtotime((string) $c['impreso_en'])) : '—' ?></td>
-                    <td class="right"><?= number_format((int) $c['filas_leidas']) ?></td>
-                    <td class="right"><?= number_format((int) $c['insertadas']) ?></td>
-                    <td class="right"><?= number_format((int) $c['actualizadas']) ?></td>
-                    <td class="right muted"><?= number_format((int) $c['sin_cambio']) ?></td>
-                    <td>
-                        <?php if ((int) $c['cuadre_ok'] === 1): ?>
-                            <span class="badge badge-ok" style="font-size:10px;padding:2px 7px;">
-                                <?= number_format((int) $c['totales_verificados']) ?> totales OK
-                            </span>
-                        <?php else: ?>
-                            <span class="badge badge-warn" style="font-size:10px;padding:2px 7px;"
-                                  title="<?= htmlspecialchars((string) ($c['advertencias'] ?? '')) ?>">
-                                <?= number_format((int) $c['totales_descuadrados']) ?> sin cuadrar
-                            </span>
-                        <?php endif; ?>
-                    </td>
-                </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
-    </div>
-</div>
-<?php endif; ?>
 
 <script>
 function feMostrarArchivo(input) {

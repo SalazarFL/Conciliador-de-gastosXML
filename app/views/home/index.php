@@ -31,15 +31,15 @@ $totalLineas   = $respaldadas + $conDiferencia + $sinRespaldo;
         <div class="stat-sub">Facturas pendientes de importar</div>
     </div>
     <div class="stat-card white">
-        <div class="stat-label"><i class="fas fa-file-invoice-dollar" style="margin-right:5px;"></i>Último pago semanal</div>
+        <div class="stat-label"><i class="fas fa-file-invoice-dollar" style="margin-right:5px;"></i>Último pago</div>
         <?php if ($ultimoListado): ?>
         <div class="stat-value" style="color:<?= ($sinRespaldo + $conDiferencia) > 0 ? 'var(--warn)' : 'var(--ok)' ?>;">
             <?= $respaldadas ?>/<?= $totalLineas ?>
         </div>
-        <div class="stat-sub">Respaldadas · <?= htmlspecialchars($ultimoListado['nombre']) ?></div>
+        <div class="stat-sub">Respaldadas · <?= htmlspecialchars(Pago::etiqueta($ultimoListado)) ?></div>
         <?php else: ?>
         <div class="stat-value" style="color:var(--text-muted);">—</div>
-        <div class="stat-sub">Aún no has subido un listado</div>
+        <div class="stat-sub">Aún no hay ningún pago</div>
         <?php endif; ?>
     </div>
     <div class="stat-card white">
@@ -51,7 +51,7 @@ $totalLineas   = $respaldadas + $conDiferencia + $sinRespaldo;
         <div class="stat-sub"><?= $sinRespaldo ?> sin respaldo · <?= $conDiferencia ?> con diferencia</div>
         <?php else: ?>
         <div class="stat-value" style="color:var(--text-muted);">—</div>
-        <div class="stat-sub">Sube el listado en Pagos semanales</div>
+        <div class="stat-sub">Crea el pago y sube su archivo en Pagos</div>
         <?php endif; ?>
     </div>
 </div>
@@ -67,19 +67,28 @@ $totalLineas   = $respaldadas + $conDiferencia + $sinRespaldo;
                 <i class="fas fa-building" style="margin-right:6px;color:var(--navy-light);"></i>
                 Empresa con la que trabajas
             </div>
+            <?php // Registrar empresas es de administración; elegir con cuál
+                  // se trabaja lo hace cualquiera, entre las suyas. ?>
+            <?php if (Permisos::puede('empresas.administrar')): ?>
             <a href="<?= $baseUrl ?>/configuracion?ir=empresas" class="btn btn-outline btn-sm"
                title="Registrar, editar o eliminar empresas">
                 <i class="fas fa-gear"></i> Administrar
             </a>
+            <?php endif; ?>
         </div>
 
         <?php if (empty($sociedades)): ?>
         <div style="font-size:12.5px;color:var(--text-muted);">
+            <?php if (Permisos::puede('empresas.administrar')): ?>
             Todavía no hay ninguna empresa registrada. La que elijas es con la que trabajas:
             su cédula se compara contra el receptor de cada factura del correo.
             <a href="<?= $baseUrl ?>/configuracion?ir=empresas" style="color:var(--navy-light);font-weight:700;">
                 Registra la primera
             </a>.
+            <?php else: ?>
+            No tienes ninguna empresa asignada todavía. Pídele al administrador que te
+            dé acceso a la que te toque: hasta entonces los listados saldrán vacíos.
+            <?php endif; ?>
         </div>
         <?php else: ?>
         <div style="display:flex;flex-direction:column;gap:5px;">
@@ -118,12 +127,19 @@ $totalLineas   = $respaldadas + $conDiferencia + $sinRespaldo;
     <!-- ── Accesos rápidos ── -->
     <div style="display:flex;flex-direction:column;gap:6px;">
         <?php
+        /*
+         * Cada acceso lleva el permiso que exige su módulo. Ofrecer un atajo
+         * que acaba en "no tienes permiso" no ayuda a nadie: quien no tiene el
+         * módulo simplemente no lo ve, y el enrutador sigue siendo lo que de
+         * verdad lo protege.
+         */
         $accesos = [
-            ['/por-pagar', 'fa-file-invoice-dollar', 'Pagos semanales', 'Verificar el listado del pago semanal', 'rgba(15,118,110,.09)', '#0f766e'],
-            ['/correo', 'fa-envelope-open-text', 'Facturas desde Correo', 'Buscar e importar XML y PDF del buzón', 'rgba(240,165,0,.10)', 'var(--gold-dark)'],
-            ['/facturas-erp', 'fa-file-invoice-dollar', 'Facturas', 'Cargar el listado del ERP y consultar saldos', 'rgba(27,58,107,.09)', 'var(--navy)'],
-            ['/seguimiento', 'fa-list-check', 'Seguimiento', 'Lo que falta de respaldo o no cuadra', 'rgba(27,58,107,.07)', 'var(--navy-light)'],
+            ['/por-pagar', 'fa-file-invoice-dollar', 'Pagos', 'Verificar el listado del pago', 'rgba(15,118,110,.09)', '#0f766e', 'por_pagar.ver'],
+            ['/correo', 'fa-envelope-open-text', 'Facturas desde Correo', 'Buscar e importar XML y PDF del buzón', 'rgba(240,165,0,.10)', 'var(--gold-dark)', 'correo.ver'],
+            ['/facturas-erp', 'fa-file-invoice-dollar', 'Facturas', 'Cargar el listado del sistema y consultar saldos', 'rgba(27,58,107,.09)', 'var(--navy)', 'facturas_erp.ver'],
+            ['/seguimiento', 'fa-list-check', 'Seguimiento', 'Lo que falta de respaldo o no cuadra', 'rgba(27,58,107,.07)', 'var(--navy-light)', 'seguimiento.ver'],
         ];
+        $accesos = array_values(array_filter($accesos, fn($a) => Permisos::puede($a[6])));
         ?>
         <?php foreach ($accesos as $a): ?>
         <a href="<?= $baseUrl . $a[0] ?>" class="card" style="text-decoration:none;transition:transform .14s,box-shadow .14s;padding:9px 12px;margin-top:0;"
@@ -141,6 +157,14 @@ $totalLineas   = $respaldadas + $conDiferencia + $sinRespaldo;
             </div>
         </a>
         <?php endforeach; ?>
+
+        <?php if (!$accesos): ?>
+        <div class="card" style="padding:12px;font-size:12.5px;color:var(--text-muted);line-height:1.5;">
+            <i class="fas fa-circle-info" style="color:var(--gold);"></i>
+            Tu rol (<strong><?= htmlspecialchars(Permisos::nombreRol()) ?></strong>) todavía no
+            incluye ningún módulo. Pídele al administrador que te asigne uno.
+        </div>
+        <?php endif; ?>
     </div>
 
 </div>

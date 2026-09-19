@@ -28,6 +28,19 @@ $local = is_file($archivoLocal)
     : [];
 $local = is_array($local) ? $local : [];
 
+/*
+ * La clave con la que se cifran las contraseñas de los buzones vive en su
+ * PROPIO archivo, no en local.php: cambiar-base.ps1 pisa local.php con el
+ * perfil que se elija (oficina, propia…) y se la llevaría por delante, y sin
+ * ella las contraseñas guardadas dejan de poder leerse. local.clave.php ya
+ * está en .gitignore por el patrón local.*.php. Ver app/helpers/Secreto.php.
+ */
+$archivoClave = __DIR__ . DIRECTORY_SEPARATOR . 'local.clave.php';
+$claveSecretos = trim((string) ($local['clave_secretos'] ?? ''));
+if ($claveSecretos === '' && is_file($archivoClave)) {
+    $claveSecretos = trim((string) require $archivoClave);
+}
+
 // Errores en pantalla por defecto: es una herramienta interna y quien la usa
 // necesita poder mandar la captura del error a quien la mantiene.
 $ambiente = ($local['environment'] ?? '') === 'production' ? 'production' : 'development';
@@ -75,8 +88,14 @@ return [
     // Vacío = buscar 'pdftotext' en el PATH del sistema.
     'pdftotext_path' => (string) ($local['pdftotext_path'] ?? ''),
 
+    // Clave con la que se cifra lo que la base guarda pero nadie debe poder
+    // leer de ella (hoy, la contraseña de cada buzón: ver app/helpers/Secreto.php).
+    // Sale de local.clave.php —o de local.php, si alguien la puso ahí— y tiene
+    // que ser LA MISMA en todas las computadoras: la base es una sola.
+    'clave_secretos' => $claveSecretos,
+
     // Los pesos y umbrales del viejo módulo de Conciliación salieron de aquí
     // con él. Los que quedaron en uso viven junto al código que los aplica:
     // FacturaMatcher (umbrales de número y proveedor, tolerancia en colones)
-    // y PagoSemanalResolutor (tolerancia de saldo).
+    // y PagoResolutor (tolerancia de saldo).
 ];

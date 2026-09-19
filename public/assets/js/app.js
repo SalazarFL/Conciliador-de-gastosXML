@@ -15,6 +15,85 @@ if (window.self !== window.top) {
 	document.documentElement.classList.add('en-ventana');
 }
 
+/* El token de la sesión en cada escritura que va a la propia aplicación.
+ *
+ * El servidor rechaza un POST que no pruebe salir de una pantalla de Nexo
+ * Fiscal (ver app/core/Csrf.php). En vez de pedirle a cada pantalla que se
+ * acuerde de mandarlo, se le pone aquí a todo lo que sale: fetch,
+ * XMLHttpRequest y formularios, también los que se envían con form.submit().
+ * Solo al mismo origen: el token no viaja nunca a otro sitio.
+ */
+(function () {
+	'use strict';
+
+	var meta = document.querySelector('meta[name="csrf-token"]');
+	var token = meta ? meta.getAttribute('content') : '';
+	if (!token) return;
+
+	function esPropia(url) {
+		try { return new URL(url, window.location.href).origin === window.location.origin; }
+		catch (e) { return false; }
+	}
+	function escribe(metodo) {
+		metodo = String(metodo || 'GET').toUpperCase();
+		return metodo !== 'GET' && metodo !== 'HEAD' && metodo !== 'OPTIONS';
+	}
+
+	if (window.fetch) {
+		var fetchOriginal = window.fetch;
+		window.fetch = function (recurso, opciones) {
+			try {
+				var esPeticion = typeof Request !== 'undefined' && recurso instanceof Request;
+				var metodo = (opciones && opciones.method) || (esPeticion ? recurso.method : 'GET');
+				var url = esPeticion ? recurso.url : String(recurso);
+				if (escribe(metodo) && esPropia(url)) {
+					opciones = Object.assign({}, opciones || {});
+					var cabeceras = new Headers(opciones.headers || (esPeticion ? recurso.headers : undefined));
+					if (!cabeceras.has('X-CSRF-Token')) cabeceras.set('X-CSRF-Token', token);
+					opciones.headers = cabeceras;
+				}
+			} catch (e) { /* ante la duda, la petición sale como la escribió la pantalla */ }
+			return fetchOriginal.call(this, recurso, opciones);
+		};
+	}
+
+	if (window.XMLHttpRequest) {
+		var abrir = XMLHttpRequest.prototype.open;
+		var enviar = XMLHttpRequest.prototype.send;
+		XMLHttpRequest.prototype.open = function (metodo, url) {
+			this._nexoCsrf = escribe(metodo) && esPropia(url);
+			return abrir.apply(this, arguments);
+		};
+		XMLHttpRequest.prototype.send = function () {
+			if (this._nexoCsrf) {
+				try { this.setRequestHeader('X-CSRF-Token', token); } catch (e) {}
+			}
+			return enviar.apply(this, arguments);
+		};
+	}
+
+	function sellar(form) {
+		if (!form || !escribe(form.getAttribute('method') || form.method)) return;
+		if (!esPropia(form.getAttribute('action') || window.location.href)) return;
+		var campo = form.querySelector('input[name="csrf_token"]');
+		if (!campo) {
+			campo = document.createElement('input');
+			campo.type = 'hidden';
+			campo.name = 'csrf_token';
+			form.appendChild(campo);
+		}
+		if (!campo.value) campo.value = token;
+	}
+	document.addEventListener('submit', function (e) { sellar(e.target); }, true);
+	if (window.HTMLFormElement) {
+		var submitOriginal = HTMLFormElement.prototype.submit;
+		HTMLFormElement.prototype.submit = function () {
+			sellar(this);
+			return submitOriginal.apply(this, arguments);
+		};
+	}
+})();
+
 /* Diálogos visuales compartidos. Sustituyen alert/confirm del navegador para
  * que los mensajes tengan contexto, una acción clara y la identidad del sistema. */
 (function () {
@@ -46,6 +125,8 @@ if (window.self !== window.top) {
 					'<div><div class="app-dialog-brand">Nexo Fiscal</div><h2 class="app-dialog-title" id="app-dialog-title"></h2></div>' +
 				'</div>' +
 				'<div class="app-dialog-message" id="app-dialog-message"></div>' +
+				'<div class="app-dialog-body" hidden></div>' +
+				'<div class="app-dialog-error" role="alert" hidden></div>' +
 				'<div class="app-dialog-actions">' +
 					'<button type="button" class="btn btn-outline app-dialog-cancel">Cancelar</button>' +
 					'<button type="button" class="btn btn-primary app-dialog-confirm">Entendido</button>' +
@@ -59,6 +140,8 @@ if (window.self !== window.top) {
 			icon: layer.querySelector('.app-dialog-icon i'),
 			title: layer.querySelector('.app-dialog-title'),
 			message: layer.querySelector('.app-dialog-message'),
+			body: layer.querySelector('.app-dialog-body'),
+			error: layer.querySelector('.app-dialog-error'),
 			close: layer.querySelector('.app-dialog-close'),
 			cancel: layer.querySelector('.app-dialog-cancel'),
 			confirm: layer.querySelector('.app-dialog-confirm')
@@ -66,7 +149,15 @@ if (window.self !== window.top) {
 
 		ui.close.addEventListener('click', function () { finish(false); });
 		ui.cancel.addEventListener('click', function () { finish(false); });
-		ui.confirm.addEventListener('click', function () { finish(true); });
+		ui.confirm.addEventListener('click', confirmar);
+		// Enter en un campo del formulario es aceptar, como en cualquier
+		// formulario; en un área de texto sigue siendo salto de línea.
+		ui.body.addEventListener('keydown', function (event) {
+			if (event.key === 'Enter' && event.target.tagName !== 'TEXTAREA' && event.target.tagName !== 'BUTTON') {
+				event.preventDefault();
+				confirmar();
+			}
+		});
 		layer.addEventListener('click', function (event) {
 			if (event.target === layer) finish(false);
 		});
@@ -86,6 +177,17 @@ if (window.self !== window.top) {
 		ui.icon.className = 'fas ' + meta.icon;
 		ui.title.textContent = active.options.title || meta.title;
 		ui.message.textContent = active.options.message || '';
+		// En un formulario la explicación es opcional: sin ella, el hueco del
+		// mensaje sobraría entre el título y los campos.
+		ui.message.hidden = !!active.options.content && !active.options.message;
+		ui.body.innerHTML = '';
+		if (active.options.content) {
+			if (typeof active.options.content === 'string') ui.body.innerHTML = active.options.content;
+			else ui.body.appendChild(active.options.content);
+		}
+		ui.body.hidden = !active.options.content;
+		mostrarError('');
+		ui.confirm.disabled = false;
 		ui.cancel.textContent = active.options.cancelText || 'Cancelar';
 		ui.confirm.textContent = active.options.confirmText || (active.options.confirm ? 'Continuar' : 'Entendido');
 		ui.cancel.hidden = !active.options.confirm;
@@ -95,8 +197,50 @@ if (window.self !== window.top) {
 		ui.layer.setAttribute('aria-hidden', 'false');
 		requestAnimationFrame(function () {
 			ui.layer.classList.add('open');
-			(active.options.confirm ? ui.cancel : ui.confirm).focus();
+			var campo = ui.body.hidden ? null : ui.body.querySelector('input:not([type=hidden]):not([disabled]):not([readonly]), select, textarea');
+			if (campo) {
+				campo.focus();
+				if (typeof campo.select === 'function' && campo.tagName === 'INPUT') campo.select();
+			} else {
+				(active.options.confirm ? ui.cancel : ui.confirm).focus();
+			}
 		});
+	}
+
+	function mostrarError(texto) {
+		ui.error.textContent = texto || '';
+		ui.error.hidden = !texto;
+	}
+
+	/* Aceptar. En un formulario pasa primero por onConfirm, que puede
+	 * devolver (o prometer) un texto de error: el cuadro se queda abierto
+	 * con lo escrito y el error a la vista, en vez de cerrarse y obligar a
+	 * empezar de nuevo. Cualquier otro valor cierra y es la respuesta. */
+	function confirmar() {
+		if (!active || !ui || ui.confirm.disabled) return;
+		var actual = active;
+		if (typeof actual.options.onConfirm !== 'function') { finish(true); return; }
+
+		mostrarError('');
+		var textoBoton = ui.confirm.innerHTML;
+		ui.confirm.disabled = true;
+		ui.confirm.innerHTML = '<i class="fas fa-spinner fa-spin"></i> ' + (actual.options.pendingText || 'Guardando…');
+
+		Promise.resolve()
+			.then(function () { return actual.options.onConfirm(ui.body); })
+			.then(function (resultado) {
+				if (active !== actual) return;
+				ui.confirm.disabled = false;
+				ui.confirm.innerHTML = textoBoton;
+				if (typeof resultado === 'string' && resultado !== '') { mostrarError(resultado); return; }
+				if (resultado === false) return;
+				finish(resultado === undefined ? true : resultado);
+			}, function (error) {
+				if (active !== actual) return;
+				ui.confirm.disabled = false;
+				ui.confirm.innerHTML = textoBoton;
+				mostrarError((error && error.message) || 'No se pudo completar.');
+			});
 	}
 
 	function finish(result) {
@@ -163,6 +307,16 @@ if (window.self !== window.top) {
 		confirm: function (message, options) {
 			options = options || {};
 			return show(Object.assign({}, options, { message: String(message || ''), confirm: true }));
+		},
+		/* Un formulario corto con la cara de los demás diálogos, en lugar de
+		 * prompt(). `content` es un elemento o HTML; `onConfirm(cuerpo)` valida
+		 * y guarda, y devuelve un texto de error para quedarse abierto. Se
+		 * resuelve con lo que devuelva onConfirm, o false si se cancela. */
+		form: function (options) {
+			options = options || {};
+			return show(Object.assign({ confirmText: 'Guardar' }, options, {
+				message: String(options.message || ''), confirm: true
+			}));
 		}
 	};
 
@@ -230,7 +384,7 @@ if (window.self !== window.top) {
 		}
 		if (event.key !== 'Tab') return;
 		var focusable = Array.prototype.filter.call(
-			ui.panel.querySelectorAll('button:not([hidden]):not([disabled])'),
+			ui.panel.querySelectorAll('button:not([hidden]):not([disabled]), input:not([type=hidden]):not([disabled]), select:not([disabled]), textarea:not([disabled])'),
 			function (element) { return element.offsetParent !== null; }
 		);
 		if (!focusable.length) return;
@@ -1326,7 +1480,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
 /* Visor de ventanas: otra pantalla del sistema, encima de la que se está usando.
  *
- * "Buscar en el correo", desde la cola de seguimiento o desde el pago semanal,
+ * "Buscar en el correo", desde la cola de seguimiento o desde el pago,
  * abría otra pestaña en otro módulo. El trabajo es de ida y vuelta —mirar el
  * renglón, ir a buscarlo, volver al siguiente— y con treinta renglones son
  * treinta pestañas y treinta vueltas a encontrar dónde se iba.
@@ -1739,4 +1893,751 @@ document.addEventListener('DOMContentLoaded', function () {
 		var cuadros = document.querySelectorAll(CUADROS);
 		for (var i = 0; i < cuadros.length; i++) { centrar(cuadros[i]); }
 	});
+})();
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * CLIC DERECHO SOBRE UN RENGLÓN
+ *
+ * Las acciones de una fila viven en su última columna, en botones de un icono
+ * cada uno: hay que leer el renglón, llevar el ratón hasta el borde derecho y
+ * ahí adivinar cuál de los tres iconos es el que hace falta —o pararse encima
+ * a esperar el globo de ayuda—. Con el clic derecho las mismas acciones salen
+ * donde está el puntero, en una lista y con su nombre escrito.
+ *
+ * El menú no sabe qué hace ninguna acción, y es a propósito: no hay un
+ * catálogo de opciones por módulo que mantener al día. Lee los botones que la
+ * fila YA tiene dibujados y, al elegir uno, le manda el clic al botón de
+ * verdad. De ahí salen tres cosas gratis: valen igual las confirmaciones, la
+ * ficha y las ventanas; una pantalla nueva entra sola en cuanto tiene una
+ * tabla; y lo que un usuario no tiene permitido ver tampoco está dibujado en
+ * su fila, así que tampoco puede aparecer en su menú.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+(function () {
+	/* Un renglón de listado: las tablas del sistema y las tarjetas de
+	 * Configuración, que son un listado con otra forma. */
+	var FILAS = 'table.data-table tbody tr, table.table tbody tr, .cfg-item';
+
+	/* Lo que se puede pulsar. Las casillas y los campos de filtro quedan fuera
+	 * a propósito: eso se usa donde está, y dentro de un campo el menú que
+	 * sirve es el del navegador. */
+	var PULSABLES = 'a[href], button';
+
+	/* Cajones donde una fila junta sus acciones. Lo que esté aquí dentro es una
+	 * acción aunque no lleve título. */
+	var CAJONES = '.cfg-item-acciones, .seg-respaldo, .pp-acciones';
+
+	var menu = null;
+	var fila = null;
+
+	/** Cómo se llama la acción. El título es la frase que las pantallas ya
+	 *  escribieron para el globo de ayuda: sirve igual de nombre.
+	 *
+	 *  Un botón de un icono y sin título se queda fuera del menú, y no hay más
+	 *  remedio: una opción en blanco no se puede elegir. En la práctica no pasa
+	 *  —todos llevan título, que es lo que enseña el globo—, pero quien añada
+	 *  uno nuevo tiene aquí el porqué. */
+	function etiqueta(el) {
+		var texto = (el.getAttribute('title') || el.getAttribute('aria-label') || '').trim();
+		if (!texto) { texto = (el.textContent || '').replace(/\s+/g, ' ').trim(); }
+		if (!texto) { return ''; }
+		/* Varios títulos explican además el porqué ("Buscarlo en el correo. La
+		 * nota no trae número propio: se busca por proveedor…"). En el menú va
+		 * la orden; la explicación se queda en el globo de la propia opción. */
+		var corte = texto.indexOf('. ');
+		if (corte > 0) { texto = texto.slice(0, corte); }
+		return texto.length > 64 ? texto.slice(0, 63) + '…' : texto;
+	}
+
+	/* Un renglón está lleno de cosas que se pueden pulsar y no todas son una
+	 * acción sobre él: el proveedor lleva a lo suyo, el lote abre el lote. Vale
+	 * lo que tenga título —todos los botones de acción del sistema lo llevan,
+	 * porque es lo que enseña el globo de ayuda— y lo que esté en la última
+	 * columna o en un cajón de acciones, que ya es su sitio. */
+	function esAccion(el) {
+		if (el.getAttribute('title') || el.getAttribute('aria-label')) { return true; }
+		var celda = el.closest('td');
+		if (celda && celda === celda.parentNode.lastElementChild) { return true; }
+		return !!el.closest(CAJONES);
+	}
+
+	function utilizable(el) {
+		if (el.disabled || el.dataset.sinMenu === 'si') { return false; }
+		/* Escondido por su pantalla —un botón que solo sale con la selección
+		 * puesta, la mitad de un par que depende del estado— no es una acción
+		 * que esta fila tenga ahora. */
+		if (el.offsetParent === null && !el.getClientRects().length) { return false; }
+		return esAccion(el) && etiqueta(el) !== '';
+	}
+
+	function acciones(renglon) {
+		var encontradas = [];
+		var vistas = {};
+		Array.prototype.forEach.call(renglon.querySelectorAll(PULSABLES), function (el) {
+			if (!utilizable(el)) { return; }
+			var nombre = etiqueta(el);
+			/* Lo mismo escrito dos veces —el chip del XML y el botón de verlo—
+			 * es una sola opción en el menú. */
+			if (vistas[nombre]) { return; }
+			vistas[nombre] = true;
+			encontradas.push({
+				nombre: nombre,
+				ayuda: (el.getAttribute('title') || '').trim(),
+				origen: el
+			});
+		});
+		return encontradas;
+	}
+
+	/** De qué renglón es este menú. La tabla se sigue viendo detrás, y sin esto
+	 *  treinta renglones iguales no dicen sobre cuál se va a actuar. */
+	function rotulo(renglon) {
+		var celdas = renglon.querySelectorAll('td, .cfg-item-titulo');
+		for (var i = 0; i < celdas.length; i++) {
+			if (celdas[i].querySelector('input, select')) { continue; }
+			var texto = (celdas[i].textContent || '').replace(/\s+/g, ' ').trim();
+			if (texto.length > 1) {
+				return texto.length > 40 ? texto.slice(0, 39) + '…' : texto;
+			}
+		}
+		return '';
+	}
+
+	function opciones() {
+		return menu ? Array.prototype.slice.call(menu.querySelectorAll('.menu-fila-opcion')) : [];
+	}
+
+	/** Arriba y abajo con el teclado, dando la vuelta por los dos extremos. */
+	function mover(paso) {
+		var lista = opciones();
+		if (!lista.length) { return; }
+		var donde = lista.indexOf(document.activeElement);
+		var siguiente = donde < 0
+			? (paso > 0 ? 0 : lista.length - 1)
+			: (donde + paso + lista.length) % lista.length;
+		lista[siguiente].focus();
+	}
+
+	function crear(items, titulo) {
+		var caja = document.createElement('div');
+		caja.className = 'menu-fila';
+		caja.setAttribute('role', 'menu');
+		caja.tabIndex = -1;
+
+		if (titulo) {
+			var cabecera = document.createElement('div');
+			cabecera.className = 'menu-fila-titulo';
+			cabecera.textContent = titulo;
+			cabecera.title = titulo;
+			caja.appendChild(cabecera);
+		}
+
+		items.forEach(function (accion) {
+			var opcion = document.createElement('button');
+			opcion.type = 'button';
+			opcion.className = 'menu-fila-opcion';
+			opcion.setAttribute('role', 'menuitem');
+			/* El título entero, con su porqué, no se pierde: en el menú es el
+			 * globo de la opción cuando dice más que su nombre. */
+			if (accion.ayuda && accion.ayuda !== accion.nombre) { opcion.title = accion.ayuda; }
+
+			var marca = document.createElement('span');
+			marca.className = 'menu-fila-icono';
+			var icono = accion.origen.querySelector('i');
+			if (icono) { marca.appendChild(icono.cloneNode(true)); }
+			opcion.appendChild(marca);
+
+			var texto = document.createElement('span');
+			texto.className = 'menu-fila-texto';
+			texto.textContent = accion.nombre;
+			opcion.appendChild(texto);
+
+			opcion.addEventListener('click', function () { ejecutar(accion.origen); });
+			caja.appendChild(opcion);
+		});
+
+		caja.addEventListener('keydown', function (evento) {
+			if (evento.key === 'ArrowDown') { evento.preventDefault(); mover(1); }
+			else if (evento.key === 'ArrowUp') { evento.preventDefault(); mover(-1); }
+		});
+
+		return caja;
+	}
+
+	/* Pegado al puntero y siempre entero dentro de la ventana: si no cabe hacia
+	 * abajo o hacia la derecha se abre para el otro lado, como cualquier menú
+	 * de escritorio. En la última fila de un listado largo, que es donde más se
+	 * usa, esto es la diferencia entre verlo y no verlo. */
+	function colocar(x, y) {
+		var margen = 6;
+		var ancho = menu.offsetWidth;
+		var alto = menu.offsetHeight;
+		var izq = (x + ancho + margen > window.innerWidth) ? x - ancho : x;
+		var arriba = (y + alto + margen > window.innerHeight) ? y - alto : y;
+		menu.style.left = Math.max(margen, Math.min(izq, window.innerWidth - ancho - margen)) + 'px';
+		menu.style.top = Math.max(margen, Math.min(arriba, window.innerHeight - alto - margen)) + 'px';
+	}
+
+	function cerrar() {
+		if (!menu) { return; }
+		menu.parentNode.removeChild(menu);
+		menu = null;
+		if (fila) { fila.classList.remove('is-menu-abierto'); fila = null; }
+	}
+
+	function ejecutar(origen) {
+		cerrar();
+		/* El clic va al botón de la fila, no a una copia suya. Así la acción es
+		 * exactamente la misma que si se hubiera pulsado el botón: su
+		 * confirmación, su ficha, su ventana, su formulario. Este menú no tiene
+		 * que saber qué hace ninguna, ni enterarse cuando cambie. */
+		origen.click();
+	}
+
+	document.addEventListener('contextmenu', function (evento) {
+		if (!evento.target.closest) { return; }
+		if (evento.target.closest('.menu-fila')) { return; }
+		/* Shift + clic derecho es la salida al menú del navegador: copiar el
+		 * texto, abrir en otra pestaña, inspeccionar. */
+		if (evento.shiftKey) { cerrar(); return; }
+		/* Y dentro de un campo manda siempre el del navegador, que ahí sí tiene
+		 * algo que ofrecer: pegar, deshacer, el corrector. */
+		if (evento.target.closest('input, select, textarea, [contenteditable="true"]')) { cerrar(); return; }
+
+		var renglon = evento.target.closest(FILAS);
+		if (!renglon) { cerrar(); return; }
+		var items = acciones(renglon);
+		/* Un renglón sin acciones no tiene menú que enseñar: se deja el del
+		 * navegador, por si lo que se quería era copiar lo que dice. */
+		if (!items.length) { cerrar(); return; }
+
+		evento.preventDefault();
+		cerrar();
+
+		fila = renglon;
+		fila.classList.add('is-menu-abierto');
+		menu = crear(items, rotulo(fila));
+		document.body.appendChild(menu);
+
+		/* La tecla de menú del teclado no trae puntero: entonces sale pegado a
+		 * la fila, que es de lo que habla. */
+		var x = evento.clientX;
+		var y = evento.clientY;
+		if (!x && !y) {
+			var sitio = fila.getBoundingClientRect();
+			x = sitio.left + 24;
+			y = sitio.bottom;
+		}
+		colocar(x, y);
+
+		/* El foco entra al menú, no a su primera opción: con el ratón, una
+		 * opción ya marcada se lee como la que se va a ejecutar. Con el teclado
+		 * la primera flecha la marca. */
+		menu.focus();
+	});
+
+	document.addEventListener('pointerdown', function (evento) {
+		if (!menu || !evento.target.closest) { return; }
+		if (evento.target.closest('.menu-fila')) { return; }
+		cerrar();
+	}, true);
+
+	document.addEventListener('keydown', function (evento) {
+		if (!menu || evento.key !== 'Escape') { return; }
+		/* Mientras el menú está abierto, Escape es suyo: debajo puede haber un
+		 * cuadro o una ventana que también cierran con Escape, y se irían los
+		 * dos de un solo golpe. */
+		evento.preventDefault();
+		evento.stopImmediatePropagation();
+		cerrar();
+	}, true);
+
+	/* El menú va fijo a un punto de la pantalla: si lo de debajo se mueve, deja
+	 * de señalar la fila con la que se abrió. */
+	document.addEventListener('scroll', function (evento) {
+		if (!menu) { return; }
+		var donde = evento.target;
+		if (donde && donde.closest && donde.closest('.menu-fila')) { return; }
+		cerrar();
+	}, true);
+	window.addEventListener('resize', cerrar);
+	window.addEventListener('blur', cerrar);
+})();
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * QUÉ COLUMNAS SE VEN
+ *
+ * Un listado sabe de cada renglón mucho más de lo que cabe en la pantalla: la
+ * cédula del proveedor, la sucursal, el archivo del que salió, la fecha en que
+ * se cargó. Enseñarlo todo llena la tabla y no se lee; enseñar siempre lo
+ * mismo obliga a abrir la ficha renglón por renglón para ver un dato que la
+ * base ya tiene. El botón de la esquina de la tabla lo resuelve: cada quien
+ * enciende lo que le hace falta hoy.
+ *
+ * Las columnas están TODAS dibujadas en el HTML —las apagadas también—, así
+ * que encender una es quitarle una regla de CSS y no volver a pedir la página.
+ * Esa regla es una sola, en una hoja de estilo, y no una clase por celda: los
+ * listados que se repintan solos (Notas de crédito, Correo) borran sus <td> y
+ * los vuelven a hacer, y una clase puesta a mano se perdería en cada repinte.
+ *
+ * Lo que quede encendido es lo que baja el Excel: el enlace de Exportar lleva
+ * la lista puesta. El archivo es lo que se está viendo, que era el punto.
+ *
+ * El catálogo no se repite acá: se lee de las propias cabeceras de la tabla,
+ * que ya lo traen del servidor (app/config/columnas.php) en su data-col. Una
+ * lista de columnas escrita dos veces es una lista que un día no coincide.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+(function () {
+	/* La misma clave que usa el guion de la vista (partials/columnas.php) para
+	 * aplicar la elección antes de que la página se pinte. Si cambia acá,
+	 * cambia allá: son las dos mitades de lo mismo. */
+	function clave(listado) { return 'columnas:' + listado; }
+
+	var panel = null;
+	var tablaAbierta = null;
+	var arrastrando = null;
+
+	function tablas() {
+		return Array.prototype.slice.call(document.querySelectorAll('table[data-listado]'));
+	}
+
+	/** Las columnas de esta tabla, en su orden, leídas de la cabecera. */
+	function columnas(tabla) {
+		var cabeceras = tabla.querySelectorAll('thead tr:first-child th[data-col]');
+		return Array.prototype.map.call(cabeceras, function (th) {
+			return {
+				id: th.getAttribute('data-col'),
+				/* El título de la columna, no lo que haya dentro del <th>: ahí
+				 * puede haber un icono de orden o un signo de filtro puesto. */
+				titulo: (th.getAttribute('data-col-titulo') || th.textContent || '').replace(/\s+/g, ' ').trim(),
+				defecto: th.getAttribute('data-col-defecto') !== 'no'
+			};
+		});
+	}
+
+	function porDefecto(tabla) {
+		return columnas(tabla).filter(function (c) { return c.defecto; })
+			.map(function (c) { return c.id; });
+	}
+
+	/** Lo que esta persona eligió, si eligió algo alguna vez. */
+	function guardadas(listado) {
+		try {
+			var crudo = localStorage.getItem(clave(listado));
+			if (!crudo) { return null; }
+			var lista = JSON.parse(crudo);
+			return Array.isArray(lista) && lista.length ? lista : null;
+		} catch (e) {
+			return null;
+		}
+	}
+
+	function guardar(listado, ids) {
+		try { localStorage.setItem(clave(listado), JSON.stringify(ids)); } catch (e) {}
+	}
+
+	function olvidar(listado) {
+		try { localStorage.removeItem(clave(listado)); } catch (e) {}
+	}
+
+	/** Qué se está viendo ahora mismo: lo elegido, o lo de fábrica. */
+	function visibles(tabla) {
+		var listado = tabla.getAttribute('data-listado');
+		var todas = columnas(tabla).map(function (c) { return c.id; });
+		var elegidas = guardadas(listado);
+		if (!elegidas) { return porDefecto(tabla); }
+		/* Solo las que esta tabla tiene: una elección guardada hace meses puede
+		 * nombrar una columna que ya no existe, y una que se inventó después
+		 * no puede quedar escondida para siempre por no estar en la lista
+		 * vieja —para eso el catálogo dice cuáles vienen de fábrica—. */
+		var vivas = elegidas.filter(function (id) { return todas.indexOf(id) >= 0; });
+		return vivas.length ? vivas : porDefecto(tabla);
+	}
+
+	/**
+	 * La hoja de estilo que esconde lo apagado. Una sola por listado, con el
+	 * mismo id que pone la vista: acá se reescribe la que ya venía puesta, y
+	 * así no hay un parpadeo de columnas que aparecen y se van.
+	 */
+	function pintar(tabla) {
+		var listado = tabla.getAttribute('data-listado');
+		var hoja = document.getElementById('cols-' + listado);
+		if (!hoja) {
+			hoja = document.createElement('style');
+			hoja.id = 'cols-' + listado;
+			document.head.appendChild(hoja);
+		}
+
+		var puestas = visibles(tabla);
+		var apagadas = columnas(tabla)
+			.map(function (c) { return c.id; })
+			.filter(function (id) { return puestas.indexOf(id) < 0; });
+
+		hoja.textContent = apagadas.length
+			? '[data-listado="' + listado + '"] [data-col="'
+				+ apagadas.join('"],[data-listado="' + listado + '"] [data-col="') + '"]{display:none}'
+			: '';
+
+		ordenar(tabla, puestas.concat(apagadas));
+		enlacesDeExportar(listado, puestas);
+	}
+
+	/* ── El orden de las columnas ────────────────────────────────────────────
+	 *
+	 * Esconder una columna es una regla de CSS, pero MOVERLA no: en una tabla
+	 * el orden es el orden de las celdas, y no hay forma de cambiarlo desde la
+	 * hoja de estilo sin romper la alineacion entre cabecera y cuerpo. Asi que
+	 * se mueven las celdas, fila por fila.
+	 *
+	 * Las celdas SIN data-col no se tocan y se quedan en su sitio: la de
+	 * acciones, la del ancla del final, la de la casilla de seleccion. Solo se
+	 * reparten entre si las que el catalogo conoce, ocupando exactamente las
+	 * mismas posiciones que ya ocupaban.
+	 */
+	function ordenar(tabla, orden) {
+		var lugar = {};
+		orden.forEach(function (id, i) { lugar[id] = i; });
+
+		var filas = Array.prototype.slice.call(tabla.querySelectorAll('thead tr, tbody tr'));
+		filas.forEach(function (fila) { ordenarFila(fila, lugar); });
+	}
+
+	function ordenarFila(fila, lugar) {
+		var celdas = Array.prototype.slice.call(fila.children);
+		var conCol = celdas.filter(function (c) { return c.hasAttribute('data-col'); });
+		if (conCol.length < 2) { return; }
+
+		/* Una celda con un data-col que la cabecera no tiene: no se sabe donde
+		 * ponerla, y adivinar seria dejar la fila descuadrada. Se deja la fila
+		 * como esta. */
+		for (var i = 0; i < conCol.length; i++) {
+			if (!(conCol[i].getAttribute('data-col') in lugar)) { return; }
+		}
+
+		var ordenadas = conCol.slice().sort(function (a, b) {
+			return lugar[a.getAttribute('data-col')] - lugar[b.getAttribute('data-col')];
+		});
+
+		var yaEsta = true;
+		for (var j = 0; j < conCol.length; j++) {
+			if (conCol[j] !== ordenadas[j]) { yaEsta = false; break; }
+		}
+		if (yaEsta) { return; }
+
+		/* Cada celda ordenada entra en la posicion que ocupaba una de las de
+		 * su clase, para que las que no llevan data-col no se muevan. */
+		var posiciones = conCol.map(function (c) { return celdas.indexOf(c); });
+		var nuevas = celdas.slice();
+		posiciones.forEach(function (pos, k) { nuevas[pos] = ordenadas[k]; });
+		nuevas.forEach(function (c) { fila.appendChild(c); });
+	}
+
+	/**
+	 * Los listados que se repintan solos —Notas de credito al filtrar, Correo
+	 * al listar— rehacen su <tbody> con el orden del catalogo. Se vuelve a
+	 * aplicar el elegido en cuanto aparecen las filas nuevas.
+	 */
+	function vigilarRepintes(tabla) {
+		if (!window.MutationObserver) { return; }
+		var cuerpos = tabla.querySelectorAll('tbody');
+		if (!cuerpos.length) { return; }
+
+		var trabajando = false;
+		var vigia = new MutationObserver(function () {
+			if (trabajando) { return; }
+			trabajando = true;
+			try {
+				var puestas = visibles(tabla);
+				var todas = columnas(tabla).map(function (c) { return c.id; });
+				ordenar(tabla, puestas.concat(todas.filter(function (id) {
+					return puestas.indexOf(id) < 0;
+				})));
+			} finally {
+				trabajando = false;
+			}
+		});
+		Array.prototype.forEach.call(cuerpos, function (cuerpo) {
+			vigia.observe(cuerpo, { childList: true });
+		});
+	}
+
+	/**
+	 * Y el Excel baja lo mismo. El enlace ya lleva los filtros puestos; acá se
+	 * le añade —o se le cambia— la lista de columnas.
+	 */
+	function enlacesDeExportar(listado, puestas) {
+		var enlaces = document.querySelectorAll('a[data-exportar="' + listado + '"]');
+		Array.prototype.forEach.call(enlaces, function (enlace) {
+			var href = enlace.getAttribute('href') || '';
+			var partes = href.split('#');
+			var base = partes[0].replace(/([?&])cols=[^&]*/g, '$1').replace(/[?&]$/, '');
+			var union = base.indexOf('?') >= 0 ? '&' : '?';
+			enlace.setAttribute('href',
+				base.replace(/&&+/g, '&').replace(/\?&/, '?')
+				+ union + 'cols=' + encodeURIComponent(puestas.join(','))
+				+ (partes[1] ? '#' + partes[1] : ''));
+		});
+	}
+
+	// ── El panel ────────────────────────────────────────────────────────────
+
+	function cerrar() {
+		if (!panel) { return; }
+		panel.parentNode.removeChild(panel);
+		panel = null;
+		tablaAbierta = null;
+	}
+
+	function abrir(tabla, boton) {
+		cerrar();
+		tablaAbierta = tabla;
+
+		var puestas = visibles(tabla);
+		panel = document.createElement('div');
+		panel.className = 'cols-panel';
+		panel.setAttribute('role', 'dialog');
+		panel.setAttribute('aria-label', 'Columnas del listado');
+
+		var titulo = document.createElement('div');
+		titulo.className = 'cols-titulo';
+		titulo.textContent = 'Columnas';
+		panel.appendChild(titulo);
+
+		var pista = document.createElement('div');
+		pista.className = 'cols-pista';
+		pista.textContent = 'Arrastra para cambiar el orden.';
+		panel.appendChild(pista);
+
+		var lista = document.createElement('div');
+		lista.className = 'cols-lista';
+
+		/* En el orden elegido, no en el del catalogo: el panel es lo que dice
+		 * en que orden van, asi que tiene que enseñarlo ya puesto. Las
+		 * apagadas van despues, en el orden de siempre. */
+		var todas = columnas(tabla);
+		var porId = {};
+		todas.forEach(function (c) { porId[c.id] = c; });
+		var enOrden = puestas.map(function (id) { return porId[id]; }).filter(Boolean);
+		todas.forEach(function (c) {
+			if (puestas.indexOf(c.id) < 0) { enOrden.push(c); }
+		});
+
+		enOrden.forEach(function (col) {
+			var fila = document.createElement('label');
+			fila.className = 'cols-opcion';
+			fila.draggable = true;
+
+			var agarre = document.createElement('span');
+			agarre.className = 'cols-agarre';
+			agarre.setAttribute('aria-hidden', 'true');
+			agarre.textContent = '≡';
+
+			var casilla = document.createElement('input');
+			casilla.type = 'checkbox';
+			casilla.value = col.id;
+			casilla.checked = puestas.indexOf(col.id) >= 0;
+			casilla.addEventListener('change', function () { cambiar(tabla); });
+
+			var texto = document.createElement('span');
+			texto.className = 'cols-nombre';
+			texto.textContent = col.titulo || col.id;
+
+			fila.appendChild(agarre);
+			fila.appendChild(casilla);
+			fila.appendChild(texto);
+			arrastrable(fila, lista, tabla);
+			lista.appendChild(fila);
+		});
+		panel.appendChild(lista);
+
+		var pie = document.createElement('div');
+		pie.className = 'cols-pie';
+		pie.appendChild(boton_('Todas', function () { marcarTodas(tabla, true); }));
+		pie.appendChild(boton_('Como estaba', function () {
+			olvidar(tabla.getAttribute('data-listado'));
+			pintar(tabla);
+			refrescarCasillas(tabla);
+		}));
+		panel.appendChild(pie);
+
+		document.body.appendChild(panel);
+		colocar(boton);
+		panel.querySelector('input').focus();
+	}
+
+	/**
+	 * Arrastrar una fila del panel para cambiar el orden de esa columna.
+	 *
+	 * Con la API del navegador y no con raton a mano: es la que ya sabe de
+	 * pantallas tactiles, de teclas de cancelar y de soltar fuera del panel.
+	 * Al soltar se guarda, que es lo mismo que hace marcar una casilla —el
+	 * orden del panel ES el orden que se guarda—, asi que no hace falta
+	 * confirmar nada.
+	 */
+	function arrastrable(fila, lista, tabla) {
+		fila.addEventListener('dragstart', function (evento) {
+			arrastrando = fila;
+			fila.classList.add('cols-arrastrando');
+			try {
+				evento.dataTransfer.effectAllowed = 'move';
+				/* Firefox no empieza el arrastre sin algo puesto aqui. */
+				evento.dataTransfer.setData('text/plain', fila.querySelector('input').value);
+			} catch (e) {}
+		});
+
+		fila.addEventListener('dragend', function () {
+			fila.classList.remove('cols-arrastrando');
+			arrastrando = null;
+			cambiar(tabla);
+		});
+
+		fila.addEventListener('dragover', function (evento) {
+			if (!arrastrando || arrastrando === fila) { return; }
+			evento.preventDefault();
+			try { evento.dataTransfer.dropEffect = 'move'; } catch (e) {}
+
+			/* Por encima de la mitad va antes; por debajo, despues. Sin esto
+			 * la fila salta de sitio en cuanto el puntero la roza. */
+			var caja = fila.getBoundingClientRect();
+			var antes = (evento.clientY - caja.top) < (caja.height / 2);
+			lista.insertBefore(arrastrando, antes ? fila : fila.nextSibling);
+		});
+
+		fila.addEventListener('drop', function (evento) { evento.preventDefault(); });
+	}
+
+	function boton_(texto, alPulsar) {
+		var b = document.createElement('button');
+		b.type = 'button';
+		b.className = 'cols-accion';
+		b.textContent = texto;
+		b.addEventListener('click', alPulsar);
+		return b;
+	}
+
+	/** Debajo del botón y pegado a su derecha, sin salirse de la ventana. */
+	function colocar(boton) {
+		var sitio = boton.getBoundingClientRect();
+		var margen = 6;
+		var ancho = panel.offsetWidth;
+		var alto = panel.offsetHeight;
+
+		var izq = Math.min(sitio.right - ancho, window.innerWidth - ancho - margen);
+		var arriba = sitio.bottom + 4;
+		if (arriba + alto + margen > window.innerHeight) {
+			arriba = Math.max(margen, sitio.top - alto - 4);
+		}
+		panel.style.left = Math.max(margen, izq) + 'px';
+		panel.style.top = arriba + 'px';
+	}
+
+	function casillas() {
+		return panel ? Array.prototype.slice.call(panel.querySelectorAll('input[type=checkbox]')) : [];
+	}
+
+	function cambiar(tabla) {
+		var marcadas = casillas().filter(function (c) { return c.checked; });
+		/* Una tabla sin columnas no es una tabla. La última encendida no se
+		 * puede apagar: se vuelve a encender y ahí se ve por qué. */
+		if (!marcadas.length) {
+			var ultima = casillas()[0];
+			ultima.checked = true;
+			ultima.closest('.cols-opcion').classList.add('cols-rebote');
+			setTimeout(function () {
+				var fila = ultima.closest('.cols-opcion');
+				if (fila) { fila.classList.remove('cols-rebote'); }
+			}, 400);
+			return;
+		}
+		guardar(tabla.getAttribute('data-listado'), marcadas.map(function (c) { return c.value; }));
+		pintar(tabla);
+	}
+
+	function marcarTodas(tabla, si) {
+		casillas().forEach(function (c) { c.checked = si; });
+		cambiar(tabla);
+	}
+
+	function refrescarCasillas(tabla) {
+		var puestas = visibles(tabla);
+		casillas().forEach(function (c) { c.checked = puestas.indexOf(c.value) >= 0; });
+	}
+
+	// ── El botón de la esquina ──────────────────────────────────────────────
+
+	/**
+	 * Va en la última celda de la cabecera —la de las acciones, que está
+	 * vacía— o en la que la vista marque. Es la esquina de la tabla: el sitio
+	 * donde se busca esto en cualquier programa que lo tenga.
+	 */
+	function ponerBoton(tabla) {
+		if (tabla.getAttribute('data-cols-listo') === 'si') { return; }
+		if (!columnas(tabla).length) { return; }
+
+		var celda = tabla.querySelector('thead th[data-columnas-boton]')
+			|| tabla.querySelector('thead tr:first-child th:last-child');
+		if (!celda) { return; }
+
+		var boton = document.createElement('button');
+		boton.type = 'button';
+		boton.className = 'cols-boton';
+		boton.title = 'Elegir qué columnas se ven';
+		boton.setAttribute('aria-label', 'Elegir qué columnas se ven');
+		boton.innerHTML = '<i class="fas fa-table-columns"></i>';
+		boton.addEventListener('click', function (evento) {
+			evento.stopPropagation();
+			if (panel && tablaAbierta === tabla) { cerrar(); return; }
+			abrir(tabla, boton);
+		});
+
+		celda.appendChild(boton);
+		tabla.setAttribute('data-cols-listo', 'si');
+	}
+
+	/*
+	 * Volver a poner las columnas en los enlaces de Exportar.
+	 *
+	 * Lo necesita el listado de Notas de crédito, que filtra en vivo y rehace
+	 * el enlace entero cada vez que alguien escribe: al rehacerlo se lleva por
+	 * delante la lista de columnas, y sin esto el Excel bajaría las de fábrica
+	 * en cuanto se tocara un filtro.
+	 */
+	window.ColumnasEnExportar = function () {
+		tablas().forEach(function (tabla) {
+			enlacesDeExportar(tabla.getAttribute('data-listado'), visibles(tabla));
+		});
+	};
+
+	function arrancar() {
+		tablas().forEach(function (tabla) {
+			ponerBoton(tabla);
+			/* Y se repinta aunque la vista ya lo hubiera hecho: así el enlace
+			 * de Exportar sale con las columnas puestas desde el principio, y
+			 * no solo después de tocar el botón. */
+			pintar(tabla);
+			vigilarRepintes(tabla);
+		});
+	}
+
+	document.addEventListener('pointerdown', function (evento) {
+		if (!panel || !evento.target.closest) { return; }
+		if (evento.target.closest('.cols-panel, .cols-boton')) { return; }
+		cerrar();
+	}, true);
+
+	document.addEventListener('keydown', function (evento) {
+		if (!panel || evento.key !== 'Escape') { return; }
+		evento.preventDefault();
+		evento.stopImmediatePropagation();
+		cerrar();
+	}, true);
+
+	window.addEventListener('resize', cerrar);
+
+	if (document.readyState === 'loading') {
+		document.addEventListener('DOMContentLoaded', arrancar);
+	} else {
+		arrancar();
+	}
 })();

@@ -28,6 +28,14 @@ require_once __DIR__ . '/../../helpers/AplicacionNotaCredito.php';
  */
 $modoSeguimiento = Seguimiento::modo($modoSeguimiento ?? Seguimiento::MODO_SISTEMA);
 $esModoCorreo    = $modoSeguimiento === Seguimiento::MODO_CORREO;
+/*
+ * Y con el modo, qué columnas puede enseñar. Son dos catálogos y no uno
+ * porque las preguntas son distintas: en Correo no hay diferencia contra el
+ * ERP que mirar, y en Sistema no hay "cómo llegó". Cada uno recuerda su propia
+ * elección, que es lo que se quiere: son dos trabajos distintos.
+ */
+require_once __DIR__ . '/../../helpers/Columnas.php';
+$listadoCols = $esModoCorreo ? 'seguimiento_correo' : 'seguimiento';
 $origenes        = is_array($origenes ?? null) ? $origenes : Seguimiento::origenesDe($modoSeguimiento);
 $llegadas        = is_array($llegadas ?? null) ? $llegadas : Seguimiento::LLEGADAS;
 
@@ -155,10 +163,11 @@ $fechaDia = function ($valor) {
 
             <?php // Exportar baja lo que la cola tiene puesto en pantalla, así
                   // que va con ella y no en un encabezado aparte. Es el mismo
-                  // lugar que ocupa en Facturas y en Pagos semanales. ?>
+                  // lugar que ocupa en Facturas y en Pagos. ?>
             <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/seguimiento/exportar?<?= $qs() ?>"
-               style="margin-left:6px;" title="Bajar en CSV los renglones que muestran los filtros">
-                <i class="fas fa-file-csv"></i> Exportar
+               data-exportar="<?= $listadoCols ?>" style="margin-left:6px;"
+               title="Bajar a Excel lo que estás viendo: estos filtros y estas columnas">
+                <i class="fas fa-file-excel"></i> Exportar
             </a>
         </div>
     </div>
@@ -190,7 +199,7 @@ $fechaDia = function ($valor) {
          *                               la cola es el archivo entero.
          *   Marca                       Sirve para auditar decisiones, no para
          *                               trabajar la cola.
-         *   Listado                     El pago semanal tiene su propia
+         *   Listado                     El pago tiene su propia
          *                               pantalla, con su propio checklist.
          *
          * Todas siguen funcionando si llegan por la URL: lo que se retiró es
@@ -485,7 +494,8 @@ $fechaDia = function ($valor) {
 
     <!-- ══ Tabla ══ -->
     <div class="table-wrap">
-        <table class="data-table seg-tabla">
+        <?php $columnasListado = $listadoCols; include __DIR__ . '/../partials/columnas.php'; ?>
+        <table class="data-table seg-tabla" data-listado="<?= $listadoCols ?>">
             <thead>
                 <?php /*
                  * Siete columnas. Dos de las tres que se habían retirado siguen
@@ -514,38 +524,41 @@ $fechaDia = function ($valor) {
                         title="Marcá una y, con Shift, otra más abajo: se marcan todas las del medio.">
                         <input type="checkbox" id="chk-todos" aria-label="Seleccionar todos">
                     </th>
-                    <th>Documento</th>
-                    <th>Proveedor</th>
-                    <th class="right">Monto</th>
-                    <th class="right" title="<?= $esModoCorreo
+                    <th data-col="documento">Documento</th>
+                    <th data-col="proveedor">Proveedor</th>
+                    <th class="right" data-col="monto">Monto</th>
+                    <th class="right" data-col="saldo" title="<?= $esModoCorreo
                         ? 'Lo que queda debiendo el registro del sistema al que está enganchado este comprobante'
                         : 'Lo que queda debiendo el documento' ?>">Saldo</th>
-                    <th class="center">Respaldo</th>
-                    <th style="width:1%;"></th>
+                    <th class="center" data-col="respaldo">Respaldo</th>
+                    <?php // Y todo lo que la cola sabe de cada renglón y no cabía
+                          // en seis columnas: apagado de fábrica, a un clic. ?>
+                    <?= Columnas::cabecerasExtra($listadoCols) ?>
+                    <th style="width:1%;" data-columnas-boton></th>
                 </tr>
                 <tr class="seg-search-row">
                     <th class="center" title="Filtros por columna"><i class="fas fa-search"></i></th>
-                    <th><input form="seg-filter-form" name="col_documento"
+                    <th data-col="documento"><input form="seg-filter-form" name="col_documento"
                                value="<?= htmlspecialchars($filtros['col_documento']) ?>"
                                placeholder="Buscar" aria-label="Buscar en documento"></th>
                     <?php // El proveedor y la sucursal se eligen arriba, en la
                           // barra, con su buscador propio: repetir aquí un
                           // campo de texto para lo mismo solo permite pedir
                           // dos cosas distintas a la vez. ?>
-                    <th></th>
+                    <th data-col="proveedor"></th>
                     <?php // Cada una con la suya: cuando compartían columna las dos
                           // casillas iban apretadas, una al lado de la otra. ?>
-                    <th>
+                    <th data-col="monto">
                         <input form="seg-filter-form" name="col_monto" inputmode="decimal"
                                value="<?= htmlspecialchars($filtros['col_monto']) ?>"
                                placeholder="Monto" aria-label="Buscar monto">
                     </th>
-                    <th>
+                    <th data-col="saldo">
                         <input form="seg-filter-form" name="col_saldo" inputmode="decimal"
                                value="<?= htmlspecialchars($filtros['col_saldo']) ?>"
                                placeholder="Saldo" aria-label="Buscar saldo">
                     </th>
-                    <th>
+                    <th data-col="respaldo">
                         <select form="seg-filter-form" name="col_respaldo" aria-label="Filtrar respaldo">
                             <option value="">Todos</option>
                             <option value="completo" <?= $filtros['col_respaldo'] === 'completo' ? 'selected' : '' ?>>Completo</option>
@@ -553,13 +566,17 @@ $fechaDia = function ($valor) {
                             <option value="sin_pdf" <?= $filtros['col_respaldo'] === 'sin_pdf' ? 'selected' : '' ?>>Sin PDF</option>
                         </select>
                     </th>
+                    <?php // Los mismos huecos que arriba, vacíos: sin ellos, al
+                          // encender una columna esta fila se correría un sitio
+                          // y cada buscador quedaría bajo la columna de al lado. ?>
+                    <?= Columnas::cabecerasExtra($listadoCols, false) ?>
                     <th></th>
                 </tr>
             </thead>
             <tbody>
             <?php if (empty($filas)): ?>
                 <tr class="empty-row">
-                    <td colspan="7">
+                    <td colspan="30">
                         <div style="font-size:34px;color:var(--ok);margin-bottom:8px;">
                             <i class="fas fa-circle-check"></i>
                         </div>
@@ -642,7 +659,7 @@ $fechaDia = function ($valor) {
                                aria-label="Seleccionar <?= htmlspecialchars($f['documento']) ?>">
                     </td>
 
-                    <td>
+                    <td data-col="documento">
                         <div class="seg-doc">
                             <span class="badge badge-<?= $esNc ? 'navy' : 'gold' ?>" style="font-size:10px;">
                                 <?= $esNc ? 'NC' : 'FE' ?>
@@ -661,7 +678,7 @@ $fechaDia = function ($valor) {
                             <?php endif; ?>
                             <?php /*
                              * El contexto solo se enseña en las facturas, donde
-                             * dice a qué pago semanal entró y eso cambia de una
+                             * dice a qué pago entró y eso cambia de una
                              * a otra. En las notas es el listado del que salen,
                              * y como el módulo mantiene un único acumulado, los
                              * 1.935 renglones traían la misma frase: ocupaba
@@ -689,7 +706,7 @@ $fechaDia = function ($valor) {
                             <?php if ($esModoCorreo && $sinSistema): ?>
                             <span class="badge seg-badge-mini"
                                   style="background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;"
-                                  title="Este comprobante está cargado pero no aparece en ningún registro del ERP">
+                                  title="Este comprobante está cargado pero no aparece en ningún registro del sistema">
                                 <i class="fas fa-link-slash" style="margin-right:3px;"></i>
                                 Sin registro en el sistema
                             </span>
@@ -800,7 +817,7 @@ $fechaDia = function ($valor) {
                         <?php endif; ?>
                     </td>
 
-                    <td>
+                    <td data-col="proveedor">
                         <?php // Con el ancho que soltaron las tres columnas que se
                               // fueron, el nombre entra: se cortaba en 3 de cada 10. ?>
                         <?= htmlspecialchars(mb_strimwidth((string) $f['proveedor'], 0, 46, '…')) ?>
@@ -809,7 +826,7 @@ $fechaDia = function ($valor) {
                         <?php endif; ?>
                     </td>
 
-                    <td class="right">
+                    <td class="right" data-col="monto">
                         <strong><?= $moneda($f['monto'], $f['moneda']) ?></strong>
                         <?php // Lo único que decía "Qué falta" y no estaba ya en
                               // los chips. Va acá, pegado al número del que habla:
@@ -835,7 +852,7 @@ $fechaDia = function ($valor) {
                      *               a ningún registro del sistema
                      *   la cifra    lo que queda debiendo
                      */ ?>
-                    <td class="right">
+                    <td class="right" data-col="saldo">
                         <?php if ($sinSaldoConocido): ?>
                         <span style="color:#cbd5e1;" title="<?= $esModoCorreo
                             ? 'No está enganchado a ningún registro del sistema: no hay saldo que mirar'
@@ -850,7 +867,7 @@ $fechaDia = function ($valor) {
                     <!-- Las dos piezas que tiene que tener todo documento. Estos
                          chips son, además, la respuesta a "qué falta": la columna
                          que lo repetía con palabras se retiró. -->
-                    <td class="center">
+                    <td class="center" data-col="respaldo">
                         <div class="seg-respaldo">
                             <?php if ($f['xml_ok']): ?>
                             <a class="seg-chip seg-chip-ok" target="_blank"
@@ -862,7 +879,7 @@ $fechaDia = function ($valor) {
                             </a>
                             <?php elseif ($f['xml_perdido']): ?>
                             <span class="seg-chip seg-chip-perdido"
-                                  title="El XML se archivó y ya no está en la carpeta compartida">
+                                  title="El XML se archivó y ya no está donde se guardó">
                                 <i class="fas fa-link-slash"></i> XML
                             </span>
                             <?php else: ?>
@@ -884,7 +901,7 @@ $fechaDia = function ($valor) {
                             </a>
                             <?php elseif ($f['pdf_perdido']): ?>
                             <span class="seg-chip seg-chip-perdido"
-                                  title="El PDF se archivó y ya no está en la carpeta compartida">
+                                  title="El PDF se archivó y ya no está donde se guardó">
                                 <i class="fas fa-link-slash"></i> PDF
                             </span>
                             <?php elseif ($f['pdf_historico']): ?>
@@ -913,6 +930,10 @@ $fechaDia = function ($valor) {
                             <?php endif; ?>
                         </div>
                     </td>
+                    <?php // Todo lo que la cola sabe y no cabía en pantalla, con
+                          // el mismo valor con el que baja al Excel. ?>
+                    <?= Columnas::celdasExtra($listadoCols, $f) ?>
+
                     <td style="white-space:nowrap;">
                         <?php
                         /*
@@ -1051,7 +1072,7 @@ $fechaDia = function ($valor) {
                         <option value="0">Sin recordatorio</option>
                         <option value="1">Cada día</option>
                         <option value="3">Cada 3 días</option>
-                        <option value="7" selected>Cada semana</option>
+                        <option value="7" selected>Cada pago</option>
                         <option value="15">Cada 15 días</option>
                         <option value="30">Cada mes</option>
                     </select>
@@ -1059,8 +1080,8 @@ $fechaDia = function ($valor) {
                            value="08:00" aria-label="Hora del recordatorio">
                 </div>
                 <div id="dlg-recordatorio-nota" style="font-size:11px;color:var(--text-muted);margin-top:4px;">
-                    El primer aviso sale en una semana a las 08:00, y vuelve a salir
-                    cada semana mientras siga en revisión.
+                    El primer aviso sale en un pago a las 08:00, y vuelve a salir
+                    cada pago mientras siga en revisión.
                 </div>
             </div>
 
@@ -1377,7 +1398,7 @@ $fechaDia = function ($valor) {
 
     /* Shift + clic marca de golpe todo lo que hay entre la última casilla que
      * se tocó y esta. La cola se trabaja en tandas —veinte comprobantes del
-     * mismo proveedor, una semana entera— y de a un clic es fácil saltarse
+     * mismo proveedor, un pago entero— y de a un clic es fácil saltarse
      * uno sin notarlo. Ctrl no hace falta: un clic suelto ya suma o quita uno
      * sin tocar los demás. El comportamiento vive en app.js porque lo
      * comparte con las listas del correo. */
@@ -1526,6 +1547,15 @@ $fechaDia = function ($valor) {
         .then(function (r) { return r.json(); })
         .then(function (d) {
             if (!d.ok) { throw new Error(d.message || 'No se pudo guardar.'); }
+            // Lo que no está en la cola de la empresa activa no se toca; si
+            // había algo así en la selección, se dice antes de recargar.
+            if (d.descartados) {
+                return AppDialog.alert(
+                    'Se guardaron ' + d.afectados + ' renglones. ' + d.descartados
+                        + ' no se tocaron porque ya no están en la cola de esta empresa.',
+                    { title: 'Guardado en parte', type: 'warning' }
+                ).then(function () { window.location.reload(); });
+            }
             window.location.reload();
         })
         .catch(function (err) {
@@ -1546,7 +1576,7 @@ $fechaDia = function ($valor) {
         var PLAZOS = {
             '1':  ['mañana', 'todos los días'],
             '3':  ['en 3 días', 'cada 3 días'],
-            '7':  ['en una semana', 'cada semana'],
+            '7':  ['en un pago', 'cada pago'],
             '15': ['en 15 días', 'cada 15 días'],
             '30': ['en un mes', 'cada mes']
         };
@@ -1694,7 +1724,7 @@ $fechaDia = function ($valor) {
         // Se archivó y desapareció de la carpeta compartida, que no es lo
         // mismo que no haberlo tenido nunca: este se puede volver a bajar.
         if (f.xml_perdido || f.pdf_perdido) {
-            html += '<span class="badge badge-perdido" title="Se archivó y ya no está en la carpeta compartida">' +
+            html += '<span class="badge badge-perdido" title="Se archivó y ya no está donde se guardó">' +
                     '<i class="fas fa-link-slash"></i> Archivo perdido</span>';
             if (f.recuperable) {
                 html += '<button type="button" class="btn-recuperar" data-recuperar-doc="' + Number(f.factura_xml_id) + '"' +

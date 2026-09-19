@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/../../helpers/Columnas.php';
 // Los nombres de las clases de nota salen de acá, y se usan antes de incluir
 // el parcial que también lo pide.
 require_once __DIR__ . '/../../helpers/ClaseNotaCredito.php';
@@ -319,6 +320,17 @@ include __DIR__ . '/../partials/elegir-proveedor.php';
             <?php if ($filtrosActivos): ?>
             <a href="<?= $baseUrl ?>/notas-credito?listado_id=<?= (int) $listado['id'] ?>&amp;limpiar=1" class="btn btn-outline btn-sm"><i class="fas fa-broom"></i> Limpiar</a>
             <?php endif; ?>
+            <?php /*
+             * Esta pantalla filtra en vivo y reescribe la barra de direcciones,
+             * así que el enlace se arma con lo que hay en ella en el momento de
+             * pulsarlo (lo hace el JS de abajo, buscando data-exportar). Lo que
+             * sale de aquí es el punto de partida.
+             */ ?>
+            <a href="<?= $baseUrl ?>/notas-credito/exportar?listado_id=<?= (int) $listado['id'] ?>"
+               class="btn btn-outline btn-sm" data-exportar="notascredito"
+               title="Bajar a Excel lo que estás viendo: estos filtros y estas columnas">
+                <i class="fas fa-file-excel"></i> Exportar
+            </a>
         </div>
     </form>
 
@@ -334,7 +346,8 @@ include __DIR__ . '/../partials/elegir-proveedor.php';
         <?php endif; ?>
     </div>
     <div class="nc-table-wrap">
-        <table class="data-table nc-table">
+        <?php $columnasListado = 'notascredito'; include __DIR__ . '/../partials/columnas.php'; ?>
+        <table class="data-table nc-table" data-listado="notascredito">
             <thead>
                 <?php /*
                  * Seis columnas, no trece. Las siete que se fueron estaban
@@ -380,7 +393,7 @@ include __DIR__ . '/../partials/elegir-proveedor.php';
                  * arriba en vez de adentro, donde se iba al escribir.
                  */ ?>
                 <tr class="nc-head">
-                    <th>
+                    <th data-col="estado" data-col-titulo="Estado">
                         <div class="nc-filtros nc-una">
                             <label class="nc-f">
                                 <span class="nc-ttl">Estado</span>
@@ -397,7 +410,7 @@ include __DIR__ . '/../partials/elegir-proveedor.php';
                             </label>
                         </div>
                     </th>
-                    <th>
+                    <th data-col="proveedor" data-col-titulo="Proveedor">
                         <div class="nc-filtros">
                             <label class="nc-f">
                                 <span class="nc-ttl">Proveedor</span>
@@ -409,7 +422,7 @@ include __DIR__ . '/../partials/elegir-proveedor.php';
                             </label>
                         </div>
                     </th>
-                    <th>
+                    <th data-col="documento" data-col-titulo="Documento">
                         <div class="nc-filtros nc-fechas">
                             <label class="nc-f">
                                 <span class="nc-ttl">Documento</span>
@@ -429,7 +442,7 @@ include __DIR__ . '/../partials/elegir-proveedor.php';
                             </label>
                         </div>
                     </th>
-                    <th class="right">
+                    <th class="right" data-col="monto" data-col-titulo="Monto">
                         <div class="nc-filtros nc-una">
                             <label class="nc-f">
                                 <span class="nc-ttl">Monto</span>
@@ -437,7 +450,7 @@ include __DIR__ . '/../partials/elegir-proveedor.php';
                             </label>
                         </div>
                     </th>
-                    <th class="right">
+                    <th class="right" data-col="saldo" data-col-titulo="Saldo">
                         <div class="nc-filtros nc-una">
                             <label class="nc-f">
                                 <span class="nc-ttl">Saldo</span>
@@ -445,7 +458,7 @@ include __DIR__ . '/../partials/elegir-proveedor.php';
                             </label>
                         </div>
                     </th>
-                    <th>
+                    <th data-col="nc_xml" data-col-titulo="NC XML">
                         <div class="nc-filtros">
                             <label class="nc-f nc-ancho">
                                 <span class="nc-ttl">NC XML</span>
@@ -461,7 +474,11 @@ include __DIR__ . '/../partials/elegir-proveedor.php';
                             </label>
                         </div>
                     </th>
-                    <th>
+                    <?php // Y lo que se había retirado de la tabla por estar
+                          // vacío en la mayoría de los renglones: sigue en la
+                          // base y vuelve con una casilla. ?>
+                    <?= Columnas::cabecerasExtra('notascredito') ?>
+                    <th data-columnas-boton>
                         <span class="nc-col-title">Acciones</span>
                         <?php // El botón sale solo cuando hay algo escrito arriba. ?>
                         <button type="button" class="nc-clear-col" id="nc-limpiar-col" hidden>
@@ -472,7 +489,7 @@ include __DIR__ . '/../partials/elegir-proveedor.php';
             </thead>
             <tbody id="nc-lines-body">
             <?php if (empty($lineas)): ?>
-                <tr><td colspan="7" style="text-align:center;padding:18px;color:var(--text-muted);">No hay notas con estos filtros.</td></tr>
+                <tr><td colspan="25" style="text-align:center;padding:18px;color:var(--text-muted);">No hay notas con estos filtros.</td></tr>
             <?php endif; ?>
             <?php foreach ($lineas as $row): ?>
                 <?php
@@ -488,7 +505,7 @@ include __DIR__ . '/../partials/elegir-proveedor.php';
                     ? (float) $row['diferencia'] : null;
                 ?>
                 <tr>
-                    <td>
+                    <td data-col="estado">
                         <?php /*
                          * La insignia es el botón. "Ver detalles" estaba debajo
                          * de las 2.613 filas, siempre, así que no distinguía
@@ -511,14 +528,14 @@ include __DIR__ . '/../partials/elegir-proveedor.php';
                         <?php endif; ?>
                     </td>
 
-                    <td class="nc-provider">
+                    <td class="nc-provider" data-col="proveedor">
                         <?= htmlspecialchars($row['proveedor_nombre']) ?>
                         <?php if (trim((string) $row['sucursal']) !== ''): ?>
                         <div class="nc-reason"><?= htmlspecialchars($row['sucursal']) ?></div>
                         <?php endif; ?>
                     </td>
 
-                    <td class="nc-doc">
+                    <td class="nc-doc" data-col="documento">
                         <?= htmlspecialchars($row['documento']) ?>
                         <div class="nc-sub">
                             <?= ncFecha($row['fecha']) ?>
@@ -557,7 +574,7 @@ include __DIR__ . '/../partials/elegir-proveedor.php';
                         </div>
                     </td>
 
-                    <td class="right" style="white-space:nowrap;">
+                    <td class="right" style="white-space:nowrap;" data-col="monto">
                         <?= ncMonto($row['monto'], $row['moneda']) ?>
                     </td>
 
@@ -568,12 +585,12 @@ include __DIR__ . '/../partials/elegir-proveedor.php';
                      * comparar de arriba abajo, que es lo que se hace al
                      * decidir qué nota aplicar.
                      */ ?>
-                    <td class="right" style="white-space:nowrap;<?= $ncSinSaldo ? 'color:var(--text-muted);' : '' ?>"
+                    <td class="right" data-col="saldo" style="white-space:nowrap;<?= $ncSinSaldo ? 'color:var(--text-muted);' : '' ?>"
                         title="<?= $ncSinSaldo ? 'La nota ya se aplicó entera' : 'Lo que queda por aplicar de esta nota' ?>">
                         <?= $ncSinSaldo ? 'sin saldo' : ncMonto($row['saldo'], $row['moneda']) ?>
                     </td>
 
-                    <td>
+                    <td data-col="nc_xml">
                         <?php if (!empty($row['factura_xml_id'])): ?>
                             <a href="<?= $baseUrl ?>/notas-xml/ver/<?= (int) $row['factura_xml_id'] ?>" target="_blank" rel="noopener"
                                data-ficha="<?= (int) $row['factura_xml_id'] ?>"
@@ -615,6 +632,7 @@ include __DIR__ . '/../partials/elegir-proveedor.php';
                         <?php else: ?>—<?php endif; ?>
                     </td>
 
+                    <?= Columnas::celdasExtra('notascredito', $row) ?>
                     <td>
                         <div class="nc-actions">
                             <button type="button" class="btn btn-outline btn-sm nc-link-btn"
@@ -642,7 +660,7 @@ include __DIR__ . '/../partials/elegir-proveedor.php';
 <?php elseif (empty($listados)): ?>
 <div class="card" style="text-align:center;padding:22px;color:var(--text-muted);">
     <i class="fas fa-file-circle-minus" style="font-size:34px;margin-bottom:12px;color:#cbd5e1;"></i>
-    <div style="font-weight:700;color:var(--navy);">Aún no hay notas de crédito del ERP</div>
+    <div style="font-weight:700;color:var(--navy);">Aún no hay notas de crédito del sistema</div>
     <div style="font-size:12px;margin-top:5px;">Carga el primer CSV para iniciar el acumulado.</div>
 </div>
 <?php endif; ?>
@@ -940,7 +958,7 @@ include __DIR__ . '/../partials/elegir-proveedor.php';
             // su archivo ya no está donde la base dice. Filtrar en vivo no
             // puede hacer desaparecer un problema.
             if (row.archivo_perdido) {
-                xmlHtml += '<div><span class="badge badge-perdido" title="Se archivó y ya no está en la carpeta compartida">' +
+                xmlHtml += '<div><span class="badge badge-perdido" title="Se archivó y ya no está donde se guardó">' +
                     '<i class="fas fa-link-slash"></i> ' +
                     (row.archivo_que_falta ? 'Falta el '+esc(row.archivo_que_falta) : 'Archivo perdido') + '</span>' +
                     (row.archivo_recuperable
@@ -954,7 +972,7 @@ include __DIR__ . '/../partials/elegir-proveedor.php';
          * servidor: si aquí se dejara colgando del monto, la tabla cambiaría
          * de forma en cuanto alguien escribiera en un filtro. */
         var sinSaldo = Math.abs(Number(row.saldo)) < 0.005;
-        var saldoHtml = '<td class="right" style="white-space:nowrap;' +
+        var saldoHtml = '<td class="right" data-col="saldo" style="white-space:nowrap;' +
             (sinSaldo ? 'color:var(--text-muted);' : '') + '">' +
             (sinSaldo ? 'sin saldo' : money(row.saldo, row.moneda)) + '</td>';
 
@@ -964,14 +982,21 @@ include __DIR__ . '/../partials/elegir-proveedor.php';
                   (row.fecha_nc_proveedor ? ' ('+dateEs(row.fecha_nc_proveedor)+')' : '') + '</span>'
                 : '') + '</div>';
 
+        /*
+         * Las columnas que no vienen de fábrica llegan YA DIBUJADAS desde el
+         * servidor (columnas_extra). Sus quince fórmulas no se repiten acá: si
+         * se escribieran otra vez en JavaScript, un día dirían algo distinto de
+         * lo que baja el Excel, que sale de las mismas del servidor.
+         */
         return '<tr>'+
-            '<td>'+estadoHtml+'</td>'+
-            '<td class="nc-provider">'+esc(row.proveedor_nombre || '')+
+            '<td data-col="estado">'+estadoHtml+'</td>'+
+            '<td class="nc-provider" data-col="proveedor">'+esc(row.proveedor_nombre || '')+
                 (row.sucursal ? '<div class="nc-reason">'+esc(row.sucursal)+'</div>' : '')+'</td>'+
-            '<td class="nc-doc">'+esc(row.documento || '')+subDoc+'</td>'+
-            '<td class="right" style="white-space:nowrap;">'+money(row.monto, row.moneda)+'</td>'+
+            '<td class="nc-doc" data-col="documento">'+esc(row.documento || '')+subDoc+'</td>'+
+            '<td class="right" style="white-space:nowrap;" data-col="monto">'+money(row.monto, row.moneda)+'</td>'+
             saldoHtml+
-            '<td>'+xmlHtml+'</td>'+
+            '<td data-col="nc_xml">'+xmlHtml+'</td>'+
+            (row.columnas_extra || '')+
             '<td><div class="nc-actions">'+
                 '<button type="button" class="btn btn-outline btn-sm nc-link-btn" data-linea="'+Number(row.id)+'">' +
                 '<i class="fas fa-link"></i> '+(tieneXml ? 'Cambiar' : 'Vincular XML')+'</button>'+
@@ -1162,6 +1187,16 @@ include __DIR__ . '/../partials/elegir-proveedor.php';
             if (resultCount) resultCount.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
 
             window.history.replaceState(null, '', BASE + '/notas-credito?' + params.toString());
+            /*
+             * Y el Excel baja lo mismo. Acá se le ponen al enlace los filtros
+             * que están puestos ahora; las columnas se las vuelve a poner
+             * app.js, que es quien sabe cuáles están encendidas.
+             */
+            var exportar = document.querySelector('a[data-exportar="notascredito"]');
+            if (exportar) {
+                exportar.setAttribute('href', BASE + '/notas-credito/exportar?' + params.toString());
+                if (typeof window.ColumnasEnExportar === 'function') { window.ColumnasEnExportar(); }
+            }
             fetch(BASE + '/notas-credito/buscar?' + params.toString(), {signal:filterRequest.signal})
                 .then(function (response) { return response.json(); })
                 .then(function (data) {

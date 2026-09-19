@@ -7,9 +7,13 @@ require_once __DIR__ . '/../helpers/AlcanceProveedor.php';
 require_once __DIR__ . '/../helpers/BusquedaImporte.php';
 require_once __DIR__ . '/../helpers/EstadoArchivo.php';
 require_once __DIR__ . '/../helpers/Retorno.php';
+require_once __DIR__ . '/../helpers/Columnas.php';
 
 class NotasXmlController extends Controller
 {
+    /** Cuántas notas caben en un Excel: por cada una se mira el disco. */
+    const TOPE_EXPORTACION = 5000;
+
     public function __construct() { $this->requireAuth(); }
 
     public function index()
@@ -23,7 +27,7 @@ class NotasXmlController extends Controller
 
         /*
          * Tarjeta del documento que se está buscando: se llega acá con el botón
-         * "Buscar en los XML cargados" del pago semanal o de la cola de
+         * "Buscar en los XML cargados" del pago o de la cola de
          * seguimiento, y se recorre esa lista sin volver al otro módulo.
          */
         $navDoc = null;
@@ -103,9 +107,43 @@ class NotasXmlController extends Controller
         ]);
     }
 
+    /**
+     * El listado en Excel, con los mismos buscadores puestos y las mismas
+     * columnas encendidas. `cols` se lo pone al enlace el botón de la esquina
+     * de la tabla; sin él bajan las de fábrica.
+     */
+    public function exportar()
+    {
+        try {
+            $importes = [
+                'monto' => BusquedaImporte::numero($this->get('monto', '')),
+                'saldo' => BusquedaImporte::numero($this->get('saldo', '')),
+            ];
+            $notas = EstadoArchivo::decorar($this->loadModel('Factura')->getNotasXml(
+                $this->fechaValida((string) $this->get('desde', '')),
+                $this->fechaValida((string) $this->get('hasta', '')),
+                mb_substr(trim((string) $this->get('buscar', '')), 0, 100, 'UTF-8'),
+                ProveedorCatalogo::normalizarClave($this->get('proveedor', '')),
+                1,
+                self::TOPE_EXPORTACION,
+                $importes
+            ));
+
+            Columnas::descargar('notasxml', $notas, $this->get('cols', ''));
+        } catch (Throwable $e) {
+            $this->registrarFallo('exportar las notas XML', $e);
+            $this->redirectWithMessage(
+                $this->url('/notas-xml'),
+                'No se pudo generar el Excel: ' . $e->getMessage(),
+                'error'
+            );
+        }
+    }
+
     public function subir()
     {
         if (!$this->isPost()) { $this->redirect($this->url('/notas-xml')); }
+        $this->exigirListadoProveedores($this->url('/notas-xml'));
         require_once __DIR__ . '/../helpers/FileUploader.php';
         $config = require __DIR__ . '/../config/config.php';
         $temp = rtrim($config['uploads_path'], '/\\') . DIRECTORY_SEPARATOR . 'xml';

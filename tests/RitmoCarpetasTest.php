@@ -33,7 +33,7 @@ assertRitmo(RitmoCarpetas::ventana(false, $reciente) === RitmoCarpetas::VENTANA_
     'una carpeta que recibió algo hace poco sigue en el ritmo de siempre');
 
 assertRitmo(RitmoCarpetas::ventana(false, $viejo) === RitmoCarpetas::VENTANA_ARCHIVO,
-    'una carpeta quieta hace semanas pasa al ritmo de archivo');
+    'una carpeta quieta hace pagos pasa al ritmo de archivo');
 
 // En el buzón real son 217 de 323: carpetas que el servidor lista y que nunca
 // tuvieron nada. Tratarlas como vivas era quedarse casi sin ahorro.
@@ -117,7 +117,7 @@ assertRitmo($resumen === ['base' => 1, 'activas' => 1, 'archivo' => 2],
 // ── El ahorro, con la forma real de los buzones de hoy ─────────────────────
 //
 // 323 carpetas entre los tres buzones: 3 bandejas de entrada, 18 que
-// recibieron algo en las últimas dos semanas, 88 de meses cerrados y 214 que
+// recibieron algo en las últimas dos pagos, 88 de meses cerrados y 214 que
 // el servidor lista pero que nunca tuvieron nada. Antes se preguntaban las 323
 // en cada corrida.
 $carpetas = [];
