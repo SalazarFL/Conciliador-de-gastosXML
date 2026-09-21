@@ -19,6 +19,7 @@
  */
 
 require_once __DIR__ . '/../models/Bitacora.php';
+require_once __DIR__ . '/../models/Sociedad.php';
 
 class SociedadesController extends Controller
 {
@@ -44,8 +45,17 @@ class SociedadesController extends Controller
         $nombre = trim((string) $this->post('nombre', ''));
         $cedula = trim((string) $this->post('cedula', ''));
 
-        if ($nombre === '' || preg_replace('/\D+/', '', $cedula) === '') {
-            $this->redirectWithMessage($this->destino(),'Indica el nombre y una cédula con números.', 'error');
+        if ($nombre === '') {
+            $this->redirectWithMessage($this->destino(),'Indica el nombre de la empresa.', 'error');
+        }
+
+        // La cédula se comprueba aquí solo para contestar sin el "No se pudo
+        // registrar la sociedad:" delante. La comprobación de verdad está en
+        // el modelo, que es por donde pasa todo el que la escriba.
+        try {
+            $cedula = Sociedad::normalizarCedula($cedula);
+        } catch (InvalidArgumentException $e) {
+            $this->redirectWithMessage($this->destino(), $e->getMessage(), 'error');
         }
 
         try {
@@ -65,8 +75,14 @@ class SociedadesController extends Controller
         $nombre = trim((string) $this->post('nombre', ''));
         $cedula = trim((string) $this->post('cedula', ''));
 
-        if ($nombre === '' || preg_replace('/\D+/', '', $cedula) === '') {
-            $this->redirectWithMessage($this->destino(),'Indica el nombre y una cédula con números.', 'error');
+        if ($nombre === '') {
+            $this->redirectWithMessage($this->destino(),'Indica el nombre de la empresa.', 'error');
+        }
+
+        try {
+            $cedula = Sociedad::normalizarCedula($cedula);
+        } catch (InvalidArgumentException $e) {
+            $this->redirectWithMessage($this->destino(), $e->getMessage(), 'error');
         }
 
         try {
@@ -187,12 +203,23 @@ class SociedadesController extends Controller
             $this->redirectWithMessage($this->destino(), 'No se cambió nada: ' . $e->getMessage(), 'error');
         }
 
-        $this->redirectWithMessage($this->destino(), $tipo === 'sharepoint'
-            ? 'Desde ahora, lo nuevo de ' . $nombre . ' se archiva en SharePoint'
-              . ($biblioteca !== '' ? ' ("' . $biblioteca . '")' : '')
-              . '. Lo que ya estaba sigue en la carpeta compartida hasta que se migre.'
-            : 'Desde ahora, lo nuevo de ' . $nombre . ' se archiva en la carpeta compartida. '
-              . 'Lo que ya estaba en SharePoint sigue ahí.',
-            'success');
+        if ($tipo !== 'sharepoint') {
+            $this->redirectWithMessage($this->destino(),
+                'Desde ahora, lo nuevo de ' . $nombre . ' se archiva en la carpeta compartida. '
+                . 'Lo que ya estaba en SharePoint sigue ahí.', 'success');
+        }
+
+        // Lo que ya tenía no se mueve con el ajuste. Se dice cuánto y cómo se
+        // sube, porque quien acaba de pasar la empresa va a ir a buscar sus
+        // documentos a SharePoint y no los va a encontrar.
+        $enDisco = $modelo->documentosEnDisco((int) $id);
+        $mensaje = 'Desde ahora, lo nuevo de ' . $nombre . ' se archiva en SharePoint'
+            . ($biblioteca !== '' ? ' ("' . $biblioteca . '")' : '') . '.';
+        if ($enDisco > 0) {
+            $mensaje .= ' Sus ' . number_format($enDisco, 0, ',', '.') . ' comprobantes anteriores siguen en la '
+                . 'carpeta compartida y se abren desde ahí como siempre, pero NO están en SharePoint hasta '
+                . 'migrarlos: php cli/migrar_documentos_a_graph.php --sociedad=' . (int) $id . ' --todo';
+        }
+        $this->redirectWithMessage($this->destino(), $mensaje, $enDisco > 0 ? 'warning' : 'success');
     }
 }

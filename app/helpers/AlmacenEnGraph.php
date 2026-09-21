@@ -47,6 +47,14 @@ class AlmacenEnGraph extends AlmacenDocumentos
     public const TIPO = 'sharepoint';
     public const PREFIJO = 'sharepoint:';
 
+    /**
+     * Lo único que se sube. La biblioteca está para que todas las PC de una
+     * empresa vean sus comprobantes; lo demás —respaldos de la base, los
+     * Excel y CSV que se cargan, cachés, temporales— es de la computadora que
+     * lo usa y se queda en ella.
+     */
+    public const EXTENSIONES = ['xml', 'pdf'];
+
     /** @var ClienteGraph */
     private $graph;
 
@@ -66,10 +74,38 @@ class AlmacenEnGraph extends AlmacenDocumentos
 
     private $alcanzable = null;
 
+    /**
+     * Cuánto se da por sabido que la biblioteca NO tiene la columna del hash.
+     * Sin recordarlo, cada petición lo volvía a averiguar con un PATCH que
+     * contesta 400 —medio segundo, en cada comprobante que se guarda—; y si
+     * alguien agrega la columna, a lo sumo en este rato se empieza a usar.
+     */
+    private const RECORDAR_SIN_COLUMNA = 1800;
+
     public function __construct(ClienteGraph $graph, array $opciones = [])
     {
         $this->graph = $graph;
         $this->columnaHash = (string) ($opciones['columna_hash'] ?? 'HashSha256');
+        if ($graph->recordado('sin_columna_hash', self::RECORDAR_SIN_COLUMNA) === true) {
+            $this->hayColumnaHash = false;
+        }
+    }
+
+    /** Anota si la biblioteca tiene la columna, aquí y para las próximas peticiones. */
+    private function saberColumnaHash($hay)
+    {
+        $this->hayColumnaHash = (bool) $hay;
+        $this->graph->recordar('sin_columna_hash', $hay ? null : true);
+    }
+
+    /**
+     * Olvida lo que se sabía de la columna y lo vuelve a averiguar. Para
+     * quien acaba de agregarla y quiere comprobarlo ya (probar_sharepoint).
+     */
+    public function olvidarColumnaHash()
+    {
+        $this->hayColumnaHash = null;
+        $this->graph->recordar('sin_columna_hash', null);
     }
 
     public function cliente()
@@ -167,10 +203,16 @@ class AlmacenEnGraph extends AlmacenDocumentos
 
     public function escribir($ruta, $origenLocal, array $opciones = [])
     {
+        $clave = $this->clave($ruta);
+        // Antes que nada, y sin salir a la red: un archivo que no es un
+        // comprobante no tiene nada que hacer en la biblioteca.
+        if (!self::esComprobante($clave)) {
+            throw new InvalidArgumentException('A SharePoint solo van XML y PDF: "' . basename($clave)
+                . '" se queda en esta computadora.');
+        }
         if (!is_file($origenLocal)) {
             throw new RuntimeException('No está el archivo que se quiere archivar: ' . $origenLocal);
         }
-        $clave = $this->clave($ruta);
         $hash = (string) ($opciones['hash'] ?? hash_file('sha256', $origenLocal));
 
         try {
@@ -345,9 +387,23 @@ class AlmacenEnGraph extends AlmacenDocumentos
         return false;
     }
 
+    /** La subida crea las carpetas del camino: ver ClienteGraph::subir. */
+    public function creaCarpetasAlEscribir()
+    {
+        return true;
+    }
+
     public function tieneIdentidadPermanente()
     {
         return true;
+    }
+
+    /** ¿Es un XML o un PDF? Por la extensión, sin importar mayúsculas. */
+    public static function esComprobante($ruta)
+    {
+        $extension = strtolower((string) pathinfo(str_replace('\\', '/', (string) $ruta), PATHINFO_EXTENSION));
+
+        return in_array($extension, self::EXTENSIONES, true);
     }
 
     // ── Interno ───────────────────────────────────────────────────────────
@@ -436,7 +492,7 @@ class AlmacenEnGraph extends AlmacenDocumentos
             // Sin la columna, Graph rechaza la pregunta entera. Se anota y se
             // sigue sin ella: el hash pasa a "no se sabe".
             if ($conHash && $e->codigoHttp() === 400) {
-                $this->hayColumnaHash = false;
+                $this->saberColumnaHash(false);
                 return $this->pedirItem($rutaApi, false);
             }
             $this->ultimoError = $e->getMessage();
@@ -491,10 +547,12 @@ class AlmacenEnGraph extends AlmacenDocumentos
             $this->graph->pedir('PATCH',
                 $this->graph->unidad() . '/items/' . rawurlencode($itemId) . '/listItem/fields',
                 ['json' => [$this->columnaHash => $hash], 'idempotente' => true]);
-            $this->hayColumnaHash = true;
+            if ($this->hayColumnaHash !== true) {
+                $this->saberColumnaHash(true);
+            }
         } catch (ErrorGraph $e) {
             if ($e->codigoHttp() === 400) {
-                $this->hayColumnaHash = false;
+                $this->saberColumnaHash(false);
                 return;
             }
             // El documento ya se subió entero; perder la declaración no lo

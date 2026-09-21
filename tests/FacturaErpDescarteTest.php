@@ -38,13 +38,25 @@ $PROV = '990000002';
 $PROV_FILTRO = 'cod:' . $PROV;
 $modelo = new FacturaErp();
 
-$limpiar = function () use ($pdo, $PROV) {
+// Quien descarta tiene que existir de verdad: `descartada_por` ya tiene clave
+// foránea hacia `usuarios`, así que un id inventado —antes iba un 7 a secas—
+// hace fallar el INSERT. Que exista es además lo que hace honesta la
+// comprobación de "se guarda quién descartó": con un id fantasma se estaba
+// comprobando que la base acepta cualquier número.
+$USUARIO_PRUEBA = '__test_descarte__';
+
+$limpiar = function () use ($pdo, $PROV, $USUARIO_PRUEBA) {
     $pdo->prepare("DELETE FROM facturas_erp WHERE proveedor_codigo = ?")->execute([$PROV]);
     $pdo->prepare("DELETE FROM facturas_erp_incidencias WHERE proveedor_codigo = ?")->execute([$PROV]);
     $pdo->prepare("DELETE FROM facturas_erp_descartes WHERE proveedor_codigo = ?")->execute([$PROV]);
     $pdo->exec("DELETE FROM facturas_erp_cargas WHERE archivo_origen = '__test_descarte__.csv'");
+    $pdo->prepare("DELETE FROM usuarios WHERE username = ?")->execute([$USUARIO_PRUEBA]);
 };
 $limpiar();
+
+$pdo->prepare('INSERT INTO usuarios (nombre, username, password_hash, activo) VALUES (?, ?, ?, 0)')
+    ->execute(['Prueba descarte', $USUARIO_PRUEBA, 'x']);
+$QUIEN_DESCARTA = (int) $pdo->lastInsertId();
 
 $meta = ['archivo' => '__test_descarte__.csv', 'impreso_en' => null, 'rango_texto' => null];
 $cuadre = ['verificados' => 0, 'descuadres' => []];
@@ -80,7 +92,7 @@ try {
     $ids = $modelo->idsIncidencias(['proveedor' => $PROV_FILTRO, 'tipo' => 'sin_numero']);
     assertDescarte(count($ids) === 1, 'hay una incidencia de factura sin número');
 
-    $r = $modelo->descartarIncidencias($ids, 'Captura manual ya revisada', 7, true);
+    $r = $modelo->descartarIncidencias($ids, 'Captura manual ya revisada', $QUIEN_DESCARTA, true);
     assertDescarte($r['descartadas'] === 1, 'se descarta una incidencia');
     assertDescarte($r['firmas'] === 1, 'se recuerda una firma para las próximas cargas');
     assertDescarte($contar([]) === 1, 'queda una sola incidencia vigente');
@@ -92,7 +104,7 @@ try {
     $q->execute([$ids[0]]);
     $fila = $q->fetch();
     assertDescarte($fila['motivo'] === 'Captura manual ya revisada', 'se guarda el motivo del descarte');
-    assertDescarte((int) $fila['descartada_por'] === 7, 'se guarda quién descartó');
+    assertDescarte((int) $fila['descartada_por'] === $QUIEN_DESCARTA, 'se guarda quién descartó');
 
     // ── 2ª carga del mismo archivo: la descartada NO puede reaparecer ──
     $modelo->importar($facturas, $meta, $cuadre, null, $incidencias);

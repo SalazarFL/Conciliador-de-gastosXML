@@ -629,6 +629,52 @@ class ClienteGraph
         return ctype_digit($valor) ? (float) $valor : null;
     }
 
+    /**
+     * Algo que conviene recordar entre peticiones de esta máquina, junto al
+     * token: cada petición web es un proceso nuevo, y volver a averiguar lo
+     * mismo cuesta un viaje por red cada vez. null borra lo recordado.
+     *
+     * Con un cliente solo de memoria —las pruebas— no se guarda nada.
+     */
+    public function recordar($clave, $valor)
+    {
+        $archivo = $this->archivoRecordado($clave);
+        if ($archivo === null) {
+            return;
+        }
+        if ($valor === null) {
+            @unlink($archivo);
+            return;
+        }
+        $this->guardarEstado($archivo, ['valor' => $valor, 'en' => time()]);
+    }
+
+    /** Lo recordado con recordar(), si no tiene más de $vigencia segundos; si no, null. */
+    public function recordado($clave, $vigencia)
+    {
+        $archivo = $this->archivoRecordado($clave);
+        if ($archivo === null || !is_file($archivo)) {
+            return null;
+        }
+        $datos = json_decode((string) @file_get_contents($archivo), true);
+        if (!is_array($datos) || !array_key_exists('valor', $datos)
+            || time() - (int) ($datos['en'] ?? 0) > (int) $vigencia) {
+            return null;
+        }
+        return $datos['valor'];
+    }
+
+    /** Uno por biblioteca: lo que se sabe de una no vale para otra. */
+    private function archivoRecordado($clave)
+    {
+        if ($this->archivoToken === null) {
+            return null;
+        }
+        return dirname($this->archivoToken) . DIRECTORY_SEPARATOR . 'graph_'
+            . preg_replace('/[^a-z0-9_]/i', '', (string) $clave) . '_'
+            . substr(md5($this->driveId()), 0, 12) . '.json';
+    }
+
     /** Archivo temporal y rename: dos procesos a la vez no dejan un JSON a medias. */
     private function guardarEstado($archivo, array $datos)
     {

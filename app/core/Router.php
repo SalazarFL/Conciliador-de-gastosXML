@@ -7,6 +7,7 @@
 // La comprobación de permisos y el registro de la bitácora ocurren ANTES de
 // que exista un controlador, así que ambos se cargan aquí y no por loadModel.
 require_once __DIR__ . '/Permisos.php';
+require_once __DIR__ . '/Requisitos.php';
 require_once __DIR__ . '/Csrf.php';
 require_once __DIR__ . '/../models/Bitacora.php';
 
@@ -111,6 +112,16 @@ class Router
                      * el permiso no dependa del id que traiga.
                      */
                     Permisos::guardia($method, $route['uri']);
+
+                    /*
+                     * Y después de "quién eres", "si hay adónde entrar": hay
+                     * tres cosas —el catálogo de proveedores, una empresa y
+                     * un buzón— sin las cuales un módulo no trabaja, solo lo
+                     * aparenta. Va aquí por el mismo motivo: el menú los
+                     * dibuja apagados, pero escribir la dirección a mano
+                     * tiene que chocar con la misma puerta.
+                     */
+                    Requisitos::guardia($method, $route['uri']);
 
                     // Y todo lo que escribe tiene que venir de una pantalla
                     // de la aplicación, no de una página ajena que aprovecha

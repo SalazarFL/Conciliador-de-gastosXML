@@ -43,6 +43,61 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     .correo-modo-descargas { grid-template-columns:1fr; grid-template-rows:none; }
     .correo-modo-descargas .rz-lista { display:none; }
 }
+
+/* Lo que se ve mientras un correo se guarda o se importa. */
+#correo-progress {
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    background: rgba(15, 23, 42, .55);
+}
+.correo-trabajando-caja {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: min(470px, 92vw);
+    max-height: 86vh;
+    overflow: auto;
+    background: #fff;
+    border-radius: 12px;
+    padding: 18px 20px 14px;
+    box-shadow: 0 18px 50px rgba(2, 6, 23, .38);
+}
+.correo-trabajando-titulo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--navy);
+}
+.correo-trabajando-barra {
+    background: #e2e8f0;
+    border-radius: 6px;
+    height: 9px;
+    overflow: hidden;
+    margin: 10px 0 6px;
+}
+.correo-trabajando-barra > div {
+    background: linear-gradient(90deg, #0c2461, #1e3a8a);
+    height: 100%;
+    width: 0%;
+    transition: width .3s;
+}
+#cor-counts { font-size: 11.5px; color: var(--text-muted); margin-top: 6px; }
+#cor-detail { font-size: 11.5px; color: var(--text-muted); }
+#cor-repetidas { margin-top: 8px; font-size: 12px; }
+#cor-repetidas .rep {
+    border-left: 3px solid #f59e0b;
+    background: #fffbeb;
+    border-radius: 4px;
+    padding: 6px 8px;
+    margin-top: 5px;
+    color: #78350f;
+}
+#cor-repetidas .rep.otra { border-left-color: #2563eb; background: #eff6ff; color: #1e3a8a; }
+.correo-trabajando-pie { text-align: right; margin-top: 10px; }
 </style>
 
 <?php if (!$listo): ?>
@@ -337,15 +392,32 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
             <div id="buscar-resumen" style="display:none;background:#f0fdf4;border:1px solid #86efac;border-radius:6px;padding:5px 8px;font-size:11px;color:#166534;margin-bottom:6px;"></div>
 
-            <div id="correo-progress" style="display:none;margin-bottom:6px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;margin-bottom:3px;flex-wrap:wrap;gap:4px;">
-                    <span id="cor-status" style="font-weight:700;color:var(--navy);">Preparando…</span>
-                    <span id="cor-counts" style="color:var(--text-muted);"></span>
+            <?php /*
+                  Mientras trabaja, esto tapa la pantalla a propósito.
+                  Estaba aquí abajo, en Actividad, y desde el botón "Procesar
+                  este correo" —que vive dos paneles más arriba— no se veía:
+                  se hacía clic, pasaban diez segundos y en la pantalla no se
+                  movía nada. Tapar también evita lo otro: seguir haciendo
+                  clic en cosas mientras el correo se está guardando.
+            */ ?>
+            <div id="correo-progress" style="display:none;">
+                <div class="correo-trabajando-caja">
+                    <div class="correo-trabajando-titulo">
+                        <i class="fas fa-spinner fa-spin" id="cor-spinner"></i>
+                        <span id="cor-status">Preparando…</span>
+                    </div>
+                    <div id="cor-counts"></div>
+                    <div class="correo-trabajando-barra">
+                        <div id="cor-bar"></div>
+                    </div>
+                    <div id="cor-detail"></div>
+                    <div id="cor-repetidas"></div>
+                    <div class="correo-trabajando-pie">
+                        <button type="button" class="btn btn-outline btn-sm" id="cor-cerrar" style="display:none;">
+                            Cerrar
+                        </button>
+                    </div>
                 </div>
-                <div style="background:#e2e8f0;border-radius:6px;height:8px;overflow:hidden;">
-                    <div id="cor-bar" style="background:linear-gradient(90deg,#0c2461,#1e3a8a);height:100%;width:0%;transition:width .3s;"></div>
-                </div>
-                <div id="cor-detail" style="font-size:10.5px;color:var(--text-muted);margin-top:3px;"></div>
             </div>
 
             <?php if (!empty($historial)): ?>
@@ -550,6 +622,9 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     var elCounts     = document.getElementById('cor-counts');
     var elBar        = document.getElementById('cor-bar');
     var elDetail     = document.getElementById('cor-detail');
+    var elSpinner    = document.getElementById('cor-spinner');
+    var elRepetidas  = document.getElementById('cor-repetidas');
+    var btnCerrarProg = document.getElementById('cor-cerrar');
     var elResumen    = document.getElementById('buscar-resumen');
 
     // ── Estado ──
@@ -581,6 +656,82 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     function setStatus(t) { elStatus.textContent = t; }
     function setBar(p) { elBar.style.width = Math.max(0, Math.min(100, p)) + '%'; }
     function sleep(ms) { return new Promise(function (ok) { setTimeout(ok, ms); }); }
+
+    // ── El cartel de "estoy trabajando" ──
+    // Tapa la pantalla mientras dura. Solo se puede cerrar cuando algo falla:
+    // si todo va bien la página se recarga sola al terminar, y cerrarlo a la
+    // mitad dejaría el correo guardándose sin que se vea.
+    function abrirTrabajando(titulo) {
+        panel.style.display = 'block';
+        elSpinner.style.display = '';
+        btnCerrarProg.style.display = 'none';
+        alCerrarTrabajando = cerrarTrabajando;
+        setBar(0);
+        setStatus(titulo);
+        elCounts.textContent = '';
+        elDetail.textContent = '';
+        elRepetidas.innerHTML = '';
+    }
+
+    function cerrarTrabajando() {
+        panel.style.display = 'none';
+    }
+
+    var alCerrarTrabajando = cerrarTrabajando;
+
+    function trabajandoFallo(mensaje, ayuda) {
+        elSpinner.style.display = 'none';
+        setStatus(mensaje);
+        elDetail.textContent = ayuda || '';
+        alCerrarTrabajando = cerrarTrabajando;
+        btnCerrarProg.textContent = 'Cerrar';
+        btnCerrarProg.style.display = '';
+    }
+
+    /**
+     * Terminó bien, pero hay algo que leer. Se queda esperando el clic en vez
+     * de recargar solo: un aviso que se va antes de leerse no es un aviso.
+     */
+    function trabajandoEspera(titulo, textoBoton, accion) {
+        elSpinner.style.display = 'none';
+        setStatus(titulo);
+        alCerrarTrabajando = accion;
+        btnCerrarProg.textContent = textoBoton;
+        btnCerrarProg.style.display = '';
+    }
+
+    /** Las que no entraron porque ya estaban en el sistema, una por una. */
+    function pintarRepetidas(lista) {
+        if (!Array.isArray(lista) || !lista.length) return;
+        elRepetidas.innerHTML = lista.map(function (r) {
+            var div = document.createElement('div');
+            div.className = 'rep' + (r.misma_empresa ? '' : ' otra');
+            var numero = r.numero ? 'Factura ' + r.numero : 'Un comprobante';
+            var proveedor = r.proveedor ? ' de ' + r.proveedor : '';
+            var cuando = r.cargada_en ? ' el ' + String(r.cargada_en).substring(0, 16).replace('T', ' ') : '';
+            div.textContent = r.misma_empresa
+                ? numero + proveedor + ' ya estaba cargada' + cuando + '. No se importa otra vez.'
+                : numero + proveedor + ' ya está cargada en ' + (r.empresa || 'otra empresa') + cuando
+                  + '. El mismo comprobante no puede estar en dos empresas, así que no se importa aquí.';
+            return div.outerHTML;
+        }).join('');
+    }
+
+    /** El botón que se pulsó, con su rueda, mientras dure el trabajo. */
+    function botonOcupado(boton, texto) {
+        if (!boton) return function () {};
+        var antes = boton.innerHTML;
+        boton.disabled = true;
+        boton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> ' + texto;
+        return function () {
+            boton.disabled = false;
+            boton.innerHTML = antes;
+        };
+    }
+
+    if (btnCerrarProg) {
+        btnCerrarProg.addEventListener('click', function () { alCerrarTrabajando(); });
+    }
 
     // Cuenta de correo con la que se trabaja: viaja en cada petición
     var CUENTA_ID = <?= (int) $cuentaActivaId ?>;
@@ -1462,7 +1613,9 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
     if (btnProcUno) {
         btnProcUno.addEventListener('click', function () {
-            if (correoActual) procesarItems([{ uid: correoActual.uid, carpeta: correoActual.carpeta || '' }]);
+            if (correoActual) {
+                procesarItems([{ uid: correoActual.uid, carpeta: correoActual.carpeta || '' }], btnProcUno);
+            }
         });
     }
 
@@ -1819,7 +1972,11 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         return '';
     });
 
-    function procesarItems(items) {
+    function procesarItems(items, boton) {
+        // Una tanda a la vez. Cada correo cuesta segundos —con los documentos
+        // en SharePoint, varios viajes por red—, y sin esto cada clic de más
+        // mientras tanto lanzaba otra carga completa del mismo correo.
+        if (procesandoBandeja) return;
         if (!items.length) {
             AppDialog.alert('Selecciona al menos un correo para iniciar el procesamiento.', {
                 title: 'No hay correos seleccionados', type: 'warning'
@@ -1830,20 +1987,24 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         procesandoBandeja = true;
         btnProcesar.disabled = true;
         btnCargar.disabled = true;
-        panel.style.display = 'block';
-        setBar(0);
-        elCounts.textContent = '';
-        elDetail.textContent = '';
+        var soltarBoton = botonOcupado(boton || btnProcUno, 'Procesando…');
+        if (btnProcUno && boton !== btnProcUno) btnProcUno.disabled = true;
+        abrirTrabajando(items.length === 1
+            ? 'Bajando el correo…'
+            : 'Procesando ' + items.length + ' correos…');
 
         var totales = { procesados: 0, nuevas: 0, ya_existentes: 0, aceptadas: 0, rechazadas: 0, otra_cedula: 0, pdfs_guardados: 0, pdfs_sin_identificar: 0, sin_adjuntos: 0 };
         var errores = [];
+        var repetidas = [];
         var hechos = 0;
 
         var cadena = Promise.resolve();
         for (var i = 0; i < items.length; i += CHUNK_PROCESAR) {
             (function (lote) {
                 cadena = cadena.then(function () {
-                    setStatus('Procesando correos… (' + Math.min(hechos + lote.length, items.length) + '/' + items.length + ')');
+                    setStatus(items.length === 1
+                        ? 'Leyendo los adjuntos y guardándolos…'
+                        : 'Procesando correos… (' + Math.min(hechos + lote.length, items.length) + '/' + items.length + ')');
                     return postJson(BASE + '/correo/procesar', { items: JSON.stringify(lote) }).then(function (r) {
                         hechos += lote.length;
                         totales.procesados += r.procesados || 0;
@@ -1856,12 +2017,14 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                         totales.pdfs_sin_identificar += r.pdfs_sin_identificar || 0;
                         totales.sin_adjuntos += r.sin_adjuntos || 0;
                         (r.errores || []).forEach(function (e) { errores.push(e); });
+                        (r.repetidas || []).forEach(function (e) { repetidas.push(e); });
 
                         setBar((hechos / items.length) * 100);
                         elCounts.textContent =
                             'Nuevas: ' + totales.nuevas +
-                            ' · Ya existentes: ' + totales.ya_existentes +
+                            ' · Ya cargadas: ' + totales.ya_existentes +
                             ' · PDFs: ' + totales.pdfs_guardados;
+                        pintarRepetidas(repetidas);
                     });
                 });
             })(items.slice(i, i + CHUNK_PROCESAR));
@@ -1892,22 +2055,38 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                          + '</div>';
                 }
 
-                setStatus('¡Listo! Actualizando…');
                 procesandoBandeja = false; // ya no hay nada que perder al recargar
+                pintarRepetidas(repetidas);
+
+                // Con algo repetido, la pantalla se queda quieta hasta que se
+                // dé por enterado: es justo el caso en que antes parecía que
+                // el clic no había hecho nada.
+                if (repetidas.length) {
+                    trabajandoEspera(
+                        totales.nuevas > 0
+                            ? 'Listo, pero hay ' + repetidas.length + ' que ya estaba' + (repetidas.length !== 1 ? 'n' : '') + ' cargada' + (repetidas.length !== 1 ? 's' : '')
+                            : 'No entró nada: ya estaba cargado',
+                        'Entendido',
+                        function () { mostrarYRecargar(html, true); }
+                    );
+                    return;
+                }
+
+                setStatus('¡Listo! Actualizando…');
                 setTimeout(function () { mostrarYRecargar(html, true); }, 700);
             })
             .catch(function (err) {
                 procesandoBandeja = false;
-                setStatus('Error: ' + err.message);
-                elDetail.textContent = 'Puedes volver a intentarlo con los mismos correos.';
+                trabajandoFallo('Error: ' + err.message, 'Puedes volver a intentarlo con los mismos correos.');
                 btnProcesar.disabled = false;
                 btnCargar.disabled = false;
+                soltarBoton();
             });
     }
 
     if (btnProcesar) {
         btnProcesar.addEventListener('click', function () {
-            procesarItems(Object.values(seleccion));
+            procesarItems(Object.values(seleccion), btnProcesar);
         });
     }
 
@@ -1937,17 +2116,15 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             // Ya no se pregunta el pago: cada comprobante encuentra su
             // factura en el listado del ERP y hereda de ahí la que le toque.
 
-            btnImportar.disabled = true;
+            var soltarImportar = botonOcupado(btnImportar, 'Importando…');
             if (btnDescartar) btnDescartar.disabled = true;
-            panel.style.display = 'block';
-            setBar(0);
-            elDetail.textContent = '';
-            setStatus('Encolando ' + ids.length + ' factura' + (ids.length !== 1 ? 's' : '') + '…');
+            abrirTrabajando('Preparando ' + ids.length + ' factura' + (ids.length !== 1 ? 's' : '') + '…');
 
             var importacionId = 0;
             var archivosGuardados = 0;
             var avisoCarpeta = '';
             var avisosArchivos = [];
+            var repetidas = [];
 
             postJson(BASE + '/correo/importar', { ids: ids.join(',') })
                 .then(function (r) {
@@ -1955,8 +2132,14 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                     archivosGuardados = r.archivos_guardados || 0;
                     avisoCarpeta = r.aviso_carpeta || '';
                     avisosArchivos = r.avisos || [];
+                    repetidas = r.repetidas || [];
+                    pintarRepetidas(repetidas);
+
+                    // Todas estaban ya cargadas: no hay cola que seguir.
+                    if (!importacionId) return null;
+
                     setBar(15);
-                    setStatus('Procesando facturas…');
+                    setStatus('Guardando y archivando…');
 
                     var sinAvance = 0;
                     function paso() {
@@ -1994,15 +2177,21 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                     setBar(100);
                     var s = (estado && estado.stats) || {};
                     var importadas = s.importado || 0;
-                    var repetidas = s.duplicado || 0;
+                    var duplicadasEnCola = s.duplicado || 0;
                     var erroresImportacion = s.error || 0;
 
                     var html = '<i class="fas fa-check-circle" style="margin-right:5px;"></i>'
                         + '<strong>' + importadas + '</strong> factura' + (importadas !== 1 ? 's' : '') + ' importada' + (importadas !== 1 ? 's' : '')
-                        + (repetidas > 0 ? ' · ' + repetidas + ' ya estaba' + (repetidas !== 1 ? 'n' : '') + ' en este pago' : '')
+                        // "Duplicado" es que el comprobante ya estaba cargado,
+                        // esté o no en un pago: se guardó la primera vez que
+                        // llegó, y ahí siguen sus archivos.
+                        + (duplicadasEnCola > 0 ? ' · ' + duplicadasEnCola + ' ya estaba' + (duplicadasEnCola !== 1 ? 'n' : '') + ' cargada' + (duplicadasEnCola !== 1 ? 's' : '') + ' desde antes' : '')
+                        + (repetidas.length > 0 ? ' · ' + repetidas.length + ' no entr' + (repetidas.length !== 1 ? 'aron' : 'ó') + ' por estar ya cargada' + (repetidas.length !== 1 ? 's' : '') : '')
                         + (erroresImportacion > 0 ? ' · ' + erroresImportacion + ' con error' : '')
                         + (archivosGuardados > 0 ? ' · ' + archivosGuardados + ' archivo' + (archivosGuardados !== 1 ? 's' : '') + ' renombrado' + (archivosGuardados !== 1 ? 's' : '') + ' en la carpeta' : '')
-                        + ' — <a href="' + BASE + '/facturas?importacion_id=' + importacionId + '" style="color:#166534;font-weight:700;">Ver en Facturas</a>';
+                        + (importacionId
+                            ? ' — <a href="' + BASE + '/facturas?importacion_id=' + importacionId + '" style="color:#166534;font-weight:700;">Ver en Facturas</a>'
+                            : '');
                     if (avisoCarpeta) {
                         html += '<div style="margin-top:6px;color:#b45309;">⚠ ' + avisoCarpeta + '</div>';
                     }
@@ -2018,13 +2207,25 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                              + '</div>';
                     }
 
+                    if (repetidas.length) {
+                        setBar(100);
+                        trabajandoEspera(
+                            importadas > 0
+                                ? 'Listo, pero ' + repetidas.length + ' no entr' + (repetidas.length !== 1 ? 'aron' : 'ó')
+                                : 'No entró nada: ya estaba cargado',
+                            'Entendido',
+                            function () { mostrarYRecargar(html, true); }
+                        );
+                        return;
+                    }
+
                     setStatus('¡Listo! Actualizando…');
                     setTimeout(function () { mostrarYRecargar(html, true); }, 900);
                 })
                 .catch(function (err) {
-                    setStatus('Error: ' + err.message);
-                    elDetail.textContent = 'Puedes reintentar: solo se bloquearán las facturas que ya estén en el pago seleccionada.';
-                    btnImportar.disabled = false;
+                    trabajandoFallo('Error: ' + err.message,
+                        'Puedes reintentar: lo que ya esté cargado se queda fuera solo.');
+                    soltarImportar();
                     if (btnDescartar) btnDescartar.disabled = false;
                 });
         });

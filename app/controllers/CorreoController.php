@@ -20,6 +20,20 @@
  *
  * Los PDF quedan nombrados con el número de su factura, listos para el
  * renombrador FE_.
+ *
+ * ── Lo que ya está cargado no vuelve a entrar ──
+ *
+ * En cualquiera de los tres caminos, un comprobante que ya está en el sistema
+ * y conserva sus dos archivos ni siquiera llega a la Bandeja: se cuenta en
+ * `ya_existentes`, se dice con su número y en qué empresa está, y la fila que
+ * hubiera dejado una captura anterior del mismo correo se borra con sus
+ * archivos. Antes entraba, se importaba y salía "duplicado" después de subir y
+ * bajar el par por la red, que desde la pantalla se ve como un clic que no
+ * hace nada.
+ *
+ * Al que le FALTE un archivo sí se le deja entrar: la importación lo vuelve a
+ * archivar, y esa es la forma de reponer un documento perdido. Ver
+ * Factura::yaCargado() y tests/CorreoRepetidaTest.php.
  */
 
 require_once __DIR__ . '/../helpers/MailFetcher.php';
@@ -31,6 +45,7 @@ require_once __DIR__ . '/../helpers/AlmacenDocumentos.php';
 require_once __DIR__ . '/../helpers/XmlDocumentImporter.php';
 require_once __DIR__ . '/../helpers/EntradaAutomatica.php';
 require_once __DIR__ . '/../helpers/PaqueteDocumentos.php';
+require_once __DIR__ . '/../helpers/EstadoArchivo.php';
 
 class CorreoController extends Controller
 {
@@ -1210,6 +1225,7 @@ class CorreoController extends Controller
         $pdfsGuardados = 0;
         $pdfsSinIdentificar = 0;
         $errores = [];
+        $repetidas = [];
 
         foreach ($lote as $item) {
             $uid = $item['uid'];
@@ -1233,6 +1249,9 @@ class CorreoController extends Controller
                 foreach ($resultado['errores'] as $err) {
                     $errores[] = $err;
                 }
+                foreach ($resultado['repetidas'] as $rep) {
+                    $repetidas[] = $rep;
+                }
 
                 $procesados++;
             } catch (Throwable $e) {
@@ -1254,6 +1273,7 @@ class CorreoController extends Controller
             'pdfs_guardados' => $pdfsGuardados,
             'pdfs_sin_identificar' => $pdfsSinIdentificar,
             'errores' => array_slice($errores, 0, 10),
+            'repetidas' => array_slice($repetidas, 0, 20),
         ]);
     }
 
@@ -1299,8 +1319,14 @@ class CorreoController extends Controller
             $sociedad = $this->loadModel('Sociedad')->getActiva();
             if (!$sociedad) { throw new InvalidArgumentException('Selecciona una sociedad activa antes de iniciar.'); }
             $raiz = trim((string) ($this->configLocal()['carpeta_destino'] ?? ''));
-            if ($raiz === '') { throw new InvalidArgumentException('Configura la carpeta raíz desde el engranaje de Correo.'); }
-            new DocumentoArchivo($raiz); // valida creación y escritura antes de crear el lote
+            // La carpeta compartida hace falta solo si la empresa archiva en
+            // disco; en SharePoint los XML y PDF van a la biblioteca.
+            if ($raiz === '' && DocumentoArchivo::necesitaCarpetaCompartida((int) $sociedad['id'])) {
+                throw new InvalidArgumentException('Configura la carpeta raíz desde el engranaje de Correo.');
+            }
+            if ($raiz !== '') {
+                new DocumentoArchivo($raiz); // valida creación y escritura antes de crear el lote
+            }
 
             // Actualización breve y best-effort; el lote también incluye los
             // mensajes cuyo detalle de adjuntos siga pendiente en el índice.
@@ -1727,7 +1753,12 @@ class CorreoController extends Controller
                     $captura = $this->procesarMensaje(
                         $mensaje, $bandeja, $facturas, (int) $lote['cuenta_id'],
                         ['FE', 'NC'], (string) $lote['sociedad_cedula'],
-                        (int) $lote['sociedad_id'], [], 'descargas'
+                        (int) $lote['sociedad_id'], [], 'descargas',
+                        // Descargas resuelve cada fila aquí mismo —la importa
+                        // o la descarta, y en los dos casos borra sus
+                        // archivos—, así que su paso por la Bandeja no sale de
+                        // esta computadora. Ver carpetaBandeja().
+                        true
                     );
                     $resumen['duplicados'] += (int) ($captura['ya_existentes'] ?? 0);
 
@@ -1986,12 +2017,36 @@ class CorreoController extends Controller
             $bandejaModel = $this->loadModel('CorreoBandeja');
             $filas = $bandejaModel->getByIds($ids, 'pendiente');
 
+            $facturaModel = $this->loadModel('Factura');
             $rutas = [];
             $idsValidos = [];
             $filasValidas = [];
+            $repetidas = [];
+            $yaExistentes = [];
             foreach ($filas as $fila) {
                 $rutaXml = (string) ($fila['archivo_xml'] ?? '');
                 if ($rutaXml === '' || !RutaDocumento::existe($rutaXml)) {
+                    continue;
+                }
+
+                /*
+                 * Última parada antes de encolar. La captura ya deja fuera lo
+                 * que está cargado, pero entre capturar e importar pueden
+                 * pasar horas y otra persona pudo meter el mismo comprobante:
+                 * encolarlo sería gastar la subida para que el importador
+                 * conteste "duplicado". Con sus dos archivos en pie no hay
+                 * nada que hacerle, así que la fila se va de la Bandeja.
+                 */
+                $yaCargado = $facturaModel->yaCargado((string) ($fila['hash_xml'] ?? ''), '', '', '');
+                if ($yaCargado !== null && EstadoArchivo::de($yaCargado)['entregable']) {
+                    $yaExistentes[] = (int) $fila['id'];
+                    $repetidas[] = [
+                        'numero' => (string) ($fila['numero_corto'] ?? ''),
+                        'proveedor' => (string) ($fila['proveedor'] ?? ''),
+                        'empresa' => (string) ($yaCargado['sociedad_nombre'] ?? ''),
+                        'misma_empresa' => (int) ($yaCargado['sociedad_id'] ?? 0) === (int) ($fila['sociedad_id'] ?? 0),
+                        'cargada_en' => (string) ($yaCargado['creado_en'] ?? ''),
+                    ];
                     continue;
                 }
 
@@ -2006,7 +2061,15 @@ class CorreoController extends Controller
                 $filasValidas[] = $fila;
             }
 
-            if (empty($rutas)) {
+            if ($yaExistentes) {
+                $bandejaModel->marcarYaExisten($yaExistentes);
+                $this->purgarYaExisten($bandejaModel);
+            }
+
+            // Que no quede nada por importar es un fallo solo si tampoco hubo
+            // nada que contar: si todas estaban ya cargadas, la respuesta de
+            // abajo lo explica una por una.
+            if (empty($rutas) && empty($repetidas)) {
                 $this->json(['ok' => false, 'message' => 'Las filas seleccionadas no tienen XML pendiente de importar (¿ya se importaron o falta el archivo?).'], 422);
             }
 
@@ -2018,33 +2081,43 @@ class CorreoController extends Controller
             // por qué tomar —y equivocarse dejaba la factura fuera del pago—.
             $pagoId = null;
 
-            require_once __DIR__ . '/../helpers/InvoiceImportQueue.php';
-            $service = new InvoiceImportQueue();
-
-            $sociedadActiva = $this->loadModel('Sociedad')->getActiva();
-            $inicio = $service->iniciarImportacion([
-                'archivo_origen' => 'Correo ' . date('d/m/Y H:i'),
-                'total_esperado' => count($rutas),
-                'pago_id' => $pagoId,
-                'tipo_documento' => 'FE',
-                'cedula_receptor' => $sociedadActiva['cedula'] ?? '',
-                'sociedad_id' => (int) ($sociedadActiva['id'] ?? 0),
-            ]);
-            $importacionId = (int) $inicio['importacion_id'];
-
-            $resultado = $service->agregarArchivosLocales($importacionId, $rutas);
-
-            $bandejaModel->marcarImportadas($idsValidos, $importacionId);
-
-            // La cola tomó el XML y el PDF donde están, en la bandeja, y los
-            // borra ella cuando XmlDocumentImporter archive el par y confirme
-            // la BD. Borrarlos acá le quitaría el archivo a la importación.
+            $importacionId = 0;
+            $encoladas = 0;
+            $estadoCola = null;
             $avisosPendientes = [];
-            if ((int) $resultado['uploaded_count'] === count($filasValidas)) {
-                foreach ($filasValidas as $fila) {
-                    if (empty($fila['archivo_pdf']) || !RutaDocumento::existe($fila['archivo_pdf'])) {
-                        $avisosPendientes[] = 'Factura ' . ($fila['numero_corto'] ?? '')
-                            . ': el XML se archivará y el PDF quedará pendiente.';
+
+            // Sin nada que encolar no se abre una importación vacía: la
+            // respuesta va igual, con lo que se quedó fuera y por qué.
+            if ($rutas) {
+                require_once __DIR__ . '/../helpers/InvoiceImportQueue.php';
+                $service = new InvoiceImportQueue();
+
+                $sociedadActiva = $this->loadModel('Sociedad')->getActiva();
+                $inicio = $service->iniciarImportacion([
+                    'archivo_origen' => 'Correo ' . date('d/m/Y H:i'),
+                    'total_esperado' => count($rutas),
+                    'pago_id' => $pagoId,
+                    'tipo_documento' => 'FE',
+                    'cedula_receptor' => $sociedadActiva['cedula'] ?? '',
+                    'sociedad_id' => (int) ($sociedadActiva['id'] ?? 0),
+                ]);
+                $importacionId = (int) $inicio['importacion_id'];
+
+                $resultado = $service->agregarArchivosLocales($importacionId, $rutas);
+                $encoladas = (int) $resultado['uploaded_count'];
+                $estadoCola = $resultado['estado'];
+
+                $bandejaModel->marcarImportadas($idsValidos, $importacionId);
+
+                // La cola tomó el XML y el PDF donde están, en la bandeja, y los
+                // borra ella cuando XmlDocumentImporter archive el par y confirme
+                // la BD. Borrarlos acá le quitaría el archivo a la importación.
+                if ($encoladas === count($filasValidas)) {
+                    foreach ($filasValidas as $fila) {
+                        if (empty($fila['archivo_pdf']) || !RutaDocumento::existe($fila['archivo_pdf'])) {
+                            $avisosPendientes[] = 'Factura ' . ($fila['numero_corto'] ?? '')
+                                . ': el XML se archivará y el PDF quedará pendiente.';
+                        }
                     }
                 }
             }
@@ -2060,12 +2133,13 @@ class CorreoController extends Controller
             $this->json([
                 'ok' => true,
                 'importacion_id' => $importacionId,
-                'encoladas' => (int) $resultado['uploaded_count'],
+                'encoladas' => $encoladas,
                 'archivos_guardados' => 0,
                 'carpeta_destino' => trim((string) ($this->configLocal()['carpeta_destino'] ?? '')),
                 'aviso_carpeta' => '',
                 'avisos' => array_slice($avisosPendientes, 0, 10),
-                'estado' => $resultado['estado'],
+                'repetidas' => $repetidas,
+                'estado' => $estadoCola,
             ]);
         } catch (Throwable $e) {
             $this->json(['ok' => false, 'message' => 'No fue posible encolar la importación: ' . $e->getMessage()], 500);
@@ -2323,7 +2397,12 @@ class CorreoController extends Controller
             '',
             0,
             $sociedadesPermitidas,
-            'automatica'
+            'automatica',
+            // Con entrada automática el comprobante se archiva a continuación,
+            // en esta misma corrida: su paso por la Bandeja no lo ve nadie y
+            // no tiene por qué salir de esta computadora. Lo que acabe
+            // esperando ahí lo sube ingresar(). Ver carpetaTrabajoLocal().
+            $automatica
         );
 
         $captura['entrada'] = $automatica
@@ -2333,10 +2412,81 @@ class CorreoController extends Controller
         return $captura;
     }
 
+    /**
+     * Un correo a la vez, en todo el grupo.
+     *
+     * Procesar el mismo correo dos veces a la vez no da dos filas —la segunda
+     * revive la de la primera—, pero sí dos juegos de archivos: cada una sube
+     * los suyos y a lo sumo borra los de la otra, y en SharePoint son varias
+     * llamadas por red por cada uno. El 19/09/2026, con el botón "Procesar
+     * este correo" sin bloquearse mientras trabajaba, seis clics dejaron el
+     * mismo XML subido seis veces a la bandeja.
+     *
+     * El candado es de la base (GET_LOCK), así que vale entre pestañas y entre
+     * computadoras. Quien llega segundo no espera ni repite: el correo ya se
+     * está guardando, y lo dice.
+     */
     private function procesarMensaje(array $mensaje, $bandejaModel, $facturaModel,
                                      $cuentaId = 0, array $tiposPermitidos = ['FE'],
                                      $cedulaForzada = '', $sociedadIdForzada = 0,
-                                     array $sociedadesPermitidas = [], $origen = 'manual')
+                                     array $sociedadesPermitidas = [], $origen = 'manual',
+                                     $seImportaEnElActo = false)
+    {
+        require_once __DIR__ . '/../models/BloqueoEnBase.php';
+        $candado = 'captura_' . substr(sha1((int) $cuentaId . '|' . (string) ($mensaje['clave'] ?? '')), 0, 24);
+        $tomado = BloqueoEnBase::tomar($candado);
+        if ($tomado === false) {
+            // Los adjuntos que se bajaron para esta vuelta no van a ningún
+            // lado: son de esta máquina y se borran acá.
+            foreach (array_merge($mensaje['xmls'] ?? [], $mensaje['pdfs'] ?? []) as $adjunto) {
+                if (!empty($adjunto['ruta'])) {
+                    @unlink((string) $adjunto['ruta']);
+                }
+            }
+            return [
+                'nuevas' => 0, 'ya_existentes' => 0, 'aceptadas' => 0, 'rechazadas' => 0,
+                'otra_cedula' => 0, 'pdfs_guardados' => 0, 'pdfs_sin_identificar' => 0,
+                'pdfs_duplicados_omitidos' => 0, 'repetidas' => [], 'filas' => [], 'archivos_huerfanos' => [],
+                'en_curso' => 1,
+                'errores' => ['El correo "' . mb_substr((string) ($mensaje['asunto'] ?? ''), 0, 80, 'UTF-8')
+                    . '" ya se está guardando (en esta u otra ventana, o en otra computadora): '
+                    . 'no se repitió. Espera a que termine.'],
+            ];
+        }
+        try {
+            return $this->procesarMensajeSinCandado($mensaje, $bandejaModel, $facturaModel, $cuentaId,
+                $tiposPermitidos, $cedulaForzada, $sociedadIdForzada, $sociedadesPermitidas, $origen,
+                $seImportaEnElActo);
+        } finally {
+            if ($tomado === true) {
+                BloqueoEnBase::soltar($candado);
+            }
+        }
+    }
+
+    /**
+     * Dónde dejar el adjunto recién bajado: en la zona de paso del grupo o en
+     * la de esta computadora.
+     *
+     * El criterio es quién lo va a necesitar. Si el comprobante se archiva a
+     * continuación en esta misma corrida, nadie más: se queda acá y se ahorra
+     * el viaje de ida y vuelta a SharePoint. Si va a ESPERAR en la Bandeja a
+     * que alguien lo mire, tiene que poder abrirlo quien lo mire, esté en la
+     * computadora que esté.
+     */
+    private function carpetaBandeja($que, $sociedadId, $seImportaEnElActo)
+    {
+        $sub = 'BANDEJA/' . $que . '/' . RutaDocumento::delMes();
+
+        return $seImportaEnElActo
+            ? RutaDocumento::carpetaTrabajoLocal($sub)
+            : RutaDocumento::carpetaTrabajo($sub, $sociedadId);
+    }
+
+    private function procesarMensajeSinCandado(array $mensaje, $bandejaModel, $facturaModel,
+                                               $cuentaId, array $tiposPermitidos, $cedulaForzada,
+                                               $sociedadIdForzada, array $sociedadesPermitidas, $origen,
+                                               $seImportaEnElActo = false)
     {
         $resultado = [
             'nuevas' => 0,
@@ -2348,6 +2498,9 @@ class CorreoController extends Controller
             'pdfs_sin_identificar' => 0,
             'pdfs_duplicados_omitidos' => 0,
             'errores' => [],
+            // Las que ya estaban en el sistema, con nombre y empresa: la
+            // pantalla las enseña una por una, no como un número.
+            'repetidas' => [],
             'filas' => [],
             'archivos_huerfanos' => [],
         ];
@@ -2421,6 +2574,10 @@ class CorreoController extends Controller
                 $facturas[] = [
                     'adjunto' => $adjunto,
                     'clave' => trim((string) ($docData['clave'] ?? '')),
+                    // Lo que hace falta para preguntar si ya está cargado con
+                    // la misma regla del importador. Ver Factura::yaCargado().
+                    'consecutivo' => (string) ($docData['consecutivo_completo'] ?? ''),
+                    'rfc_emisor' => (string) ($docData['rfc_emisor'] ?? ''),
                     'numero_corto' => $this->numeroCorto((string) ($docData['numero_factura_asistente'] ?? '')),
                     'proveedor' => (string) ($docData['razon_social_emisor'] ?? ''),
                     'fecha_emision' => (string) ($docData['fecha_emision'] ?? ''),
@@ -2577,6 +2734,51 @@ class CorreoController extends Controller
                 $estado = 'otra_cedula';
             }
 
+            /*
+             * Lo que ya está cargado no vuelve a entrar a la Bandeja.
+             *
+             * Antes entraba: se marcaba "pendiente", alguien la importaba,
+             * subía y bajaba el par por la red y salía "duplicado". Desde la
+             * pantalla eso se ve como un clic que no hace nada. Ahora se dice
+             * en el momento, y en qué empresa está —el mismo buzón sirve a
+             * varias, y la clave única de facturas_xml no lleva la empresa, así
+             * que el mismo comprobante no puede estar en dos—.
+             *
+             * Se para SOLO si el comprobante conserva sus dos archivos. Si le
+             * falta alguno sí entra: la importación lo vuelve a archivar, que
+             * es la forma de reponer un documento perdido. Y solo se para lo
+             * limpio: una rechazada por Hacienda o de otra cédula se queda en
+             * la Bandeja aunque ya esté cargada, porque eso hay que mirarlo.
+             */
+            $yaCargado = $estado === 'pendiente' && $facturaModel instanceof Factura
+                ? $facturaModel->yaCargado(
+                    $factura['hash_xml'], $factura['consecutivo'],
+                    $factura['rfc_emisor'], $factura['fecha_emision']
+                )
+                : null;
+            if ($yaCargado !== null && EstadoArchivo::de($yaCargado)['entregable']) {
+                @unlink($adjunto['ruta']);
+                if (isset($pdfPorIndice[$idx])) {
+                    @unlink($pdfPorIndice[$idx]['ruta']);
+                    unset($pdfPorIndice[$idx]);
+                }
+                // La fila que dejó una captura anterior de este mismo correo
+                // ya no lleva a ninguna parte: se va, con sus archivos.
+                if ($filaPrevia) {
+                    $bandejaModel->marcarYaExisten([(int) $filaPrevia['id']]);
+                    $this->purgarYaExisten($bandejaModel);
+                }
+                $resultado['ya_existentes']++;
+                $resultado['repetidas'][] = [
+                    'numero' => $factura['numero_corto'] !== '' ? $factura['numero_corto'] : $adjunto['nombre'],
+                    'proveedor' => $factura['proveedor'],
+                    'empresa' => (string) ($yaCargado['sociedad_nombre'] ?? ''),
+                    'misma_empresa' => (int) ($yaCargado['sociedad_id'] ?? 0) === $sociedadFacturaId,
+                    'cargada_en' => (string) ($yaCargado['creado_en'] ?? ''),
+                ];
+                continue;
+            }
+
             // Mover el XML de tmp/ a la bandeja (nombre con prefijo removible
             // "__"). La bandeja vive donde archiva la empresa del comprobante
             // —la carpeta compartida o SharePoint—: la fila que se crea abajo
@@ -2585,7 +2787,7 @@ class CorreoController extends Controller
             // miles de archivos en un solo lugar.
             $nombreSeguro = preg_replace('/[^A-Za-z0-9._-]+/', '_', $adjunto['nombre']);
             try {
-                $rutaXml = RutaDocumento::carpetaTrabajo('BANDEJA/xml/' . RutaDocumento::delMes(), $sociedadFacturaId)
+                $rutaXml = $this->carpetaBandeja('xml', $sociedadFacturaId, $seImportaEnElActo)
                     . DIRECTORY_SEPARATOR . uniqid('correo_', true) . '__' . $nombreSeguro;
                 AlmacenDocumentos::de($rutaXml)->adoptar($rutaXml, $adjunto['ruta']);
             } catch (Throwable $e) {
@@ -2608,7 +2810,7 @@ class CorreoController extends Controller
                 } else {
                     $numero = $factura['numero_corto'] !== '' ? $factura['numero_corto'] : pathinfo($nombreSeguro, PATHINFO_FILENAME);
                     try {
-                        $rutaPdf = RutaDocumento::carpetaTrabajo('BANDEJA/pdf/' . RutaDocumento::delMes(), $sociedadFacturaId)
+                        $rutaPdf = $this->carpetaBandeja('pdf', $sociedadFacturaId, $seImportaEnElActo)
                             . DIRECTORY_SEPARATOR . uniqid('correo_pdf_', true) . '__' . $numero . '.pdf';
                         AlmacenDocumentos::de($rutaPdf)->adoptar($rutaPdf, $pdfPorIndice[$idx]['ruta']);
                         $resultado['pdfs_guardados']++;
@@ -2887,13 +3089,16 @@ class CorreoController extends Controller
 
         if ($capturarNuevos) {
             $raiz = DocumentoArchivo::raizConfigurada();
-            if ($raiz === '' || !is_dir($raiz)) {
+            // Con todas las empresas en SharePoint la Bandeja vive en la
+            // biblioteca y esta PC no necesita la carpeta compartida.
+            $sinCarpeta = $raiz === '' && !DocumentoArchivo::necesitaCarpetaCompartida();
+            if (!$sinCarpeta && ($raiz === '' || !is_dir($raiz))) {
                 $this->json([
                     'ok' => false,
                     'message' => 'Configura primero una carpeta compartida válida para guardar la Bandeja.',
                 ], 422);
             }
-            if (!RutaDocumento::permiteEscritura($raiz)) {
+            if (!$sinCarpeta && !RutaDocumento::permiteEscritura($raiz)) {
                 $this->json([
                     'ok' => false,
                     'message' => 'La carpeta compartida no permite escritura; la captura automática no podría guardar la Bandeja.',

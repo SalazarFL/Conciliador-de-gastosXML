@@ -269,7 +269,9 @@ $resumenCapturas = [
 if ($capturaActiva && isset($cuentasModel, $cuentas)
     && (microtime(true) - $inicioCorrida) < $topeSegundos) {
     try {
-        if (DocumentoArchivo::raizConfigurada() === '') {
+        // Solo si alguna empresa archiva en disco: con todas en SharePoint, la
+        // Bandeja y el archivo están en la biblioteca.
+        if (DocumentoArchivo::raizConfigurada() === '' && DocumentoArchivo::necesitaCarpetaCompartida()) {
             throw new RuntimeException(
                 'La captura automática necesita la carpeta compartida de documentos configurada.'
             );
@@ -288,6 +290,20 @@ if ($capturaActiva && isset($cuentasModel, $cuentas)
         $entrada = $entradaAutomatica
             ? new EntradaAutomatica(new CorreoBandeja(), $sociedadesPorId)
             : null;
+
+        // Lo que una corrida anterior dejó a medias en esta computadora: se
+        // sube antes de empezar, para que lo alcance cualquiera. Cuesta una
+        // consulta y casi siempre no hay nada.
+        if ($entrada !== null) {
+            $rescatadas = $entrada->rescatarLoQueQuedoAqui();
+            if ($rescatadas > 0) {
+                registrar(
+                    $rutaLog,
+                    'Subidas a la bandeja compartida ' . $rescatadas
+                    . ' fila(s) que habían quedado en esta computadora.'
+                );
+            }
+        }
 
         // Tandas cortas en round-robin: una cuenta con mucho tráfico no
         // monopoliza toda la corrida ni retrasa a los demás buzones.
@@ -555,6 +571,9 @@ try {
             (int) ($orden['marcados_sin_archivo'] ?? 0),
             (int) ($orden['errores'] ?? 0)
         ));
+        if (!empty($orden['revision_suspendida'])) {
+            registrar($rutaLog, 'Archivo local: REVISIÓN SUSPENDIDA. ' . $orden['revision_suspendida']);
+        }
 
         // No en cada corrida: la carpeta que le toca a un documento solo
         // cambia cuando entra uno nuevo o cuando cambia su pago de pago, y

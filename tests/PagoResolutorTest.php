@@ -22,24 +22,30 @@ function assertResolutor($condition, $message)
     }
 }
 
-function erpFila($id, $documento, $proveedor, $monto, $saldo = null, $corto = null, $listado = null)
+function erpFila($id, $documento, $proveedor, $monto, $saldo = null, $corto = null, $listado = null, $codigo = '')
 {
     return [
         'id' => $id,
         'documento' => $documento,
         'numero_corto' => $corto,
+        'proveedor_codigo' => $codigo,
         'proveedor_nombre' => $proveedor,
         'fecha_emision' => '2026-07-15',
         'monto' => $monto,
         'saldo' => $saldo === null ? $monto : $saldo,
-        'pago_id' => $listado ? 9 : null,
         'pago_id' => $listado,
     ];
 }
 
-function filaArchivo($numero, $proveedor, $saldo)
+function filaArchivo($numero, $proveedor, $saldo, $codigo = '')
 {
-    return ['estado' => 'leida', 'numero' => $numero, 'proveedor' => $proveedor, 'saldo' => $saldo];
+    return [
+        'estado' => 'leida',
+        'numero' => $numero,
+        'proveedor' => $proveedor,
+        'codigo' => $codigo,
+        'saldo' => $saldo,
+    ];
 }
 
 $CONS = '00200001010000045587';
@@ -92,26 +98,87 @@ $r = PagoResolutor::resolver(
 );
 assertResolutor($r['filas'][0]['factura_erp_id'] === 11, 'el proveedor separa dos facturas con el mismo número');
 
-// ── Mismo número y mismo proveedor: desempata el saldo ───────────
+// ── El código del proveedor manda sobre el nombre ────────────────
+// El ERP imprime los nombres cortados y a su manera, así que dos grupos
+// distintos pueden parecerse. El código no se parece: es igual o no lo es.
 $r = PagoResolutor::resolver(
-    [filaArchivo('FACT-12339', 'MERCORICA S.A.', 800.00)],
+    [filaArchivo('FACT-12339', 'MERCORICA SOCIEDAD ANONIMA', 800.00, '140000283')],
     [
-        erpFila(11, 'FACT-12339', 'MERCORICA S.A.', 500.00, null, '12339'),
-        erpFila(12, 'FACT-12339', 'MERCORICA S.A.', 800.00, null, '12339'),
+        erpFila(11, 'FACT-12339', 'MERCORICA S.A.', 800.00, null, '12339', null, '140000283'),
+        erpFila(12, 'FACT-12339', 'MERCORICA DEL SUR S.A.', 800.00, null, '12339', null, '140000999'),
     ]
 );
-assertResolutor($r['filas'][0]['factura_erp_id'] === 12, 'el saldo separa lo que el proveedor no pudo');
+assertResolutor($r['filas'][0]['factura_erp_id'] === 11, 'el código separa dos proveedores de nombre parecido');
 
-// ── Ni el proveedor ni el saldo distinguen: no se elige ──────────
+// El monto ya no desempata: dos facturas del mismo código con el mismo número
+// son indistinguibles aunque una valga lo que dice el archivo. Antes se elegía
+// la del monto más cercano, que es elegir por una coincidencia.
+$r = PagoResolutor::resolver(
+    [filaArchivo('FACT-12339', 'MERCORICA S.A.', 800.00, '140000283')],
+    [
+        erpFila(11, 'FACT-12339', 'MERCORICA S.A.', 500.00, null, '12339', null, '140000283'),
+        erpFila(12, 'FACT-12339', 'MERCORICA S.A.', 800.00, null, '12339', null, '140000283'),
+    ]
+);
+assertResolutor($r['resumen']['ambigua'] === 1, 'el monto no desempata dos facturas del mismo código');
+assertResolutor($r['ids'] === [], 'una ambigua no entra al pago');
+
+// ── El número es de otro código: ausente, no ambigua ─────────────
+// No es un empate: ese número, en el sistema, le pertenece a otro proveedor.
+// El motivo nombra al dueño porque lo que hay que corregir está en el archivo
+// o en el reporte del ERP, no en esta pantalla.
+$r = PagoResolutor::resolver(
+    [filaArchivo('FACT-12339', 'MERCORICA S.A.', 800.00, '140000283')],
+    [erpFila(11, 'FACT-12339', 'DISTRIBUIDORA LA FLORIDA S.A.', 800.00, null, '12339', null, '140000777')]
+);
+assertResolutor($r['resumen']['ausente'] === 1, 'un número de otro código no se asigna');
+assertResolutor(strpos($r['filas'][0]['motivo'], '140000777') !== false,
+    'el motivo nombra al código que sí tiene esa factura');
+assertResolutor(strpos($r['filas'][0]['motivo'], '140000283') !== false,
+    'y el que venía en el archivo, para poder compararlos');
+
+// ── Sin código en el archivo se cae al nombre, como antes ────────
+// Es el camino de las tablas armadas a mano y de los archivos viejos.
 $r = PagoResolutor::resolver(
     [filaArchivo('FACT-12339', 'MERCORICA S.A.', 800.00)],
     [
-        erpFila(11, 'FACT-12339', 'MERCORICA S.A.', 800.00, 800.00, '12339'),
-        erpFila(12, 'FACT-12339', 'MERCORICA S.A.', 800.00, 800.00, '12339'),
+        erpFila(11, 'FACT-12339', 'MERCORICA S.A.', 800.00, null, '12339', null, '140000283'),
+        erpFila(12, 'FACT-12339', 'DISTRIBUIDORA LA FLORIDA S.A.', 800.00, null, '12339', null, '140000777'),
+    ]
+);
+assertResolutor($r['filas'][0]['factura_erp_id'] === 11, 'sin código, el nombre sigue separando');
+
+// Pero sin código y con el mismo nombre ya no queda nada: antes lo resolvía el
+// saldo, y resolverlo así es lo que se quitó.
+$r = PagoResolutor::resolver(
+    [filaArchivo('FACT-12339', 'MERCORICA S.A.', 800.00)],
+    [
+        erpFila(11, 'FACT-12339', 'MERCORICA S.A.', 500.00, null, '12339', null, '140000283'),
+        erpFila(12, 'FACT-12339', 'MERCORICA S.A.', 800.00, null, '12339', null, '140000283'),
     ]
 );
 assertResolutor($r['resumen']['ambigua'] === 1, 'sin forma de distinguir no se asigna al azar');
 assertResolutor($r['ids'] === [], 'una ambigua no entra al pago');
+
+// ── El reporte la lista sin monto: no se paga ────────────────────
+// Quien arma el pago borra el monto de lo que deja fuera, y el subtotal del
+// grupo lo confirma. Se cuenta para poder verla antes de confirmar, pero no
+// entra al pago ni impide cargarlo.
+$r = PagoResolutor::resolver(
+    [
+        ['estado' => 'sin_monto', 'numero' => 'FACT-' . $CONS, 'proveedor' => 'AGENCIAS JOP S.A.',
+         'codigo' => '140000014', 'saldo' => 0.0],
+        filaArchivo('FACT-12339', 'MERCORICA S.A.', 800.00, '140000283'),
+    ],
+    [
+        erpFila(10, $CONS, 'AGENCIAS JOP S.A.', 50000.00, null, null, null, '140000014'),
+        erpFila(11, 'FACT-12339', 'MERCORICA S.A.', 800.00, null, '12339', null, '140000283'),
+    ]
+);
+assertResolutor($r['resumen']['sin_monto'] === 1, 'la fila sin monto se cuenta aparte');
+assertResolutor($r['ids'] === [11], 'y no entra al pago, aunque su factura exista en el sistema');
+assertResolutor($r['resumen']['ausente'] === 0 && $r['resumen']['ambigua'] === 0,
+    'una fila sin monto no es un problema que impida cargar');
 
 // ── La misma factura dos veces en el archivo ─────────────────────
 $r = PagoResolutor::resolver(

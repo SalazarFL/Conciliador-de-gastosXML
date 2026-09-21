@@ -66,7 +66,7 @@ $urlExportarNotas = $baseUrl . '/notas-xml/exportar?' . http_build_query(array_f
             : (n === 1 ? this.files[0].name : n + ' archivos seleccionados');
     });
     </script>
-    <?php if (empty($carpetaRaiz)): ?><div style="margin:8px 0 0;padding:7px 9px;background:#fff7ed;border:1px solid #fdba74;border-radius:7px;color:#9a3412;font-size:11.5px;">Configura primero la carpeta raíz desde el engranaje de Correo.</div><?php endif; ?>
+    <?php if (!empty($faltaCarpeta)): ?><div style="margin:8px 0 0;padding:7px 9px;background:#fff7ed;border:1px solid #fdba74;border-radius:7px;color:#9a3412;font-size:11.5px;">Configura primero la carpeta raíz desde el engranaje de Correo.</div><?php endif; ?>
 </div>
 
 <?php

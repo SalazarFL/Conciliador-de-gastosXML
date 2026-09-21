@@ -269,9 +269,20 @@ class Devolucion extends Model
         );
     }
 
+    /**
+     * Los totales de arriba de la pantalla.
+     *
+     * Acota igual de estricto que `listar()`. Antes decía
+     * `sociedad_id = ? OR sociedad_id IS NULL`, y era el único sitio del
+     * sistema con ese patrón: los números de arriba contaban las devoluciones
+     * de la empresa MÁS todas las que no tenían empresa, así que no cuadraban
+     * con la lista de abajo y cada empresa del grupo veía sumados los mismos
+     * huérfanos. Desde migration_devoluciones_sin_empresa.sql la columna es
+     * NOT NULL y ya no hay huérfanos que recoger.
+     */
     public function resumen($sociedadId = null)
     {
-        $where = $sociedadId ? 'WHERE sociedad_id = ? OR sociedad_id IS NULL' : '';
+        $where = $sociedadId ? 'WHERE sociedad_id = ?' : '';
         $params = $sociedadId ? [(int) $sociedadId] : [];
         $filas = $this->fetchAll(
             "SELECT estado, COUNT(*) AS n FROM devoluciones {$where} GROUP BY estado",
@@ -291,7 +302,10 @@ class Devolucion extends Model
 
     public function pendientesDeVerificar($sociedadId = null)
     {
-        $where = $sociedadId !== null ? 'AND (sociedad_id = ? OR sociedad_id IS NULL)' : '';
+        // Estricto, igual que `listar()` y `resumen()`. Con el `OR ... IS NULL`
+        // de antes, cada empresa reverificaba las devoluciones sin dueño: el
+        // mismo trabajo repetido una vez por empresa del grupo.
+        $where = $sociedadId !== null ? 'AND sociedad_id = ?' : '';
         $params = $sociedadId !== null ? [(int) $sociedadId] : [];
         return $this->fetchAll(
             "SELECT id FROM devoluciones WHERE estado <> 'verificada' {$where} ORDER BY id",

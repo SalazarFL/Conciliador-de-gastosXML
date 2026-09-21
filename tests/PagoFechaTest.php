@@ -25,6 +25,7 @@
 
 require_once __DIR__ . '/../app/core/Model.php';
 require_once __DIR__ . '/../app/models/Pago.php';
+require_once __DIR__ . '/soporte/SociedadDePrueba.php';
 
 $fallos = 0;
 function verificaPago($condicion, $mensaje)
@@ -84,9 +85,11 @@ verificaPago(Pago::normalizarFecha('') === '' && Pago::normalizarFecha('cuando s
 
 // ── La mitad que necesita base ────────────────────────────────────────
 $hayBase = false;
+$pdo = null;
 try {
     $config = require __DIR__ . '/../app/config/database.php';
-    new PDO($config['dsn'], $config['username'], $config['password'],
+    // Se guarda la conexión: hace falta para crear la empresa de la prueba.
+    $pdo = new PDO($config['dsn'], $config['username'], $config['password'],
         [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
     $hayBase = true;
 } catch (Throwable $e) {
@@ -95,7 +98,9 @@ try {
 if (!$hayBase) {
     echo "SKIP: la parte con base de datos (sin base disponible)\n";
 } else {
-    $sociedadPrueba = 990000 + random_int(0, 9000);
+    // Empresa de verdad: `pagos.sociedad_id` ya tiene clave foránea y un id
+    // inventado —lo de antes— ya no entra.
+    $sociedadPrueba = SociedadDePrueba::crear($pdo, 'pago fecha');
     // El modelo trabaja acotado a una empresa, como en la aplicacion: leer un
     // pago por su id tambien pasa por ese filtro.
     $modelo = (new Pago())->setSociedad($sociedadPrueba);
@@ -133,9 +138,10 @@ if (!$hayBase) {
     verificaPago((string) $corregido['fecha_pago'] === '2026-09-02',
         'y una fecha inválida no borra la que ya estaba');
 
-    // Limpieza: estos pagos son de una sociedad que no existe, así que se
-    // borran. execute() es protegido, y con razón —nadie escribe SQL suelto
-    // contra un modelo—; acá se abre solo para la prueba.
+    // Limpieza: los pagos primero y la empresa después, que es el orden que
+    // exige la clave foránea —con pagos colgando, borrarla está prohibido—.
+    // execute() es protegido, y con razón —nadie escribe SQL suelto contra un
+    // modelo—; acá se abre solo para la prueba.
     $borrar = new class extends Model {
         public function borrarPagos(array $ids)
         {
@@ -145,6 +151,7 @@ if (!$hayBase) {
         }
     };
     $borrar->borrarPagos($creados);
+    SociedadDePrueba::borrar($pdo, $sociedadPrueba);
 }
 
 if ($fallos > 0) {

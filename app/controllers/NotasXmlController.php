@@ -101,7 +101,10 @@ class NotasXmlController extends Controller
             'importes' => $importes,
             'proveedoresFiltro' => ProveedorCatalogo::opciones($modelo->proveedoresParaFiltro('NC')),
             'pagina' => $page, 'paginas' => $paginas, 'total' => $total,
-            'carpetaRaiz' => DocumentoArchivo::raizConfigurada(),
+            // Solo falta si la empresa archiva en la carpeta compartida: en
+            // SharePoint los XML van a la biblioteca.
+            'faltaCarpeta' => DocumentoArchivo::raizConfigurada() === ''
+                && DocumentoArchivo::necesitaCarpetaCompartida($modelo->sociedadId()),
             'navDoc' => $navDoc,
             'docBuscadoCargado' => $docBuscadoCargado,
         ]);

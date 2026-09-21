@@ -157,10 +157,30 @@ $moneda = function ($n) { return number_format((float) $n, 2, ',', '.'); };
         }).then(function (r) { return r.json(); });
     }
 
+    /*
+     * Antes recargaba pasara lo que pasara. Cuando el cierre no llegaba a
+     * escribir nada, la pantalla volvía con el aviso en su sitio y sin decir
+     * una palabra: idéntico a que el botón estuviera roto. Ahora solo recarga
+     * si el servidor dice que sí, y si no, cuenta lo que pasó.
+     */
+    function avisar(mensaje, titulo) {
+        if (window.AppDialog) {
+            window.AppDialog.alert(mensaje, { title: titulo, type: 'danger' });
+        } else {
+            alert(mensaje);
+        }
+    }
+
     window.avisoCerrar = function (id, estado) {
         enviar('/avisos/cerrar', { id: id, estado: estado })
-            .then(function () { location.reload(); })
-            .catch(function () { alert('No se pudo cerrar el aviso.'); });
+            .then(function (r) {
+                if (r && r.ok) { location.reload(); return; }
+                avisar((r && r.message) || 'No se pudo cerrar el aviso.', 'El aviso sigue abierto');
+            })
+            .catch(function () {
+                avisar('No se pudo cerrar el aviso. Revisa la conexión y vuelve a intentarlo.',
+                       'El aviso sigue abierto');
+            });
     };
 })();
 </script>

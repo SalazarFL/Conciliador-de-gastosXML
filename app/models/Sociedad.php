@@ -81,6 +81,58 @@ class Sociedad extends Model
     }
 
     /**
+     * Cuántos comprobantes de la empresa siguen en la carpeta compartida.
+     * Es lo que hay que decir al pasarla a SharePoint: esos no se mueven
+     * solos, se migran (cli/migrar_documentos_a_graph.php).
+     */
+    public function documentosEnDisco($id)
+    {
+        try {
+            return (int) $this->fetchColumn(
+                "SELECT COUNT(*) FROM facturas_xml
+                  WHERE sociedad_id = ? AND almacen IS NULL AND COALESCE(ruta_xml, '') <> ''
+                    AND ruta_xml NOT LIKE 'sharepoint:%'",
+                [(int) $id]
+            );
+        } catch (Throwable $e) {
+            return 0;
+        }
+    }
+
+    /**
+     * ¿Hay siquiera una empresa registrada?
+     *
+     * Sin filtrar por quién pregunta, a propósito: no es "cuáles puedo ver"
+     * —eso es getAll()— sino si el sistema está puesto en marcha. Lo usa
+     * Requisitos, que cierra los módulos mientras no lo esté.
+     */
+    public function hayAlguna()
+    {
+        return (int) $this->fetchColumn("SELECT COUNT(*) FROM {$this->table}") > 0;
+    }
+
+    /**
+     * ¿Alguna empresa archiva todavía en la carpeta compartida?
+     *
+     * Es lo que decide si una computadora necesita esa carpeta configurada:
+     * con todas en SharePoint, no. Sin la columna —base sin la migración—,
+     * todas están en disco. Y sin ninguna empresa también hace falta: lo que
+     * no se sabe de quién es se archiva en disco, en SIN EMPRESA.
+     */
+    public function hayEmpresasEnDisco()
+    {
+        try {
+            return (bool) $this->fetchColumn(
+                "SELECT NOT EXISTS (SELECT 1 FROM {$this->table})
+                     OR EXISTS (SELECT 1 FROM {$this->table}
+                                 WHERE almacen_documentos = 'disco' OR almacen_documentos IS NULL)"
+            );
+        } catch (Throwable $e) {
+            return true;
+        }
+    }
+
+    /**
      * Cambia dónde se archiva lo nuevo de una sociedad.
      *
      * Se niega a pasar a un almacén que ESTA máquina no puede usar: el ajuste
@@ -263,8 +315,37 @@ class Sociedad extends Model
         return true;
     }
 
+    /**
+     * Qué empresa ya tiene esa cédula, si alguna. Null si está libre.
+     *
+     * Compara solo los dígitos: `3-101-123456` y `3101123456` son la misma
+     * cédula escrita de dos formas, y antes eran dos empresas distintas porque
+     * nada comprobaba nada. La unicidad de la base
+     * (migration_sociedad_cedula_unica.sql) lo impide de verdad; esto es para
+     * poder decirlo en español en vez de soltar un "Duplicate entry".
+     *
+     * @param int $exceptoId Al editar, la empresa que se está editando no
+     *                       cuenta como duplicada de sí misma.
+     */
+    public function cedulaEnUso($cedula, $exceptoId = 0)
+    {
+        $digitos = preg_replace('/\D+/', '', (string) $cedula);
+        if ($digitos === '') {
+            return null;
+        }
+        return $this->fetchOne(
+            "SELECT id, nombre, cedula FROM {$this->table}
+              WHERE REGEXP_REPLACE(cedula, '[^0-9]', '') = ? AND id <> ?
+              LIMIT 1",
+            [$digitos, (int) $exceptoId]
+        ) ?: null;
+    }
+
     public function crear($nombre, $cedula)
     {
+        $cedula = self::normalizarCedula($cedula);
+        $this->exigirCedulaLibre($cedula, 0);
+
         // La primera sociedad registrada queda activa automáticamente
         $esPrimera = (int) $this->fetchColumn("SELECT COUNT(*) FROM {$this->table}") === 0;
 
@@ -274,12 +355,128 @@ class Sociedad extends Model
 
     public function actualizar($id, $nombre, $cedula)
     {
+        $cedula = self::normalizarCedula($cedula);
+        $this->exigirCedulaLibre($cedula, (int) $id);
+
         $sql = "UPDATE {$this->table} SET nombre = ?, cedula = ? WHERE id = ?";
         return $this->execute($sql, [$nombre, $cedula, (int) $id]);
     }
 
+    /**
+     * La cédula de una empresa, comprobada y guardada solo con dígitos.
+     *
+     * Una empresa del grupo es siempre persona jurídica, así que su cédula es
+     * la jurídica de Hacienda: diez dígitos que empiezan por 3. Quien la
+     * escribe la escribe como quiere —3-101-639680, 3101639680— y las dos
+     * son la misma; se guarda normalizada porque así es como viene el
+     * receptor en el XML y como se guarda la del usuario, y es lo que hace
+     * que se crucen sin limpiar nada en cada consulta.
+     *
+     * Antes bastaba con que tuviera un número dentro. Un 78999999999999999
+     * entraba sin protestar y la empresa quedaba dada de alta con una cédula
+     * que no existe: ninguna factura vuelve a cruzar con ella, y eso no se ve
+     * hasta que alguien pregunta por qué esa empresa no recibe nada.
+     */
+    public static function normalizarCedula($cedula): string
+    {
+        $digitos = (string) preg_replace('/\D+/', '', (string) $cedula);
+
+        if (preg_match('/^3\d{9}$/', $digitos)) {
+            return $digitos;
+        }
+
+        $cuantos = strlen($digitos);
+        if ($cuantos === 0) {
+            $detalle = 'Esa no trae números.';
+        } elseif ($cuantos === 10) {
+            $detalle = 'Esa tiene diez, pero no empieza por 3: así son las de '
+                     . 'persona física, no las de una empresa.';
+        } else {
+            $detalle = 'Esa tiene ' . $cuantos . ($cuantos === 1 ? ' dígito.' : ' dígitos.');
+        }
+
+        throw new InvalidArgumentException(
+            'La cédula de una empresa es la jurídica: diez dígitos que empiezan '
+            . 'por 3, como 3101639680. ' . $detalle
+        );
+    }
+
+    /** Lanza con un mensaje legible si esa cédula ya es de otra empresa. */
+    private function exigirCedulaLibre($cedula, $exceptoId)
+    {
+        $otra = $this->cedulaEnUso($cedula, $exceptoId);
+        if ($otra) {
+            throw new RuntimeException(
+                'Esa cédula ya es de "' . $otra['nombre'] . '" (' . $otra['cedula']
+                . '). Dos empresas con la misma cédula reparten su trabajo entre '
+                . 'dos fichas y nadie se entera de que son la misma.'
+            );
+        }
+    }
+
+    /**
+     * Qué tiene esta empresa que impide borrarla. Vacío = se puede.
+     *
+     * Las claves foráneas de migration_claves_sociedad.sql ya impiden el
+     * borrado, pero solas contestan con un SQLSTATE 1451 que no le dice nada a
+     * nadie. Esto es para contestar en español y con números: "tiene 14.043
+     * facturas y 87 pagos", que es lo que hay que saber para decidir.
+     *
+     * Solo mira las tablas con RESTRICT. Las de CASCADE se borran solas con la
+     * empresa —un permiso de acceso, una bandeja de revisión— y no son motivo
+     * para detener a nadie.
+     */
+    public function loQueImpideBorrar($id)
+    {
+        $id = (int) $id;
+        $tablas = [
+            'facturas_xml'         => 'comprobante(s) electrónico(s)',
+            'facturas_erp'         => 'factura(s) del ERP',
+            'devoluciones'         => 'devolución(es)',
+            'pagos'                => 'pago(s)',
+            'notas_credito_cargas' => 'carga(s) de notas de crédito',
+            'correo_bandeja'       => 'documento(s) en la bandeja de correo',
+        ];
+
+        $motivos = [];
+        foreach ($tablas as $tabla => $comoSeLlama) {
+            try {
+                $n = (int) $this->fetchColumn(
+                    "SELECT COUNT(*) FROM `{$tabla}` WHERE sociedad_id = ?",
+                    [$id]
+                );
+            } catch (Throwable $e) {
+                // Una tabla que todavía no exista en esta base no es un
+                // impedimento; lo que no se puede es dar un falso "sí se
+                // puede" por no haber podido contar.
+                continue;
+            }
+            if ($n > 0) {
+                $motivos[] = number_format($n, 0, ',', '.') . ' ' . $comoSeLlama;
+            }
+        }
+        return $motivos;
+    }
+
+    /**
+     * Borra la empresa. Lanza si todavía tiene documentos.
+     *
+     * Antes era un DELETE pelado y la base lo dejaba pasar: las catorce mil
+     * facturas se quedaban con un `sociedad_id` que ya no existía, invisibles
+     * en todas las pantallas —filtran por empresa— y sin forma de reasignarlas
+     * desde ningún lado.
+     */
     public function eliminar($id)
     {
+        $motivos = $this->loQueImpideBorrar($id);
+        if ($motivos) {
+            throw new RuntimeException(
+                'No se puede eliminar: la empresa todavía tiene '
+                . implode(', ', $motivos) . '. Hay que mover o dar de baja '
+                . 'eso primero; si se borrara la empresa, quedarían sin dueño '
+                . 'y no saldrían en ninguna pantalla.'
+            );
+        }
         return $this->execute("DELETE FROM {$this->table} WHERE id = ?", [(int) $id]);
     }
 

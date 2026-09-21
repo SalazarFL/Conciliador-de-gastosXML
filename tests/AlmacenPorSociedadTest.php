@@ -109,8 +109,17 @@ try {
         'NULL es disco aunque la sociedad ya se haya pasado: es lo archivado antes');
     comprobarSociedad(AlmacenDocumentos::paraFila(['almacen' => 'sharepoint', 'sociedad_id' => 6]) === $nube,
         'una fila en SharePoint se busca ahí aunque su sociedad esté en disco');
-    comprobarSociedad(AlmacenDocumentos::paraFila(['sociedad_id' => 5]) === $nube,
-        'sin columna, se usa la sociedad');
+    comprobarSociedad(AlmacenDocumentos::paraFila(['sociedad_id' => 5]) === $disco,
+        'sin columna, disco aunque la sociedad esté en SharePoint: una ruta sin prefijo es de disco, '
+        . 'y lo de SharePoint se guarda con el suyo');
+    // El 19/09/2026: una empresa con 14.043 documentos en disco se pasó a
+    // SharePoint desde Configuración, y toda consulta que no pedía la
+    // columna `almacen` leía sus rutas como de SharePoint.
+    $historico = RutaDocumento::hidratarFila(
+        ['sociedad_id' => 5, 'ruta_xml' => 'SISTEMA/A/2026/06 JUNIO/Facturas/FE_1.xml'], ['ruta_xml']);
+    comprobarSociedad($historico['ruta_xml'] === RutaDocumento::absoluta('SISTEMA/A/2026/06 JUNIO/Facturas/FE_1.xml'),
+        'lo archivado en disco antes de pasar la empresa se sigue leyendo del disco, aunque la consulta '
+        . 'no traiga la columna: ' . $historico['ruta_xml']);
     comprobarSociedad(AlmacenDocumentos::paraFila([]) === $disco, 'sin nada, disco');
 
     // La dirección dice a quién pertenece.

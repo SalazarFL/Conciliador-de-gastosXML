@@ -259,6 +259,24 @@ class Pago extends Model
         );
     }
 
+    /**
+     * Los nombres de carpeta que ya usan los pagos de la sociedad en curso.
+     *
+     * Es el selector de carpeta cuando los documentos están en SharePoint:
+     * ahí no se recorre la biblioteca para llenarlo —serían llamadas por red
+     * cada vez que alguien abre Pagos—, y la base ya sabe qué carpetas hay.
+     */
+    public function carpetasUsadas()
+    {
+        $params = [];
+        $sql = "SELECT DISTINCT carpeta_pago FROM {$this->table}
+                 WHERE carpeta_pago IS NOT NULL AND carpeta_pago <> ''"
+             . $this->condicionSociedad('', $params);
+        $nombres = array_map('strval', array_column($this->fetchAll($sql, $params) ?: [], 'carpeta_pago'));
+        natcasesort($nombres);
+        return array_values($nombres);
+    }
+
     public function configurarCarpetaPago($pagoId, $carpeta)
     {
         $carpeta = trim((string) $carpeta);

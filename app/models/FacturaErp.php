@@ -803,8 +803,8 @@ class FacturaErp extends Model
     public function getIndicePago()
     {
         $params = [];
-        $sql = "SELECT id, documento, numero_corto, proveedor_nombre, fecha_emision,
-                       monto, saldo, pago_id
+        $sql = "SELECT id, documento, numero_corto, proveedor_codigo, proveedor_nombre,
+                       fecha_emision, monto, saldo, pago_id
                   FROM facturas_erp
                  WHERE tipo IN ('F','FE','FACT')"
              . $this->condicionSociedad('', $params);

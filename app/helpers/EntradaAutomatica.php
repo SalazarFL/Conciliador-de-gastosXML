@@ -113,6 +113,7 @@ class EntradaAutomatica
             // existiendo.
             if (($ref['estado'] ?? '') !== 'pendiente') {
                 $res['retenidos']++;
+                $this->compartir($filaId);
                 continue;
             }
 
@@ -130,6 +131,7 @@ class EntradaAutomatica
                 $res['retenidos']++;
                 $res['errores'][] = 'Sin empresa resuelta, queda en la Bandeja: '
                     . $this->etiqueta($fila);
+                $this->compartir($filaId, $fila);
                 continue;
             }
 
@@ -164,6 +166,7 @@ class EntradaAutomatica
                 // responder, por ejemplo—. Reintentarlo es un clic.
                 $res['fallidos']++;
                 $res['errores'][] = 'No entró ' . $this->etiqueta($fila) . ': ' . $e->getMessage();
+                $this->compartir($filaId, $fila);
                 continue;
             }
 
@@ -197,6 +200,89 @@ class EntradaAutomatica
         }
 
         return $res;
+    }
+
+    /**
+     * Sube a la zona de paso del grupo los archivos de una fila que se QUEDA
+     * en la Bandeja.
+     *
+     * Mientras el comprobante iba a archivarse en esta misma corrida, su
+     * adjunto se quedó en esta computadora (RutaDocumento::carpetaTrabajoLocal
+     * dice por qué). En cuanto pasa a esperar a que alguien lo mire, deja de
+     * ser cosa de esta máquina: quien lo mire puede estar en otra, y desde
+     * otra no hay forma de abrir un archivo de este disco.
+     *
+     * Si no se puede subir —sin carpeta compartida, sin red— la fila se queda
+     * apuntando a lo de aquí: es la única copia del comprobante y perderla
+     * sería peor. La próxima corrida en esta computadora lo reintenta, desde
+     * rescatarLoQueQuedoAqui().
+     */
+    private function compartir($filaId, ?array $fila = null)
+    {
+        $filaId = (int) $filaId;
+        if ($filaId <= 0) {
+            return;
+        }
+        if ($fila === null) {
+            $filas = $this->bandeja->getByIds([$filaId]);
+            if (empty($filas)) {
+                return;
+            }
+            $fila = $filas[0];
+        }
+
+        $nuevas = [];
+        foreach (['archivo_xml', 'archivo_pdf'] as $campo) {
+            $ruta = (string) ($fila[$campo] ?? '');
+            if ($ruta === '' || !RutaDocumento::esDeTrabajoLocal($ruta) || !RutaDocumento::existe($ruta)) {
+                continue;
+            }
+            try {
+                // El mes es el de la carpeta donde ya está, no el de hoy: una
+                // corrida que arranca el 31 a las 23:59 no parte el par.
+                $destino = RutaDocumento::carpetaTrabajo(
+                        'BANDEJA/' . ($campo === 'archivo_pdf' ? 'pdf' : 'xml')
+                        . '/' . basename(dirname($ruta)),
+                        (int) ($fila['sociedad_id'] ?? 0)
+                    ) . DIRECTORY_SEPARATOR . basename($ruta);
+                AlmacenDocumentos::de($destino)->adoptar($destino, $ruta);
+                $nuevas[$campo] = $destino;
+            } catch (Throwable $e) {
+                // Se queda donde está; la fila lo sigue apuntando.
+            }
+        }
+
+        if ($nuevas) {
+            $this->bandeja->reapuntarArchivos($filaId, $nuevas);
+        }
+    }
+
+    /**
+     * Sube lo que una corrida anterior dejó a medias en esta computadora.
+     *
+     * Solo puede pasar si la corrida se cortó entre capturar el adjunto y
+     * archivarlo —se apagó la máquina, se mató el proceso—: la fila quedó
+     * pendiente apuntando a un archivo que únicamente esta PC ve. Como la
+     * captura siempre la hace la computadora de la tarea programada, la
+     * siguiente corrida de esa misma tarea lo encuentra y lo sube.
+     *
+     * @return int Cuántas filas se subieron.
+     */
+    public function rescatarLoQueQuedoAqui()
+    {
+        $subidas = 0;
+        foreach ($this->bandeja->pendientesEnEstaPC() as $fila) {
+            $antes = [(string) ($fila['archivo_xml'] ?? ''), (string) ($fila['archivo_pdf'] ?? '')];
+            $this->compartir((int) $fila['id'], $fila);
+            $filas = $this->bandeja->getByIds([(int) $fila['id']]);
+            $ahora = empty($filas) ? $antes
+                : [(string) ($filas[0]['archivo_xml'] ?? ''), (string) ($filas[0]['archivo_pdf'] ?? '')];
+            if ($ahora !== $antes) {
+                $subidas++;
+            }
+        }
+
+        return $subidas;
     }
 
     /** ¿Entró algo que valga la pena cruzar contra los listados? */

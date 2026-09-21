@@ -107,18 +107,32 @@ class XmlDocumentImporter
             // Un PDF que no se puede leer no frena al XML: el comprobante
             // entra y el PDF queda pendiente, igual que si no hubiera venido.
             // Es lo que ya pasaba con un PDF ausente, y por eso no se lanza.
+            //
+            // Y se consigue recién cuando hace falta: si el comprobante ya
+            // estaba archivado con su PDF, no se usa, y bajarlo de SharePoint
+            // era un segundo de espera para nada.
             $pdfLocal = null;
             $esTemporal = false;
-            if (is_string($pdfPath) && $pdfPath !== '') {
-                if (RutaDocumento::esAbsoluta($pdfPath) && is_file($pdfPath)) {
-                    $pdfLocal = $pdfPath;
-                } else {
-                    $pdfLocal = RutaDocumento::rutaLocal($pdfPath);
-                    $esTemporal = $pdfLocal !== null;
+            $buscado = false;
+            $pdf = function ($soloSiVino = false) use ($pdfPath, &$pdfLocal, &$esTemporal, &$buscado) {
+                if ($soloSiVino) {
+                    return is_string($pdfPath) && $pdfPath !== '';
                 }
-            }
+                if (!$buscado) {
+                    $buscado = true;
+                    if (is_string($pdfPath) && $pdfPath !== '') {
+                        if (RutaDocumento::esAbsoluta($pdfPath) && is_file($pdfPath)) {
+                            $pdfLocal = $pdfPath;
+                        } else {
+                            $pdfLocal = RutaDocumento::rutaLocal($pdfPath);
+                            $esTemporal = $pdfLocal !== null;
+                        }
+                    }
+                }
+                return $pdfLocal;
+            };
             try {
-                return $this->importarLocal($xmlLocal, $pdfLocal, $contexto);
+                return $this->importarLocal($xmlLocal, $pdf, $contexto);
             } finally {
                 if ($esTemporal) {
                     RutaDocumento::soltarLocal($pdfLocal);
@@ -127,7 +141,11 @@ class XmlDocumentImporter
         });
     }
 
-    private function importarLocal($xmlPath, $pdfPath, array $contexto)
+    /**
+     * @param Closure $pdf Devuelve el PDF local, o null; lo baja la primera vez
+     *                     que se le pide. $pdf(true) solo dice si vino un PDF.
+     */
+    private function importarLocal($xmlPath, Closure $pdf, array $contexto)
     {
         $this->exigirListado();
 
@@ -185,10 +203,11 @@ class XmlDocumentImporter
         }
 
         if ($existente) {
-            return $this->completarExistente($existente, $xmlPath, $pdfPath, $doc, $contexto);
+            return $this->completarExistente($existente, $xmlPath, $pdf, $doc, $contexto);
         }
 
         // La carpeta es la de la empresa del documento, no una sola para todas.
+        $pdfPath = $pdf();
         $archivado = $this->archivoDe($contexto['sociedad_id'] ?? 0)->archivar(
             $xmlPath,
             is_string($pdfPath) ? $pdfPath : null,
@@ -362,7 +381,7 @@ class XmlDocumentImporter
         }
     }
 
-    private function completarExistente(array $existente, $xmlPath, $pdfPath, array $doc, array $contexto)
+    private function completarExistente(array $existente, $xmlPath, Closure $pdf, array $doc, array $contexto)
     {
         $cambios = [];
         $creados = [];
@@ -376,6 +395,7 @@ class XmlDocumentImporter
 
         // Repara rutas históricas obsoletas si el XML vuelve a llegar.
         if (empty($existente['ruta_xml']) || !RutaDocumento::existe((string) $existente['ruta_xml'])) {
+            $pdfPath = $pdf();
             $creados = $this->archivoDe(
                 $existente['sociedad_id'] ?? ($contexto['sociedad_id'] ?? 0)
             )->archivar(
@@ -385,8 +405,9 @@ class XmlDocumentImporter
                 (string) ($existente['proveedor_nombre'] ?? ($doc['razon_social_emisor'] ?? ''))
             );
             $cambios = $creados;
-        } elseif (is_string($pdfPath) && $pdfPath !== '' && is_file($pdfPath)
-            && (empty($existente['ruta_pdf']) || !RutaDocumento::existe((string) $existente['ruta_pdf']))) {
+        } elseif ($pdf(true)
+            && (empty($existente['ruta_pdf']) || !RutaDocumento::existe((string) $existente['ruta_pdf']))
+            && is_string($pdfPath = $pdf()) && is_file($pdfPath)) {
             $cambios = $this->archivoDe(
                     $existente['sociedad_id'] ?? ($contexto['sociedad_id'] ?? 0)
                 )->archivarPdfPara($existente, $pdfPath);

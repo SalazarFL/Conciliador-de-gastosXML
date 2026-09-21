@@ -331,7 +331,7 @@ class NotasCreditoController extends Controller
             $modelo = $this->loadModel('NotaCredito');
             $r = $modelo->insertarDesdeRevision($campos, (int) $sociedad['id'], $linea['carga_id']);
 
-            $bandeja->marcarIncluida($linea['id'], $campos, $r['id'], $_SESSION['usuario_id'] ?? null);
+            $bandeja->marcarIncluida($linea['id'], $campos, $r['id'], $_SESSION['user_id'] ?? null);
             $recordar = $this->post('recordar', '') !== '';
             if ($recordar) {
                 $bandeja->recordar(
@@ -340,7 +340,7 @@ class NotasCreditoController extends Controller
                     'incluir',
                     $campos,
                     'Corregida a mano desde la bandeja de revisión.',
-                    $_SESSION['usuario_id'] ?? null
+                    $_SESSION['user_id'] ?? null
                 );
             }
 
@@ -389,7 +389,7 @@ class NotasCreditoController extends Controller
             }
 
             $nota = (string) $this->post('nota', '');
-            $bandeja->marcarDescartada($linea['id'], $nota, $_SESSION['usuario_id'] ?? null);
+            $bandeja->marcarDescartada($linea['id'], $nota, $_SESSION['user_id'] ?? null);
             $recordar = $this->post('recordar', '') !== '';
             if ($recordar) {
                 $bandeja->recordar(
@@ -398,7 +398,7 @@ class NotasCreditoController extends Controller
                     'descartar',
                     [],
                     $nota,
-                    $_SESSION['usuario_id'] ?? null
+                    $_SESSION['user_id'] ?? null
                 );
             }
 
@@ -564,7 +564,7 @@ class NotasCreditoController extends Controller
                 // Todas las que el archivo traía ilegibles, no solo las que
                 // llevaban "NC-": las otras ni siquiera se contaban.
                 'filas_invalidas' => count($parsed['revision']),
-            ], $_SESSION['usuario_id'] ?? null);
+            ], $_SESSION['user_id'] ?? null);
             $guardado = true;
             $listadoId = (int) $resultado['listado_id'];
 

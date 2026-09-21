@@ -293,6 +293,15 @@ class LineaEnRevision extends Model
      * Marca una línea como resuelta. La inserción en el listado la hace el
      * modelo del módulo: esta clase no sabe qué es una factura.
      */
+    /**
+     * `resultado_id` es la fila que nació de incluir esta línea.
+     *
+     * El 0 se guarda como NULL. Antes `(int) $resultadoId` convertía en 0 tanto
+     * un null como un 0, y 0 no es el id de nada: quedaba una referencia a una
+     * fila inexistente que nadie podía seguir. Desde que la columna tiene clave
+     * foránea eso además revienta el UPDATE, y con razón. NULL es lo que
+     * corresponde y es lo que ya hacía `resuelta_por` justo al lado.
+     */
     public function marcarIncluida($id, array $campos, $resultadoId, $usuarioId = null)
     {
         $this->execute(
@@ -300,7 +309,12 @@ class LineaEnRevision extends Model
                 SET estado = 'incluida', campos = ?, resultado_id = ?,
                     resuelta_en = NOW(), resuelta_por = ?
               WHERE id = ?",
-            [self::json($campos), (int) $resultadoId, $usuarioId !== null ? (int) $usuarioId : null, (int) $id]
+            [
+                self::json($campos),
+                (int) $resultadoId > 0 ? (int) $resultadoId : null,
+                $usuarioId !== null ? (int) $usuarioId : null,
+                (int) $id,
+            ]
         );
     }
 

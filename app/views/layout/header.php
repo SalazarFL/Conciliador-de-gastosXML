@@ -89,16 +89,24 @@ if (!empty($tituloPagina)) {
 /*
  * Qué ofrece el menú.
  *
+ * La lista no está aquí: vive en config/menu.php y la filtra Navegacion, que
+ * es la misma que dibuja el panel principal. Cuando cada uno tenía la suya,
+ * la barra enseñaba once módulos y el panel ofrecía cuatro atajos.
+ *
  * Esconder un módulo no es lo que protege —de eso se encarga el enrutador,
  * que comprueba el permiso aunque se escriba la dirección a mano—, pero sí es
  * lo que hace que el sistema se entienda: un menú con seis entradas que
  * devuelven "no tienes permiso" no informa de nada y parece averiado.
- *
- * La sección de Configuración se ofrece si se puede entrar a CUALQUIERA de
- * sus secciones, no solo con 'configuracion.ver': ahí dentro viven usuarios,
- * roles, bitácora y respaldo, cada uno con su propio dueño.
  */
+require_once __DIR__ . '/../../helpers/Navegacion.php';
+$seccionesMenu = Navegacion::secciones();
+
 $puedeVerMenu = fn(string $permiso): bool => Permisos::puede($permiso);
+
+// El engranaje de la barra superior lleva a la misma pantalla que la entrada
+// del menú, y se ofrece con la misma regla: Configuración hospeda secciones
+// de varios dueños —usuarios, roles, bitácora, respaldo—, así que basta con
+// poder entrar a CUALQUIERA de ellas.
 $puedeConfiguracion = Permisos::puedeAlguno([
     'configuracion.ver', 'usuarios.ver', 'usuarios.administrar',
     'roles.administrar', 'bitacora.ver', 'respaldo.administrar',
@@ -149,120 +157,36 @@ if (!isset($sociedadActiva)) {
 
         <!-- Navegación -->
         <nav class="sidebar-nav">
-            <?php if ($puedeVerMenu('seguimiento.ver')): ?>
-            <div class="sidebar-section-label">Trabajo del día</div>
-
-            <a href="<?= $baseUrl ?>/seguimiento" class="<?= navActive('seguimiento', $uriClean) ?>"
-               title="Todo lo que le falta respaldo o no cuadra, en una sola lista">
-                <span class="nav-icon"><i class="fas fa-list-check"></i></span>
-                <span class="nav-label">Seguimiento</span>
+            <?php foreach ($seccionesMenu as $idSeccion => $seccion): ?>
+            <div class="sidebar-section-label"<?= $idSeccion === array_key_first($seccionesMenu) ? '' : ' style="margin-top:16px;"' ?>><?= htmlspecialchars($seccion['titulo']) ?></div>
+                <?php foreach ($seccion['entradas'] as $entrada): ?>
+                    <?php if (!empty($entrada['bloqueada'])):
+                        /*
+                         * A la vista pero cerrado: al módulo le falta un paso
+                         * de configuración. Se dibuja apagado y sin enlace —no
+                         * hay adónde llevar todavía— y el globo dice cuál es
+                         * el paso. Quien escriba la dirección a mano choca con
+                         * la misma puerta: ver app/core/Requisitos.php.
+                         */
+                        $falta = implode(' · ', array_map(
+                            fn($r) => (string) ($r['titulo'] ?? ''), $entrada['falta']
+                        )); ?>
+            <span class="nav-bloqueada"
+                  title="<?= htmlspecialchars($entrada['titulo'] . ' — falta configurar: ' . $falta) ?>">
+                <span class="nav-icon"><i class="fas <?= $entrada['icono'] ?>"></i></span>
+                <span class="nav-label"><?= htmlspecialchars($entrada['titulo']) ?></span>
+                <span class="nav-candado"><i class="fas fa-lock"></i></span>
+            </span>
+                    <?php else: ?>
+            <a href="<?= $baseUrl . $entrada['ruta'] ?>"
+               class="<?= navActive($entrada['segmento'], $uriClean) ?>"
+               title="<?= htmlspecialchars($entrada['ayuda']) ?>">
+                <span class="nav-icon"><i class="fas <?= $entrada['icono'] ?>"></i></span>
+                <span class="nav-label"><?= htmlspecialchars($entrada['titulo']) ?></span>
             </a>
-            <?php endif; ?>
-
-            <?php $hayModulos = Permisos::puedeAlguno([
-                'por_pagar.ver', 'notas_credito.ver', 'correo.ver', 'facturas_erp.ver',
-            ]); ?>
-            <?php if ($hayModulos): ?>
-            <div class="sidebar-section-label" style="margin-top:16px;">Módulos</div>
-            <?php endif; ?>
-
-            <?php if ($puedeVerMenu('por_pagar.ver')): ?>
-            <a href="<?= $baseUrl ?>/por-pagar" class="<?= navActive('por-pagar', $uriClean) ?>" title="Pagos">
-                <span class="nav-icon"><i class="fas fa-file-invoice-dollar"></i></span>
-                <span class="nav-label">Pagos</span>
-            </a>
-            <?php endif; ?>
-
-            <?php if ($puedeVerMenu('notas_credito.ver')): ?>
-            <a href="<?= $baseUrl ?>/notas-credito" class="<?= navActive('notas-credito', $uriClean) ?>"
-               title="Notas de crédito">
-                <span class="nav-icon"><i class="fas fa-file-circle-minus"></i></span>
-                <span class="nav-label">Notas de crédito</span>
-            </a>
-            <?php endif; ?>
-
-            <?php /*
-             * Devoluciones no se ofrece por ahora: el módulo está completo y
-             * su ruta responde, pero todavía no se presenta como parte del
-             * trabajo. Se retiró la entrada del menú, no la pantalla — para
-             * volver a ofrecerlo basta con devolver este enlace.
-             *
-             *   <a href="/devoluciones" ...>Devoluciones</a>
-             */ ?>
-
-            <?php if ($puedeVerMenu('correo.ver')): ?>
-            <a href="<?= $baseUrl ?>/correo" class="<?= navActive('correo', $uriClean) ?>" title="Correo">
-                <span class="nav-icon"><i class="fas fa-envelope-open-text"></i></span>
-                <span class="nav-label">Correo</span>
-            </a>
-            <?php endif; ?>
-
-            <?php if ($puedeVerMenu('facturas_erp.ver')): ?>
-            <a href="<?= $baseUrl ?>/facturas-erp" class="<?= navActive('facturas-erp', $uriClean) ?>"
-               title="Las facturas de la empresa">
-                <span class="nav-icon"><i class="fas fa-file-invoice-dollar"></i></span>
-                <span class="nav-label">Facturas</span>
-            </a>
-            <?php endif; ?>
-
-            <?php /*
-             * Las dos pantallas de carga de comprobantes tienen su propia
-             * sección. Antes se llegaba a ellas desde adentro de Facturas y de
-             * Notas de crédito, y por eso ambas entradas se marcaban activas a
-             * la vez: ahora cada módulo se marca solo por su propia ruta.
-             */ ?>
-            <?php if (Permisos::puedeAlguno(['facturas_xml.ver', 'notas_xml.ver'])): ?>
-            <div class="sidebar-section-label" style="margin-top:16px;">XML</div>
-            <?php endif; ?>
-
-            <?php if ($puedeVerMenu('facturas_xml.ver')): ?>
-            <a href="<?= $baseUrl ?>/facturas" class="<?= navActive('facturas', $uriClean) ?>"
-               title="Carga y consulta de los comprobantes XML de facturas">
-                <span class="nav-icon"><i class="fas fa-file-code"></i></span>
-                <span class="nav-label">Facturas XML</span>
-            </a>
-            <?php endif; ?>
-
-            <?php if ($puedeVerMenu('notas_xml.ver')): ?>
-            <a href="<?= $baseUrl ?>/notas-xml" class="<?= navActive('notas-xml', $uriClean) ?>"
-               title="Carga y consulta de los comprobantes XML de notas de crédito">
-                <span class="nav-icon"><i class="fas fa-file-import"></i></span>
-                <span class="nav-label">Notas XML</span>
-            </a>
-            <?php endif; ?>
-
-            <?php if ($puedeConfiguracion || $puedeVerMenu('bitacora.ver') || $puedeVerMenu('diagnostico.ver')): ?>
-            <div class="sidebar-section-label" style="margin-top:16px;">Administración</div>
-            <?php endif; ?>
-
-            <?php // Todo lo que se ajusta vive en una sola pantalla; el
-                  // engranaje de la barra superior lleva a la misma. ?>
-            <?php if ($puedeConfiguracion): ?>
-            <a href="<?= $baseUrl ?>/configuracion" class="<?= navActive('configuracion', $uriClean) ?>"
-               title="Carpeta de XML y PDF, cuentas de correo, empresas, usuarios, roles y respaldo">
-                <span class="nav-icon"><i class="fas fa-gear"></i></span>
-                <span class="nav-label">Configuración</span>
-            </a>
-            <?php endif; ?>
-
-            <?php // La bitácora tiene entrada propia además de su sección en
-                  // Configuración: quien audita entra aquí varias veces al día
-                  // y no tiene por qué pasar por los ajustes cada vez. ?>
-            <?php if ($puedeVerMenu('bitacora.ver')): ?>
-            <a href="<?= $baseUrl ?>/bitacora" class="<?= navActive('bitacora', $uriClean) ?>"
-               title="Quién hizo qué, y cuándo">
-                <span class="nav-icon"><i class="fas fa-clock-rotate-left"></i></span>
-                <span class="nav-label">Actividad</span>
-            </a>
-            <?php endif; ?>
-
-            <?php if ($puedeVerMenu('diagnostico.ver')): ?>
-            <a href="<?= $baseUrl ?>/diagnostico" class="<?= navActive('diagnostico', $uriClean) ?>"
-               title="Revisar la instalación de esta computadora">
-                <span class="nav-icon"><i class="fas fa-stethoscope"></i></span>
-                <span class="nav-label">Diagnóstico</span>
-            </a>
-            <?php endif; ?>
+                    <?php endif; ?>
+                <?php endforeach; ?>
+            <?php endforeach; ?>
         </nav>
 
         <!-- Footer del sidebar -->
@@ -625,6 +549,18 @@ if (!isset($sociedadActiva)) {
                       title="Sociedad activa">
                     <i class="fas fa-building" style="color:var(--gold-dark);font-size:13px;"></i>
                     <?= htmlspecialchars($sociedadActiva['nombre']) ?>
+                </span>
+                <?php else: ?>
+                <?php // Sin empresa las pantallas salen vacías a propósito: no
+                      // se sabe de quién son los documentos, así que no se
+                      // muestra ninguno. Antes se mostraban todos. Si no se
+                      // dice aquí, la aplicación parece rota en vez de
+                      // acotada, y el aviso va en la barra y no en cada
+                      // pantalla porque el problema es el mismo en todas. ?>
+                <span class="topbar-society" style="font-size:11.5px;color:#9a3412;background:#fff7ed;border:1px solid #fdba74;border-radius:999px;padding:3px 8px;display:flex;align-items:center;gap:5px;font-weight:600;"
+                      title="No hay ninguna empresa seleccionada, así que los listados salen vacíos. Elegí una en Configuración → Empresas.">
+                    <i class="fas fa-triangle-exclamation" style="color:#c2410c;font-size:13px;"></i>
+                    Sin empresa
                 </span>
                 <?php endif; ?>
                 <?php // El rol se lee junto al nombre: saber con qué permisos

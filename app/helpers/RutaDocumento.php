@@ -273,6 +273,61 @@ class RutaDocumento
         return $ruta;
     }
 
+    /**
+     * La misma zona de paso, pero en ESTA computadora.
+     *
+     * Un adjunto que se captura y se importa en la misma corrida vive dos
+     * segundos. Mandarlo a la biblioteca para bajarlo acto seguido, archivarlo
+     * y borrarlo son seis viajes de red por comprobante que no le sirven a
+     * nadie, y si la corrida se corta a la mitad dejan el archivo suelto allá
+     * arriba. Mientras no tenga que verlo nadie más, se queda aquí.
+     *
+     * En cuanto el documento pasa a ESPERAR en la Bandeja —rechazado por
+     * Hacienda, a nombre de otra cédula, sin empresa resuelta, o porque la
+     * importación falló— deja de ser cosa de esta máquina: la fila la ve todo
+     * el grupo, así que EntradaAutomatica lo sube antes de dejarlo ahí. Ver
+     * EntradaAutomatica::compartir().
+     */
+    public static function carpetaTrabajoLocal($sub = '')
+    {
+        require_once __DIR__ . '/AlmacenDocumentos.php';
+        $sub = trim(str_replace('\\', '/', (string) $sub), '/');
+        $ruta = self::raizTrabajoLocal()
+            . ($sub !== '' ? DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $sub) : '');
+
+        // Una ruta absoluta sin prefijo es de disco siempre, así que esto crea
+        // la carpeta de ESTA máquina aunque la empresa archive en SharePoint.
+        AlmacenDocumentos::de($ruta)->asegurarCarpeta($ruta);
+
+        return $ruta;
+    }
+
+    /** Dónde guarda esta computadora lo que está en tránsito. */
+    public static function raizTrabajoLocal()
+    {
+        return dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'storage'
+            . DIRECTORY_SEPARATOR . 'correo' . DIRECTORY_SEPARATOR . 'transito';
+    }
+
+    /**
+     * ¿La ruta apunta a la zona de paso de esta computadora?
+     *
+     * Lo que está ahí no lo alcanza ninguna otra PC: una fila de la Bandeja
+     * que lo apunte solo se puede importar desde aquí.
+     */
+    public static function esDeTrabajoLocal($ruta)
+    {
+        $ruta = trim((string) $ruta);
+        if ($ruta === '' || !self::esAbsoluta($ruta)) {
+            return false;
+        }
+
+        return self::empiezaCon(
+            self::normalizarSeparadores($ruta),
+            self::raizTrabajoLocal() . DIRECTORY_SEPARATOR
+        );
+    }
+
     /** La subcarpeta del mes: una carpeta con miles de archivos se vuelve lenta, en disco y en SharePoint. */
     public static function delMes()
     {

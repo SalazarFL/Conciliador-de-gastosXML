@@ -85,6 +85,21 @@ class DevolucionesController extends Controller
 
         try {
             $sociedad = $this->loadModel('Sociedad')->getActiva();
+
+            // Sin empresa activa esto guardaba `sociedad_id = NULL`, y una
+            // devolución de nadie no se puede reasignar desde ninguna pantalla
+            // —todas filtran por empresa— y hasta hace poco se le contaba a
+            // todas en el resumen. Mejor no importarla que importarla huérfana:
+            // el PDF sigue donde está y se vuelve a subir eligiendo empresa.
+            if (!$sociedad) {
+                $this->redirectWithMessage(
+                    $this->url('/devoluciones'),
+                    'Elige con qué empresa estás trabajando antes de subir devoluciones: '
+                    . 'si no, quedarían sin dueño y no saldrían en ninguna pantalla.',
+                    'error'
+                );
+            }
+
             $archivos = FileUploader::uploadMultiple(
                 'pdf_files',
                 $tempDir,

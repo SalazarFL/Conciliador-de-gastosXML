@@ -1436,6 +1436,54 @@ class Seguimiento extends Model
         return $this->generarRecordatorios();
     }
 
+    /**
+     * Apaga el recordatorio de un renglón, sin sacarlo de revisión.
+     *
+     * Es lo que hace "Marcar como resuelto" en la campana. Cerrar el aviso a
+     * secas no alcanzaba: el aviso es el recado, y la alarma que lo manda vive
+     * aquí. Al día siguiente el barrido volvía a sonar y avisarVarios() REABRE
+     * lo que estaba resuelto —a propósito, ver Notificacion::avisar—, así que
+     * el botón parecía no hacer nada: el mismo pendiente llegó a contar siete
+     * repeticiones del mismo recado.
+     *
+     * Lo que NO hace es sacarlo de revisión. El trabajo sigue pendiente y
+     * sigue en la cola, con su responsable y su motivo; lo único que se apaga
+     * es la insistencia. Volver a armarla es elegir una frecuencia en
+     * Seguimiento, que es donde se armó.
+     *
+     * @return int 1 si había una alarma que apagar, 0 si no la había.
+     */
+    public function apagarRecordatorio($origen, $referenciaId, array $usuario)
+    {
+        // Sin alarma no hay nada que apagar, y escribir igual dejaría una
+        // anotación en la historia del documento por no haber hecho nada.
+        // Pasa al cerrar un aviso viejo, o al pulsar dos veces.
+        $armado = (int) $this->fetchColumn(
+            'SELECT COUNT(*) FROM seguimiento
+              WHERE origen = ? AND referencia_id = ? AND recordar_en IS NOT NULL',
+            [(string) $origen, (int) $referenciaId]
+        );
+        if ($armado === 0) {
+            return 0;
+        }
+
+        $this->aplicar(
+            [['origen' => $origen, 'referencia_id' => $referenciaId]],
+            [
+                // Los dos juntos, igual que cuando un renglón sale de
+                // revisión: el momento sin la frecuencia deja media alarma.
+                'recordar_en'   => null,
+                'recordar_cada' => null,
+                // Para que la historia del documento diga por qué dejó de
+                // sonar, en vez de que alguien se pregunte dentro de un mes
+                // qué pasó con el recordatorio que había puesto.
+                'comentario'    => 'Recordatorio apagado desde la campana.',
+            ],
+            $usuario
+        );
+        return 1;
+    }
+
     private function barrerRecordatorios($limite)
     {
         $vencidos = $this->fetchAll(

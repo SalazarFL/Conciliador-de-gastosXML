@@ -80,6 +80,11 @@ class DocumentoArchivo
     /** Tope del nombre de la empresa como carpeta. */
     public const MAX_CARPETA_EMPRESA = 60;
 
+    /** Lo que se le dice a quien archiva en disco sin carpeta compartida. */
+    public const SIN_CARPETA = 'Esta empresa archiva sus XML y PDF en la carpeta compartida, y esta '
+        . 'computadora no la tiene configurada. Configúrala en Correo, o pasa la empresa a SharePoint '
+        . 'en Configuración → Empresas del grupo.';
+
     private $raiz;
     private $empresa = '';
     private $notaSistemaLista = false;
@@ -98,12 +103,19 @@ class DocumentoArchivo
             // real mientras se prueba otra cosa.
             $raiz = RutaDocumento::raiz();
         }
-        if ($raiz === '') {
-            throw new RuntimeException('Configura la carpeta raíz de XML y PDF en Correo.');
-        }
 
         $this->raiz = rtrim($raiz, '/\\');
         $this->almacen = AlmacenDocumentos::actual();
+
+        // Sin carpeta compartida se puede seguir: una PC que solo trabaja
+        // empresas en SharePoint no la necesita —los XML y PDF van a la
+        // biblioteca y lo demás se queda en esta máquina—. Lo que no se puede
+        // es archivar en disco sin ella, y eso lo frena exigirCarpeta() en el
+        // momento de escribir, no acá: el archivo que se construye todavía no
+        // sabe de qué empresa va a ser el documento.
+        if ($this->raiz === '') {
+            return;
+        }
         $this->asegurarDirectorio($this->raiz);
         if (!$this->almacen->permiteEscritura($this->raiz)) {
             throw new RuntimeException('La carpeta raíz no permite escritura: ' . $this->raiz);
@@ -480,6 +492,7 @@ class DocumentoArchivo
      */
     public function carpetaBasePagos()
     {
+        $this->exigirCarpeta();
         $nueva = $this->enRaiz(self::CARPETA_PAGOS);
         $vieja = $this->enRaiz(self::CARPETA_PAGOS_VIEJA);
 
@@ -574,9 +587,20 @@ class DocumentoArchivo
         return rtrim(mb_substr((string) $nombre, 0, 100, 'UTF-8'), ". \t");
     }
 
-    /** Carpetas de pago ya creadas que pueden reutilizarse en el selector. */
+    /**
+     * Carpetas de pago ya creadas que pueden reutilizarse en el selector.
+     *
+     * Solo donde recorrer es barato —el disco—. En SharePoint serían una o
+     * varias llamadas cada vez que alguien abre Pagos, para un selector que
+     * igual acepta cualquier nombre: la pantalla usa los nombres que ya
+     * tienen los pagos en la base.
+     */
     public function carpetasPago()
     {
+        if (!$this->almacen->recorreElArbolBarato()
+            || ($this->raiz === '' && $this->almacen instanceof AlmacenEnDisco)) {
+            return [];
+        }
         $resultado = [];
         foreach ($this->almacen->listarCarpeta($this->carpetaBasePagos()) as $item) {
             if ($item['es_carpeta']) {
@@ -607,6 +631,7 @@ class DocumentoArchivo
      */
     private function copiarValidado($origen, $carpeta, $base, $extension)
     {
+        $this->exigirCarpeta();
         $hash = hash_file('sha256', $origen);
         if (!is_string($hash) || $hash === '') {
             throw new RuntimeException('No se pudo calcular el hash de ' . basename($origen) . '.');
@@ -710,8 +735,52 @@ class DocumentoArchivo
 
     private function asegurarDirectorio($ruta)
     {
+        $this->exigirCarpeta();
+        // Donde la subida crea el camino sola (SharePoint), pedir la carpeta
+        // antes eran llamadas por red de más en cada comprobante.
+        if ($this->almacen->creaCarpetasAlEscribir()) {
+            return;
+        }
         $this->almacen->asegurarCarpeta($ruta);
         $this->asegurarNotaSistema($ruta);
+    }
+
+    /**
+     * ¿Hay dónde escribir? En SharePoint siempre: la biblioteca es la raíz.
+     * En disco hace falta la carpeta compartida de esta máquina, y sin ella
+     * se para con un motivo que dice qué hacer, en vez de dejar que una ruta
+     * relativa termine escrita quién sabe dónde.
+     */
+    private function exigirCarpeta()
+    {
+        if ($this->raiz === '' && $this->almacen instanceof AlmacenEnDisco) {
+            throw new RuntimeException(self::SIN_CARPETA);
+        }
+    }
+
+    /**
+     * ¿Esta máquina necesita la carpeta compartida?
+     *
+     * Solo si alguna empresa —o la indicada— archiva en disco. Con todas en
+     * SharePoint, los XML y PDF viven en la biblioteca y lo demás en esta
+     * máquina: la carpeta sincronizada sobra. Si la base no contesta, sí: es
+     * lo que se hizo siempre, y equivocarse para este lado solo pide un
+     * ajuste de más.
+     */
+    public static function necesitaCarpetaCompartida($sociedadId = null)
+    {
+        try {
+            if ($sociedadId !== null && (int) $sociedadId > 0) {
+                return AlmacenDocumentos::tipoDeSociedad((int) $sociedadId) === AlmacenDocumentos::DISCO;
+            }
+            if (!class_exists('Sociedad')) {
+                require_once dirname(__DIR__) . '/core/Model.php';
+                require_once dirname(__DIR__) . '/models/Sociedad.php';
+            }
+            return (new Sociedad())->hayEmpresasEnDisco();
+        } catch (Throwable $e) {
+            return true;
+        }
     }
 
     /**
@@ -719,10 +788,15 @@ class DocumentoArchivo
      * la aplicación llenaría de carpetas cualquier ruta que alguien escriba
      * por error en la configuración. Un fallo al escribirla no interrumpe el
      * archivado —el documento importa más que su letrero—.
+     *
+     * Solo en disco. A SharePoint van XML y PDF y nada más (ver
+     * AlmacenEnGraph::escribir), y ahí tampoco hace la misma falta: un
+     * documento movido desde el navegador se sigue por su id, y uno borrado
+     * queda en la papelera del sitio y marcado en la aplicación.
      */
     private function asegurarNotaSistema($ruta)
     {
-        if ($this->notaSistemaLista) {
+        if ($this->notaSistemaLista || !$this->almacen instanceof AlmacenEnDisco) {
             return;
         }
         $sistema = $this->carpetaSistema();

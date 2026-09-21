@@ -22,6 +22,48 @@ sistema no notan la diferencia: los documentos se abren igual.
 Las dos formas conviven: una empresa en SharePoint y otra en disco funcionan
 lado a lado en la misma instalación.
 
+## Qué va a SharePoint y qué se queda en la computadora
+
+De una empresa en SharePoint, a la biblioteca van **los XML y los PDF, y nada
+más**: los archivados en `SISTEMA/EMPRESA/AAAA/MM MES/…`, las copias de la
+carpeta del pago (`PAGOS/<pago>/`) y los PDF de devoluciones. Así todas las
+personas que trabajan esa empresa, desde cualquier PC, ven los mismos
+documentos.
+
+**La bandeja del correo sube solo si el documento se queda esperando.** Un
+comprobante que llega con la entrada automática encendida se captura y se
+archiva en la misma corrida: su paso por la bandeja dura dos segundos y no lo
+ve nadie más, así que se queda en `storage/correo/transito` de esa
+computadora. Subirlo a `_TRABAJO/BANDEJA` para bajarlo acto seguido y borrarlo
+eran seis viajes de red por comprobante, y dejaba el archivo suelto allá
+arriba si la corrida se cortaba en el medio. En cuanto el documento pasa a
+ESPERAR en la Bandeja —Hacienda lo rechazó, viene a nombre de otra cédula, no
+se resolvió su empresa, falló al importar— sí sube: lo va a mirar una persona
+que puede estar en otra PC. Lo hace `EntradaAutomatica::compartir()`, y si una
+corrida se cortó antes de archivar, la siguiente en esa misma computadora sube
+lo que quedó (`rescatarLoQueQuedoAqui()`). Procesar un correo a mano desde la
+pantalla de Correo deja la fila esperando, así que ahí la bandeja sube siempre.
+
+Todo lo demás se queda en la computadora que lo usa:
+
+| Qué | Dónde |
+|---|---|
+| Temporales: adjuntos recién bajados, documentos bajados para un ZIP o para leer un PDF | `storage/correo/tmp`, `storage/tmp/almacen` (se borran solos) |
+| Bandeja de lo que se archiva en el acto | `storage/correo/transito` |
+| Excel y CSV que se cargan (pagos, reporte del ERP, notas) | `public/uploads` |
+| Respaldos de la base | `_TRABAJO/RESPALDOS` de la carpeta compartida si la hay; si no, `storage/backups/RESPALDOS` |
+| Registros, cachés, token de Graph | `storage/logs`, `storage/cache` |
+
+No es solo costumbre: `AlmacenEnGraph::escribir()` **rechaza** cualquier
+archivo que no sea `.xml` o `.pdf`, sin salir a la red. Por eso la nota
+`LEEME - NO MODIFICAR.txt` existe solo en la carpeta compartida.
+
+**Una PC puede trabajar sin carpeta compartida.** Si todas las empresas están
+en SharePoint, no hace falta configurarla en Correo: la captura, la
+importación, la bandeja y los pagos funcionan, y Diagnóstico lo dice en verde.
+Si alguna empresa sigue en disco, la carpeta sigue haciendo falta, y archivar
+para esa empresa sin ella se frena con un mensaje que dice qué hacer.
+
 ---
 
 ## 1. Preparar SharePoint (una vez)
@@ -93,6 +135,13 @@ eligiendo "SharePoint" y pulsando *Cambiar*: antes de cambiar el ajuste se
 prueba la conexión con la biblioteca, y si no contesta no se cambia nada. Lo
 que llegue desde ese momento se archiva en SharePoint.
 
+Si se pasa desde ahí una empresa **con documentos**, el botón lo permite pero
+lo que ya tenía **no se mueve**: sigue en la carpeta compartida, se abre desde
+ahí como siempre, y no aparece en SharePoint. El aviso dice cuántos son y el
+comando para subirlos. Una factura que ya estaba cargada y se vuelve a cargar
+sale como "ya estaba cargada desde antes" y no se sube de nuevo: sus archivos
+siguen donde se guardaron la primera vez.
+
 Una empresa **con documentos** se pasa con el comando de migración, que sube
 lo que ya existe y cambia el ajuste solo cuando no queda nada pendiente:
 
@@ -110,7 +159,7 @@ existe por separado (`--inventario`, `--subir`, `--verificar`, `--reescribir`).
 | inventario | Lee la **base**: qué archivos de la empresa están en disco. Lo que ya no está queda *omitido* y no frena nada. |
 | subir | A la **misma ruta relativa** (`SISTEMA/EMPRESA/2026/…`). Antes comprueba que el archivo del disco sea el que la base archivó. |
 | verificar | Tamaño y hash declarado, de 20 en 20. `--muestreo=N` además baja N al azar y los rehashea. |
-| reescribir | Pone `almacen` y los ids en cada fila, **sin tocar su ruta**. Al final, si no queda nada pendiente, cambia el ajuste de la empresa. |
+| reescribir | Pone `almacen`, los ids y el prefijo `sharepoint:` en cada fila (la ruta dentro de la biblioteca es la misma que en disco). Al final, si no queda nada pendiente, cambia el ajuste de la empresa. |
 
 **Se puede cortar en cualquier momento** (Ctrl+C, un corte de luz) y retomar
 corriendo lo mismo, desde cualquier PC con credenciales. El avance vive en la
@@ -121,9 +170,10 @@ Lo que conviene saber antes:
 - **Correrlo con el usuario de Windows que sincroniza OneDrive**, no como
   tarea del sistema. Los archivos que OneDrive tiene solo en la nube solo se
   bajan para ese usuario.
-- **Tiempo:** cada archivo son dos llamadas a SharePoint, y cada llamada tarda
-  de medio segundo a un segundo. Mil archivos son del orden de media hora.
-  Con `--limite` se trocea en noches.
+- **Tiempo:** cada archivo son dos llamadas a SharePoint. Con la conexión
+  reusada, una llamada corta tarda ~0,15 s y una subida ~0,5–0,7 s desde esta
+  PC; calcular del orden de un cuarto de hora por cada mil archivos. Con
+  `--limite` se trocea en noches.
 - **Antes de cortar, vaciar la bandeja de esa empresa.** Lo que queda en
   tránsito termina donde empezó; no se pierde, pero es más limpio.
 - **Orden recomendado:** la empresa más chica primero, y una semana mirándola
@@ -218,8 +268,9 @@ muere.
 - **El PDF de una devolución movido a mano en SharePoint no se sigue.** Las
   facturas sí.
 - **Los respaldos de la base (`.sql.gz`) no van a SharePoint por Graph.**
-  Siguen en `_TRABAJO/RESPALDOS` de la carpeta compartida: no son documentos
-  de ninguna empresa.
+  Siguen en `_TRABAJO/RESPALDOS` de la carpeta compartida, o en
+  `storage/backups/RESPALDOS` si la PC no la tiene: no son documentos de
+  ninguna empresa.
 - **Borrar los originales del disco después de migrar no es parte de esto.**
   Es una decisión aparte, y mientras no se tome, volver atrás es gratis.
 
@@ -231,7 +282,30 @@ muere.
   implementaciones: `AlmacenEnDisco` y `AlmacenEnGraph`. Nadie más va al disco
   por su cuenta: `tests/PuertaUnicaTest.php` lo vigila.
 - Las direcciones de SharePoint llevan prefijo: `sharepoint:SISTEMA/…`. Una
-  ruta relativa sin prefijo siempre es de disco.
+  ruta relativa sin prefijo siempre es de disco. **Todo lo que se guarda en
+  SharePoint se guarda con el prefijo en la base**, también en `facturas_xml`
+  (la migración y el reconciliador incluidos), y la ruta de una fila **nunca**
+  se deduce del ajuste de su empresa: ese ajuste es solo para lo nuevo. El
+  19/09/2026, por deducirlo, el organizador leyó como de SharePoint los 14.043
+  documentos en disco de una empresa recién pasada, los marcó "sin archivo" y
+  repuntó 1.580 a las copias de `PAGOS`. `EmpresaPasadaASharePointTest` lo
+  vigila.
+- El organizador no marca ni reubica nada si en una revisión falta más de la
+  mitad del archivo (y al menos 200): lo más probable es que falte la carpeta,
+  no los documentos. Lo dice en `sync_auto.log` como REVISIÓN SUSPENDIDA. Al
+  buscar un documento por su contenido prefiere siempre el original a una
+  copia de `PAGOS`.
+- Un correo se procesa de a uno en todo el grupo (candado en la base por
+  cuenta y mensaje): el segundo clic, pestaña o PC no vuelve a subir nada.
+- Lo que cuesta guardar un comprobante que entra solo: **4 llamadas**, y dos
+  de ellas son subir el XML y el PDF a su carpeta. Para eso: la bandeja no sale
+  de la computadora cuando el documento se archiva en el acto, la conexión se
+  reusa dentro de cada petición (`TransporteCurl`), las carpetas no se piden
+  antes de subir (la subida las crea), el PDF se baja solo si hace falta, y que
+  la biblioteca no tiene la columna `HashSha256` se recuerda media hora en
+  `storage/cache` en vez de averiguarlo en cada guardado. `BandejaEnTransitoTest`
+  las cuenta y falla si pasan de 4. Procesar el correo a mano, que deja la fila
+  esperando, sigue costando 2 llamadas más (el par a `_TRABAJO/BANDEJA`).
 - **Los listados nunca salen a la red.** `existeEnFila()` contesta desde la
   base (`archivo_faltante_en`); la red se usa solo para contenido.
 - `ClienteGraph` hace el token, los reintentos (`Retry-After`, espera
@@ -240,7 +314,20 @@ muere.
 - Las pruebas corren **sin red ni credenciales**, contra `GraphEnMemoria`
   (`tests/soporte/`), que se comporta como Graph: ids permanentes, 409, delta,
   410. Las de punta a punta: `PuntaAPuntaSharePointTest`,
-  `ReconciliadorGraphTest`, `MigracionGraphTest`.
+  `ReconciliadorGraphTest`, `MigracionGraphTest`, `SinCarpetaCompartidaTest`
+  (una PC sin carpeta compartida: correo → bandeja → importación → carpeta
+  del pago → otra PC lo abre, y nada que no sea XML/PDF sube) y
+  `BandejaEnTransitoTest` (lo que se archiva en el acto no pasa por la
+  biblioteca; lo que se queda esperando sí).
+- `SinCarpetaCompartidaTest` también corre contra la biblioteca **de verdad**
+  de `local.graph.php`, y borra lo que sube al terminar (sale a la red; no es
+  parte de la certificación):
+
+  ```
+  $env:XMLCONCILIA_CONFIG_FILE = 'app\config\local.php84-cert.php'
+  $env:XMLCONCILIA_SHAREPOINT_REAL = '1'
+  php tests/SinCarpetaCompartidaTest.php
+  ```
 - Tablas: `almacen_pendientes` (borrados por terminar), `almacen_delta`
   (enlace de cambios y revisión rotativa, uno para todas las PC),
   `almacen_copias_pago` (copias ya hechas), `almacen_migracion` (el paso a paso

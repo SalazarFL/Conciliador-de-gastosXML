@@ -538,6 +538,7 @@ document.addEventListener('keydown', function (e) {
         ausente: ['No está en el sistema', '#fee2e2', '#991b1b'],
         ambigua: ['Ambigua', '#fef3c7', '#92400e'],
         repetida: ['Repetida', '#fef3c7', '#92400e'],
+        sin_monto: ['No se paga', '#e2e8f0', '#475569'],
         error: ['Error', '#fee2e2', '#991b1b']
     };
 
@@ -783,6 +784,10 @@ document.addEventListener('keydown', function (e) {
         ausente: ['no está en el sistema', '#fee2e2', '#991b1b'],
         ambigua: ['ambigua', '#fef3c7', '#92400e'],
         repetida: ['repetida', '#fef3c7', '#92400e'],
+        // El reporte la lista con el monto en blanco: no se paga. No es un
+        // problema que resolver —no apaga el botón— pero tiene que verse, que
+        // en el reporte del 17/09 eran 229 de 539 filas.
+        sin_monto: ['no se paga', '#e2e8f0', '#475569'],
         error: ['ilegible', '#fee2e2', '#991b1b']
     };
     // No es un estado del resolutor: es una resuelta que además se le quita a
@@ -803,6 +808,7 @@ document.addEventListener('keydown', function (e) {
             '<span style="color:#16a34a;font-weight:800;">' + (x.resuelta || 0) + ' encontradas en el sistema</span>' +
             '<span style="color:var(--text-muted);">₡' + fmtMonto(r.monto_resuelto || 0) + '</span>' +
             ((x.reasignada || 0) ? '<span style="color:#92400e;font-weight:700;">' + x.reasignada + ' cambian de pago</span>' : '') +
+            ((x.sin_monto || 0) ? '<span style="color:#475569;font-weight:700;">' + x.sin_monto + ' sin monto: no se pagan</span>' : '') +
             (problemas ? '<span style="color:#b91c1c;font-weight:700;">' + problemas + ' sin resolver</span>' : '');
 
         document.getElementById('ppv-tbody').innerHTML = (r.lineas || []).map(function (l) {

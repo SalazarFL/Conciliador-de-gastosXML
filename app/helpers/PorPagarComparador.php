@@ -80,7 +80,7 @@ class PorPagarComparador
         // de otro pago dejó de ser un conflicto y entra como cualquier otra,
         // moviéndose. Sigue contándose aparte, en 'reasignada'.
         $resumen = array_fill_keys(
-            ['nueva', 'igual', 'faltante', 'ausente', 'ambigua', 'repetida', 'error'],
+            ['nueva', 'igual', 'faltante', 'ausente', 'ambigua', 'repetida', 'sin_monto', 'error'],
             0
         );
         $resumen['reasignada'] = (int) ($resolucion['resumen']['reasignada'] ?? 0);

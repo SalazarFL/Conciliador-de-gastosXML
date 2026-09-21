@@ -32,9 +32,21 @@ interface TransporteGraph
     public function enviar(array $peticion);
 }
 
-/** El de verdad. */
+/**
+ * El de verdad.
+ *
+ * Con UNA conexión para todo el proceso, que se reusa de una llamada a la
+ * siguiente. Abrir una nueva cada vez —DNS, TCP y el saludo TLS— costaba unos
+ * 300 ms antes de mandar nada, y guardar un comprobante son diez o quince
+ * llamadas: medido desde la oficina, cada llamada baja de ~500 ms a ~150 ms.
+ * curl_reset() limpia las opciones de la anterior pero conserva la conexión
+ * abierta (y el certificado raíz de php.ini, que PHP vuelve a poner).
+ */
 class TransporteCurl implements TransporteGraph
 {
+    /** @var resource|CurlHandle|null */
+    private static $conexion = null;
+
     public function enviar(array $peticion)
     {
         $cabeceras = [];
@@ -51,8 +63,14 @@ class TransporteCurl implements TransporteGraph
         $guardarEn = $peticion['guardar_en'] ?? null;
         $timeout = max(1.0, (float) ($peticion['timeout'] ?? 60));
 
-        $ch = curl_init((string) $peticion['url']);
+        if (self::$conexion === null) {
+            self::$conexion = curl_init();
+        } else {
+            curl_reset(self::$conexion);
+        }
+        $ch = self::$conexion;
         curl_setopt_array($ch, [
+            CURLOPT_URL            => (string) $peticion['url'],
             CURLOPT_CUSTOMREQUEST  => (string) $peticion['metodo'],
             CURLOPT_HTTPHEADER     => $cabeceras,
             CURLOPT_FOLLOWLOCATION => !empty($peticion['seguir']),

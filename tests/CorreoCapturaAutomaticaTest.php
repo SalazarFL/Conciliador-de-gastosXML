@@ -3,6 +3,7 @@
 require_once __DIR__ . '/../app/core/Model.php';
 require_once __DIR__ . '/../app/models/CorreoIndice.php';
 require_once __DIR__ . '/../app/models/CorreoCapturaAutomatica.php';
+require_once __DIR__ . '/soporte/DocumentosDePrueba.php';
 
 function assertCapturaAuto($condicion, $mensaje)
 {
@@ -26,14 +27,19 @@ try {
 }
 
 $sufijo = random_int(100000, 999999);
-$cuentaId = 900000000 + $sufijo;
+// Un buzón de verdad. Antes era un id inventado (900000000 + azar) para no
+// tocar los buzones reales; la idea era la correcta pero funcionaba porque
+// `cuenta_id` no tenía clave foránea. Ahora la tiene, y el buzón desechable
+// aísla igual de bien.
+$cuentaId = DocumentosDePrueba::cuentaCorreo($pdo, '__captura_auto_' . $sufijo);
 $carpeta = '__captura_auto_' . $sufijo;
 $uidvalidity = 700000 + $sufijo;
 $uids = [11, 12, 13];
 
-$limpiar = function () use ($pdo, $cuentaId, $carpeta) {
-    $pdo->prepare('DELETE FROM correo_capturas_auto WHERE cuenta_id = ?')->execute([$cuentaId]);
-    $pdo->prepare('DELETE FROM correo_indice WHERE cuenta_id = ? AND carpeta = ?')->execute([$cuentaId, $carpeta]);
+// Borrar el buzón se lleva su índice y sus capturas por cascada; la bandeja
+// es RESTRICT y el ayudante la vacía antes.
+$limpiar = function () use ($pdo, $cuentaId) {
+    DocumentosDePrueba::borrarCuentaCorreo($pdo, $cuentaId);
 };
 
 try {

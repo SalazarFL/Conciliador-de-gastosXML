@@ -133,7 +133,8 @@ html, body {
   padding: 7px 16px 3px;
 }
 
-.sidebar-nav a {
+.sidebar-nav a,
+.sidebar-nav .nav-bloqueada {
   display: flex;
   align-items: center;
   gap: 9px;
@@ -145,6 +146,32 @@ html, body {
   border-left: 3px solid transparent;
   transition: background .15s, color .15s, border-color .15s;
 }
+
+/*
+ * El módulo que está a la vista pero todavía no se puede abrir: le falta un
+ * paso de configuración. No es un enlace —no hay adónde llevar— pero tampoco
+ * desaparece: esconderlo haría preguntar qué pasó con Correo, y apagado con
+ * su candado se entiende solo. El globo dice qué paso falta.
+ */
+.sidebar-nav .nav-bloqueada {
+  color: rgba(255,255,255,.34);
+  cursor: not-allowed;
+  position: relative;
+}
+
+.sidebar-nav .nav-bloqueada:hover {
+  background: rgba(255,255,255,.04);
+}
+
+.sidebar-nav .nav-bloqueada .nav-candado {
+  font-size: 9.5px;
+  margin-left: auto;
+  opacity: .8;
+  color: var(--gold);
+}
+
+/* Colapsada solo se ve el icono: el candado sobraría y no cabría. */
+.sidebar:not(.expanded) .sidebar-nav .nav-bloqueada .nav-candado { display: none; }
 
 .sidebar-nav a:hover {
   background: rgba(255,255,255,.07);
@@ -159,13 +186,16 @@ html, body {
   font-weight: 700;
 }
 
-.sidebar-nav a .nav-icon {
+.sidebar-nav a .nav-icon,
+.sidebar-nav .nav-bloqueada .nav-icon {
   width: 20px;
   text-align: center;
   font-size: 14px;
   flex-shrink: 0;
   opacity: .85;
 }
+
+.sidebar-nav .nav-bloqueada .nav-icon { opacity: .5; }
 
 .sidebar-nav a.active .nav-icon { opacity: 1; }
 
@@ -268,6 +298,7 @@ html, body {
   .sidebar.expanded .logo-mini { display: none; }
 
   .sidebar-nav a,
+  .sidebar-nav .nav-bloqueada,
   .sidebar-bottom a {
     justify-content: center;
     min-height: 38px;
@@ -276,7 +307,8 @@ html, body {
     white-space: nowrap;
   }
 
-  .sidebar.expanded .sidebar-nav a {
+  .sidebar.expanded .sidebar-nav a,
+  .sidebar.expanded .sidebar-nav .nav-bloqueada {
     justify-content: flex-start;
     padding-left: 16px;
     padding-right: 16px;
@@ -500,64 +532,432 @@ html, body {
 }
 
 /* ══════════════════════════════
-   STAT CARDS
+   PANEL PRINCIPAL
+   ──────────────────────────────
+   Tres bandas, de arriba abajo: cómo va el trabajo (métricas), con qué
+   empresa se trabaja, y qué módulos puede abrir quien entró. Antes las
+   cuatro métricas tenían pesos distintos —dos en degradado gritando, dos
+   en blanco— y los atajos se apilaban en una columna al lado de una
+   tarjeta medio vacía. La misma información, ordenada, se lee de una.
+
+   Los tonos: cada pastilla de color sale de --tono, así que añadir un
+   módulo nuevo es elegirle un tono, no escribir CSS.
 ══════════════════════════════ */
-.stats-grid {
+.tono-navy  { --tono: var(--navy-light); --tono-bg: rgba(34,84,189,.10); }
+.tono-oro   { --tono: var(--gold-dark);  --tono-bg: rgba(240,165,0,.14); }
+.tono-verde { --tono: #0f766e;           --tono-bg: rgba(15,118,110,.10); }
+.tono-gris  { --tono: var(--text-muted); --tono-bg: rgba(90,110,138,.10); }
+
+/* ── Métricas ── */
+.panel-metricas {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
-  gap: 6px;
-  margin-bottom: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
 }
 
-.stat-card {
-  border-radius: var(--radius-lg);
-  padding: 8px 10px;
-}
-
-.stat-card.navy {
-  background: linear-gradient(135deg, var(--navy) 0%, var(--navy-light) 100%);
-  color: white;
-  box-shadow: 0 8px 24px rgba(27,58,107,.22);
-}
-
-.stat-card.gold {
-  background: linear-gradient(135deg, #8a5a00 0%, var(--gold) 100%);
-  color: white;
-  box-shadow: 0 8px 24px rgba(240,165,0,.22);
-}
-
-.stat-card.white {
-  background: var(--white);
+.metrica {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  background: var(--card);
   border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow);
+  padding: 11px 13px;
+  text-decoration: none;
+  color: inherit;
+  transition: transform .14s, box-shadow .14s, border-color .14s;
 }
 
-.stat-label {
+/* Solo las que llevan a algún sitio se levantan: si no es un enlace,
+   moverse al pasar por encima promete algo que no va a pasar. */
+a.metrica:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--tono);
+}
+
+.metrica-chip {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  background: var(--tono-bg);
+  color: var(--tono);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+
+.metrica-cuerpo { min-width: 0; flex: 1; }
+
+.metrica-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.metrica-valor {
+  display: block;
+  font-size: 23px;
+  font-weight: 800;
+  line-height: 1.15;
+  color: var(--navy);
+}
+
+.metrica-valor.es-ok      { color: var(--ok); }
+.metrica-valor.es-alerta  { color: var(--warn); }
+.metrica-valor.es-apagado { color: var(--text-light); }
+
+.metrica-sub {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Con qué empresa se trabaja ── */
+.panel-empresa {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 10px 13px;
+  margin-bottom: 16px;
+}
+
+.panel-empresa-titulo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.panel-empresa-titulo i { color: var(--navy-light); font-size: 13px; }
+
+/* Las empresas fluyen en fila y bajan solas cuando no caben: con una sola
+   esto es un renglón, no una tarjeta con medio panel en blanco debajo. */
+.panel-empresa-lista {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Cada empresa es su propio POST —así se elige—, y el formulario no pinta
+   nada: solo envuelve a su pastilla. */
+.panel-empresa-lista form { display: flex; }
+
+/* Sin empresas todavía: el renglón explica qué falta, en vez de quedarse
+   en blanco como si el sistema no hubiera cargado. */
+.panel-empresa-aviso {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.panel-empresa-aviso a { color: var(--navy-light); font-weight: 700; }
+
+.empresa-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 11px;
+  border-radius: 999px;
+  border: 1.5px solid var(--border);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: border-color .14s, background .14s;
+}
+
+.empresa-chip:hover { border-color: var(--navy-light); background: #F7FAFF; }
+
+.empresa-chip.es-activa {
+  background: var(--gold-pale);
+  border-color: var(--gold-light);
+  cursor: default;
+}
+
+.empresa-chip i { font-size: 13px; color: var(--text-light); }
+.empresa-chip.es-activa i { color: var(--ok); }
+
+.empresa-chip-nombre {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--navy);
+  white-space: nowrap;
+}
+
+.empresa-chip.es-activa .empresa-chip-nombre { font-weight: 800; }
+
+.empresa-chip-cedula {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* ── Los módulos de quien entró ── */
+.panel-modulos-cabecera {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.panel-modulos-titulo {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--navy);
+}
+
+.panel-rol { font-size: 11.5px; color: var(--text-muted); }
+.panel-rol strong { color: var(--navy); font-weight: 700; }
+
+.panel-seccion {
+  display: flex;
+  align-items: center;
+  gap: 9px;
   font-size: 10.5px;
   font-weight: 700;
-  letter-spacing: .09em;
+  letter-spacing: .1em;
   text-transform: uppercase;
-  margin-bottom: 4px;
-  opacity: .82;
+  color: var(--text-light);
+  margin: 14px 0 8px;
 }
 
-.stat-card.white .stat-label { color: var(--text-muted); opacity: 1; }
+.panel-seccion::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-light);
+}
 
-.stat-value {
-  font-size: 22px;
+.panel-modulos {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(248px, 1fr));
+  gap: 9px;
+}
+
+.modulo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 10px 12px;
+  text-decoration: none;
+  color: inherit;
+  transition: transform .14s, box-shadow .14s, border-color .14s;
+}
+
+.modulo:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 32px rgba(12,36,97,.14);
+  border-color: var(--tono);
+}
+
+.modulo-icono {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  background: var(--tono-bg);
+  color: var(--tono);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+}
+
+.modulo-cuerpo { flex: 1; min-width: 0; }
+
+.modulo-nombre {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--navy);
+}
+
+.modulo-resumen {
+  display: block;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* El contador de lo pendiente. Solo aparece cuando hay algo: un "0" al
+   lado del nombre se lee como un aviso y no lo es. */
+.modulo-marca {
+  font-size: 10px;
   font-weight: 800;
   line-height: 1;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: var(--warn-bg);
+  color: var(--warn);
 }
 
-.stat-card.white .stat-value { color: var(--navy); }
+.modulo-flecha { color: var(--border); font-size: 12px; flex-shrink: 0; }
+.modulo:hover .modulo-flecha { color: var(--tono); }
 
-.stat-sub {
+/*
+ * El módulo que todavía no se puede abrir: le falta un paso de configuración.
+ * Se queda en la lista, apagado y sin levantarse al pasar por encima, porque
+ * lo que tiene que decir no es "pulsa" sino "falta esto". Ver
+ * app/core/Requisitos.php.
+ */
+.modulo.es-cerrado {
+  background: var(--bg, #EFF3FA);
+  border-style: dashed;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.modulo.es-cerrado:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: var(--border);
+}
+
+.modulo.es-cerrado .modulo-icono { opacity: .45; }
+.modulo.es-cerrado .modulo-nombre { color: var(--text-muted); }
+
+.modulo-candado {
+  font-size: 9.5px;
+  color: var(--gold-dark);
+  flex-shrink: 0;
+}
+
+/* ── Los pasos que le faltan a la instalación ── */
+/*
+ * Va arriba del todo y no se puede ignorar: mientras falte alguno, casi
+ * ningún módulo se abre, y quien entra el primer día no tiene forma de
+ * adivinar por dónde empezar. Desaparece sola cuando los tres están hechos.
+ */
+.panel-arranque {
+  background: var(--card);
+  border: 1px solid var(--gold-light, #F5C451);
+  border-left: 4px solid var(--gold);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 13px 15px;
+  margin-bottom: 14px;
+}
+
+.panel-arranque-titulo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--navy);
+  margin-bottom: 5px;
+}
+
+.panel-arranque-titulo i { color: var(--gold-dark); font-size: 13px; }
+
+.panel-arranque-cuenta {
+  margin-left: auto;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--warn);
+  background: var(--warn-bg);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+
+.panel-arranque-texto {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  line-height: 1.55;
+  margin-bottom: 10px;
+}
+
+.panel-arranque-pasos { display: flex; flex-direction: column; gap: 7px; }
+
+.arranque-paso {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #F7FAFF;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 9px 11px;
+}
+
+.arranque-numero {
+  flex: 0 0 21px;
+  height: 21px;
+  border-radius: 50%;
+  background: var(--navy);
+  color: #fff;
   font-size: 11px;
-  margin-top: 4px;
-  opacity: .85;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.stat-card.white .stat-sub { color: var(--text-muted); opacity: 1; }
+.arranque-cuerpo { flex: 1; min-width: 0; }
+.arranque-nombre { font-size: 13px; font-weight: 700; color: var(--navy); }
+.arranque-porque { font-size: 11.5px; color: var(--text-muted); line-height: 1.5; }
+
+/* Quien no tiene la llave ve el paso igual: así sabe qué pedir. */
+.arranque-ajeno {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-style: italic;
+}
+
+.panel-vacio {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.panel-vacio i { color: var(--gold); margin-right: 5px; }
+
+@media (max-width: 620px) {
+  .panel-empresa-titulo { width: 100%; }
+  .metrica-valor { font-size: 20px; }
+}
 
 /* ══════════════════════════════
    BUTTONS

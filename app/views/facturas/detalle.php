@@ -140,7 +140,7 @@ $campo = function ($etiqueta, $valor, $mono = false) {
             <?php endif; ?>
             <?php if (empty($estado['xml_ok']) && empty($estado['pdf_ok'])): ?>
             <span style="font-size:12.5px;color:var(--text-muted);align-self:center;">
-                No hay archivos que abrir: la carpeta compartida no tiene ninguno de los dos.
+                No hay archivos que abrir: no está ninguno de los dos donde se archivaron.
             </span>
             <?php endif; ?>
         </div>

@@ -321,26 +321,41 @@ Prueba::caso('tomarPendientes de captura: tope 1..100, FOR UPDATE y la transacci
 
 // ── CorreoCuenta ───────────────────────────────────────────────────────────
 
-Prueba::caso('configPara: cuenta inexistente es null; la contraseña se decodifica', function () {
+Prueba::caso('configPara: cuenta inexistente es null; la contraseña cifrada se descifra', function () {
     igual(null, (new CorreoCuenta())->configPara(999), 'no existe');
     Soporte::$pdo->respuestas['FROM correo_cuentas WHERE id = ?'] = [[
-        'id' => '3', 'host' => 'mail.x', 'puerto' => '993', 'usuario' => 'a@x', 'password' => base64_encode('clavé'),
+        'id' => '3', 'host' => 'mail.x', 'puerto' => '993', 'usuario' => 'a@x',
+        'password' => Secreto::cifrar('clavé'),
         'carpeta' => 'INBOX', 'dias_atras' => '0', 'indice_retencion_dias' => null, 'solo_no_leidos' => '0',
     ]];
     $c = (new CorreoCuenta())->configPara('3');
-    igual('clavé', $c['password'], 'decodificada');
+    igual('clavé', $c['password'], 'descifrada');
     igual(1825, $c['indice_retencion_dias'], 'retención nula → 5 años');
     igual(4, $c['sociedad_id'], 'la empresa en curso');
 });
 
-Prueba::caso('configPara: una contraseña legado guardada sin base64 se vuelve vacía (y la cuenta deja de estar configurada)', function () {
-    Soporte::$pdo->respuestas['FROM correo_cuentas WHERE id = ?'] = [[
-        'id' => '3', 'host' => 'mail.x', 'puerto' => '993', 'usuario' => 'a@x', 'password' => 'clave plana!',
-        'carpeta' => 'INBOX', 'dias_atras' => '0', 'indice_retencion_dias' => '0', 'solo_no_leidos' => '0',
-    ]];
-    $c = (new CorreoCuenta())->configPara(3);
-    igual('', $c['password'], 'decodificación estricta');
-    verificar(!MailFetcher::configurado($c), 'sale como "sin credenciales completas"');
+/*
+ * Antes esto era al revés: una contraseña en base64 se decodificaba y la
+ * cuenta funcionaba. Era la rampa para las cuentas anteriores al cifrado, y su
+ * precio era que el camino de lectura de todos los días aceptaba para siempre
+ * contraseñas sin cifrar —legibles desde la tabla, desde un respaldo o desde un
+ * app.log— sin que nada avisara. Se cortó cuando ya no quedaba ninguna fila
+ * así; migrarlas es cosa de cli/cifrar_claves_correo.php, que es el único que
+ * sigue sabiendo leer el formato viejo.
+ */
+Prueba::caso('configPara: una contraseña sin cifrar se vuelve vacía (y la cuenta deja de estar configurada)', function () {
+    foreach ([
+        'base64 (el formato viejo)' => base64_encode('clavé'),
+        'texto plano'               => 'clave plana!',
+    ] as $caso => $guardada) {
+        Soporte::$pdo->respuestas['FROM correo_cuentas WHERE id = ?'] = [[
+            'id' => '3', 'host' => 'mail.x', 'puerto' => '993', 'usuario' => 'a@x', 'password' => $guardada,
+            'carpeta' => 'INBOX', 'dias_atras' => '0', 'indice_retencion_dias' => '0', 'solo_no_leidos' => '0',
+        ]];
+        $c = (new CorreoCuenta())->configPara(3);
+        igual('', $c['password'], "no se lee: {$caso}");
+        verificar(!MailFetcher::configurado($c), "sale como \"sin credenciales completas\": {$caso}");
+    }
 });
 
 Prueba::caso('crear cuenta: retención acotada, carpeta vacía es INBOX, empresa en curso por omisión', function () {

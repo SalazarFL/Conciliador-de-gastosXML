@@ -36,12 +36,20 @@ class CorreoBandeja extends Model
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
         $sociedadId = !empty($data['sociedad_id']) ? (int) $data['sociedad_id'] : $this->sociedadId();
+        if ($sociedadId <= 0) {
+            // Antes esto guardaba 0 o NULL y la fila no la veía nadie: todas
+            // las pantallas de la bandeja filtran por empresa.
+            throw new RuntimeException(
+                'No se puede dejar un documento en la bandeja sin saber de qué '
+                . 'empresa es. Elige con cuál estás trabajando.'
+            );
+        }
         $origen = in_array(($data['origen'] ?? 'manual'), ['manual', 'automatica', 'descargas'], true)
             ? (string) ($data['origen'] ?? 'manual') : 'manual';
 
         return $this->insert($sql, [
             (int) ($data['cuenta_id'] ?? 0),
-            $sociedadId > 0 ? $sociedadId : null,
+            $sociedadId,
             (string) ($data['uid_correo'] ?? ''),
             $data['remitente'] ?? null,
             $data['asunto'] ?? null,
@@ -53,7 +61,10 @@ class CorreoBandeja extends Model
             $data['proveedor'] ?? null,
             $data['fecha_emision'] ?? null,
             isset($data['total']) ? (float) $data['total'] : null,
-            $data['hash_xml'] ?? null,
+            // Vacío y no NULL: es lo que hace que la unicidad deduplique.
+            // Dos NULL no son iguales en SQL, así que el mismo correo
+            // ilegible abría un renglón nuevo cada vez que se reprocesaba.
+            (string) ($data['hash_xml'] ?? ''),
             (string) ($data['estado'] ?? 'pendiente'),
             $origen,
         ]);
@@ -137,10 +148,23 @@ class CorreoBandeja extends Model
         return $this->fetchAll($sql, $params);
     }
 
+    /**
+     * La fila de este correo, si ya está en la bandeja.
+     *
+     * Cuando el XML no se pudo leer no hay hash. Hoy eso se guarda como cadena
+     * vacía (migration_bandeja_dedup_nula.sql), pero en las filas de antes de
+     * esa migración está como NULL, y en SQL `NULL = NULL` no es cierto —es
+     * NULL—, así que con `=` esta búsqueda no las encontraba NUNCA: el mismo
+     * correo ilegible reprocesado cinco veces abría cinco renglones, que es
+     * justo el caso en que más molesta ver el mismo mensaje repetido.
+     *
+     * `<=>` compara igual que `=` pero tratando NULL como un valor más, así
+     * que sirve para las dos épocas.
+     */
     public function getPorUidHash($uidCorreo, $hashXml)
     {
-        $params = [(string) $uidCorreo, (string) $hashXml];
-        $sql = "SELECT * FROM {$this->table} WHERE uid_correo = ? AND hash_xml = ?"
+        $params = [(string) $uidCorreo, $hashXml !== null ? (string) $hashXml : null];
+        $sql = "SELECT * FROM {$this->table} WHERE uid_correo = ? AND hash_xml <=> ?"
              . $this->condicionSociedad('', $params) . ' LIMIT 1';
         return $this->fetchOne($sql, $params);
     }
@@ -157,7 +181,7 @@ class CorreoBandeja extends Model
         $origen = in_array(($data['origen'] ?? 'manual'), ['manual', 'automatica', 'descargas'], true)
             ? (string) ($data['origen'] ?? 'manual') : 'manual';
         $sql = "UPDATE {$this->table} SET
-                    cuenta_id = ?, sociedad_id = ?, remitente = ?, asunto = ?, fecha_correo = ?,
+                    cuenta_id = ?, sociedad_id = COALESCE(?, sociedad_id), remitente = ?, asunto = ?, fecha_correo = ?,
                     archivo_xml = ?, archivo_pdf = ?, numero_corto = ?, tipo_doc = ?,
                     proveedor = ?, fecha_emision = ?, total = ?, estado = ?, origen = ?,
                     importacion_id = NULL
@@ -165,6 +189,8 @@ class CorreoBandeja extends Model
 
         return $this->execute($sql, [
             (int) ($data['cuenta_id'] ?? 0),
+            // COALESCE y no NULL: `revivir` actúa sobre una fila que ya se
+            // encontró acotada a una empresa. Anularla la dejaba sin dueño.
             !empty($data['sociedad_id']) ? (int) $data['sociedad_id'] : null,
             $data['remitente'] ?? null,
             $data['asunto'] ?? null,
@@ -182,6 +208,54 @@ class CorreoBandeja extends Model
         ]);
     }
 
+    /**
+     * Cambia solo dónde están los archivos de una fila, sin tocar nada más.
+     *
+     * Lo usa EntradaAutomatica cuando sube a la zona de paso del grupo un
+     * comprobante que se quedó esperando en la Bandeja: el documento es el
+     * mismo, cambió de lugar.
+     */
+    public function reapuntarArchivos($id, array $rutas)
+    {
+        $campos = [];
+        $valores = [];
+        foreach (['archivo_xml', 'archivo_pdf'] as $campo) {
+            if (!array_key_exists($campo, $rutas)) {
+                continue;
+            }
+            $campos[] = $campo . ' = ?';
+            $valores[] = RutaDocumento::relativa($rutas[$campo] ?? '') ?: null;
+        }
+        if (!$campos) {
+            return 0;
+        }
+        $valores[] = (int) $id;
+
+        return $this->execute(
+            "UPDATE {$this->table} SET " . implode(', ', $campos) . ' WHERE id = ?',
+            $valores
+        );
+    }
+
+    /**
+     * Filas esperando en la Bandeja cuyo archivo solo ve esta computadora.
+     *
+     * Son restos de una corrida que se cortó entre capturar y archivar. Ver
+     * EntradaAutomatica::rescatarLoQueQuedoAqui().
+     */
+    public function pendientesEnEstaPC()
+    {
+        $prefijo = RutaDocumento::raizTrabajoLocal() . DIRECTORY_SEPARATOR;
+
+        return $this->fetchAll(
+            "SELECT * FROM {$this->table}
+              WHERE estado IN ('pendiente', 'rechazada', 'otra_cedula')
+                AND archivo_xml LIKE ?
+              ORDER BY id",
+            [str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $prefijo) . '%']
+        );
+    }
+
     public function existePorHash($hashXml)
     {
         $sql = "SELECT 1 FROM {$this->table}
@@ -193,6 +267,17 @@ class CorreoBandeja extends Model
     public function marcarImportadas(array $ids, $importacionId)
     {
         return $this->actualizarEstado($ids, 'importada', (int) $importacionId);
+    }
+
+    /**
+     * "Esta ya estaba en el sistema." Es un estado de paso: purgarYaExisten()
+     * borra la fila y quien llama borra sus archivos. Se marca desde
+     * cualquier estado —la fila puede venir de una captura anterior del mismo
+     * correo, ya importada—.
+     */
+    public function marcarYaExisten(array $ids)
+    {
+        return $this->actualizarEstado($ids, 'ya_existe', null, null);
     }
 
     public function marcarImportadasGeneral(array $ids)
@@ -335,7 +420,7 @@ class CorreoBandeja extends Model
         $sql = "CREATE TABLE IF NOT EXISTS {$this->table} (
                     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
                     cuenta_id INT UNSIGNED NOT NULL DEFAULT 0,
-                    sociedad_id INT UNSIGNED NULL DEFAULT NULL,
+                    sociedad_id INT UNSIGNED NOT NULL,
                     uid_correo VARCHAR(64) NOT NULL COMMENT 'uidvalidity:uid del mensaje IMAP (dedup)',
                     remitente VARCHAR(255) NULL DEFAULT NULL,
                     asunto VARCHAR(255) NULL DEFAULT NULL,
@@ -347,7 +432,7 @@ class CorreoBandeja extends Model
                     proveedor VARCHAR(255) NULL DEFAULT NULL,
                     fecha_emision DATE NULL DEFAULT NULL,
                     total DECIMAL(15,2) NULL DEFAULT NULL,
-                    hash_xml CHAR(64) NULL DEFAULT NULL,
+                    hash_xml CHAR(64) NOT NULL DEFAULT '',
                     estado ENUM('pendiente','importada','descartada','ya_existe','rechazada','otra_cedula') NOT NULL DEFAULT 'pendiente',
                     origen ENUM('manual','automatica','descargas') NOT NULL DEFAULT 'manual',
                     importacion_id INT UNSIGNED NULL DEFAULT NULL,

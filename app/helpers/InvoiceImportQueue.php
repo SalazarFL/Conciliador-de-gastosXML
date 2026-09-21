@@ -599,9 +599,19 @@ class InvoiceImportQueue
         return 'error';
     }
 
+    /**
+     * En disco la carpeta se deja creada, como siempre. Donde recorrer cuesta
+     * red —SharePoint— no: la crea la primera subida, y crearla de antemano
+     * dejaba una carpeta vacía en la biblioteca por cada importación —las que
+     * vienen de la bandeja nunca copian nada ahí— a costa de llamadas con
+     * alguien esperando.
+     */
     private function ensureDirectory($path)
     {
-        AlmacenDocumentos::de($path)->asegurarCarpeta($path);
+        $almacen = AlmacenDocumentos::de($path);
+        if ($almacen->recorreElArbolBarato()) {
+            $almacen->asegurarCarpeta($path);
+        }
     }
 
     private function shouldStopCurrentBatch($startedAt)

@@ -191,9 +191,10 @@ try {
         'con C y la devolución pendientes, la empresa NO se corta: ' . json_encode($r));
     paso(AlmacenDocumentos::tipoDeSociedad($sociedadId) === 'disco', 'y sigue archivando en disco');
     $filaA = $fila('facturas_xml', $a);
-    paso($filaA['almacen'] === 'sharepoint' && $filaA['ruta_xml'] === "$mes/FE_A.xml"
+    paso($filaA['almacen'] === 'sharepoint' && $filaA['ruta_xml'] === "sharepoint:$mes/FE_A.xml"
         && $filaA['item_xml_id'] !== null && $filaA['item_pdf_id'] !== null,
-        'la fila de A anota SharePoint y sus ids, sin tocar la ruta: ' . json_encode($filaA));
+        'la fila de A anota SharePoint, sus ids y el prefijo en la ruta (la misma ruta en la biblioteca): '
+        . json_encode($filaA));
     paso($fila('devoluciones', $devolucionId)['almacen'] === null, 'la devolución que cambió sigue en disco');
 
     // Se arregla: la devolución vuelve a su ruta y C a su hash verdadero.

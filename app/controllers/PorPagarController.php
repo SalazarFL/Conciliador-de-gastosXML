@@ -94,9 +94,7 @@ class PorPagarController extends Controller
 
         $carpetasPago = [];
         try {
-            if (DocumentoArchivo::raizConfigurada() !== '') {
-                $carpetasPago = (new DocumentoArchivo())->carpetasPago();
-            }
+            $carpetasPago = $this->carpetasPagoDe($sociedadActiva, $modelo);
         } catch (Throwable $e) {
         }
 
@@ -283,6 +281,9 @@ class PorPagarController extends Controller
                 $registros[] = [
                     'numero' => $this->getValue($row, $map, ['numero', 'documento']),
                     'proveedor' => $this->getValue($row, $map, ['proveedor']),
+                    // Una tabla armada a mano puede traerlo o no; el reporte
+                    // agrupado siempre lo trae, y lo pone el otro camino.
+                    'codigo' => $this->getValue($row, $map, ['codigo', 'codigo_proveedor', 'proveedor_codigo']),
                     'total' => $this->getValue($row, $map, ['saldo', 'total']),
                 ];
             }
@@ -293,6 +294,7 @@ class PorPagarController extends Controller
             try {
                 $numero = trim((string) ($row['numero'] ?? ''));
                 $proveedor = trim((string) ($row['proveedor'] ?? ''));
+                $codigo = trim((string) ($row['codigo'] ?? ''));
                 $saldo = Validator::parseAmount($row['total'] ?? ($row['saldo'] ?? 0));
 
                 // Números que Excel entrega como 26546.0
@@ -308,9 +310,12 @@ class PorPagarController extends Controller
                 }
 
                 $filas[] = [
-                    'estado' => 'leida',
+                    // El reporte la lista sin monto: se lleva marcada para
+                    // contarla, pero no se paga. Ver extraerReporteAgrupado().
+                    'estado' => !empty($row['sin_monto']) ? 'sin_monto' : 'leida',
                     'numero' => $numero,
                     'proveedor' => $proveedor,
+                    'codigo' => $codigo,
                     'saldo' => $saldo,
                 ];
             } catch (Throwable $e) {
@@ -319,6 +324,7 @@ class PorPagarController extends Controller
                     'motivo' => $e->getMessage(),
                     'numero' => trim((string) ($row['numero'] ?? '')),
                     'proveedor' => trim((string) ($row['proveedor'] ?? '')),
+                    'codigo' => trim((string) ($row['codigo'] ?? '')),
                     'saldo' => 0.0,
                 ];
             }
@@ -666,7 +672,11 @@ class PorPagarController extends Controller
         // 'en_otro_pago' salió de esta lista: una factura que ya estaba en el
         // pago de otro pago dejó de cortar la carga. Se paga una sola vez,
         // así que el archivo más reciente manda y la factura se mueve.
-        foreach (['ausente' => 'no están en Facturas',
+        // 'ausente' cubre dos cosas desde que se lee el código del proveedor: la
+        // factura no está en Facturas, o está pero bajo otro código. Cuál de las
+        // dos es lo dice el motivo de cada fila, que la vista previa enseña; acá
+        // se nombra a las dos porque el texto se lee antes de ir a mirarlas.
+        foreach (['ausente' => 'no están en Facturas, o su número está a nombre de otro proveedor',
                   'ambigua' => 'tienen más de una factura posible en el sistema',
                   'error' => 'no se pudieron leer'] as $estado => $texto) {
             if (empty($resumen[$estado])) {
@@ -793,14 +803,41 @@ class PorPagarController extends Controller
             throw new Exception('Seleccioná una carpeta válida para el pago.');
         }
         $pagoModel->configurarCarpetaPago((int) $pagoId, $carpetaPago);
+        // En la carpeta compartida se deja creada para que se vea enseguida.
+        // En SharePoint no: la crea la primera copia que llega, y crearla
+        // acá serían llamadas por red con alguien esperando la pantalla.
         try {
-            (new DocumentoArchivo())->prepararCarpetaPago($carpetaPago);
+            if ($this->archivaEnDisco($pago['sociedad_id'] ?? 0)) {
+                (new DocumentoArchivo())->prepararCarpetaPago($carpetaPago);
+            }
         } catch (Throwable $e) {
             // Sin carpeta raíz configurada el pago se carga igual; los
             // archivos se acomodan cuando alguien la configure.
         }
         $pago['carpeta_pago'] = $carpetaPago;
         return $pago;
+    }
+
+    /**
+     * Las carpetas de pago para el selector, de donde archiva la empresa:
+     * las que hay en la carpeta compartida, o —en SharePoint— los nombres
+     * que ya usan sus pagos, que la base sabe sin salir a la red.
+     */
+    private function carpetasPagoDe($sociedad, $pagoModel)
+    {
+        if (!$this->archivaEnDisco($sociedad['id'] ?? 0)) {
+            return $pagoModel->carpetasUsadas();
+        }
+        return DocumentoArchivo::raizConfigurada() !== ''
+            ? (new DocumentoArchivo())->carpetasPago()
+            : [];
+    }
+
+    /** ¿La empresa archiva en la carpeta compartida? Sin empresa, sí: es lo de siempre. */
+    private function archivaEnDisco($sociedadId)
+    {
+        return (int) $sociedadId <= 0
+            || AlmacenDocumentos::tipoDeSociedad((int) $sociedadId) === AlmacenDocumentos::DISCO;
     }
 
     // ── Comparar y actualizar ──────────────────────────────────────
@@ -988,8 +1025,7 @@ class PorPagarController extends Controller
             return $resultado;
         }
         if (DocumentoArchivo::raizConfigurada() === '') {
-            $resultado['aviso'] = 'No hay carpeta raíz configurada: los archivos quedaron donde estaban.';
-            return $resultado;
+            return $this->reubicarSinCarpeta($facturaIds, $resultado);
         }
 
         try {
@@ -1026,6 +1062,42 @@ class PorPagarController extends Controller
             $resultado['aviso'] = 'No se pudieron mover los archivos: ' . $e->getMessage();
         }
 
+        return $resultado;
+    }
+
+    /**
+     * Sin carpeta compartida en esta computadora no hay nada de disco que
+     * acomodar, y lo de SharePoint tampoco se acomoda acá: sus copias a la
+     * carpeta del pago las hace la tarea programada. Se cuentan para
+     * decirlo. Solo si algún documento del pago sigue en disco hay algo que
+     * esta PC no puede hacer, y eso también se dice.
+     */
+    private function reubicarSinCarpeta(array $facturaIds, array $resultado)
+    {
+        try {
+            $facturas = $this->loadModel('Factura');
+            $enDisco = count($facturas->getParaOrganizarArchivos($facturaIds));
+            $enEspera = 0;
+            foreach ($facturas->getParaOrganizarArchivos($facturaIds, 'sharepoint', true) as $fila) {
+                if (!empty($fila['en_pago']) && trim((string) ($fila['carpeta_pago'] ?? '')) !== '') {
+                    $enEspera++;
+                }
+            }
+        } catch (Throwable $e) {
+            $resultado['aviso'] = 'No se pudo revisar dónde están los archivos: ' . $e->getMessage();
+            return $resultado;
+        }
+
+        $avisos = [];
+        if ($enDisco > 0) {
+            $avisos[] = $enDisco . ' documento(s) están en la carpeta compartida, que esta computadora no'
+                . ' tiene configurada: quedaron donde estaban.';
+        }
+        if ($enEspera > 0) {
+            $avisos[] = $enEspera . ' documento(s) están en SharePoint: su copia en la carpeta del pago la'
+                . ' hace la tarea programada en los próximos minutos.';
+        }
+        $resultado['aviso'] = implode(' ', $avisos);
         return $resultado;
     }
 
@@ -1516,6 +1588,7 @@ class PorPagarController extends Controller
     {
         $registros = [];
         $proveedor = '';
+        $codigo = '';
 
         // El reporte no trae encabezados: la primera fila es una fila más
         $filas = array_merge([$dataset['header']], $dataset['rows']);
@@ -1533,9 +1606,10 @@ class PorPagarController extends Controller
             }
 
             // Encabezado de grupo: "Proveedor 140000014 AGENCIAS JOP S.A."
-            $nombre = $this->nombreDeGrupo($celdas);
-            if ($nombre !== null) {
-                $proveedor = $nombre;
+            $grupo = $this->grupoDeProveedor($celdas);
+            if ($grupo !== null) {
+                $proveedor = $grupo['nombre'];
+                $codigo = $grupo['codigo'];
                 continue;
             }
 
@@ -1557,7 +1631,24 @@ class PorPagarController extends Controller
                     break;
                 }
             }
+            // Monto en blanco: el reporte la lista pero no la paga.
+            //
+            // No es una fila rota. Quien arma el pago borra el monto de lo que
+            // deja fuera, y el subtotal del grupo lo confirma: en 162 de los 168
+            // grupos del reporte del 17/09 el subtotal es exactamente la suma de
+            // las filas que SÍ traen monto. Acá se saltaban en silencio —229 de
+            // 539 en ese archivo—, así que nadie podía ver si el archivo era el
+            // que creía. Ahora se pasan marcadas: no entran al pago, pero se
+            // cuentan en la vista previa.
             if ($monto === '') {
+                $registros[] = [
+                    'sin_monto' => true,
+                    'fecha' => '',
+                    'numero' => $celdas[0],
+                    'proveedor' => $proveedor,
+                    'codigo' => $codigo,
+                    'total' => '',
+                ];
                 continue;
             }
 
@@ -1581,6 +1672,7 @@ class PorPagarController extends Controller
                 'fecha' => $fecha,
                 'numero' => $celdas[0],
                 'proveedor' => $proveedor,
+                'codigo' => $codigo,
                 'total' => $monto,
             ];
         }
@@ -1589,7 +1681,12 @@ class PorPagarController extends Controller
     }
 
     /**
-     * Nombre del proveedor si estas celdas abren un grupo, o null si no.
+     * Código y nombre del proveedor si estas celdas abren un grupo, null si no.
+     *
+     * El código es lo que identifica al proveedor en el ERP, y viene en la misma
+     * fila, a la par del nombre. Se leía ya —hace falta para reconocer el
+     * encabezado— pero se tiraba, y sin él la única forma de saber de quién era
+     * una factura era comparar dos nombres escritos por sistemas distintos.
      *
      * Se busca el rótulo ENTRE las celdas en vez de exigir que la fila
      * empiece con él, y el nombre se toma de su celda en vez de recortarlo
@@ -1604,7 +1701,7 @@ class PorPagarController extends Controller
      * El código y el nombre pueden venir juntos o en celdas separadas, según
      * de dónde se exportó.
      */
-    private function nombreDeGrupo(array $celdas)
+    private function grupoDeProveedor(array $celdas)
     {
         foreach ($celdas as $i => $celda) {
             // El rótulo, con el código y el nombre opcionalmente pegados.
@@ -1612,28 +1709,32 @@ class PorPagarController extends Controller
                 continue;
             }
 
+            $codigo = isset($m[1]) ? trim($m[1]) : '';
             $resto = array_values(array_slice($celdas, $i + 1));
             if (isset($m[2]) && trim($m[2]) !== '') {
-                return trim($m[2]);
+                return ['codigo' => $codigo, 'nombre' => trim($m[2])];
             }
 
             // El código no venía con el rótulo: tiene que estar en la celda
             // siguiente. Si no lo está, esto era un rótulo de columna suelto
             // ("Proveedor" sobre una tabla) y no abre ningún grupo.
-            if (!isset($m[1]) || $m[1] === '') {
+            if ($codigo === '') {
                 if (empty($resto)) {
                     return null;
                 }
-                if (preg_match('/^\d{4,}\s+(.+)$/u', $resto[0], $c)) {
-                    return trim($c[1]);
+                if (preg_match('/^(\d{4,})\s+(.+)$/u', $resto[0], $c)) {
+                    return ['codigo' => $c[1], 'nombre' => trim($c[2])];
                 }
                 if (!preg_match('/^\d{4,}$/', $resto[0])) {
                     return null;
                 }
+                $codigo = $resto[0];
                 array_shift($resto);
             }
 
-            return !empty($resto) && trim($resto[0]) !== '' ? trim($resto[0]) : null;
+            return !empty($resto) && trim($resto[0]) !== ''
+                ? ['codigo' => $codigo, 'nombre' => trim($resto[0])]
+                : null;
         }
 
         return null;

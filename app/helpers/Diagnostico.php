@@ -51,7 +51,8 @@ class Diagnostico
             [$this->php(), $this->extensiones(), $this->configuracionDeEstaMaquina(),
              $this->baseDeDatos()],
             $this->esquema(),
-            [$this->carpetaCompartida(), $this->escrituraEnCarpeta(), $this->rutasAbsolutas(),
+            [$this->clavesDeBuzonCifradas(),
+             $this->carpetaCompartida(), $this->escrituraEnCarpeta(), $this->rutasAbsolutas(),
              $this->documentosDentroDelProyecto(), $this->archivosFaltantes()],
             $this->sharepoint()
         );
@@ -223,6 +224,61 @@ class Diagnostico
             if ($this->existeColumna($pdo, 'facturas_xml', 'xml_contenido')) {
                 $pendientes[] = 'database/migration_rutas_relativas.sql';
             }
+            // Esta no se ve por una columna que falte, sino por el tipo de una
+            // que está: mientras usuarios.id tenga signo, las diecisiete
+            // columnas que lo referencian no pueden tener clave foránea, y
+            // borrar a una persona deja sus rastros apuntando al vacío.
+            if ($this->usuariosIdConSigno($pdo)) {
+                $pendientes[] = 'database/migration_usuarios_id_unsigned.sql';
+            }
+            // Tampoco se ve por una columna: `facturas_xml.sociedad_id` existe
+            // desde hace tiempo, lo que faltaba era la clave. Sin ella, borrar
+            // una empresa se lleva sus facturas a un sociedad_id inexistente.
+            if (!$this->tieneClaveForanea($pdo, 'facturas_xml', 'sociedad_id', 'sociedades')) {
+                $pendientes[] = 'database/migration_claves_sociedad.sql';
+            }
+            // El último grupo: roles, pagos e importaciones. Se pregunta por
+            // rol_permisos porque es la que más duele sin clave —permisos
+            // colgando de un rol borrado— y no depende de que haya datos.
+            if (!$this->tieneClaveForanea($pdo, 'rol_permisos', 'rol_id', 'roles')) {
+                $pendientes[] = 'database/migration_claves_rol_pago_importacion.sql';
+            }
+            // El seguimiento apunta a tres tablas según su `origen`, así que no
+            // puede tener una clave directa: lleva tres columnas derivadas, una
+            // por destino, y la clave va en ellas.
+            if (!$this->existeColumna($pdo, 'seguimiento', 'ref_factura_xml')) {
+                $pendientes[] = 'database/migration_seguimiento_referencias.sql';
+            }
+            // Y el resto: buzones, proveedores, cargas y listados.
+            if (!$this->tieneClaveForanea($pdo, 'correo_indice', 'cuenta_id', 'correo_cuentas')) {
+                $pendientes[] = 'database/migration_claves_correo_cargas.sql';
+            }
+            // Mientras `devoluciones.sociedad_id` admita NULL puede haber
+            // devoluciones de nadie, y el resumen se las contaba a todas.
+            if ($this->columnaAdmiteNull($pdo, 'devoluciones', 'sociedad_id')) {
+                $pendientes[] = 'database/migration_devoluciones_sin_empresa.sql';
+            }
+            // Sin `cedula_norm` nada impide dos empresas con la misma cédula
+            // escrita distinto (3-101-123456 y 3101123456).
+            if (!$this->existeColumna($pdo, 'sociedades', 'cedula_norm')) {
+                $pendientes[] = 'database/migration_sociedad_cedula_unica.sql';
+            }
+            // Y mientras `hash_xml` admita NULL, la unicidad de la bandeja no
+            // deduplica: dos NULL no son iguales, así que el correo cuyo XML no
+            // se pudo leer abre un renglón nuevo en cada reprocesamiento.
+            if ($this->columnaAdmiteNull($pdo, 'correo_bandeja', 'hash_xml')) {
+                $pendientes[] = 'database/migration_bandeja_dedup_nula.sql';
+            }
+            // Al revés otra vez: estas columnas sobran. `proveedor_normalizado`
+            // no la escribe nadie desde el relleno de 002, así que está en NULL
+            // o caduca, y arrastra un índice construido sobre eso.
+            if ($this->existeColumna($pdo, 'facturas_xml', 'proveedor_normalizado')) {
+                $pendientes[] = 'database/migration_limpieza_columnas_indices.sql';
+            }
+            // Y la moneda por omisión heredada de la plantilla mexicana.
+            if ($this->monedaPorOmisionAjena($pdo)) {
+                $pendientes[] = 'database/migration_comentarios_y_moneda.sql';
+            }
         } catch (Throwable $e) {
             return [$this->resultado('Estructura de la base', 'aviso',
                 'No se pudo revisar: ' . $e->getMessage(), '')];
@@ -245,9 +301,67 @@ class Diagnostico
         return $revisiones;
     }
 
+    /**
+     * Que ninguna contraseña de buzón siga guardada sin cifrar.
+     *
+     * Por qué se revisa: antes, una contraseña sin el prefijo `enc:v1:` se leía
+     * como base64 —que no es cifrado, es una forma de escribir— y el sistema
+     * funcionaba igual. No fallaba nada, no avisaba nada, y mientras tanto esa
+     * contraseña estaba en claro para cualquiera con la tabla, un respaldo o un
+     * app.log viejo. Un agujero que no da síntomas no se cierra solo.
+     *
+     * Ahora Secreto::descifrar() no las lee, así que una fila así deja la cuenta
+     * sin conectar; esta revisión es la que dice POR QUÉ, y qué hacer. Pasa al
+     * restaurar un respaldo anterior al cifrado.
+     */
+    private function clavesDeBuzonCifradas()
+    {
+        $nombre = 'Contraseñas de los buzones';
+
+        try {
+            $pdo = $this->pdo();
+            if (!$this->existeTabla($pdo, 'correo_cuentas')) {
+                return $this->resultado($nombre, 'ok', 'Todavía no hay buzones registrados.', '');
+            }
+
+            $total = (int) $pdo->query('SELECT COUNT(*) FROM correo_cuentas')->fetchColumn();
+            if ($total === 0) {
+                return $this->resultado($nombre, 'ok', 'Todavía no hay buzones registrados.', '');
+            }
+
+            $sinCifrar = (int) $pdo->query(
+                "SELECT COUNT(*) FROM correo_cuentas
+                  WHERE password IS NULL OR password = '' OR password NOT LIKE 'enc:v1:%'"
+            )->fetchColumn();
+        } catch (Throwable $e) {
+            // Sin base, la revisión de la base ya lo dijo; insistir aquí solo
+            // agrega un consejo equivocado sobre un problema que no es este.
+            return $this->resultado($nombre, 'ok', 'No se pudo comprobar (la base no responde).', '');
+        }
+
+        if ($sinCifrar === 0) {
+            return $this->resultado($nombre, 'ok',
+                $total . ' buzón(es), todas las contraseñas cifradas.', '');
+        }
+
+        return $this->resultado($nombre, 'error',
+            $sinCifrar . ' de ' . $total . ' contraseña(s) de buzón NO están cifradas',
+            "Esas cuentas no van a poder conectarse, y mientras sigan así su contraseña se lee "
+            . "de la tabla o de un respaldo sin ninguna clave. Pásalas al formato cifrado:\n"
+            . "  php cli/cifrar_claves_correo.php --ver     (dice qué haría)\n"
+            . "  php cli/cifrar_claves_correo.php\n"
+            . 'Si alguna sale como ilegible, vuelve a escribir su contraseña en Configuración → Correo.');
+    }
+
     private function carpetaCompartida()
     {
         $raiz = RutaDocumento::raiz();
+        if ($raiz === '' && !DocumentoArchivo::necesitaCarpetaCompartida()) {
+            return $this->resultado('Carpeta compartida', 'ok',
+                'No hace falta: todas las empresas archivan en SharePoint',
+                'Los XML y PDF van a la biblioteca; lo demás —temporales, respaldos de la base, '
+                . 'Excel y CSV cargados— queda en esta computadora.');
+        }
         if ($raiz === '') {
             return $this->resultado('Carpeta compartida', 'error',
                 'Sin configurar',
@@ -267,6 +381,10 @@ class Diagnostico
     private function escrituraEnCarpeta()
     {
         $raiz = RutaDocumento::raiz();
+        if ($raiz === '' && !DocumentoArchivo::necesitaCarpetaCompartida()) {
+            return $this->resultado('Permisos de escritura', 'ok',
+                'Sin carpeta compartida que probar: lo de SharePoint se revisa abajo', '');
+        }
         if ($raiz === '' || !is_dir($raiz)) {
             return $this->resultado('Permisos de escritura', 'aviso',
                 'No se pudo probar (la carpeta compartida no está disponible)', '');
@@ -515,6 +633,68 @@ class Diagnostico
         $stmt = $pdo->prepare('SELECT 1 FROM information_schema.COLUMNS
                                WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ? LIMIT 1');
         $stmt->execute([$tabla, $columna]);
+        return (bool) $stmt->fetchColumn();
+    }
+
+    /**
+     * Si `usuarios.id` sigue siendo INT con signo.
+     *
+     * Es la marca de que falta migration_usuarios_id_unsigned.sql. No se puede
+     * preguntar por una columna que falte —no falta ninguna—, ni por las claves
+     * foráneas directamente: una base a medio migrar podría tener algunas y no
+     * todas, y el tipo del padre es lo único que o está o no está.
+     */
+    private function usuariosIdConSigno(PDO $pdo)
+    {
+        $stmt = $pdo->prepare('SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+                               WHERE TABLE_SCHEMA = DATABASE()
+                                 AND TABLE_NAME = ? AND COLUMN_NAME = ? LIMIT 1');
+        $stmt->execute(['usuarios', 'id']);
+        $tipo = (string) $stmt->fetchColumn();
+
+        // Sin fila no hay nada que reportar: si `usuarios` no existe, la base
+        // no está instalada y eso lo dice otra revisión.
+        return $tipo !== '' && stripos($tipo, 'unsigned') === false;
+    }
+
+    /**
+     * Si `facturas_xml.moneda` todavía tiene por omisión la moneda de México.
+     *
+     * Viene de la plantilla con la que nació el proyecto. En la práctica no se
+     * usa —el modelo siempre guarda un valor, y por omisión CRC—, pero un
+     * DEFAULT que miente es una trampa para el día que alguien inserte sin
+     * pasar por el modelo.
+     */
+    private function monedaPorOmisionAjena(PDO $pdo)
+    {
+        $stmt = $pdo->prepare("SELECT COLUMN_DEFAULT FROM information_schema.COLUMNS
+                               WHERE TABLE_SCHEMA = DATABASE()
+                                 AND TABLE_NAME = 'facturas_xml'
+                                 AND COLUMN_NAME = 'moneda' LIMIT 1");
+        $stmt->execute();
+        return strtoupper(trim((string) $stmt->fetchColumn(), "'")) === 'MXN';
+    }
+
+    /** Si `tabla.columna` todavía admite NULL. */
+    private function columnaAdmiteNull(PDO $pdo, $tabla, $columna)
+    {
+        $stmt = $pdo->prepare('SELECT IS_NULLABLE FROM information_schema.COLUMNS
+                               WHERE TABLE_SCHEMA = DATABASE()
+                                 AND TABLE_NAME = ? AND COLUMN_NAME = ? LIMIT 1');
+        $stmt->execute([$tabla, $columna]);
+        // Sin fila no hay nada que reportar: si la tabla no existe, lo dice
+        // otra revisión.
+        return $stmt->fetchColumn() === 'YES';
+    }
+
+    /** Si `tabla.columna` ya tiene clave foránea hacia `referida`. */
+    private function tieneClaveForanea(PDO $pdo, $tabla, $columna, $referida)
+    {
+        $stmt = $pdo->prepare('SELECT 1 FROM information_schema.KEY_COLUMN_USAGE
+                               WHERE TABLE_SCHEMA = DATABASE()
+                                 AND TABLE_NAME = ? AND COLUMN_NAME = ?
+                                 AND REFERENCED_TABLE_NAME = ? LIMIT 1');
+        $stmt->execute([$tabla, $columna, $referida]);
         return (bool) $stmt->fetchColumn();
     }
 

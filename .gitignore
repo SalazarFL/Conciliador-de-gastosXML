@@ -24,6 +24,7 @@ public/uploads/facturas_erp/*
 
 # Runtime cache
 storage/cache/*.json
+storage/cache/*.marca
 
 # Session files (runtime)
 storage/sessions/
@@ -60,3 +61,17 @@ MEMORY.md
 # Son copias de archivos que git ya versiona —el respaldo de verdad es el
 # repositorio— así que no tienen por qué entrar en un commit.
 storage/respaldo_predespliegue_*/
+
+# Catálogo de proveedores generado en runtime: son CSV con datos reales
+# (proveedores, cédulas) de la empresa. El repositorio es público.
+storage/catalogo_proveedores/
+
+# Progreso de tareas en runtime (jobs en curso), no es código.
+storage/progreso/
+
+# Capturas y logs de pruebas Playwright (artefactos de ejecución local).
+.playwright-mcp/
+
+# Carpeta que aparece por una ruta con %SystemDrive% sin expandir al copiar
+# archivos; termina con caché de Windows adentro. No es parte del proyecto.
+public/%SystemDrive%/

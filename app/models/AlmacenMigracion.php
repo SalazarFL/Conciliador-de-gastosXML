@@ -239,9 +239,11 @@ class AlmacenMigracion extends Model
     }
 
     /**
-     * Pasa una fila a SharePoint: `almacen` y los ids. La ruta NO se toca —la
-     * relativa de siempre sirve para los dos almacenes—, y eso es lo que hace
-     * que volver atrás sea poner `almacen` en NULL.
+     * Pasa una fila a SharePoint: `almacen`, los ids y el prefijo de la ruta.
+     * La ruta en la biblioteca es la misma relativa de siempre; lo que cambia
+     * es que se guarda con `sharepoint:` delante, porque una ruta sin prefijo
+     * es de disco (ver AlmacenDocumentos, "Cuál se usa"). Volver atrás es
+     * devolverFila(), que pone la ruta del inventario, sin prefijo.
      *
      * Solo si la fila sigue en disco y con las mismas rutas que se
      * inventariaron: si el organizador la movió entretanto, lo subido ya no es
@@ -261,6 +263,8 @@ class AlmacenMigracion extends Model
             if ($tabla === 'devoluciones' && $ext !== 'pdf') {
                 continue;
             }
+            $sets[] = "{$campo} = ?";
+            $setParams[] = 'sharepoint:' . RutaDocumento::relativa((string) $a['ruta']);
             $sets[] = "item_{$ext}_id = ?";
             $setParams[] = (string) $a['item_id'] ?: null;
             if ($tabla === 'facturas_xml') {

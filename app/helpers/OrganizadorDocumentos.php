@@ -110,8 +110,9 @@ class OrganizadorDocumentos
             if ($incluirNoRegistrados) {
                 $this->organizarNoRegistrados($resumen, (bool) $dryRun);
             }
-            $estado = $this->estadoRutasFaltantes($this->facturas->getParaOrganizarArchivos());
-            $this->anotarFaltantes($estado['sin_archivo'], [], (bool) $dryRun, $resumen);
+            $filas = $this->facturas->getParaOrganizarArchivos();
+            $estado = $this->estadoRutasFaltantes($filas);
+            $this->anotarFaltantes($estado['sin_archivo'], [], (bool) $dryRun, $resumen, count($filas));
             if (!$dryRun) {
                 $this->podarCarpetasVacias($resumen);
                 $this->anotarOrden();
@@ -155,7 +156,13 @@ class OrganizadorDocumentos
             $mismaFirmaPendiente = $faltantes['firma'] !== ''
                 && hash_equals((string) ($estadoAnterior['firma_faltantes'] ?? ''), $faltantes['firma']);
 
-            if ($completo || ($faltantes['firma'] !== ''
+            if ($this->demasiadosFaltantes(count($faltantes['sin_archivo']), count($filas))) {
+                // Ni reubicar ni marcar: buscar miles de documentos por su
+                // contenido es justo lo que los repunta a copias que no son.
+                $resumen['revision_suspendida'] = self::AVISO_SUSPENDIDA;
+                $resumen['archivos_no_encontrados'] = $faltantes['archivos'];
+                $resumen['faltantes_en_disco'] = $faltantes['documentos_sin_archivos'];
+            } elseif ($completo || ($faltantes['firma'] !== ''
                 && (!$mismaFirmaPendiente || !is_file($this->indiceCache)))) {
                 $this->construirIndice($completo, $resumen);
                 $this->reconciliarFilas($filas, $dryRun, $completo, $resumen);
@@ -167,7 +174,8 @@ class OrganizadorDocumentos
                     // Lo que quedó sin archivo DESPUÉS de reconciliar: antes
                     // de esto, la mitad de los faltantes eran archivos que la
                     // reconciliación acababa de encontrar en otra carpeta.
-                    $this->anotarFaltantes($estadoFinal['sin_archivo'], $ids, false, $resumen);
+                    $this->anotarFaltantes($estadoFinal['sin_archivo'], $ids, false, $resumen,
+                        count($filasActualizadas));
                 } else {
                     $this->anotarFaltantes($faltantes['sin_archivo'], $ids, true, $resumen);
                 }
@@ -233,8 +241,9 @@ class OrganizadorDocumentos
             }
             $this->organizarRegistrados($resumen, (bool) $dryRun, $ids);
             $this->contarCopiasEnEspera($ids, $resumen);
-            $estado = $this->estadoRutasFaltantes($this->facturas->getParaOrganizarArchivos($ids));
-            $this->anotarFaltantes($estado['sin_archivo'], $ids, (bool) $dryRun, $resumen);
+            $filas = $this->facturas->getParaOrganizarArchivos($ids);
+            $estado = $this->estadoRutasFaltantes($filas);
+            $this->anotarFaltantes($estado['sin_archivo'], $ids, (bool) $dryRun, $resumen, count($filas));
             if (!$dryRun) {
                 $this->podarCarpetasVacias($resumen);
                 $this->registrarLog($resumen);
@@ -375,9 +384,34 @@ class OrganizadorDocumentos
      * $ambito son los documentos revisados; fuera de él no se toca nada,
      * porque de esos no se sabe. Vacío quiere decir "se revisaron todos".
      */
-    private function anotarFaltantes(array $faltantes, array $ambito, $dryRun, array &$resumen)
+    /**
+     * ¿Faltan tantos que lo que falta es la carpeta y no los documentos?
+     *
+     * Que desaparezca más de la mitad del archivo de una vez no es que alguien
+     * borró miles de documentos: es OneDrive desconectado, una ruta mal
+     * leída, un disco que no montó. Marcarlos a todos "sin archivo" y salir a
+     * buscarlos por su contenido convierte un problema de la carpeta en un
+     * problema de la base, que es mucho más difícil de deshacer.
+     */
+    private function demasiadosFaltantes($faltan, $revisados)
+    {
+        return $faltan >= self::MINIMO_PARA_SOSPECHAR && $faltan * 2 > $revisados;
+    }
+
+    /** Desde cuántos faltantes se sospecha de la carpeta y no de los documentos. */
+    private const MINIMO_PARA_SOSPECHAR = 200;
+
+    public const AVISO_SUSPENDIDA = 'Falta más de la mitad del archivo de una vez: se supone que la carpeta no '
+        . 'está disponible (OneDrive desconectado, una ruta mal leída) y no se marcó ni se reubicó nada.';
+
+    private function anotarFaltantes(array $faltantes, array $ambito, $dryRun, array &$resumen, $revisados = 0)
     {
         $resumen['marcados_sin_archivo'] = count($faltantes);
+        if ($revisados > 0 && $this->demasiadosFaltantes(count($faltantes), $revisados)) {
+            $resumen['marcados_sin_archivo'] = 0;
+            $resumen['revision_suspendida'] = self::AVISO_SUSPENDIDA;
+            return;
+        }
         if ($dryRun || !method_exists($this->facturas, 'marcarArchivosFaltantes')) {
             return;
         }
@@ -695,9 +729,47 @@ class OrganizadorDocumentos
         return $this->buscarPorNombre($rutaAnterior, $extension);
     }
 
+    /**
+     * ¿Está en la carpeta de un pago? Lo que hay ahí son COPIAS para
+     * entregar, que se borran cuando el pago se entrega: un documento
+     * registrado nunca se repunta a una de ellas si su original existe.
+     */
+    private function esCopiaDeEntrega($clave)
+    {
+        foreach ([DocumentoArchivo::CARPETA_PAGOS, DocumentoArchivo::CARPETA_PAGOS_VIEJA] as $nombre) {
+            $carpeta = $this->claveRuta($this->raiz . DIRECTORY_SEPARATOR . $nombre . DIRECTORY_SEPARATOR);
+            if (strncmp((string) $clave, $carpeta, strlen($carpeta)) === 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Los originales primero, las copias de PAGOS al final. Estable: dentro
+     * de cada grupo se respeta el orden que ya traían.
+     *
+     * Sin esto ganaba la primera que encontraba el recorrido del árbol, y
+     * "PAGOS" va antes que "SISTEMA": el 19/09/2026 una revisión repuntó
+     * 1.580 documentos a sus copias de entrega.
+     */
+    private function originalesPrimero(array $claves)
+    {
+        $originales = [];
+        $copias = [];
+        foreach ($claves as $clave) {
+            if ($this->esCopiaDeEntrega($clave)) {
+                $copias[] = $clave;
+            } else {
+                $originales[] = $clave;
+            }
+        }
+        return array_merge($originales, $copias);
+    }
+
     private function buscarPorHash($hash, $extension, $rutaAnterior, array &$resumen)
     {
-        foreach ($this->rutasPorHash[$extension][$hash] ?? [] as $clave) {
+        foreach ($this->originalesPrimero($this->rutasPorHash[$extension][$hash] ?? []) as $clave) {
             if (!isset($this->rutasReclamadas[$clave]) && isset($this->indiceActual[$clave])) {
                 return (string) $this->indiceActual[$clave]['ruta'];
             }
@@ -720,6 +792,12 @@ class OrganizadorDocumentos
 
         $nombreAnterior = strtolower(basename($rutaAnterior));
         usort($candidatas, function ($a, $b) use ($nombreAnterior) {
+            // Primero el original: una copia de PAGOS, solo si no hay otra.
+            $aCopia = $this->esCopiaDeEntrega($a) ? 1 : 0;
+            $bCopia = $this->esCopiaDeEntrega($b) ? 1 : 0;
+            if ($aCopia !== $bCopia) {
+                return $aCopia <=> $bCopia;
+            }
             $aMismo = strtolower(basename((string) ($this->indiceActual[$a]['ruta'] ?? ''))) === $nombreAnterior ? 0 : 1;
             $bMismo = strtolower(basename((string) ($this->indiceActual[$b]['ruta'] ?? ''))) === $nombreAnterior ? 0 : 1;
             return $aMismo <=> $bMismo;
@@ -742,15 +820,24 @@ class OrganizadorDocumentos
         if ($nombre === '' || $nombre === '.' || $nombre === $extension) {
             return '';
         }
-        $encontrada = '';
+        // Entre los originales primero; una copia de PAGOS solo cuenta si no
+        // hay ningún original con ese nombre.
+        $porGrupo = ['original' => [], 'copia' => []];
         foreach ($this->rutasPorExtension[$extension] ?? [] as $clave) {
             if (isset($this->rutasReclamadas[$clave])) continue;
             $ruta = (string) ($this->indiceActual[$clave]['ruta'] ?? '');
             if (strtolower(basename($ruta)) !== $nombre) continue;
-            if ($encontrada !== '') return ''; // un nombre ambiguo no se asocia
-            $encontrada = $ruta;
+            $porGrupo[$this->esCopiaDeEntrega($clave) ? 'copia' : 'original'][] = $ruta;
         }
-        return $encontrada;
+        foreach ($porGrupo as $rutas) {
+            if (count($rutas) === 1) {
+                return $rutas[0];
+            }
+            if (count($rutas) > 1) {
+                return ''; // un nombre ambiguo no se asocia
+            }
+        }
+        return '';
     }
 
     private function hashDeRutaIndexada($ruta, array &$resumen)

@@ -362,6 +362,19 @@ abstract class AlmacenDocumentos
     abstract public function recorreElArbolBarato();
 
     /**
+     * ¿Escribir un documento crea solo las carpetas de su camino?
+     *
+     * En disco no: hay que crearlas antes. En SharePoint sí, y pedirlas antes
+     * es preguntar por cada nivel y crear cada uno —nueve llamadas por red
+     * para el primer comprobante de un mes nuevo, una para cada uno de los
+     * siguientes— antes de una subida que las habría creado igual.
+     */
+    public function creaCarpetasAlEscribir()
+    {
+        return false;
+    }
+
+    /**
      * ¿Los documentos tienen un identificador que sobrevive a que los muevan?
      *
      * De esto depende cómo se reconcilia. Sin identidad permanente hay que
@@ -403,6 +416,15 @@ abstract class AlmacenDocumentos
     // Una relativa SIN prefijo es de disco, como fue siempre. No se adivina:
     // en una PC con credenciales, una ruta relativa que se le escapó a alguien
     // tiene que ir al disco y fallar como fallaba, no salir a la red.
+    //
+    // Y por eso todo lo que se guarda en SharePoint se guarda CON su prefijo,
+    // también en facturas_xml: la cadena sola dice dónde están los bytes, y
+    // una consulta que no pidió la columna `almacen` no tiene que adivinar.
+    // Lo que NO se hace nunca es deducirlo del ajuste de la sociedad: el
+    // 19/09/2026 se pasó a SharePoint, desde Configuración, una empresa con
+    // 14.043 documentos en disco; el organizador pedía sus filas sin la
+    // columna, las leyó como de SharePoint, no las encontró en el disco, las
+    // marcó a todas "sin archivo" y repuntó 1.580 a las copias de PAGOS.
 
     /** El valor que el sistema tuvo siempre, y el que significa un NULL. */
     public const DISCO = 'disco';
@@ -503,14 +525,16 @@ abstract class AlmacenDocumentos
     }
 
     /**
-     * Dónde está el documento de esta fila.
+     * Dónde está el documento de esta fila, para una ruta guardada SIN
+     * prefijo (una con prefijo ya lo dice sola: ver RutaDocumento::hidratarFila).
      *
      *   1. Si la fila trae la columna `almacen`, manda ella. NULL es disco:
      *      es todo lo que se archivó antes de que existiera la columna.
-     *   2. Si no la trae —una consulta que elige sus columnas y no la
-     *      pidió—, el de su sociedad. Fuera del rato en que se está pasando
-     *      esa sociedad, es la misma respuesta.
-     *   3. Sin sociedad, el de siempre.
+     *   2. Si no la trae, disco: una ruta sin prefijo es de disco.
+     *
+     * Nunca el ajuste de la sociedad. Ese ajuste dice dónde va lo NUEVO, y
+     * una empresa pasada a SharePoint sigue teniendo en disco todo lo de
+     * antes hasta que se migra. Ver "Cuál se usa", arriba.
      */
     public static function paraFila(array $fila)
     {
@@ -519,11 +543,6 @@ abstract class AlmacenDocumentos
         }
         if (array_key_exists('almacen', $fila)) {
             return self::tipo($fila['almacen'] ?? self::DISCO);
-        }
-        // Sin otro almacén en esta máquina no hay nada que averiguar: sería
-        // una consulta a la base por cada listado para contestar "disco".
-        if (!empty($fila['sociedad_id']) && self::hayOtrosAlmacenes()) {
-            return self::para($fila['sociedad_id']);
         }
 
         return self::actual();
@@ -632,18 +651,6 @@ abstract class AlmacenDocumentos
         }
 
         return (new Sociedad())->almacenesPorSociedad();
-    }
-
-    private static function hayOtrosAlmacenes()
-    {
-        self::descubrir();
-        foreach (array_keys(self::$fabricas) as $tipo) {
-            if ($tipo !== self::DISCO) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static function normalizarTipo($tipo)

@@ -276,7 +276,14 @@ class NotificacionesController extends Controller
         $this->json(['ok' => true]);
     }
 
-    /** Cierra un aviso sin decidir nada: "ya lo vi". */
+    /**
+     * Cierra un aviso sin decidir nada: "ya lo vi".
+     *
+     * En un recordatorio de Seguimiento cerrar el aviso no basta: el aviso es
+     * el recado y la alarma que lo manda vive en el renglón, así que al día
+     * siguiente volvía a sonar y el botón parecía roto. Ver
+     * Seguimiento::apagarRecordatorio().
+     */
     public function cerrar()
     {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -289,13 +296,77 @@ class NotificacionesController extends Controller
             $this->json(['ok' => false, 'message' => 'Aviso no indicado.'], 422);
         }
 
-        $filas = $this->loadModel('Notificacion')
-            ->cerrar($id, $estado, (int) ($_SESSION['user_id'] ?? 0), (string) $this->post('motivo', ''));
+        // Se lee ANTES de cerrarlo: después ya no se sabría de qué renglón
+        // era la alarma que hay que apagar.
+        $avisos = $this->loadModel('Notificacion');
+        $aviso  = $avisos->porId($id);
 
-        $this->json(['ok' => $filas > 0]);
+        $filas = $avisos->cerrar(
+            $id, $estado, (int) ($_SESSION['user_id'] ?? 0), (string) $this->post('motivo', '')
+        );
+
+        // Cerrar y no cerrar contestaban lo mismo, y la pantalla recargaba
+        // igual: el aviso seguía ahí sin que nadie dijera por qué.
+        if ($filas <= 0) {
+            $this->json([
+                'ok'      => false,
+                'message' => $aviso === null
+                    ? 'Ese aviso ya no está, o es de otra empresa. Recarga la página.'
+                    : 'No se pudo cerrar el aviso. Inténtalo de nuevo.',
+            ]);
+        }
+
+        $this->apagarAlarmaDe($aviso);
+
+        $this->json(['ok' => true]);
     }
 
     // ── Auxiliares ─────────────────────────────────────────────────
+
+    /**
+     * Apaga la alarma que produjo un recordatorio que se acaba de cerrar.
+     *
+     * Solo los recordatorios de Seguimiento tienen alarma detrás; los demás
+     * avisos son hechos sueltos y cerrarlos ya es todo lo que hay que hacer.
+     *
+     * El renglón viene en los datos del aviso, y si no —los primeros
+     * recordatorios no los guardaban— se saca de `ref_clave`, que es el mismo
+     * par escrito como "origen|id".
+     *
+     * Nunca tumba el cierre: el aviso ya está cerrado cuando esto corre, y
+     * que la alarma no se pudiera apagar no es razón para contestar que no se
+     * hizo nada.
+     */
+    private function apagarAlarmaDe($aviso)
+    {
+        if (!is_array($aviso) || ($aviso['tipo'] ?? '') !== 'seguimiento_recordatorio') {
+            return;
+        }
+
+        $datos = $this->datosDe($aviso);
+        $origen = trim((string) ($datos['origen'] ?? ''));
+        $referencia = (int) ($datos['referencia_id'] ?? 0);
+
+        if ($origen === '' || $referencia <= 0) {
+            $partes = explode('|', (string) ($aviso['ref_clave'] ?? ''), 2);
+            if (count($partes) === 2) {
+                $origen = trim($partes[0]);
+                $referencia = (int) $partes[1];
+            }
+        }
+        if ($origen === '' || $referencia <= 0) {
+            return;
+        }
+
+        try {
+            $this->loadModel('Seguimiento')->apagarRecordatorio($origen, $referencia, [
+                'id'     => $_SESSION['user_id'] ?? null,
+                'nombre' => $_SESSION['user_nombre'] ?? $_SESSION['user_username'] ?? 'Sistema',
+            ]);
+        } catch (Throwable $e) {
+            // Ver arriba: el aviso ya quedó cerrado.
+        }
+    }
 
     private function reverificarPendientes()
     {

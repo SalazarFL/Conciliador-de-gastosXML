@@ -63,11 +63,14 @@ $topes = [
     // El PDF subido, que se borra después de importarlo.
     'app/controllers/DevolucionesController.php' => ['unlink' => 1],
     // Todo local: los adjuntos en storage/correo/tmp, el ZIP de la bandeja,
-    // los scripts .ps1/.vbs del selector de carpetas y config.json.
+    // los scripts .ps1/.vbs del selector de carpetas y config.json. Los
+    // últimos unlink son adjuntos recién bajados que no van a ningún almacén:
+    // los de un correo que otra ventana ya está guardando (procesarMensaje) y
+    // los de un comprobante que ya estaba cargado, que ni entra a la Bandeja.
     'app/controllers/CorreoController.php' => [
         'file_get_contents' => 3, 'file_put_contents' => 6, 'filemtime' => 2,
         'filesize' => 1, 'is_file' => 9, 'mkdir' => 3, 'readfile' => 1,
-        'simplexml_load_file' => 1, 'unlink' => 14,
+        'simplexml_load_file' => 1, 'unlink' => 17,
     ],
 ];
 

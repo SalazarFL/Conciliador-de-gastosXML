@@ -411,6 +411,55 @@ class Factura extends Model
         return $row ?: null;
     }
 
+    /**
+     * ¿Este comprobante ya está en el sistema, y de quién es?
+     *
+     * Contesta con la MISMA regla con la que el importador decide que algo
+     * está repetido (`XmlDocumentImporter::importar`): primero el hash del
+     * XML, y si no, el consecutivo de ese proveedor en esa fecha. Tiene que
+     * ser la misma regla o la Bandeja avisaría una cosa y al importar pasaría
+     * otra, que es peor que no avisar.
+     *
+     * A propósito **no** se acota por empresa: la gracia es poder decir "esta
+     * factura ya está, pero en GRUPO BM". La clave única de la tabla es
+     * (consecutivo, proveedor, fecha) sin la empresa, así que el mismo
+     * comprobante no puede estar en dos: quien lo capture segundo tiene que
+     * enterarse, no chocar contra la base.
+     *
+     * Devuelve la fila con `sociedad_nombre`, o null.
+     */
+    public function yaCargado($hashXml, $consecutivo, $cedulaEmisor, $fechaEmision)
+    {
+        $hashXml = trim((string) $hashXml);
+        $fila = $hashXml !== '' ? $this->findByHashRecord($hashXml) : null;
+
+        if (!$fila) {
+            $consecutivo = trim((string) $consecutivo);
+            $cedula = preg_replace('/\D+/', '', (string) $cedulaEmisor);
+            $fecha = substr(trim((string) $fechaEmision), 0, 10);
+            if ($consecutivo !== '' && $cedula !== '' && $fecha !== '') {
+                $proveedorId = (int) $this->fetchColumn(
+                    'SELECT id FROM proveedores WHERE rfc = ? LIMIT 1',
+                    [$cedula]
+                );
+                if ($proveedorId > 0) {
+                    $fila = $this->findByConsecutivoRecord($consecutivo, $proveedorId, $fecha);
+                }
+            }
+        }
+
+        if (!$fila) {
+            return null;
+        }
+
+        $fila['sociedad_nombre'] = (string) $this->fetchColumn(
+            'SELECT nombre FROM sociedades WHERE id = ? LIMIT 1',
+            [(int) ($fila['sociedad_id'] ?? 0)]
+        );
+
+        return $fila;
+    }
+
     public function findByConsecutivoRecord(string $consecutivo, int $proveedorId, string $fechaEmision)
     {
         $sql = "SELECT f.*, p.razon_social AS proveedor_nombre
@@ -762,6 +811,9 @@ class Factura extends Model
             $extra = ', f.item_xml_id, f.item_pdf_id, f.etag_xml, f.etag_pdf, f.archivo_faltante_en, f.almacen';
         } elseif ($this->tieneColumnaAlmacen()) {
             $condiciones[] = 'f.almacen IS NULL';
+            // Con la columna en la fila, cada ruta se lee como de disco
+            // aunque su empresa ya archive lo nuevo en SharePoint.
+            $extra = ', f.almacen';
         }
         if ($soloEnPago) {
             $condiciones[] = 'f.pago_id IS NOT NULL';
@@ -1026,12 +1078,19 @@ class Factura extends Model
     public function seguirEnAlmacen($id, $extension, $ruta, $itemId, $etag)
     {
         $extension = $extension === 'pdf' ? 'pdf' : 'xml';
+        // Con su prefijo: una ruta sin él es de disco, y la fila se leería
+        // mal en cualquier consulta que no pida la columna `almacen`.
+        require_once __DIR__ . '/../helpers/AlmacenEnGraph.php';
+        $ruta = RutaDocumento::relativa($ruta);
+        if (AlmacenDocumentos::tipoDeDireccion($ruta) === '') {
+            $ruta = AlmacenEnGraph::PREFIJO . $ruta;
+        }
         return $this->execute(
             "UPDATE {$this->table}
                 SET ruta_{$extension} = ?, archivo_{$extension} = ?,
                     item_{$extension}_id = ?, etag_{$extension} = ?
               WHERE id = ?",
-            [RutaDocumento::relativa($ruta), basename(str_replace('\\', '/', (string) $ruta)),
+            [$ruta, basename(str_replace('\\', '/', $ruta)),
              (string) $itemId ?: null, (string) $etag ?: null, (int) $id]
         );
     }

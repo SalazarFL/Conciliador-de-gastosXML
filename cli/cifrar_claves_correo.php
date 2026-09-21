@@ -3,9 +3,20 @@
  * Vuelve a guardar cifradas las contraseñas de buzón que quedaron en base64.
  *
  * Las cuentas creadas antes de app/helpers/Secreto.php guardan la contraseña
- * en base64, que se lee sin clave. Se siguen usando (Secreto::descifrar las
- * entiende), pero mientras sigan así cualquiera con la tabla, un respaldo o un
- * app.log viejo las tiene. Esto las pasa al formato cifrado de una vez.
+ * en base64, que se lee sin clave: mientras una fila siga así, cualquiera con
+ * la tabla, un respaldo o un app.log viejo la tiene en claro. Esto las pasa al
+ * formato cifrado de una vez.
+ *
+ * ── Este script es el ÚNICO que entiende el formato viejo ─────────────────
+ * Secreto::descifrar() ya no lee base64: una contraseña sin el prefijo
+ * `enc:v1:` le sale vacía, y la cuenta queda sin credenciales hasta que
+ * alguien la escriba de nuevo. Eso cerró el agujero, pero deja a las
+ * instalaciones viejas sin forma de migrar, así que la decodificación vive
+ * aquí —en la herramienta cuyo trabajo es quitarla— y en ningún otro sitio.
+ * Al terminar esto, nadie en el sistema sabe leer base64 otra vez.
+ *
+ * Hace falta sobre todo al restaurar un respaldo anterior al cifrado. El
+ * diagnóstico avisa cuando toca correrlo.
  *
  * Uso:  php cli/cifrar_claves_correo.php [--ver]
  *         --ver   solo dice qué haría, sin escribir nada.
@@ -55,8 +66,10 @@ foreach ($modelo->pendientes() as $cuenta) {
         continue;
     }
 
-    $plano = Secreto::descifrar($guardada);
-    if ($plano === '') {
+    // El base64 de antes, en estricto. Secreto ya no lo lee a propósito (ver
+    // la cabecera): quien sabe deshacerlo es este script y nadie más.
+    $plano = base64_decode($guardada, true);
+    if ($plano === false || $plano === '') {
         printf("Cuenta %d (%s): la contraseña guardada está vacía o ilegible; se deja como está.\n",
             (int) $cuenta['id'], (string) $cuenta['nombre']);
         continue;

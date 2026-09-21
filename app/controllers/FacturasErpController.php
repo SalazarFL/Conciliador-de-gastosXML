@@ -182,7 +182,7 @@ class FacturasErpController extends Controller
             $modelo = $this->loadModel('FacturaErp');
             $id = $modelo->insertarDesdeRevision($campos, (int) $sociedad['id'], $linea['carga_id']);
 
-            $bandeja->marcarIncluida($linea['id'], $campos, $id, $_SESSION['usuario_id'] ?? null);
+            $bandeja->marcarIncluida($linea['id'], $campos, $id, $_SESSION['user_id'] ?? null);
             $recordar = $this->post('recordar', '') !== '';
             if ($recordar) {
                 $bandeja->recordar(
@@ -191,7 +191,7 @@ class FacturasErpController extends Controller
                     'incluir',
                     $campos,
                     'Corregida a mano desde la bandeja de revisión.',
-                    $_SESSION['usuario_id'] ?? null
+                    $_SESSION['user_id'] ?? null
                 );
             }
 
@@ -228,7 +228,7 @@ class FacturasErpController extends Controller
             }
 
             $nota = (string) $this->post('nota', '');
-            $bandeja->marcarDescartada($linea['id'], $nota, $_SESSION['usuario_id'] ?? null);
+            $bandeja->marcarDescartada($linea['id'], $nota, $_SESSION['user_id'] ?? null);
             $recordar = $this->post('recordar', '') !== '';
             if ($recordar) {
                 $bandeja->recordar(
@@ -237,7 +237,7 @@ class FacturasErpController extends Controller
                     'descartar',
                     [],
                     $nota,
-                    $_SESSION['usuario_id'] ?? null
+                    $_SESSION['user_id'] ?? null
                 );
             }
 
@@ -307,7 +307,7 @@ class FacturasErpController extends Controller
 
         $recordar = $this->post('recordar', '') !== '';
         $modelo = $this->loadModel('FacturaErp');
-        $usuarioId = $_SESSION['usuario_id'] ?? null;
+        $usuarioId = $_SESSION['user_id'] ?? null;
         $nota = 'Fila repetida en el reporte: entró otra del mismo grupo.';
         $descartadas = 0;
 
@@ -379,7 +379,7 @@ class FacturasErpController extends Controller
 
         $recordar = $this->post('recordar', '') !== '';
         $modelo = $this->loadModel('FacturaErp');
-        $usuarioId = $_SESSION['usuario_id'] ?? null;
+        $usuarioId = $_SESSION['user_id'] ?? null;
 
         foreach ($lineas as $linea) {
             $campos = is_array($linea['campos'] ?? null) ? $linea['campos'] : [];
@@ -511,7 +511,7 @@ class FacturasErpController extends Controller
             $r = $modelo->descartarIncidencias(
                 $ids,
                 (string) $this->post('motivo', ''),
-                $_SESSION['usuario_id'] ?? null,
+                $_SESSION['user_id'] ?? null,
                 $this->post('solo_esta_vez', '') === ''
             );
 
@@ -801,7 +801,7 @@ class FacturasErpController extends Controller
                 $resultado['facturas'],
                 $meta,
                 $resultado['cuadre'],
-                $_SESSION['usuario_id'] ?? null,
+                $_SESSION['user_id'] ?? null,
                 $resultado['incidencias']
             );
 

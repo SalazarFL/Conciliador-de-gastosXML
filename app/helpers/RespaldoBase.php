@@ -66,9 +66,25 @@ class RespaldoBase
         return self::storage() . DIRECTORY_SEPARATOR . 'respaldo.lock';
     }
 
-    /** Carpeta compartida donde quedan los .sql.gz. La crea si falta. */
+    /**
+     * Carpeta compartida donde quedan los .sql.gz. La crea si falta.
+     *
+     * Sin carpeta compartida —una PC que trabaja solo empresas en
+     * SharePoint— el respaldo se queda en esta máquina, en
+     * storage/backups/RESPALDOS. A SharePoint no va: allá van XML y PDF y
+     * nada más, y un volcado de la base no es un documento de ninguna
+     * empresa.
+     */
     public static function carpetaDestino()
     {
+        if (RutaDocumento::raiz() === '') {
+            $local = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR
+                . 'backups' . DIRECTORY_SEPARATOR . self::CARPETA;
+            if (!is_dir($local) && !@mkdir($local, 0777, true) && !is_dir($local)) {
+                throw new RuntimeException('No se pudo crear ' . $local);
+            }
+            return $local;
+        }
         return RutaDocumento::carpetaTrabajo(self::CARPETA);
     }
 

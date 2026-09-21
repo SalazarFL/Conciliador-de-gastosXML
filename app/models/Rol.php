@@ -360,11 +360,56 @@ class Rol extends Model
      * Borra un rol y deja sin rol a quien lo tuviera. No se les pasa a otro
      * rol automáticamente: elegirlo por ellos es peor que dejarlo en blanco,
      * porque nadie se enteraría de que la gente cambió de permisos.
+     *
+     * Antes la protección de los roles del sistema estaba SOLO en la última
+     * sentencia (`... AND es_sistema = 0`). Las dos de arriba no la tenían, así
+     * que pedir el borrado de un rol del sistema le vaciaba los permisos y
+     * dejaba a su gente sin rol —y el rol seguía ahí, vivo y sin nada—, sin un
+     * error ni un aviso. Ahora se comprueba primero y se lanza.
+     *
+     * RolesController ya comprobaba las dos cosas antes de llamar, pero un
+     * modelo no puede depender de que quien lo llame se acuerde: el que borra
+     * es él.
      */
     public function eliminar(int $id): void
     {
-        $this->execute("UPDATE usuarios SET rol_id = NULL WHERE rol_id = ?", [$id]);
-        $this->execute("DELETE FROM rol_permisos WHERE rol_id = ?", [$id]);
-        $this->execute("DELETE FROM roles WHERE id = ? AND es_sistema = 0", [$id]);
+        $rol = $this->fetchOne(
+            "SELECT id, nombre, es_sistema FROM roles WHERE id = ?",
+            [$id]
+        );
+        if (!$rol) {
+            throw new RuntimeException('Ese rol no existe.');
+        }
+        if (!empty($rol['es_sistema'])) {
+            throw new RuntimeException(
+                'El rol "' . $rol['nombre'] . '" es parte del sistema y no se '
+                . 'puede eliminar.'
+            );
+        }
+
+        // Las tres cosas o ninguna: si algo falla a la mitad, el rol se queda
+        // entero en vez de quedar sin permisos y con su gente suelta.
+        $db = self::getDB();
+        $propia = !$db->inTransaction();
+        if ($propia) {
+            $db->beginTransaction();
+        }
+        try {
+            // Las claves foráneas de migration_claves_rol_pago_importacion.sql
+            // hacen esto mismo solas (SET NULL y CASCADE). Se deja explícito
+            // para que el comportamiento no dependa de si la migración se
+            // aplicó, y para que se lea aquí qué le pasa a cada cosa.
+            $this->execute("UPDATE usuarios SET rol_id = NULL WHERE rol_id = ?", [$id]);
+            $this->execute("DELETE FROM rol_permisos WHERE rol_id = ?", [$id]);
+            $this->execute("DELETE FROM roles WHERE id = ?", [$id]);
+            if ($propia) {
+                $db->commit();
+            }
+        } catch (Throwable $e) {
+            if ($propia && $db->inTransaction()) {
+                $db->rollBack();
+            }
+            throw $e;
+        }
     }
 }

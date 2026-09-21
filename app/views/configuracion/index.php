@@ -211,7 +211,12 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
 
                 <div class="cfg-foot">
                     <div class="cfg-foot-nota">
-                        <?php if ($carpetaRaiz === ''): ?>
+                        <?php if ($carpetaRaiz === '' && empty($necesitaCarpeta)): ?>
+                        <i class="fas fa-circle-check" style="color:var(--ok);margin-right:4px;"></i>
+                        Sin carpeta compartida, y no hace falta: todas las empresas archivan sus XML y PDF
+                        en <strong>SharePoint</strong>. Lo demás —temporales, respaldos, Excel y CSV— queda
+                        en esta computadora.
+                        <?php elseif ($carpetaRaiz === ''): ?>
                         <i class="fas fa-triangle-exclamation" style="color:var(--warn);margin-right:4px;"></i>
                         Sin carpeta raíz no se pueden archivar documentos ni ordenar el archivo.
                         <?php else: ?>
@@ -544,6 +549,18 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                                 <i class="fas <?= $enSharepoint ? 'fa-cloud' : 'fa-folder' ?>"></i>
                                 <?= $enSharepoint ? 'SharePoint' : 'Carpeta compartida' ?>
                             </span>
+                            <?php // Lo que ya estaba cuando se cambió el ajuste no se movió: sin
+                                  // esto, quien va a buscarlo a SharePoint no lo encuentra y no
+                                  // sabe por qué. Desaparece solo cuando la migración termina. ?>
+                            <?php if ($enSharepoint && (int) ($soc['documentos_en_disco'] ?? 0) > 0): ?>
+                            <div style="margin-top:2px;color:var(--warning,#b26a00);">
+                                <i class="fas fa-triangle-exclamation"></i>
+                                <?= number_format((int) $soc['documentos_en_disco'], 0, ',', '.') ?>
+                                comprobantes anteriores siguen en la carpeta compartida: se abren
+                                desde aquí, pero no están en SharePoint hasta migrarlos con
+                                <code>php cli/migrar_documentos_a_graph.php --sociedad=<?= (int) $soc['id'] ?> --todo</code>
+                            </div>
+                            <?php endif; ?>
                         </div>
                         <?php // Solo quien puede cambiar la carpeta de documentos, y solo si la
                               // base ya tiene la columna: sin ella no hay dónde guardarlo. ?>
@@ -616,9 +633,14 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                                    placeholder="EMPRESA EJEMPLO S.A.">
                         </div>
                         <div>
-                            <label for="soc-cedula">Cédula</label>
+                            <label for="soc-cedula">Cédula jurídica</label>
                             <input type="text" name="cedula" id="soc-cedula" class="form-control" required
+                                   inputmode="numeric" autocomplete="off" maxlength="10" pattern="3[0-9]{9}"
+                                   title="Diez dígitos que empiezan por 3, como 3101123456."
                                    placeholder="3101123456">
+                            <div style="font-size:11px;color:var(--text-muted);margin-top:3px;">
+                                Diez dígitos que empiezan por 3. Los guiones sobran.
+                            </div>
                         </div>
                     </div>
                     <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:10px;">
@@ -1853,6 +1875,20 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
             document.getElementById('soc-nombre').focus();
         });
     });
+
+    // La cédula de una empresa es la jurídica: diez dígitos que empiezan por
+    // 3. El campo no deja escribir otra cosa —los guiones de 3-101-639680 se
+    // caen solos al pegarla— para que el error se vea al teclear y no después
+    // de enviar. Quien se salte esto no llega a la base: el modelo lo repite.
+    var socCedula = document.getElementById('soc-cedula');
+    if (socCedula) {
+        socCedula.addEventListener('input', function () {
+            var limpio = socCedula.value.replace(/\D+/g, '').slice(0, 10);
+            if (limpio !== socCedula.value) {
+                socCedula.value = limpio;
+            }
+        });
+    }
 
     socCancel.addEventListener('click', function () {
         formSoc.action = BASE + '/sociedades/crear';

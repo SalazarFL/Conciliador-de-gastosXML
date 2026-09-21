@@ -13,10 +13,23 @@
  * instala genera una con `php cli/clave_secretos.php` y la copia a cada
  * local.php.
  *
- * Lo cifrado se reconoce por el prefijo `enc:v1:`. Lo que no lo lleva se lee
- * como base64: así las cuentas que ya existían siguen funcionando sin migrar
- * nada, y se vuelven a guardar cifradas la próxima vez que se edite su
- * contraseña (o de una vez con cli/cifrar_claves_correo.php).
+ * Lo cifrado se reconoce por el prefijo `enc:v1:`. Lo que NO lo lleva no se
+ * lee: devuelve vacío, y la cuenta sale como "sin credenciales completas"
+ * hasta que alguien teclee la contraseña otra vez.
+ *
+ * ── Por qué ya no se lee el base64 de antes ───────────────────────────────
+ * Durante un tiempo esto leía como base64 cualquier valor sin el prefijo, para
+ * que las cuentas anteriores al cifrado siguieran funcionando sin migrar nada.
+ * Esa rampa tenía un precio: base64 no es cifrado, es una forma de escribir, y
+ * mientras una fila siguiera así cualquiera con la tabla, un respaldo o un
+ * app.log viejo tenía la contraseña en claro. Peor: el camino de lectura de
+ * todos los días aceptaba para siempre datos sin cifrar, así que el agujero no
+ * se cerraba nunca solo y nada avisaba de que seguía abierto.
+ *
+ * Se cortó cuando no quedaba ninguna fila en ese formato, así que no rompió
+ * nada. Lo que sabe leer el base64 viejo es ahora UNA sola cosa
+ * —cli/cifrar_claves_correo.php, cuyo trabajo es justamente quitarlo— y el
+ * diagnóstico avisa si alguna vez vuelve a aparecer una contraseña sin cifrar.
  */
 
 class Secreto
@@ -72,17 +85,21 @@ class Secreto
     }
 
     /**
-     * Devuelve el texto original. Lo que no lleva el prefijo se lee como el
-     * base64 de antes, en estricto: si tampoco es base64 válido devuelve
-     * vacío, y entonces la cuenta sale como "sin credenciales completas" en
-     * vez de intentar conectar con un texto a medio decodificar.
+     * Devuelve el texto original, o vacío si lo guardado no está cifrado por
+     * esta clase.
+     *
+     * Vacío no es un fallo silencioso: aguas abajo significa "sin credenciales
+     * completas", que es lo que hace CorreoCuenta::configParaFetcher(), así que
+     * la cuenta se queda sin conectar y alguien vuelve a escribir la
+     * contraseña —en vez de que el sistema intente entrar con un texto a medio
+     * decodificar, o de que siga aceptando para siempre una contraseña que
+     * nunca se cifró—. Ver la cabecera de esta clase.
      */
     public static function descifrar($guardado)
     {
         $guardado = (string) $guardado;
         if (!self::estaCifrado($guardado)) {
-            $plano = base64_decode($guardado, true);
-            return $plano === false ? '' : $plano;
+            return '';
         }
 
         $crudo = base64_decode(substr($guardado, strlen(self::PREFIJO)), true);

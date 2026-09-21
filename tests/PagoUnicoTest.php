@@ -25,6 +25,7 @@
 
 require_once __DIR__ . '/../app/core/Model.php';
 require_once __DIR__ . '/../app/models/Pago.php';
+require_once __DIR__ . '/soporte/SociedadDePrueba.php';
 
 $fallos = 0;
 function verificaUnico($condicion, $mensaje)
@@ -77,7 +78,9 @@ foreach (['archivo_origen', 'total_lineas', 'archivo_subido_en'] as $columna) {
 }
 
 // ── Lo que hace el modelo con esa ficha ───────────────────────────────
-$sociedadPrueba = 980000 + random_int(0, 9000);
+// Empresa de verdad: `pagos.sociedad_id` ya tiene clave foránea y un id
+// inventado —lo de antes— ya no entra.
+$sociedadPrueba = SociedadDePrueba::crear($pdo, 'pago unico');
 // Acotado a la empresa de la prueba: findById tambien respeta el alcance.
 $modelo = (new Pago())->setSociedad($sociedadPrueba);
 $creados = [];
@@ -156,6 +159,7 @@ $pdo->prepare('DELETE FROM facturas_erp WHERE id = ?')->execute([$erpId]);
 foreach ($creados as $id) {
     $pdo->prepare('DELETE FROM pagos WHERE id = ?')->execute([(int) $id]);
 }
+SociedadDePrueba::borrar($pdo, $sociedadPrueba);
 
 if ($fallos > 0) {
     fwrite(STDERR, "{$fallos} verificación(es) fallaron\n");

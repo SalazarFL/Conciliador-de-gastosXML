@@ -11,6 +11,7 @@
  */
 require_once __DIR__ . '/../app/core/Model.php';
 require_once __DIR__ . '/../app/models/LineaEnRevision.php';
+require_once __DIR__ . '/soporte/SociedadDePrueba.php';
 require_once __DIR__ . '/../app/helpers/FacturasErpCsvParser.php';
 
 function assertEnredo($condicion, $mensaje)
@@ -43,10 +44,11 @@ try {
     exit(0);
 }
 
-// Una sociedad que no existe, para no tocar datos de nadie. Se limpia al final
-// y también al empezar, por si una corrida anterior murió a la mitad.
-$sociedadId = 999777;
-$limpiar = function () use ($pdo, $sociedadId) {
+// Una empresa aparte, para no tocar datos de nadie. Antes era un id inventado
+// (999777) que la base aceptaba porque `sociedad_id` no tenía clave foránea;
+// ahora la tiene, así que la empresa existe de verdad y se borra al final.
+$sociedadId = SociedadDePrueba::crear($pdo, 'enredo bandeja');
+$limpiar = function () use ($pdo, &$sociedadId) {
     $pdo->prepare('DELETE FROM facturas_erp_revision WHERE sociedad_id = ?')->execute([$sociedadId]);
     $pdo->prepare('DELETE FROM facturas_erp_revision_memoria WHERE sociedad_id = ?')->execute([$sociedadId]);
 };
@@ -193,5 +195,8 @@ try {
 
     echo "OK: FacturasErpEnredoBandeja\n";
 } finally {
+    // $limpiar() se llama también a media prueba, así que no puede borrar la
+    // empresa: eso va aquí, una sola vez y al final.
     $limpiar();
+    SociedadDePrueba::borrar($pdo, $sociedadId);
 }

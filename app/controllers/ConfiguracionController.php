@@ -19,6 +19,7 @@
 
 require_once __DIR__ . '/../helpers/MailFetcher.php';
 require_once __DIR__ . '/../helpers/RespaldoBase.php';
+require_once __DIR__ . '/../helpers/DocumentoArchivo.php';
 
 class ConfiguracionController extends Controller
 {
@@ -58,6 +59,23 @@ class ConfiguracionController extends Controller
             $sociedades      = $sociedadModel->getAll();
             $sociedadActiva  = $sociedadModel->getActiva();
             $sociedadEnUsoId = (int) ($sociedadActiva['id'] ?? 0);
+
+            /*
+             * Cuántos comprobantes de una empresa ya pasada a SharePoint
+             * siguen en la carpeta compartida.
+             *
+             * El aviso de cuando se cambia el ajuste dura lo que dura la
+             * pantalla; la pregunta —"¿por qué no veo mis facturas en
+             * SharePoint?"— vuelve días después. Aquí queda a la vista
+             * mientras sea cierta, y desaparece sola cuando la migración
+             * termina.
+             */
+            foreach ($sociedades as $i => $s) {
+                $sociedades[$i]['documentos_en_disco'] =
+                    ($s['almacen_documentos'] ?? 'disco') === 'sharepoint'
+                        ? $sociedadModel->documentosEnDisco((int) $s['id'])
+                        : 0;
+            }
         } catch (Throwable $e) {
             // Sin base la pantalla sigue sirviendo para la carpeta raíz
         }
@@ -162,6 +180,9 @@ class ConfiguracionController extends Controller
             // ¿Esta PC tiene credenciales de SharePoint? Solo mira si existe
             // local.graph.php: no sale a la red al dibujar la pantalla.
             'sharepointDisponible' => $puede['archivo'] && $this->sharepointDisponible(),
+            // Con todas las empresas en SharePoint, esta PC no necesita la
+            // carpeta compartida: la tarjeta lo dice en vez de pedirla.
+            'necesitaCarpeta' => DocumentoArchivo::necesitaCarpetaCompartida(),
             'pagos'         => $pagos,
             'pagoActivo'    => $this->pagoActivo(),
             'usuarios'        => $usuarios,

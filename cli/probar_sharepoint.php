@@ -258,6 +258,9 @@ if ($probarAlmacen) {
     require_once __DIR__ . '/../app/helpers/AlmacenEnGraph.php';
     $anunciar('Recorriendo el almacén de la aplicación contra la biblioteca');
     $almacen = new AlmacenEnGraph($graph, $cfg);
+    // Esto es lo que se corre después de agregar la columna HashSha256: se
+    // pregunta de nuevo en vez de creer lo que se recordaba.
+    $almacen->olvidarColumnaHash();
     $base = $carpeta . '/almacen_' . date('Ymd_His');
     $uno = tempnam(sys_get_temp_dir(), 'nexo');
     $otro = tempnam(sys_get_temp_dir(), 'nexo');

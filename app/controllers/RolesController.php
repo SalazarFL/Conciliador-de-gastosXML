@@ -109,7 +109,18 @@ class RolesController extends Controller
             );
         }
 
-        $this->model->eliminar($id);
+        // Las comprobaciones de arriba deberían hacer que esto no lance nunca,
+        // pero el modelo también comprueba por su cuenta —es el que borra— y
+        // un 500 no explica nada en una pantalla de administración.
+        try {
+            $this->model->eliminar($id);
+        } catch (Throwable $e) {
+            $this->redirectWithMessage(
+                $this->url(self::DESTINO),
+                'No se pudo eliminar: ' . $e->getMessage(),
+                'error'
+            );
+        }
 
         Bitacora::registrar([
             'accion'     => 'Eliminó un rol',

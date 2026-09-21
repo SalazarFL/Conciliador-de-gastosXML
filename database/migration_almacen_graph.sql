@@ -114,3 +114,14 @@ ALTER TABLE `devoluciones`
         COMMENT 'NULL = disco (histórico) | sharepoint',
     ADD COLUMN IF NOT EXISTS `item_pdf_id` VARCHAR(128) NULL DEFAULT NULL
         COMMENT 'Id permanente del PDF en SharePoint';
+
+-- Toda ruta de SharePoint se guarda con su prefijo: una ruta sin prefijo es de
+-- disco, y así se lee bien aunque la consulta no traiga la columna `almacen`.
+-- Las filas pasadas por cli/migrar_documentos_a_graph.php antes del 19/09/2026
+-- quedaron sin él. Seguro de repetir: solo toca las que no lo tienen.
+UPDATE `facturas_xml` SET `ruta_xml` = CONCAT('sharepoint:', `ruta_xml`)
+ WHERE `almacen` = 'sharepoint' AND `ruta_xml` <> '' AND `ruta_xml` NOT LIKE 'sharepoint:%';
+UPDATE `facturas_xml` SET `ruta_pdf` = CONCAT('sharepoint:', `ruta_pdf`)
+ WHERE `almacen` = 'sharepoint' AND `ruta_pdf` <> '' AND `ruta_pdf` NOT LIKE 'sharepoint:%';
+UPDATE `devoluciones` SET `ruta_pdf` = CONCAT('sharepoint:', `ruta_pdf`)
+ WHERE `almacen` = 'sharepoint' AND `ruta_pdf` <> '' AND `ruta_pdf` NOT LIKE 'sharepoint:%';
