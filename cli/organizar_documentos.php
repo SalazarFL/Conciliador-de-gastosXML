@@ -1,19 +1,23 @@
 <?php
 /**
- * Reconcilia rutas; opcionalmente ordena el archivo por orden explícita.
+ * Pone la base al día con lo que la gente hizo en el archivo de documentos.
  *
- * Sin banderas RECONCILIA: busca los archivos que alguien movió a mano y
- * corrige la base de datos, sin tocar ni un archivo. Mover archivos siempre
- * hay que pedirlo, con --forzar-orden o --pago.
+ * Por omisión revisa SharePoint, que es donde se archiva todo desde el
+ * 27/09/2026 (ver ReconciliadorGraph): documentos movidos, borrados o
+ * restaurados desde el navegador, y las copias de la carpeta de cada pago.
  *
- *   php cli/organizar_documentos.php                    reconciliar (rápido)
- *   php cli/organizar_documentos.php --completo         reconciliar releyendo todo
- *   php cli/organizar_documentos.php --forzar-orden     MUEVE: ordena lo registrado
- *   php cli/organizar_documentos.php --pago=12        MUEVE: solo ese pago
- *   php cli/organizar_documentos.php --forzar-orden --dry-run   ver sin mover
- *   php cli/organizar_documentos.php --sharepoint       los documentos que están
- *                                                       en SharePoint (ver
- *                                                       ReconciliadorGraph)
+ *   php cli/organizar_documentos.php                 revisar SharePoint
+ *   php cli/organizar_documentos.php --dry-run       qué haría, sin tocar nada
+ *
+ * La carpeta compartida de antes solo se toca nombrándola, para ordenar lo
+ * que quedó ahí mientras no se migra:
+ *
+ *   php cli/organizar_documentos.php --carpeta=RUTA                   reconciliar (rápido)
+ *   php cli/organizar_documentos.php --carpeta=RUTA --completo        reconciliar releyendo todo
+ *   php cli/organizar_documentos.php --carpeta=RUTA --forzar-orden    MUEVE: ordena lo registrado
+ *   php cli/organizar_documentos.php --carpeta=RUTA --pago=12         MUEVE: solo ese pago
+ *
+ * --sharepoint se sigue aceptando: está escrito en notas y tareas de antes.
  */
 if (PHP_SAPI !== 'cli') {
     http_response_code(403);
@@ -35,6 +39,9 @@ $conocidas = ['--dry-run', '--solo-registrados', '--forzar-orden', '--completo',
 // con "bandera desconocida" convertiría un renombrado en una tarea rota.
 $prefijosPago = ['--pago=', '--semana='];
 $traeValor = function ($arg) use ($prefijosPago) {
+    if (strpos($arg, '--carpeta=') === 0) {
+        return true;
+    }
     foreach ($prefijosPago as $prefijo) {
         if (strpos($arg, $prefijo) === 0) {
             return true;
@@ -46,7 +53,7 @@ $traeValor = function ($arg) use ($prefijosPago) {
 foreach (array_slice($argv, 1) as $arg) {
     if (!in_array($arg, $conocidas, true) && !$traeValor($arg)) {
         fwrite(STDERR, "Bandera desconocida: {$arg}\n"
-            . "Válidas: " . implode(' ', $conocidas) . " --pago=N\n");
+            . "Válidas: " . implode(' ', $conocidas) . " --carpeta=RUTA --pago=N\n");
         exit(2);
     }
 }
@@ -57,15 +64,28 @@ $forzarOrden     = in_array('--forzar-orden', $argv, true);
 $completo        = in_array('--completo', $argv, true);
 
 $pagoId = 0;
+$carpeta = '';
 foreach ($argv as $arg) {
     foreach ($prefijosPago as $prefijo) {
         if (strpos($arg, $prefijo) === 0) {
             $pagoId = (int) substr($arg, strlen($prefijo));
         }
     }
+    if (strpos($arg, '--carpeta=') === 0) {
+        $carpeta = trim(substr($arg, strlen('--carpeta=')));
+    }
 }
 
-if (in_array('--sharepoint', $argv, true)) {
+// Lo de la carpeta compartida de antes, sin nombrarla, no corre: ahí ya no
+// se archiva nada, y mover archivos en ella por costumbre es lo último que
+// hace falta.
+if ($carpeta === '' && ($pagoId > 0 || $forzarOrden || $completo || in_array('--reconciliar', $argv, true))) {
+    fwrite(STDERR, "Eso es para la carpeta compartida de antes: nómbrala con --carpeta=RUTA.\n"
+        . "Los documentos de hoy están en SharePoint; para revisarlos, corre esto sin banderas.\n");
+    exit(2);
+}
+
+if ($carpeta === '') {
     require_once $root . '/app/helpers/ReconciliadorGraph.php';
     try {
         if (!AlmacenDocumentos::disponible(AlmacenEnGraph::TIPO)) {
@@ -82,7 +102,12 @@ if (in_array('--sharepoint', $argv, true)) {
 }
 
 try {
-    $organizador = new OrganizadorDocumentos();
+    if (!is_dir($carpeta)) {
+        fwrite(STDERR, "No existe la carpeta {$carpeta}.\n");
+        exit(2);
+    }
+    RutaDocumento::fijarRaiz($carpeta);
+    $organizador = new OrganizadorDocumentos($carpeta);
 
     if ($pagoId > 0) {
         // Ordena únicamente las facturas de ese pago, a su carpeta de pago.
@@ -104,6 +129,6 @@ try {
     echo json_encode($resumen, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), PHP_EOL;
     exit(($resumen['errores'] ?? 0) > 0 ? 1 : 0);
 } catch (Throwable $e) {
-    fwrite(STDERR, 'No se pudo procesar el archivo local: ' . $e->getMessage() . PHP_EOL);
+    fwrite(STDERR, 'No se pudo procesar la carpeta compartida de antes: ' . $e->getMessage() . PHP_EOL);
     exit(2);
 }

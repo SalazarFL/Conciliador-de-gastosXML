@@ -1,5 +1,13 @@
 # Dónde viven los documentos: las dos opciones
 
+> **Decidido el 27/09/2026: opción B, y solo B.** SharePoint pasó a ser
+> obligatorio y la carpeta compartida dejó de usarse; ya no hay empresas que
+> archiven en disco. Además, Nexo Fiscal puede vivir en **una carpeta de una
+> biblioteca que la empresa ya usa**, con permiso solo sobre esa carpeta
+> (`Files.SelectedOperations.Selected`), en vez de en una biblioteca propia.
+> Lo de abajo queda como el análisis que llevó ahí. Cómo se opera hoy:
+> [SHAREPOINT.md](SHAREPOINT.md).
+
 Este documento existe para que **la decisión sea del cliente y no nuestra**. Nexo
 Fiscal soporta las dos formas de guardar los XML y los PDF, y cuál conviene
 depende de cómo trabaja cada empresa, no de una limitación del sistema.
@@ -183,18 +191,18 @@ documentos se abren desde el sistema, siempre.**
 
 ## Cómo quedó
 
-Las dos opciones están hechas. Todo acceso a un documento pasa por una sola
-puerta (`AlmacenDocumentos`) con dos implementaciones, disco y Graph, y **la
-elección es por empresa**: en *Configuración → Empresas del grupo*, cada una
-dice dónde archiva lo nuevo. Pueden convivir empresas en disco y en
-SharePoint en la misma instalación.
+Todo acceso a un documento pasa por una sola puerta (`AlmacenDocumentos`) con
+dos implementaciones, disco y Graph. Hasta el 27/09/2026 la elección era por
+empresa; desde entonces **todo lo nuevo va a SharePoint** y el disco queda
+solo para leer lo que se archivó antes en la carpeta compartida, hasta
+migrarlo.
 
-Pasar una empresa con historia es un comando que sube lo existente, lo
-verifica y cambia el ajuste solo al final; se puede cortar, retomar y
-revertir sin perder nada, porque nunca borra el disco.
+Migrar lo de una empresa es un comando que sube lo existente y lo verifica;
+se puede cortar, retomar y revertir sin perder nada, porque nunca borra el
+disco.
 
-Cómo se prepara, se pasa una empresa, se vigila y se vuelve atrás:
-**[SHAREPOINT.md](SHAREPOINT.md)**.
+Cómo se prepara —con biblioteca propia o con una carpeta—, se migra lo viejo y
+se vigila: **[SHAREPOINT.md](SHAREPOINT.md)**.
 
 Las dos advertencias que se escribieron antes de hacerlo, y se respetaron:
 

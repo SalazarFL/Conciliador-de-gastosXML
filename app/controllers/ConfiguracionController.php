@@ -61,20 +61,17 @@ class ConfiguracionController extends Controller
             $sociedadEnUsoId = (int) ($sociedadActiva['id'] ?? 0);
 
             /*
-             * Cuántos comprobantes de una empresa ya pasada a SharePoint
-             * siguen en la carpeta compartida.
+             * Cuántos comprobantes de cada empresa siguen en la carpeta
+             * compartida de antes, sin pasar a SharePoint.
              *
-             * El aviso de cuando se cambia el ajuste dura lo que dura la
-             * pantalla; la pregunta —"¿por qué no veo mis facturas en
-             * SharePoint?"— vuelve días después. Aquí queda a la vista
+             * La pregunta —"¿por qué no veo mis facturas en SharePoint?"—
+             * aparece días después de dejar la carpeta. Aquí queda a la vista
              * mientras sea cierta, y desaparece sola cuando la migración
              * termina.
              */
+            $enDisco = $sociedadModel->documentosEnDiscoPorEmpresa();
             foreach ($sociedades as $i => $s) {
-                $sociedades[$i]['documentos_en_disco'] =
-                    ($s['almacen_documentos'] ?? 'disco') === 'sharepoint'
-                        ? $sociedadModel->documentosEnDisco((int) $s['id'])
-                        : 0;
+                $sociedades[$i]['documentos_en_disco'] = $enDisco[(int) $s['id']] ?? 0;
             }
         } catch (Throwable $e) {
             // Sin base la pantalla sigue sirviendo para la carpeta raíz
@@ -177,12 +174,9 @@ class ConfiguracionController extends Controller
             'sociedades'      => $sociedades,
             'sociedadActiva'  => $sociedadActiva,
             'sociedadEnUsoId' => $sociedadEnUsoId,
-            // ¿Esta PC tiene credenciales de SharePoint? Solo mira si existe
-            // local.graph.php: no sale a la red al dibujar la pantalla.
-            'sharepointDisponible' => $puede['archivo'] && $this->sharepointDisponible(),
-            // Con todas las empresas en SharePoint, esta PC no necesita la
-            // carpeta compartida: la tarjeta lo dice en vez de pedirla.
-            'necesitaCarpeta' => DocumentoArchivo::necesitaCarpetaCompartida(),
+            // Dónde viven los XML y PDF, leído de local.graph.php: no sale a
+            // la red al dibujar la pantalla. Si contesta lo dice Diagnóstico.
+            'sharepoint' => $this->sharepoint(),
             'pagos'         => $pagos,
             'pagoActivo'    => $this->pagoActivo(),
             'usuarios'        => $usuarios,
@@ -257,8 +251,13 @@ class ConfiguracionController extends Controller
             $plan = $modelo->importarDesdeErp($lectura['proveedores'], true);
             $contradice = $modelo->emparejamientosQueContradice($lectura['proveedores']);
 
+            // Cada empresa tiene su catálogo: se dice en cuál va a entrar
+            // antes de apretar el botón, no después.
+            $empresa = $this->loadModel('Sociedad')->findById((int) $plan['sociedad_id']);
+
             $this->json([
                 'ok' => true,
+                'empresa' => is_array($empresa) ? (string) $empresa['nombre'] : '',
                 'token' => basename($archivo['path']),
                 'archivo' => $archivo['original_name'] ?? basename($archivo['path']),
                 'impreso_en' => $lectura['meta']['impreso_en'],
@@ -270,6 +269,8 @@ class ConfiguracionController extends Controller
                     'nuevos' => $plan['nuevos'],
                     'proveedores_creados' => $plan['proveedores_creados'],
                     'cambios' => array_slice($plan['cambios'], 0, 50),
+                    'choca_con_manual' => $plan['choca_con_manual'],
+                    'manuales' => array_slice($plan['manuales'], 0, 50),
                 ],
                 'sin_cedula' => count($lectura['sin_cedula']),
                 // Los grupos enteros, no la cuenta: la pantalla tiene que
@@ -318,12 +319,18 @@ class ConfiguracionController extends Controller
     /**
      * Aplica lo que se decidió sobre las cédulas repartidas entre varios códigos.
      *
-     * Mientras quede una sin decidir la importación no sigue. Es a propósito:
-     * importarla a medias dejaría la cédula sin poder identificar a nadie, y
-     * ese es exactamente el estado en el que un comprobante se engancha al
-     * código equivocado.
+     * Entran todos, salvo los que se desmarcaron. Antes había que elegir uno
+     * solo por cédula y los demás quedaban fuera, pero los puntos de venta de
+     * una misma empresa —CEDI, PROMOCIONES, TECNOLOGIA Y FRIO— son todos
+     * buenos, y un código que no está en el catálogo no engancha con nada: el
+     * 28/09 eran 44 facturas de un pago con su XML en la base. Desmarcar queda
+     * para el alta duplicada ("ALPELMUSA" y "ALPEMUSA").
      *
-     * Lo que NO hace: borrar. El código que no se elige simplemente no entra
+     * Cada cédula tiene que quedar con al menos un código. Una que no manda
+     * nada —la pantalla siempre manda la casilla oculta de cada grupo— es un
+     * formulario que no sabe de esto, y entran todos.
+     *
+     * Lo que NO hace: borrar. El código que se desmarca simplemente no entra
      * en esta importación; si ya estaba en la lista de antes, se queda. Quitar
      * algo de la lista es una decisión aparte y tiene su propio botón.
      *
@@ -336,31 +343,33 @@ class ConfiguracionController extends Controller
             return $lectura['proveedores'];
         }
 
-        $elegidos = $this->post('elegido', []);
-        $elegidos = is_array($elegidos) ? $elegidos : [];
+        $incluir = $this->post('incluir', []);
+        $incluir = is_array($incluir) ? $incluir : [];
 
         $descartados = [];
-        $pendientes = [];
+        $vacias = [];
         foreach ($grupos as $cedula => $filas) {
-            $codigos = array_column($filas, 'codigo');
-            $elegido = trim((string) ($elegidos[$cedula] ?? ''));
-            if ($elegido === '' || !in_array($elegido, $codigos, true)) {
-                $pendientes[] = (string) $cedula;
+            if (!array_key_exists($cedula, $incluir)) {
                 continue;
             }
-            foreach ($codigos as $c) {
-                if ($c !== $elegido) {
-                    $descartados[$c] = true;
-                }
+            $codigos = array_column($filas, 'codigo');
+            $marcados = array_map('strval', (array) $incluir[$cedula]);
+            $quedan = array_values(array_intersect($codigos, $marcados));
+            if (!$quedan) {
+                $vacias[] = (string) $cedula;
+                continue;
+            }
+            foreach (array_diff($codigos, $quedan) as $c) {
+                $descartados[$c] = true;
             }
         }
 
-        if ($pendientes) {
+        if ($vacias) {
             throw new Exception(sprintf(
-                'Faltan por decidir %d cédula(s) que tienen más de un código: %s. '
-                . 'Hasta que se diga cuál es el bueno, el listado no se importa.',
-                count($pendientes),
-                implode(', ', array_slice($pendientes, 0, 6)) . (count($pendientes) > 6 ? '…' : '')
+                '%d cédula(s) se quedaron sin ningún código marcado: %s. '
+                . 'Cada una tiene que conservar al menos uno.',
+                count($vacias),
+                implode(', ', array_slice($vacias, 0, 6)) . (count($vacias) > 6 ? '…' : '')
             ));
         }
 
@@ -424,10 +433,24 @@ class ConfiguracionController extends Controller
                 $msg .= ' ' . number_format($r['sin_cedula'], 0, ',', '.')
                      . ' código(s) del archivo no traen cédula y quedaron como estaban.';
             }
+            if ($r['choca_con_manual'] > 0) {
+                $msg .= ' En ' . number_format($r['choca_con_manual'], 0, ',', '.')
+                     . ' código(s) asignados a mano el archivo trae otra cédula: se dejó la asignada a mano ('
+                     . implode(', ', array_slice(array_column($r['manuales'], 'codigo'), 0, 6))
+                     . ($r['choca_con_manual'] > 6 ? '…' : '') . ').';
+            }
             if ($desatados > 0) {
                 $msg .= ' Se desengancharon ' . number_format($desatados, 0, ',', '.')
                      . ' factura(s) que tenían el comprobante de otro proveedor: vuelven a quedar '
                      . 'sin respaldo.';
+            }
+
+            // Códigos nuevos o corregidos destraban facturas que ya tenían su
+            // XML en el sistema: se buscan ahora mismo.
+            $reparadas = $this->buscarRespaldoTrasCatalogo();
+            if ($reparadas > 0) {
+                $msg .= ' ' . number_format($reparadas, 0, ',', '.')
+                     . ' factura(s) que estaban sin respaldo encontraron su comprobante.';
             }
 
             $this->redirectWithMessage($volver, $msg, $desatados > 0 ? 'warning' : 'success');
@@ -518,11 +541,45 @@ class ConfiguracionController extends Controller
             ], 422);
         }
 
-        $r = $modelo->guardarCodigo(
+        // 'tambien': el código ya tiene dueño y no se le quita; acepta
+        // además los comprobantes de esta cédula.
+        $metodo = $this->post('modo', '') === 'tambien' ? 'aceptarTambien' : 'guardarCodigo';
+        $r = $modelo->$metodo(
             (string) $this->post('codigo', ''),
             (string) $this->post('cedula', ''),
             (string) $this->post('nombre', ''),
             (int) ($_SESSION['user_id'] ?? 0)
+        );
+
+        // Con el código ya diciendo de quién es, las facturas que lo estaban
+        // esperando buscan su comprobante ahora, no cuando otra cosa las toque.
+        if (!empty($r['ok'])) {
+            $r['reparadas'] = $this->buscarRespaldoTrasCatalogo();
+        }
+        $this->json($r, empty($r['ok']) ? 422 : 200);
+    }
+
+    /** Ver PorPagarVerificador::trasCambioDeCatalogo(). */
+    private function buscarRespaldoTrasCatalogo()
+    {
+        require_once __DIR__ . '/../helpers/PorPagarVerificador.php';
+        return PorPagarVerificador::trasCambioDeCatalogo(
+            $this->loadModel('FacturaErp'),
+            $this->loadModel('Factura')
+        );
+    }
+
+    /** Un código deja de aceptar los comprobantes de una cédula que no es su dueña. */
+    public function dejarDeAceptarProveedor()
+    {
+        if (!$this->isPost()) {
+            $this->json(['ok' => false, 'message' => 'Método no permitido.'], 405);
+        }
+
+        require_once __DIR__ . '/../models/ProveedorCodigoErp.php';
+        $r = $this->loadModel('ProveedorCodigoErp')->dejarDeAceptar(
+            (string) $this->post('codigo', ''),
+            (string) $this->post('cedula', '')
         );
         $this->json($r, empty($r['ok']) ? 422 : 200);
     }
@@ -579,18 +636,45 @@ class ConfiguracionController extends Controller
     }
 
     /**
-     * La configuración de esta computadora (storage/correo/config.json). La
-     * escribe CorreoController@config; aquí solo se lee para pintar.
+     * Lo que la tarjeta "Archivo de documentos" dice de SharePoint: si esta
+     * computadora tiene credenciales, y a qué biblioteca y carpeta apuntan.
+     * Sin el secreto, claro.
+     *
+     * El nombre de la biblioteca sí sale a la red, pero una vez al día (lo
+     * recuerda ClienteGraph) y con pocos segundos de espera; si no llega, se
+     * enseña el id como antes.
      */
-    private function sharepointDisponible()
+    private function sharepoint()
     {
         require_once __DIR__ . '/../helpers/AlmacenDocumentos.php';
-        return AlmacenDocumentos::disponible('sharepoint');
+        require_once __DIR__ . '/../helpers/ClienteGraph.php';
+        $config = ClienteGraph::configuracion();
+        $archivo = dirname(__DIR__) . '/config/local.graph.php';
+
+        $biblioteca = ['nombre' => '', 'url' => ''];
+        if ($config !== null) {
+            try {
+                $biblioteca = ClienteGraph::desdeConfiguracion()->bibliotecaVisible();
+            } catch (Throwable $e) {
+                // Se enseña el id, como antes.
+            }
+        }
+
+        return [
+            'disponible' => AlmacenDocumentos::disponible(AlmacenDocumentos::SHAREPOINT),
+            'archivo_existe' => is_file($archivo),
+            'biblioteca' => (string) $biblioteca['nombre'],
+            'biblioteca_url' => (string) $biblioteca['url'],
+            'drive_id' => $config === null ? '' : (string) $config['drive_id'],
+            'carpeta' => $config === null ? '' : trim(str_replace('\\', '/', (string) ($config['carpeta'] ?? '')), '/'),
+            'carpeta_anterior' => DocumentoArchivo::raizConfigurada(),
+        ];
     }
 
+    /** La configuración de esta computadora (storage/correo/config.json), para pintar. */
     private function configLocal()
     {
-        $defaults = ['carpeta_destino' => '', 'cuenta_id' => 0];
+        $defaults = ['cuenta_id' => 0];
         $ruta = MailFetcher::storagePath() . DIRECTORY_SEPARATOR . 'config.json';
 
         if (is_file($ruta)) {

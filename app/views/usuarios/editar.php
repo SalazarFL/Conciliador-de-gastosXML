@@ -101,7 +101,7 @@ $tituloPagina = 'Editar a ' . $usuario['nombre'];
         <p style="margin-top:10px;font-size:11.5px;color:var(--text-muted);">
             <i class="fas fa-info-circle" style="color:var(--gold);"></i>
             No puedes cambiar tu propio rol ni desactivar tu cuenta: quedarías fuera
-            de esta misma pantalla y solo se arreglaría desde la base de datos.
+            de esta pantalla.
         </p>
         <?php endif; ?>
 

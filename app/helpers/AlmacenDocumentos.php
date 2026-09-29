@@ -14,16 +14,19 @@
  *
  * De ahí esta puerta. Todo el sistema pregunta acá, y detrás puede haber:
  *
- *   AlmacenEnDisco       Los documentos en el disco del servidor. Rápido, sin
- *                        depender de internet, sin pedirle permisos a nadie.
- *
  *   AlmacenEnGraph       SharePoint por Microsoft Graph: SharePoint es el
- *                        original y no una copia sincronizada. Se activa solo
- *                        en las PC con app/config/local.graph.php; ver
- *                        docs/ALMACENAMIENTO_DOCUMENTOS.md.
+ *                        original y no una copia sincronizada. Es donde se
+ *                        archiva TODO lo nuevo, de todas las empresas, y por
+ *                        eso cada PC necesita app/config/local.graph.php; ver
+ *                        docs/SHAREPOINT.md.
  *
- * Cuál se usa se decide por sociedad y por documento —ver "Cuál se usa", al
- * final—. Por eso la puerta y no un `if` repartido por todos lados.
+ *   AlmacenEnDisco       La carpeta compartida de antes. Ya no se archiva
+ *                        nada ahí: queda para abrir lo que se archivó antes
+ *                        de SharePoint y todavía no se migró
+ *                        (cli/migrar_documentos_a_graph.php).
+ *
+ * Cuál se usa lo dice cada documento —ver "Cuál se usa", al final—. Por eso
+ * la puerta y no un `if` repartido por todos lados.
  *
  * ── Sobre rutaLocal() ──
  *
@@ -388,23 +391,22 @@ abstract class AlmacenDocumentos
     // El almacén no es "dónde está la aplicación": es DÓNDE ESTÁ ESTE
     // DOCUMENTO. Hay dos preguntas distintas y no se pueden confundir:
     //
-    //   ¿Dónde se archiva lo NUEVO de esta sociedad?
-    //       sociedades.almacen_documentos → para($sociedadId)
+    //   ¿Dónde se archiva lo NUEVO?
+    //       En SharePoint, de todas las empresas → principal(), para()
     //
     //   ¿Dónde está ESTE documento ahora mismo?
     //       facturas_xml.almacen (por fila) → paraFila($fila)
     //
-    // Mientras se pasa una sociedad de un almacén a otro, las dos respuestas
-    // discrepan durante horas, y está bien: para leer manda la fila. Sin la
-    // columna por fila, el paso sería todo o nada, sin poder retomarlo a la
-    // mitad ni volver atrás.
+    // Hasta el 27/09/2026 cada empresa elegía entre la carpeta compartida y
+    // SharePoint (sociedades.almacen_documentos). Ya no: la carpeta compartida
+    // dependía de que OneDrive tuviera los archivos bajados en cada PC, y
+    // SharePoint pasó a ser obligatorio. Esa columna quedó en la base, pero
+    // nada la lee.
     //
-    // El ajuste va en la base y no en local.php porque hay varias PC contra la
-    // misma base: con un archivo por máquina, una archivaría en SharePoint lo
-    // que otra archiva en disco, para la misma sociedad, y nadie se enteraría
-    // hasta que faltara un documento. Lo que sí es de cada máquina son las
-    // credenciales; por eso un almacén puede estar "elegido" en la base y no
-    // estar disponible en esta PC —y entonces se dice, no se improvisa—.
+    // Lo que sí sigue: lo archivado ANTES en la carpeta compartida sigue ahí
+    // hasta que se migre, y para leerlo manda la fila, como siempre. Sin la
+    // columna por fila el paso habría sido todo o nada, sin poder retomarlo a
+    // la mitad.
     //
     // Y una vez que una ruta ya salió de la base convertida en dirección, la
     // dirección misma dice a quién pertenece: en disco es absoluta (la raíz de
@@ -420,14 +422,18 @@ abstract class AlmacenDocumentos
     // Y por eso todo lo que se guarda en SharePoint se guarda CON su prefijo,
     // también en facturas_xml: la cadena sola dice dónde están los bytes, y
     // una consulta que no pidió la columna `almacen` no tiene que adivinar.
-    // Lo que NO se hace nunca es deducirlo del ajuste de la sociedad: el
-    // 19/09/2026 se pasó a SharePoint, desde Configuración, una empresa con
-    // 14.043 documentos en disco; el organizador pedía sus filas sin la
-    // columna, las leyó como de SharePoint, no las encontró en el disco, las
-    // marcó a todas "sin archivo" y repuntó 1.580 a las copias de PAGOS.
+    // Lo que NO se hace nunca es deducir dónde está un documento de dónde se
+    // archiva lo nuevo: el 19/09/2026 se pasó a SharePoint, desde
+    // Configuración, una empresa con 14.043 documentos en disco; el
+    // organizador pedía sus filas sin la columna, las leyó como de SharePoint,
+    // no las encontró en el disco, las marcó a todas "sin archivo" y repuntó
+    // 1.580 a las copias de PAGOS.
 
-    /** El valor que el sistema tuvo siempre, y el que significa un NULL. */
+    /** La carpeta compartida de antes: lo que significa un NULL o una ruta sin prefijo. */
     public const DISCO = 'disco';
+
+    /** Donde se archiva todo lo nuevo, de todas las empresas. */
+    public const SHAREPOINT = 'sharepoint';
 
     /** @var AlmacenDocumentos|null Elegido a propósito: manda sobre todo. */
     private static $forzado = null;
@@ -441,26 +447,29 @@ abstract class AlmacenDocumentos
     /** @var array tipo => instancia. Una por tipo, no por sociedad: comparten cliente y token. */
     private static $instancias = [];
 
-    /** @var callable|null Devuelve [sociedad_id => tipo]. */
-    private static $fuenteAjustes = null;
-
-    /** @var array|null [sociedad_id => tipo], y cuándo se leyó. */
-    private static $ajustes = null;
-    private static $ajustesLeidosEn = 0;
-
-    /** Cuánto se confía en el ajuste leído antes de volver a preguntarlo. */
-    private const VIGENCIA_AJUSTES = 60;
-
     /**
-     * El almacén por omisión de esta instalación: el disco, que es lo que la
-     * aplicación viene haciendo desde siempre.
-     *
-     * Es lo que se usa cuando no hay de dónde deducir otra cosa —una fila sin
-     * sociedad, la carpeta de trabajo, una prueba—.
+     * El almacén de lo que no dice dónde está: una fila sin columna `almacen`
+     * o una ruta relativa sin prefijo. Es la carpeta compartida de antes, y
+     * solo para LEER lo que se archivó ahí y todavía no se migró: nada nuevo
+     * va a parar a ella. Para escribir, principal().
      */
     public static function actual()
     {
         return self::$forzado ?? self::tipo(self::DISCO);
+    }
+
+    /**
+     * Donde se archiva todo lo nuevo: la biblioteca de SharePoint.
+     *
+     * Lanza si esta computadora no tiene las credenciales. No hay a dónde
+     * caer: guardar en el disco lo que el resto de las PC busca en SharePoint
+     * es perder el documento sin que nadie se entere.
+     *
+     * @throws RuntimeException Sin app/config/local.graph.php.
+     */
+    public static function principal()
+    {
+        return self::$forzado ?? self::tipo(self::SHAREPOINT);
     }
 
     /**
@@ -484,9 +493,11 @@ abstract class AlmacenDocumentos
             return self::$instancias[$tipo] = new AlmacenEnDisco();
         }
         if (!isset(self::$fabricas[$tipo])) {
+            if ($tipo === self::SHAREPOINT) {
+                throw new RuntimeException(self::SIN_SHAREPOINT);
+            }
             throw new RuntimeException('Esta computadora no está configurada para leer ni escribir '
-                . 'documentos en "' . $tipo . '". Si es SharePoint, falta app/config/local.graph.php '
-                . 'con las credenciales de la aplicación.');
+                . 'documentos en "' . $tipo . '".');
         }
 
         return self::$instancias[$tipo] = (self::$fabricas[$tipo])();
@@ -514,14 +525,15 @@ abstract class AlmacenDocumentos
     }
 
     /**
-     * Dónde se archiva lo nuevo de una sociedad.
+     * Dónde se archiva lo nuevo de una sociedad: SharePoint, sea cual sea.
      *
-     * Es la pregunta de las ESCRITURAS, que es donde equivocarse destruye
-     * datos, así que siempre se le hace a la base.
+     * Recibe la sociedad aunque no la use porque quien escribe la tiene a
+     * mano y es la pregunta que hace; que la respuesta sea la misma para
+     * todas es una decisión de ahora, no de la firma. Ver principal().
      */
     public static function para($sociedadId)
     {
-        return self::tipo(self::tipoDeSociedad($sociedadId));
+        return self::principal();
     }
 
     /**
@@ -532,9 +544,8 @@ abstract class AlmacenDocumentos
      *      es todo lo que se archivó antes de que existiera la columna.
      *   2. Si no la trae, disco: una ruta sin prefijo es de disco.
      *
-     * Nunca el ajuste de la sociedad. Ese ajuste dice dónde va lo NUEVO, y
-     * una empresa pasada a SharePoint sigue teniendo en disco todo lo de
-     * antes hasta que se migra. Ver "Cuál se usa", arriba.
+     * Nunca dónde se archiva lo nuevo: lo que se archivó en la carpeta
+     * compartida sigue ahí hasta que se migra. Ver "Cuál se usa", arriba.
      */
     public static function paraFila(array $fila)
     {
@@ -596,62 +607,23 @@ abstract class AlmacenDocumentos
         }
     }
 
-    /** El tipo elegido para una sociedad ('disco' si no hay otro). */
-    public static function tipoDeSociedad($sociedadId)
+    /**
+     * ¿Esta computadora puede archivar? Es decir, ¿tiene SharePoint? Solo
+     * mira si están las credenciales: no sale a la red, y por eso se puede
+     * preguntar en cada petición.
+     */
+    public static function hayPrincipal()
     {
-        $ajustes = self::ajustes();
-        $tipo = $ajustes[(int) $sociedadId] ?? self::DISCO;
-
-        return self::normalizarTipo($tipo);
+        return self::$forzado !== null || self::disponible(self::SHAREPOINT);
     }
 
     /**
-     * De dónde sale el ajuste de cada sociedad. Por omisión, de la base; las
-     * pruebas le pasan una lista.
+     * Lo que se le dice a quien quiere guardar o abrir un documento en una
+     * computadora sin SharePoint.
      */
-    public static function fijarFuenteAjustes(?callable $fuente)
-    {
-        self::$fuenteAjustes = $fuente;
-        self::$ajustes = null;
-    }
-
-    /** Para que el próximo pedido vuelva a leer el ajuste (tras cambiarlo). */
-    public static function olvidarAjustes()
-    {
-        self::$ajustes = null;
-    }
-
-    private static function ajustes()
-    {
-        // Se relee cada tanto y no una vez por proceso: la tarea programada
-        // corre durante horas, y alguien puede cambiar de almacén una sociedad
-        // a mitad de camino.
-        if (self::$ajustes !== null && time() - self::$ajustesLeidosEn < self::VIGENCIA_AJUSTES) {
-            return self::$ajustes;
-        }
-        self::$ajustesLeidosEn = time();
-        $fuente = self::$fuenteAjustes ?? [self::class, 'ajustesDeLaBase'];
-        try {
-            $leidos = $fuente();
-        } catch (Throwable $e) {
-            // Sin base no se archiva nada de todos modos: la importación que
-            // pidió esto falla en su propio INSERT, un paso más allá.
-            $leidos = [];
-        }
-
-        return self::$ajustes = is_array($leidos) ? $leidos : [];
-    }
-
-    /** [sociedad_id => tipo], o [] si la columna todavía no existe. */
-    private static function ajustesDeLaBase()
-    {
-        if (!class_exists('Sociedad')) {
-            require_once dirname(__DIR__) . '/core/Model.php';
-            require_once dirname(__DIR__) . '/models/Sociedad.php';
-        }
-
-        return (new Sociedad())->almacenesPorSociedad();
-    }
+    public const SIN_SHAREPOINT = 'Esta computadora no tiene SharePoint configurado, y los XML y PDF de todas '
+        . 'las empresas se guardan ahí. Falta app/config/local.graph.php: ver Configuración → Archivo de '
+        . 'documentos, o docs/SHAREPOINT.md.';
 
     private static function normalizarTipo($tipo)
     {
@@ -666,6 +638,14 @@ abstract class AlmacenDocumentos
      * Hoy es solo SharePoint, y solo si existe app/config/local.graph.php con
      * las credenciales. Mirarlo cuesta un is_file(); el cliente y el token se
      * crean recién cuando alguien pide el almacén.
+     *
+     * Contra una base aislada —la de las pruebas y la certificación, que por
+     * regla lleva "test" o "cert" en el nombre (scripts/verificar-php84.ps1)—
+     * la biblioteca de verdad NO se da de alta: sus filas son de usar y tirar,
+     * y lo que subieran quedaría huérfano en la biblioteca de la empresa. Una
+     * prueba que archiva sin elegir almacén falla con "no tiene SharePoint" en
+     * vez de escribir ahí. Quien quiera, a propósito, correr una prueba contra
+     * la biblioteca real lo pide con XMLCONCILIA_SHAREPOINT_REAL=1.
      */
     private static function descubrir()
     {
@@ -675,6 +655,9 @@ abstract class AlmacenDocumentos
         self::$porDescubrir = false;
         if (isset(self::$fabricas['sharepoint'])
             || !is_file(dirname(__DIR__) . '/config/local.graph.php')) {
+            return;
+        }
+        if (self::baseAislada() && getenv('XMLCONCILIA_SHAREPOINT_REAL') !== '1') {
             return;
         }
         require_once __DIR__ . '/ClienteGraph.php';
@@ -687,6 +670,17 @@ abstract class AlmacenDocumentos
 
             return new AlmacenEnGraph(new ClienteGraph($config), $config);
         };
+    }
+
+    /** ¿Esta computadora está apuntando a una base de pruebas o de certificación? */
+    private static function baseAislada()
+    {
+        try {
+            $base = (string) ((require dirname(__DIR__) . '/config/database.php')['database'] ?? '');
+        } catch (Throwable $e) {
+            return false;
+        }
+        return (bool) preg_match('/test|cert/i', $base);
     }
 
     /** Para las pruebas y para elegirlo a propósito: manda sobre todo lo demás. */
@@ -706,7 +700,5 @@ abstract class AlmacenDocumentos
         self::$forzado = null;
         self::$fabricas = [];
         self::$instancias = [];
-        self::$ajustes = null;
-        self::$fuenteAjustes = null;
     }
 }

@@ -61,11 +61,18 @@ class CorreoLote extends Model
      * la estructura MIME no debe perderse; el worker lo verifica al abrirlo.
      * Parámetros esperados, en orden: cuenta_id, timestamp desde, hasta.
      */
+    /**
+     * Las carpetas que ningún lote mira. Pública porque la comprobación de
+     * "¿está leído todo el buzón?" tiene que ignorar exactamente las mismas:
+     * una Papelera sin leer no deja nada fuera de un lote que no la mira.
+     */
+    public const CARPETAS_FUERA_DEL_LOTE = '(spam|junk|borrador|draft|sent|enviado|trash|papelera)';
+
     private const CONDICIONES_CANDIDATO =
         "i.cuenta_id = ?
          AND i.timestamp >= ? AND i.timestamp < ?
          AND (i.adjuntos IS NULL OR LOWER(i.adjuntos) REGEXP '\\.(xml|zip)([[:space:]]|$)')
-         AND LOWER(i.carpeta) NOT REGEXP '(spam|junk|borrador|draft|sent|enviado|trash|papelera)'";
+         AND LOWER(i.carpeta) NOT REGEXP '" . self::CARPETAS_FUERA_DEL_LOTE . "'";
 
     /**
      * ¿Este correo ya se procesó en una corrida anterior?

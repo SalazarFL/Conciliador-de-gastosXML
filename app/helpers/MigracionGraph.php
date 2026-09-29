@@ -2,6 +2,10 @@
 /**
  * Pasa los documentos de UNA empresa de la carpeta compartida a SharePoint.
  *
+ * Desde el 27/09/2026 todo lo nuevo se archiva en SharePoint; esto es para
+ * lo que se archivó ANTES en la carpeta compartida. Cuando termina con todas
+ * las empresas, la carpeta compartida deja de hacer falta del todo.
+ *
  * Cinco pasos, cada uno re-ejecutable y cada uno por su cuenta:
  *
  *   inventario  lee la BASE (no el árbol): qué archivos tiene la empresa en
@@ -12,14 +16,15 @@
  *               que la base archivó.
  *   verificar   de a 20 por llamada: tamaño y hash declarado. Con --muestreo
  *               además baja unos cuantos y los rehashea de verdad.
- *   reescribir  pone `almacen` y los ids en cada fila, sin tocar su ruta, y
- *               al final —solo si no queda nada pendiente— cambia el ajuste
- *               de la empresa. Ese orden es la razón de la columna por fila:
- *               mientras dura, cada documento se lee de donde está.
- *   revertir    todo a disco. Instantáneo y sin pérdida porque NADA de esto
- *               borra el original del disco. Lo que se archivó en SharePoint
- *               después del corte no tiene original en disco: hay que pedir
- *               --bajando, y se baja ANTES de tocar ninguna fila.
+ *   reescribir  pone `almacen` y los ids en cada fila, sin tocar su ruta.
+ *               Esa es la razón de la columna por fila: mientras dura, cada
+ *               documento se lee de donde está.
+ *   revertir    un rescate, no un camino de vuelta: devuelve las filas a su
+ *               ruta de la carpeta compartida. Instantáneo y sin pérdida
+ *               porque NADA de esto borra el original del disco. Lo que se
+ *               archivó en SharePoint después no tiene original en disco:
+ *               hay que pedir --bajando, y se baja ANTES de tocar ninguna
+ *               fila. Lo nuevo sigue yendo a SharePoint igual.
  *
  * El avance vive en almacen_migracion (ver AlmacenMigracion): se puede cortar
  * en cualquier momento y retomar desde cualquier PC.
@@ -31,7 +36,6 @@
 require_once __DIR__ . '/AlmacenEnGraph.php';
 require_once __DIR__ . '/RutaDocumento.php';
 require_once __DIR__ . '/../models/AlmacenMigracion.php';
-require_once __DIR__ . '/../models/Sociedad.php';
 
 class MigracionGraph
 {
@@ -294,9 +298,11 @@ class MigracionGraph
             $this->avisar('reescritura', $r['filas_pasadas']);
         }
 
+        // 'empresa_cortada': ya no queda nada de la empresa en la carpeta
+        // compartida. Antes, además, pasaba la empresa a archivar en
+        // SharePoint; ahora todas archivan ahí desde el principio.
         $falta = $this->faltaParaCortar();
         if ($falta === '') {
-            (new Sociedad())->definirAlmacen($this->sociedadId, AlmacenEnGraph::TIPO);
             $r['empresa_cortada'] = true;
         } else {
             $r['falta_para_cortar'] = $falta;
@@ -305,7 +311,8 @@ class MigracionGraph
     }
 
     /**
-     * Por qué todavía no se puede pasar la empresa, o '' si ya se puede.
+     * Por qué todavía queda algo de la empresa fuera de SharePoint, o '' si
+     * ya no queda nada.
      *
      * Hace falta que no quede nada a medias y que no haya documentos en disco
      * que el inventario no conozca —los que entraron mientras se migraba—.
@@ -413,8 +420,6 @@ class MigracionGraph
             return $r;
         }
 
-        // Lo nuevo va a disco desde ya; después, fila por fila.
-        (new Sociedad())->definirAlmacen($this->sociedadId, AlmacenDocumentos::DISCO);
         $this->registro->begin();
         try {
             foreach ($plan as $entrada) {
@@ -434,7 +439,6 @@ class MigracionGraph
     public function estado()
     {
         return [
-            'empresa_en' => AlmacenDocumentos::tipoDeSociedad($this->sociedadId),
             'archivos' => $this->registro->resumen($this->sociedadId),
             'filas_en_sharepoint' => count($this->registro->documentosEnNube($this->sociedadId)),
             'falta_para_cortar' => $this->faltaParaCortar(),

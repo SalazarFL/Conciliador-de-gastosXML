@@ -136,15 +136,18 @@ try {
         $nube, ['carpeta_estado' => null, 'registro' => null]));
     AlmacenDocumentos::olvidar();
     AlmacenDocumentos::registrar('sharepoint', function () use ($graph) { return $graph; });
-    AlmacenDocumentos::fijarFuenteAjustes(function () { return [3 => 'sharepoint']; });
     RutaDocumento::fijarRaiz($raiz);
 
-    // La empresa ya se pasó a SharePoint, pero el XML llegó antes: está en disco.
+    // El XML llegó antes de SharePoint y quedó en la carpeta compartida. Su
+    // PDF, que llega ahora, no se escribe allá —ahí ya no se archiva nada—:
+    // va a SharePoint con el nombre del XML, y su ruta lleva el prefijo.
     $archivo = (new DocumentoArchivo($raiz))->paraSociedad(3, 'Empresa');
-    $r = $archivo->archivarPdfPara(['ruta_xml' => $xmlEnDisco], $pdf);
-    comprobarFila(is_file($raiz . DIRECTORY_SEPARATOR . 'SISTEMA' . DIRECTORY_SEPARATOR . 'FE_1.pdf')
-        && $r['item_pdf_id'] === '' && $nube->llamadas === 0,
-        'el PDF se archiva al lado de su XML, en disco, aunque la empresa ya esté en SharePoint');
+    $r = $archivo->archivarPdfPara(['ruta_xml' => $xmlEnDisco, 'fecha_emision' => '2026-07-25',
+        'tipo_documento' => 'FE'], $pdf);
+    comprobarFila(!is_file($raiz . DIRECTORY_SEPARATOR . 'SISTEMA' . DIRECTORY_SEPARATOR . 'FE_1.pdf')
+        && strpos($r['ruta_pdf'], 'sharepoint:SISTEMA/') === 0
+        && basename(str_replace('\\', '/', $r['ruta_pdf'])) === 'FE_1.pdf' && $r['item_pdf_id'] !== '',
+        'el PDF de un XML de la carpeta de antes va a SharePoint, con el nombre del XML: ' . $r['ruta_pdf']);
 
     // Y al revés: un XML de SharePoint lleva su PDF a SharePoint.
     $local = tempnam(sys_get_temp_dir(), 'xml');

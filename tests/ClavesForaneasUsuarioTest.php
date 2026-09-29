@@ -1,12 +1,12 @@
 <?php
 /**
- * Las diecisiete referencias a `usuarios` están amarradas de verdad.
+ * Las dieciocho referencias a `usuarios` están amarradas de verdad.
  *
  * Durante mucho tiempo no se pudieron amarrar: `usuarios.id` era INT(11) con
- * signo y las diecisiete columnas que lo referencian son INT UNSIGNED, y a
+ * signo y las dieciocho columnas que lo referencian son INT UNSIGNED, y a
  * InnoDB los tipos le tienen que coincidir. El resultado era que se podía
  * escribir un id de usuario inventado, y que borrar a una persona dejaba sus
- * diecisiete rastros apuntando al vacío sin que nada avisara.
+ * dieciocho rastros apuntando al vacío sin que nada avisara.
  *
  * `database/migration_usuarios_id_unsigned.sql` cambia el tipo del padre y
  * crea las claves. Esta prueba comprueba que siga siendo verdad, porque es un
@@ -17,7 +17,7 @@
  * Se comprueban tres cosas distintas, y las tres hacen falta:
  *
  *   1. Que el tipo del padre siga sin signo. Es lo que permite todo lo demás.
- *   2. Que las diecisiete claves existan CON SU REGLA DE BORRADO. Una clave
+ *   2. Que las dieciocho claves existan CON SU REGLA DE BORRADO. Una clave
  *      con la regla equivocada es peor que ninguna: un CASCADE donde iba un
  *      SET NULL borra la carga entera cuando se da de baja a quien la hizo.
  *   3. Que funcionen de verdad, no solo que estén declaradas. Se crea un
@@ -63,6 +63,7 @@ $esperadas = [
     ['proveedor_alias',                'creado_por',     'SET NULL'],
     ['proveedor_cedula_ignorada',      'usuario_id',     'SET NULL'],
     ['proveedor_codigo_erp',           'confirmado_por', 'SET NULL'],
+    ['proveedor_codigo_tambien',       'usuario_id',     'SET NULL'],
     ['seguimiento_bitacora',           'usuario_id',     'SET NULL'],
 ];
 
@@ -90,11 +91,11 @@ $tipo = $pdo->query(
 comprobarFk(
     stripos((string) $tipo, 'unsigned') !== false,
     "usuarios.id volvió a tener signo ({$tipo}). Sin eso ninguna de las "
-    . 'diecisiete claves se puede crear: aplica database/migration_usuarios_id_unsigned.sql.'
+    . 'dieciocho claves se puede crear: aplica database/migration_usuarios_id_unsigned.sql.'
 );
 
 // Si el tipo está mal, las claves no pueden existir y el resto del informe
-// sería ruido repetido diecisiete veces.
+// sería ruido repetido dieciocho veces.
 if ($fallas) {
     foreach ($fallas as $f) {
         fwrite(STDERR, "FAIL: {$f}\n");
@@ -103,7 +104,7 @@ if ($fallas) {
 }
 
 // ---------------------------------------------------------------------
-// 2. Las diecisiete, con su regla
+// 2. Las dieciocho, con su regla
 // ---------------------------------------------------------------------
 $declaradas = [];
 $filas = $pdo->query(

@@ -226,10 +226,15 @@ hay con qué iniciar sesión y el script fallaría al cierre.
 
 ### 9. Los documentos
 
-Los XML y PDF no están en la base. Si esta computadora sincroniza SharePoint,
-entrar a la aplicación → **Correo** → *Carpeta de documentos* y escribir la
-ruta local. Si no lo sincroniza, la aplicación funciona igual y los documentos
-aparecen como no encontrados: para probar la conciliación alcanza.
+Los XML y PDF no están en la base: viven en SharePoint. Para guardarlos y
+abrirlos desde esta computadora hace falta `app/config/local.graph.php` (ver
+[SHAREPOINT.md](SHAREPOINT.md)). Sin él la aplicación arranca, pero Correo,
+Facturas XML, Notas XML, Devoluciones y Por pagar aparecen cerrados; para
+probar la conciliación alcanza con el resto.
+
+> **Ojo:** con las credenciales puestas, la copia local abre los documentos de
+> verdad. Lo que se borre o se reemplace desde ella se borra o se reemplaza en
+> SharePoint, para todos.
 
 ### 10. Comprobar
 

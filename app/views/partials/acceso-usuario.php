@@ -59,12 +59,11 @@ if ($alcance !== 'todas' && $alcance !== 'algunas') {
             <?php endif; ?>
         </div>
         <p class="acc-ayuda">
-            El rol es lo que decide a qué módulos entra y qué puede hacer dentro de
-            cada uno. Se arman en
+            Decide a qué módulos entra y qué hace en cada uno. Se arman en
             <a href="<?= (defined('APP_URL') ? APP_URL : '') ?>/configuracion?ir=roles">Configuración → Roles</a>.
             <?php if ($isSelf): ?>
-            <br><strong>No puedes cambiar tu propio rol:</strong> si te quitaras un
-            permiso que estás usando, te quedarías fuera de esta misma pantalla.
+            <br><strong>No puedes cambiar tu propio rol:</strong> te quedarías fuera
+            de esta pantalla.
             <?php endif; ?>
         </p>
     </div>
@@ -86,10 +85,8 @@ if ($alcance !== 'todas' && $alcance !== 'algunas') {
             </label>
         </div>
         <p class="acc-ayuda">
-            Hay que elegir una de las dos: es lo que decide con qué empresas
-            trabaja esta persona —en los listados, en el selector de Inicio y en
-            lo que se importa—. Con "solo las que se marquen" hay que marcar al
-            menos una. Los administradores las ven todas de cualquier forma.
+            Con qué empresas trabaja esta persona. Con "solo las que se marquen"
+            hay que marcar al menos una. Los administradores las ven todas.
         </p>
     </div>
 

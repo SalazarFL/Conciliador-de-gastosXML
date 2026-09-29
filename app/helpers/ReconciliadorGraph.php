@@ -35,6 +35,20 @@
  * Tampoco lo hace el organizador en la tarea programada: lo que no está en la
  * base se queda donde lo pusieron.
  *
+ * ── Con Nexo Fiscal en una carpeta ──
+ *
+ * Si Nexo Fiscal vive en una carpeta de una biblioteca que ya se usaba (ver
+ * ClienteGraph::carpeta()), los cambios se piden sobre esa carpeta y no sobre
+ * la biblioteca, y las rutas que da SharePoint —siempre desde la raíz— se
+ * pasan a relativas a la carpeta. Un documento que alguien sacó de la carpeta
+ * cuenta como borrado: para Nexo Fiscal ya no está, y si lo devuelven, la
+ * próxima vuelta lo encuentra por su id.
+ *
+ * SharePoint no siempre da el enlace de cambios de una carpeta —con permiso
+ * solo sobre ella, o en bibliotecas donde solo lo da de la raíz—. Entonces se
+ * sigue sin él: la revisión rotativa pasa a repasar más filas por vuelta y es
+ * la que se entera de todo, algo más tarde. Se vuelve a probar cada seis horas.
+ *
  * Corre con un candado en la base: varias PC tienen la tarea programada y el
  * enlace de cambios es uno solo.
  */
@@ -50,6 +64,16 @@ class ReconciliadorGraph
 {
     /** Filas que se repasan por id en cada vuelta: diez llamadas en lote. */
     public const LOTE_REVISION = 100;
+
+    /**
+     * Sin enlace de cambios, la rotativa es la única que se entera de lo que
+     * pasa en la biblioteca: repasa más por vuelta —treinta llamadas en lote,
+     * unos quince segundos— para dar la vuelta entera en pocas horas.
+     */
+    public const LOTE_REVISION_SIN_CAMBIOS = 300;
+
+    /** Cada cuánto se vuelve a probar si SharePoint da el enlace de cambios. */
+    private const REPROBAR_CAMBIOS = 21600;
 
     /** Páginas de cambios por vuelta. Lo que sobre queda para la siguiente. */
     public const MAX_PAGINAS_DELTA = 50;
@@ -84,6 +108,16 @@ class ReconciliadorGraph
     /** Las filas ya revisadas en esta vuelta: la rotativa no las repite. */
     private $revisadas = [];
 
+    /**
+     * La ruta de la carpeta de Nexo Fiscal desde la raíz de la biblioteca,
+     * como la tiene SharePoint en esta vuelta ('' = la biblioteca entera;
+     * null = la de la configuración, porque no se pudo preguntar).
+     */
+    private $rutaCarpeta = null;
+
+    /** El id de la carpeta, para no tratarla como un cambio más. */
+    private $idCarpeta = '';
+
     public function __construct(AlmacenEnGraph $almacen, $facturas = null, $delta = null, $copias = null)
     {
         $this->almacen = $almacen;
@@ -99,19 +133,13 @@ class ReconciliadorGraph
     }
 
     /**
-     * ¿Hay algo que vigilar? Sin ninguna empresa en SharePoint ni documentos
-     * allá, la tarea no tiene por qué salir a la red.
+     * ¿Hay algo que vigilar? Siempre que esta computadora llegue a
+     * SharePoint: todas las empresas archivan ahí. Sin credenciales no hay
+     * con qué preguntar, y eso lo dice Diagnóstico, no la tarea.
      */
     public static function hayQueCorrer()
     {
-        if (!AlmacenDocumentos::disponible(AlmacenEnGraph::TIPO)) {
-            return false;
-        }
-        require_once __DIR__ . '/../models/Sociedad.php';
-        if (in_array(AlmacenEnGraph::TIPO, (new Sociedad())->almacenesPorSociedad(), true)) {
-            return true;
-        }
-        return (bool) (new Factura())->getEnAlmacen(AlmacenEnGraph::TIPO, 0, 1);
+        return AlmacenDocumentos::disponible(AlmacenEnGraph::TIPO);
     }
 
     public function ejecutar($dryRun = false)
@@ -122,6 +150,7 @@ class ReconciliadorGraph
             'cambios_leidos' => 0,
             'delta_iniciado' => false,
             'delta_reiniciado' => false,
+            'sin_enlace_de_cambios' => false,
             'carpetas_recorridas' => 0,
             'documentos_revisados' => 0,
             'rutas_actualizadas' => 0,
@@ -148,8 +177,11 @@ class ReconciliadorGraph
             return $r;
         }
         try {
-            $driveId = $this->graph->driveId();
-            $estado = $this->delta->leer(AlmacenEnGraph::TIPO, $driveId);
+            // El enlace de cambios vale para una biblioteca y una carpeta: si
+            // cambia cualquiera de las dos, se empieza de nuevo.
+            $alcance = $this->graph->alcance();
+            $estado = $this->delta->leer(AlmacenEnGraph::TIPO, $alcance);
+            $this->conocerLaCarpeta();
 
             // 1-3. Lo que cambió.
             $cambios = $this->leerCambios((string) $estado['delta_link'], $r);
@@ -162,17 +194,17 @@ class ReconciliadorGraph
             }
 
             // 4. La revisión rotativa.
-            $filas = $this->facturas->getEnAlmacen(AlmacenEnGraph::TIPO, (int) $estado['cursor_revision'],
-                self::LOTE_REVISION);
+            $lote = $r['sin_enlace_de_cambios'] ? self::LOTE_REVISION_SIN_CAMBIOS : self::LOTE_REVISION;
+            $filas = $this->facturas->getEnAlmacen(AlmacenEnGraph::TIPO, (int) $estado['cursor_revision'], $lote);
             $this->revisarFilas($filas, $dryRun, $r);
-            $cursor = count($filas) < self::LOTE_REVISION ? 0 : (int) end($filas)['id'];
+            $cursor = count($filas) < $lote ? 0 : (int) end($filas)['id'];
             $r['vuelta_completa'] = $cursor === 0;
 
             // 5. Las copias de pago.
             $this->copiasDePago($dryRun, $r);
 
             if (!$dryRun) {
-                $this->delta->guardar(AlmacenEnGraph::TIPO, $driveId, $cambios['enlace'], $cursor, $r['vuelta_completa']);
+                $this->delta->guardar(AlmacenEnGraph::TIPO, $alcance, $cambios['enlace'], $cursor, $r['vuelta_completa']);
             }
         } finally {
             if ($candado === true) {
@@ -196,11 +228,23 @@ class ReconciliadorGraph
     {
         $salida = ['archivos' => [], 'carpetas' => [], 'enlace' => $enlace, 'reiniciar_revision' => false];
 
+        // SharePoint ya dijo que no da el enlace de cambios de este alcance:
+        // no se pregunta en cada vuelta, solo cada tanto.
+        if ($this->graph->recordado('sin_cambios_' . $this->claveAlcance(), self::REPROBAR_CAMBIOS) === true) {
+            $r['sin_enlace_de_cambios'] = true;
+            return $salida;
+        }
+
         if ($enlace === '') {
             // La primera vez se empieza desde ahora, no desde el principio: la
             // enumeración inicial sería la biblioteca entera, y lo que ya
             // estaba lo cubre la revisión rotativa.
-            $salida['enlace'] = $this->enlaceDesdeAhora();
+            $nuevo = $this->enlaceDesdeAhora();
+            if ($nuevo === null) {
+                $r['sin_enlace_de_cambios'] = true;
+                return $salida;
+            }
+            $salida['enlace'] = $nuevo;
             $r['delta_iniciado'] = true;
             return $salida;
         }
@@ -214,12 +258,16 @@ class ReconciliadorGraph
                 // ahora y la revisión rotativa arranca de nuevo, desde el
                 // principio, para no perderse nada.
                 $r['delta_reiniciado'] = true;
-                return ['archivos' => [], 'carpetas' => [], 'enlace' => $this->enlaceDesdeAhora(),
+                $nuevo = $this->enlaceDesdeAhora();
+                $r['sin_enlace_de_cambios'] = $nuevo === null;
+                return ['archivos' => [], 'carpetas' => [], 'enlace' => (string) $nuevo,
                         'reiniciar_revision' => true];
             }
             foreach (($resp['json']['value'] ?? []) as $item) {
                 $id = (string) ($item['id'] ?? '');
-                if ($id === '' || isset($item['root'])) {
+                // La raíz, o la carpeta de Nexo Fiscal misma: cambia cada vez
+                // que cambia algo adentro, y lo de adentro ya viene en la lista.
+                if ($id === '' || isset($item['root']) || ($this->idCarpeta !== '' && $id === $this->idCarpeta)) {
                     continue;
                 }
                 $r['cambios_leidos']++;
@@ -239,14 +287,55 @@ class ReconciliadorGraph
         return $salida;
     }
 
+    /**
+     * El enlace de cambios desde ahora, de la biblioteca o de la carpeta de
+     * Nexo Fiscal. null si SharePoint no lo da para ese alcance: el de una
+     * carpeta no siempre existe (contesta 400 o 501), y con permiso solo
+     * sobre la carpeta el de la biblioteca tampoco (403). Un fallo de red, en
+     * cambio, sube: no es un "no", es un "ahora no".
+     */
     private function enlaceDesdeAhora()
     {
-        $resp = $this->graph->pedir('GET', $this->graph->unidad() . '/root/delta?token=latest');
+        try {
+            $resp = $this->graph->pedir('GET', $this->graph->raizApi() . '/delta?token=latest');
+        } catch (ErrorGraph $e) {
+            if (!in_array($e->codigoHttp(), [400, 403, 404, 405, 501], true)) {
+                throw $e;
+            }
+            $this->graph->recordar('sin_cambios_' . $this->claveAlcance(), true);
+            return null;
+        }
         $enlace = (string) ($resp['json']['@odata.deltaLink'] ?? '');
         if ($enlace === '') {
             throw new RuntimeException('SharePoint no devolvió el enlace de cambios de la biblioteca.');
         }
+        $this->graph->recordar('sin_cambios_' . $this->claveAlcance(), null);
         return $enlace;
+    }
+
+    /** Lo que se recuerda del enlace de cambios vale para una carpeta, no para otra. */
+    private function claveAlcance()
+    {
+        return substr(md5($this->graph->alcance()), 0, 12);
+    }
+
+    /**
+     * Averigua, una vez por vuelta, dónde está hoy la carpeta de Nexo
+     * Fiscal. Las rutas que devuelve SharePoint son desde la raíz de la
+     * biblioteca, y para pasarlas a relativas hay que saber qué quitarles: si
+     * alguien renombró la carpeta, la ruta de la configuración ya no sirve y
+     * todo parecería fuera de ella.
+     */
+    private function conocerLaCarpeta()
+    {
+        $this->rutaCarpeta = null;
+        $this->idCarpeta = '';
+        if ($this->graph->carpeta() === '') {
+            $this->rutaCarpeta = '';
+            return;
+        }
+        $this->idCarpeta = $this->graph->idCarpeta();
+        $this->rutaCarpeta = $this->almacen->rutaActualDeLaCarpeta();
     }
 
     /**
@@ -272,7 +361,7 @@ class ReconciliadorGraph
                 continue;
             }
             $ruta = $this->rutaDe($resp['json']);
-            if ($ruta === null || $this->fueraDelArchivo($ruta)
+            if (!is_string($ruta) || $this->fueraDelArchivo($ruta)
                 || $this->facturas->hayEnCarpeta(AlmacenEnGraph::TIPO, AlmacenEnGraph::PREFIJO . $ruta)) {
                 continue;
             }
@@ -349,6 +438,13 @@ class ReconciliadorGraph
                     continue;
                 }
                 $ruta = $codigo === 200 && is_array($resp['json']) ? $this->rutaDe($resp['json']) : null;
+                if ($ruta === false) {
+                    // Lo sacaron de la carpeta de Nexo Fiscal: para el
+                    // sistema es como si lo hubieran borrado. Si lo devuelven,
+                    // la próxima vuelta lo encuentra por su id y lo desmarca.
+                    $falta = true;
+                    continue;
+                }
                 if ($ruta === null) {
                     // Sin respuesta clara —un 429 que no alcanzó, un 503— no
                     // se decide nada: la próxima vuelta lo vuelve a pedir.
@@ -510,9 +606,15 @@ class ReconciliadorGraph
     }
 
     /**
-     * La ruta dentro de la biblioteca de un driveItem pedido por id, o null si
-     * la respuesta no la trae. SharePoint la da en parentReference.path como
-     * '/drives/{id}/root:/SISTEMA/EMPRESA', con cada tramo codificado.
+     * La ruta de un driveItem pedido por id, relativa a donde vive Nexo
+     * Fiscal —la biblioteca o su carpeta—.
+     *
+     * SharePoint la da en parentReference.path como
+     * '/drives/{id}/root:/SISTEMA/EMPRESA', desde la raíz de la biblioteca y
+     * con cada tramo codificado.
+     *
+     * @return string|false|null La ruta; false si el documento está fuera de
+     *         la carpeta de Nexo Fiscal; null si la respuesta no la trae.
      */
     private function rutaDe(array $item)
     {
@@ -526,7 +628,9 @@ class ReconciliadorGraph
             return null;
         }
         $carpeta = trim(rawurldecode(substr($padre, $pos + 5)), '/');
-        return ltrim($carpeta . '/' . $nombre, '/');
+        $relativa = $this->graph->relativaALaCarpeta(ltrim($carpeta . '/' . $nombre, '/'), $this->rutaCarpeta);
+
+        return $relativa === null || $relativa === '' ? false : $relativa;
     }
 
     private function fueraDelArchivo($ruta)

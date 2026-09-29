@@ -11,7 +11,7 @@ $sucursales        = is_array($sucursales ?? null) ? $sucursales : [];
 $pagoFiltro        = (int) ($pagoFiltro ?? 0);
 $sinCoincidencia = (int) ($sinCoincidencia ?? 0);
 $filtros = array_replace([
-    'q' => '', 'proveedor' => '', 'sucursal' => '', 'estado' => '', 'vinculo' => '',
+    'q' => '', 'proveedor' => '', 'sucursal' => '', 'estado' => '', 'vinculo' => '', 'notas' => '',
     'fecha_desde' => '', 'fecha_hasta' => '', 'monto' => '', 'saldo' => '',
 ], is_array($filtros ?? null) ? $filtros : []);
 $filtrosQuery = array_filter($filtros, function ($valor) { return $valor !== '' && $valor !== null; });
@@ -143,7 +143,7 @@ function ppFecha($f) {
                 <option value="<?= htmlspecialchars($carpeta) ?>"></option>
                 <?php endforeach; ?>
             </datalist>
-            <div class="pp-campo-ayuda">Dentro de PAGOS. Puedes elegir una existente o escribir una nueva.</div>
+            <div class="pp-campo-ayuda">Dentro de PAGOS. Elegí una o escribí otra.</div>
         </div>
         <div class="pp-acciones">
             <button type="submit" class="btn btn-primary btn-sm" id="pp-btn-subir">
@@ -292,8 +292,7 @@ function ppUpdateFileDisplay(input) {
 
         <div id="ppl-pie" style="padding:9px 17px;background:#f8fafc;border-top:1px solid var(--border);font-size:11px;color:var(--text-muted);line-height:1.5;">
             <i class="fas fa-circle-info" style="margin-right:4px;"></i>
-            No cierres esta pestaña ni vuelvas a darle al botón: la carga sigue en el servidor y al
-            terminar te lleva sola al pago.
+            No cierres esta pestaña ni repitas el botón. Al terminar te lleva sola al pago.
         </div>
     </div>
 </div>
@@ -344,7 +343,7 @@ function ppUpdateFileDisplay(input) {
             <i class="fas fa-table-list" style="color:var(--gold);font-size:16px;"></i>
             <div style="flex:1;min-width:0;">
                 <div style="font-size:15px;font-weight:800;color:var(--navy);">Formato del archivo esperado</div>
-                <div style="font-size:12px;color:var(--text-muted);">CSV o XLSX — se aceptan dos formatos; el sistema detecta solo cuál es</div>
+                <div style="font-size:12px;color:var(--text-muted);">CSV o XLSX. El sistema detecta solo cuál de los dos es.</div>
             </div>
             <button type="button" onclick="ppCerrarFormato()" style="background:none;border:none;font-size:20px;color:#94a3b8;cursor:pointer;line-height:1;">&times;</button>
         </div>
@@ -393,25 +392,25 @@ function ppUpdateFileDisplay(input) {
             <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px;">
                 <div style="display:flex;gap:10px;align-items:flex-start;">
                     <code style="background:var(--navy);color:#fff;padding:2px 8px;border-radius:5px;font-size:11.5px;font-weight:700;flex-shrink:0;">Fecha</code>
-                    <span style="font-size:12.5px;color:var(--text-muted);">Fecha de la factura. Solo informativa: <strong>no se compara</strong> al conciliar.</span>
+                    <span style="font-size:12.5px;color:var(--text-muted);">Informativa: <strong>no se compara</strong>.</span>
                 </div>
                 <div style="display:flex;gap:10px;align-items:flex-start;">
                     <code style="background:var(--navy);color:#fff;padding:2px 8px;border-radius:5px;font-size:11.5px;font-weight:700;flex-shrink:0;">Numero</code>
-                    <span style="font-size:12.5px;color:var(--text-muted);">Número o clave de la factura. Es lo que se busca contra las facturas del sistema.</span>
+                    <span style="font-size:12.5px;color:var(--text-muted);">Número o clave. Es lo que se busca contra las facturas.</span>
                 </div>
                 <div style="display:flex;gap:10px;align-items:flex-start;">
                     <code style="background:var(--navy);color:#fff;padding:2px 8px;border-radius:5px;font-size:11.5px;font-weight:700;flex-shrink:0;">Proveedor</code>
-                    <span style="font-size:12.5px;color:var(--text-muted);">Nombre del proveedor. Sirve de referencia visual en el listado.</span>
+                    <span style="font-size:12.5px;color:var(--text-muted);">Nombre del proveedor. Solo referencia.</span>
                 </div>
                 <div style="display:flex;gap:10px;align-items:flex-start;">
                     <code style="background:var(--navy);color:#fff;padding:2px 8px;border-radius:5px;font-size:11.5px;font-weight:700;flex-shrink:0;">Total</code>
-                    <span style="font-size:12.5px;color:var(--text-muted);">Monto <strong>en colones</strong>. Se compara contra el total de la factura respaldo.</span>
+                    <span style="font-size:12.5px;color:var(--text-muted);">Monto <strong>en colones</strong>. Se compara contra el respaldo.</span>
                 </div>
             </div>
 
             <div style="margin-top:9px;background:var(--gold-pale, #fffbeb);border:1px solid var(--gold-light, #fde68a);border-radius:8px;padding:7px 9px;font-size:11.5px;color:#78350f;display:flex;gap:7px;align-items:flex-start;">
                 <i class="fas fa-lightbulb" style="color:var(--gold-dark);margin-top:2px;"></i>
-                <span>Los encabezados deben llamarse exactamente <code>Fecha</code>, <code>Numero</code>, <code>Proveedor</code> y <code>Total</code>. El orden de las columnas no importa.</span>
+                <span>Los encabezados, exactamente <code>Fecha</code>, <code>Numero</code>, <code>Proveedor</code> y <code>Total</code>. El orden no importa.</span>
             </div>
 
             <!-- ── Formato 2: reporte agrupado del sistema de la empresa ── -->
@@ -457,21 +456,21 @@ function ppUpdateFileDisplay(input) {
             <div style="margin-top:9px;display:flex;flex-direction:column;gap:6px;">
                 <div style="display:flex;gap:10px;align-items:flex-start;">
                     <code style="background:var(--navy);color:#fff;padding:2px 8px;border-radius:5px;font-size:11.5px;font-weight:700;flex-shrink:0;">Proveedor…</code>
-                    <span style="font-size:12.5px;color:var(--text-muted);">La línea <strong>"Proveedor &lt;código&gt; &lt;nombre&gt;"</strong> abre un grupo: las facturas de abajo toman ese proveedor.</span>
+                    <span style="font-size:12.5px;color:var(--text-muted);">Abre un grupo: las facturas de abajo toman ese proveedor.</span>
                 </div>
                 <div style="display:flex;gap:10px;align-items:flex-start;">
                     <code style="background:var(--navy);color:#fff;padding:2px 8px;border-radius:5px;font-size:11.5px;font-weight:700;flex-shrink:0;">FACT-…</code>
-                    <span style="font-size:12.5px;color:var(--text-muted);">De cada fila de documento se toman el <strong>número</strong>, la <strong>primera fecha</strong> (emisión) y el <strong>monto</strong>. La fecha de vencimiento se ignora.</span>
+                    <span style="font-size:12.5px;color:var(--text-muted);">Se toman <strong>número</strong>, <strong>primera fecha</strong> (emisión) y <strong>monto</strong>. El vencimiento se ignora.</span>
                 </div>
                 <div style="display:flex;gap:10px;align-items:flex-start;">
                     <code style="background:#e2e8f0;color:#475569;padding:2px 8px;border-radius:5px;font-size:11.5px;font-weight:700;flex-shrink:0;">Subtotales</code>
-                    <span style="font-size:12.5px;color:var(--text-muted);">Los totales, títulos del reporte y filas de rótulos se descartan automáticamente. No hay que limpiar el archivo antes de subirlo.</span>
+                    <span style="font-size:12.5px;color:var(--text-muted);">Totales, títulos y rótulos se descartan solos. No hay que limpiar el archivo.</span>
                 </div>
             </div>
 
             <div style="margin-top:9px;background:var(--gold-pale, #fffbeb);border:1px solid var(--gold-light, #fde68a);border-radius:8px;padding:7px 9px;font-size:11.5px;color:#78350f;display:flex;gap:7px;align-items:flex-start;">
                 <i class="fas fa-lightbulb" style="color:var(--gold-dark);margin-top:2px;"></i>
-                <span>Este es el reporte tal como lo exporta el sistema de la empresa: se sube <strong>sin modificarlo</strong> y Nexo Fiscal lo reconoce y lo aplana solo.</span>
+                <span>El reporte del sistema se sube <strong>sin modificarlo</strong>.</span>
             </div>
         </div>
 
@@ -1168,14 +1167,14 @@ document.addEventListener('keydown', function (e) {
                   + (float) ($resumen['sin_respaldo_monto'] ?? 0);
     $ppUrlEstado = function ($estado) use ($baseUrl, $filtros, $pago, $pagoFiltro) {
         $q = array_filter($filtros, function ($v) { return (string) $v !== ''; });
-        // Pulsar el que ya está puesto lo quita: es la forma de volver a
-        // verlas todas sin ir a buscar el desplegable.
-        $q['estado'] = ((string) ($filtros['estado'] ?? '') === $estado) ? '' : $estado;
-        $q['pago_id'] = (int) $pago['id'];
         $q['pago_id'] = (int) $pagoFiltro;
-        return $baseUrl . '/por-pagar?' . http_build_query(array_filter(
-            $q, function ($v) { return (string) $v !== ''; }
-        ));
+        // Pulsar el que ya está puesto lo quita: es la forma de volver a
+        // verlas todas sin ir a buscar el desplegable. Al quitarlo, 'estado'
+        // viaja vacío y no se omite: sin ninguna clave de filtro en la URL,
+        // recordarFiltros() entiende que se entró por el menú y devuelve el
+        // estado que se acababa de quitar.
+        $q['estado'] = ((string) ($filtros['estado'] ?? '') === $estado) ? '' : $estado;
+        return $baseUrl . '/por-pagar?' . http_build_query($q);
     };
     ?>
     <div class="pp-conteo">
@@ -1191,6 +1190,94 @@ document.addEventListener('keydown', function (e) {
             · ₡<?= number_format($ppMontoTotal, 2) ?>
         </span>
     </div>
+
+    <?php
+    /*
+     * La carpeta del pago, contada de verdad contra el pago.
+     *
+     * "Respaldada" dice que el XML cuadra con la línea; no dice que la
+     * factura esté en la carpeta que se manda. Un pago salió con 614 archivos
+     * para 308 facturas —a una le faltaba el PDF— y esta pantalla decía que
+     * todo estaba respaldado. Este aviso mira la carpeta y dice cuántas están
+     * y, con nombre, cuáles no y por qué. Ver ControlCarpetaPago.
+     */
+    $cc = is_array($controlCarpeta ?? null) ? $controlCarpeta : null;
+    if ($cc !== null):
+        $ccRuta = 'PAGOS / ' . (string) ($cc['carpeta'] ?? '');
+        if (!empty($cc['error'])): ?>
+    <div class="alert alert-warning">
+        <i class="fas fa-folder-open" style="margin-top:2px;"></i>
+        <div><?= htmlspecialchars($cc['error']) ?> No se puede confirmar que la carpeta esté completa.</div>
+    </div>
+        <?php else:
+        $ccFaltan = $cc['faltan'];
+        $ccSobran = $cc['sobran'];
+        $ccSoloEnCamino = $ccFaltan && !array_filter($ccFaltan, function ($f) { return $f['motivo'] !== 'sin_copiar'; });
+        if (!$ccFaltan && !$ccSobran): ?>
+    <div class="alert alert-success">
+        <i class="fas fa-folder-closed" style="margin-top:2px;"></i>
+        <div>
+            Carpeta <strong><?= htmlspecialchars($ccRuta) ?></strong> completa:
+            <strong><?= number_format($cc['completas']) ?> de <?= number_format($cc['total']) ?></strong> facturas,
+            <?= number_format($cc['archivos']) ?> archivos.
+        </div>
+    </div>
+        <?php else: ?>
+    <div class="alert <?= $ccFaltan && !$ccSoloEnCamino ? 'alert-danger' : 'alert-warning' ?>" data-control-carpeta>
+        <i class="fas fa-folder-open" style="margin-top:2px;"></i>
+        <div style="flex:1;min-width:0;">
+            <div>
+                Carpeta <strong><?= htmlspecialchars($ccRuta) ?></strong>:
+                <strong><?= number_format($cc['completas']) ?> de <?= number_format($cc['total']) ?></strong> facturas
+                (<?= number_format($cc['archivos']) ?> archivos; deberían ser <?= number_format($cc['total'] * 2) ?>).
+                <?php if ($ccFaltan && !$ccSoloEnCamino): ?>
+                <strong>No está lista para mandar.</strong>
+                <?php endif; ?>
+            </div>
+            <?php if ($ccFaltan): ?>
+            <div style="margin-top:6px;font-weight:600;">
+                Falta<?= count($ccFaltan) === 1 ? '' : 'n' ?> <?= count($ccFaltan) ?>:
+            </div>
+            <ul style="margin:2px 0 0 18px;padding:0;">
+                <?php foreach (array_slice($ccFaltan, 0, 50) as $ccF):
+                    $ccUrl = $baseUrl . '/por-pagar?' . http_build_query([
+                        'pago_id' => (int) $pagoFiltro, 'q' => $ccF['numero'],
+                    ]); ?>
+                <li>
+                    <a href="<?= htmlspecialchars($ccUrl) ?>" style="color:inherit;font-weight:600;">
+                        <?= htmlspecialchars($ccF['numero']) ?></a>
+                    · <?= htmlspecialchars($ccF['proveedor']) ?>
+                    — <?= htmlspecialchars(ControlCarpetaPago::explicar($ccF['motivo'])) ?>
+                    <?php if ($ccF['motivo'] === 'sin_pdf' && $ccF['factura_xml_id'] > 0 && Permisos::puede('documentos.recuperar')): ?>
+                    <button type="button" class="btn-recuperar" data-subir-pdf="<?= (int) $ccF['factura_xml_id'] ?>"
+                            title="Subir el PDF a mano">
+                        <i class="fas fa-upload"></i> Subir PDF
+                    </button>
+                    <?php endif; ?>
+                </li>
+                <?php endforeach; ?>
+                <?php if (count($ccFaltan) > 50): ?>
+                <li>… y <?= count($ccFaltan) - 50 ?> más.</li>
+                <?php endif; ?>
+            </ul>
+            <?php endif; ?>
+            <?php if ($ccSobran): ?>
+            <details style="margin-top:6px;">
+                <summary style="cursor:pointer;">
+                    <?= count($ccSobran) ?> archivo(s) en la carpeta que no son de ninguna factura de este pago
+                </summary>
+                <ul style="margin:2px 0 0 18px;padding:0;">
+                    <?php foreach (array_slice($ccSobran, 0, 100) as $ccS): ?>
+                    <li><?= htmlspecialchars($ccS) ?></li>
+                    <?php endforeach; ?>
+                </ul>
+            </details>
+            <?php endif; ?>
+        </div>
+    </div>
+        <?php endif;
+        endif;
+    endif; ?>
 
     <form method="GET" action="<?= $baseUrl ?>/por-pagar" class="filter-bar">
         <input type="hidden" name="pago_id" value="<?= (int) $pagoFiltro ?>">
@@ -1257,6 +1344,16 @@ document.addEventListener('keydown', function (e) {
                 <option value="sin_respaldo" <?= $filtros['estado'] === 'sin_respaldo' ? 'selected' : '' ?>>Sin respaldo</option>
             </select>
         </div>
+        <?php // Aparte del estado y no como una opción más: una factura
+              // respaldada puede tener notas esperando, y se quieren las dos
+              // preguntas a la vez. ?>
+        <div>
+            <label class="filter-label">Nota de crédito</label>
+            <select name="notas" class="form-control" onchange="this.form.submit()">
+                <option value="">Cualquiera</option>
+                <option value="aplicables" <?= $filtros['notas'] === 'aplicables' ? 'selected' : '' ?>>Con notas aplicables</option>
+            </select>
+        </div>
         <div class="filter-actions">
             <button type="submit" class="btn btn-primary btn-sm"><i class="fas fa-search"></i> Buscar</button>
             <?php if ($filtrosActivos): ?>
@@ -1275,20 +1372,6 @@ document.addEventListener('keydown', function (e) {
         <?php endif; ?>
     </div>
 
-    <style>
-    /*
-     * La sucursal, debajo del proveedor. Va en renglón propio y no pegada al
-     * nombre porque el nombre ya se come el ancho de la celda, y ahí la
-     * sucursal saldría siempre cortada. Mismo sitio y mismo tamaño que en
-     * Facturas del ERP y en Notas de crédito: es el mismo dato del mismo
-     * reporte, y leerlo en dos lugares distintos según la pantalla es lo que
-     * hace dudar de si es el mismo.
-     */
-    .pp-sucursal { font-size: 10.5px; color: var(--text-muted); margin-top: 3px;
-                   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .pp-sucursal i { font-size: 9.5px; color: var(--navy-light); margin-right: 4px; }
-    </style>
-
     <?php $columnasListado = 'porpagar'; include __DIR__ . '/../partials/columnas.php'; ?>
     <div class="table-wrap">
         <table class="data-table" style="font-size:12.5px;" data-listado="porpagar">
@@ -1298,13 +1381,14 @@ document.addEventListener('keydown', function (e) {
                     <th data-col="fecha">Fecha</th>
                     <th data-col="documento">Documento del sistema</th>
                     <th data-col="proveedor">Proveedor</th>
+                    <th data-col="sucursal">Sucursal</th>
                     <th class="right" data-col="monto">Monto</th>
                     <th class="right" data-col="saldo">Saldo</th>
                     <th data-col="xml">Factura XML</th>
+                    <th class="right" data-col="total_xml">Total XML</th>
                     <th class="right" data-col="diferencia">Diferencia</th>
-                    <?php // La sucursal ya bajaba al Excel y en pantalla iba de
-                          // letra chica bajo el proveedor: acá es columna, y se
-                          // puede ordenar por ella, que es como se arma un pago. ?>
+                    <th class="center" data-col="notas_aplicables"
+                        title="Notas de crédito que se le pueden aplicar a la factura">Notas aplicables</th>
                     <?= Columnas::cabecerasExtra('porpagar') ?>
                     <th class="center" style="width:155px;" data-columnas-boton>Acciones</th>
                 </tr>
@@ -1353,9 +1437,15 @@ document.addEventListener('keydown', function (e) {
                         if (!empty($linea['factura_xml_id']) && $nuncaLlego !== ''):
                         ?>
                         <span class="badge" style="background:#fef3c7;color:#92400e;"
-                              title="No se copió a la carpeta del pago: esa carpeta solo recibe el par XML+PDF completo. Este <?= htmlspecialchars($nuncaLlego) ?> nunca llegó al sistema.">
+                              title="No se copió: la carpeta del pago solo recibe el par XML+PDF completo, y este <?= htmlspecialchars($nuncaLlego) ?> nunca llegó.">
                             <i class="fas fa-file-circle-xmark"></i> Sin <?= htmlspecialchars($nuncaLlego) ?>
                         </span>
+                        <?php if ($nuncaLlego === 'PDF' && Permisos::puede('documentos.recuperar')): ?>
+                        <button type="button" class="btn-recuperar" data-subir-pdf="<?= (int) $linea['factura_xml_id'] ?>"
+                                title="Subir el PDF a mano (por ejemplo, el que el proveedor mandó como enlace)">
+                            <i class="fas fa-upload"></i>
+                        </button>
+                        <?php endif; ?>
                         <?php endif; ?>
                     </td>
                     <td style="white-space:nowrap;" data-col="fecha"><?= ppFecha($linea['fecha_emision']) ?></td>
@@ -1368,27 +1458,19 @@ document.addEventListener('keydown', function (e) {
                              title="<?= htmlspecialchars($linea['proveedor_nombre']) ?>">
                             <?= htmlspecialchars($linea['proveedor_nombre']) ?>
                         </div>
-                        <?php
-                        /*
-                         * A qué sucursal llegó la factura —CEDI, BM Centro San
-                         * Vito—. La barra de arriba deja filtrar por ella desde
-                         * hace tiempo, pero el renglón no la decía: se podía
-                         * pedir "solo San Vito" y no se podía comprobar que lo
-                         * que salió fuera de San Vito. Un pago se arma sucursal
-                         * por sucursal, así que es un dato de la línea, no solo
-                         * un criterio de búsqueda.
-                         *
-                         * Solo cuando la hay: la trae el reporte del ERP y hay
-                         * facturas sin ella, y un icono con nada al lado no
-                         * informa de nada.
-                         */
-                        $ppSucursal = trim((string) ($linea['sucursal'] ?? ''));
-                        if ($ppSucursal !== ''):
-                        ?>
-                        <div class="pp-sucursal" title="Sucursal: <?= htmlspecialchars($ppSucursal) ?>">
-                            <i class="fas fa-store"></i><?= htmlspecialchars($ppSucursal) ?>
-                        </div>
-                        <?php endif; ?>
+                    </td>
+                    <?php
+                    /*
+                     * A qué sucursal llegó la factura —CEDI, BM Centro San
+                     * Vito—. Un pago se arma sucursal por sucursal, así que es
+                     * un dato de la línea y no solo un criterio de búsqueda.
+                     * Vivía de letra chica bajo el proveedor; en su columna se
+                     * puede mover y leer de arriba abajo.
+                     */
+                    $ppSucursal = trim((string) ($linea['sucursal'] ?? ''));
+                    ?>
+                    <td style="white-space:nowrap;" data-col="sucursal">
+                        <?= $ppSucursal !== '' ? htmlspecialchars($ppSucursal) : '<span style="color:#cbd5e1;">—</span>' ?>
                     </td>
                     <?php
                     /*
@@ -1424,7 +1506,13 @@ document.addEventListener('keydown', function (e) {
                            title="Vinculada manualmente: solo se comparó el monto"></i>
                         <?php endif; ?>
                         <span style="font-weight:600;color:var(--navy);"><?= htmlspecialchars(NumeroFactura::xmlOchoDigitos($linea['xml_numero'])) ?></span>
-                        <span style="color:var(--text-muted);font-size:11.5px;">· <?= number_format((float) $linea['xml_total'], 2) ?></span>
+                        <?php else: ?>
+                        <span style="color:#cbd5e1;">—</span>
+                        <?php endif; ?>
+                    </td>
+                    <td class="right" style="white-space:nowrap;" data-col="total_xml">
+                        <?php if (!empty($linea['factura_xml_id']) && $linea['xml_total'] !== null): ?>
+                        <?= number_format((float) $linea['xml_total'], 2) ?>
                         <?php else: ?>
                         <span style="color:#cbd5e1;">—</span>
                         <?php endif; ?>
@@ -1438,6 +1526,15 @@ document.addEventListener('keydown', function (e) {
                         <?php else: ?>
                         <span style="color:#cbd5e1;">—</span>
                         <?php endif; ?>
+                    </td>
+                    <td class="center" data-col="notas_aplicables">
+                        <?php
+                        $naFacturaId = (int) $linea['id'];
+                        $naDocumento = (string) $linea['documento'];
+                        $naCuantas = (int) ($linea['notas_vivas'] ?? 0);
+                        $naSaldo = (float) ($linea['notas_vivas_saldo'] ?? 0);
+                        include __DIR__ . '/../partials/notas-aplicables.php';
+                        ?>
                     </td>
                     <?= Columnas::celdasExtra('porpagar', $linea) ?>
                     <td class="center" style="white-space:nowrap;">
@@ -1490,7 +1587,7 @@ document.addEventListener('keydown', function (e) {
                 <?php endforeach; ?>
                 <?php else: ?>
                 <tr>
-                    <td colspan="9" style="padding:18px;text-align:center;color:var(--text-muted);">
+                    <td colspan="30" style="padding:18px;text-align:center;color:var(--text-muted);">
                         <i class="fas fa-search" style="font-size:20px;color:#cbd5e1;display:block;margin-bottom:7px;"></i>
                         No se encontraron facturas con los filtros seleccionados.
                         <a href="<?= htmlspecialchars($urlLimpiarFiltros) ?>" style="margin-left:4px;">Limpiar filtros</a>
@@ -1512,8 +1609,7 @@ document.addEventListener('keydown', function (e) {
                 <div style="font-size:15px;font-weight:800;color:var(--navy);">Facturas sin coincidencia</div>
                 <div style="font-size:12px;color:var(--text-muted);">
                     Facturas XML de <strong><?= htmlspecialchars(Pago::etiqueta($pago)) ?></strong>
-                    que no coinciden con ninguna línea del listado. Vinculá a mano la que le corresponda
-                    a una línea sin respaldo (al vincular solo se compara el monto).
+                    que no coinciden con ninguna línea del listado. Vinculá a mano (solo se compara el monto).
                 </div>
             </div>
             <button type="button" onclick="ppsCerrar()" style="background:none;border:none;font-size:20px;color:#94a3b8;cursor:pointer;line-height:1;">&times;</button>
@@ -1665,7 +1761,7 @@ async function ppsVincular(facturaId) {
         <?= $pagoFiltro > 0 ? 'Este pago todavía no tiene facturas' : 'Todavía no hay ningún pago' ?>
     </div>
     <div style="font-size:12.5px;">
-        Elegí "➕ Nuevo pago…" arriba, ponele fecha y subí el archivo que dice qué se paga.
+        Elegí "➕ Nuevo pago…" arriba y subí el archivo de lo que se paga.
     </div>
 </div>
 

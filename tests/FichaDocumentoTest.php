@@ -109,6 +109,38 @@ try {
         'una NC no se anuncia como factura: manda a buscarla al listado equivocado');
     assertFicha($nota['url_detalle'] === $base . '/notas-xml/ver/42',
         'y su pantalla completa está en el módulo de notas XML');
+    assertFicha(campoFicha($nota, 'Número corto')['valor'] === '00012345'
+        && campoFicha($nota, 'Número asistente') === null,
+        'en la nota el número se llama número corto');
+    assertFicha(campoFicha($ficha, 'Número asistente') !== null && $ficha['referencias'] === null,
+        'la factura conserva su etiqueta y no tiene facturas de referencia');
+
+    // ── Las facturas que cita la nota en su XML ────────────────────────────
+    $conRefs = FichaDocumento::de(['tipo_documento' => 'NC'] + $fila, $base, [
+        ['tipo_doc_ref' => '01', 'numero_ref' => '50607092600310126121500100001010000953295199999999',
+         'clave_ref' => '50607092600310126121500100001010000953295199999999',
+         'consecutivo_ref' => '00100001010000953295', 'fecha_ref' => '2026-09-07',
+         'razon' => 'Nota de Devolucion', 'documento_id' => 77],
+        // Un emisor que escribió otra cosa en <Numero>, de un tipo raro.
+        ['tipo_doc_ref' => '14', 'numero_ref' => 'FACT-889', 'clave_ref' => null,
+         'consecutivo_ref' => null, 'fecha_ref' => null, 'razon' => null, 'documento_id' => 0],
+    ]);
+    $ref = $conRefs['referencias'][0] ?? [];
+    assertFicha(count($conRefs['referencias']) === 2, 'la nota trae todas las facturas que cita');
+    assertFicha(($ref['numero'] ?? '') === '00953295',
+        'cada una con su número corto, sacado del consecutivo');
+    assertFicha(($ref['fecha'] ?? '') === '07/09/2026' && ($ref['tipo'] ?? '') === 'Factura electrónica',
+        'con su fecha y su tipo, dichos como se leen');
+    assertFicha(($ref['razon'] ?? '') === 'Nota de Devolucion' && ($ref['documento_id'] ?? 0) === 77,
+        'la razón que escribió el proveedor, y el documento del sistema para abrirla');
+    $rara = $conRefs['referencias'][1] ?? [];
+    assertFicha(($rara['numero'] ?? '') === 'FACT-889' && ($rara['tipo'] ?? '') === 'Tipo 14',
+        'sin clave se enseña lo que escribió, y un tipo desconocido con su código');
+    assertFicha(($rara['documento_id'] ?? -1) === 0, 'la que no está en el sistema no se puede abrir');
+
+    $sinLeer = FichaDocumento::de(['tipo_documento' => 'NC'] + $fila, $base, null);
+    assertFicha($sinLeer['referencias'] === null,
+        'un XML que no se ha leído no se anuncia como que no cita ninguna');
 
     // ── El que se archivó y desapareció ────────────────────────────────────
     // La fila conserva la ruta, el archivo ya no está: eso desmiente a

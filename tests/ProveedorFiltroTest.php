@@ -73,12 +73,15 @@ try {
 
     // El mismo proveedor con dos códigos en el ERP: pasa cuando lo dan de
     // alta dos veces, y elegirlo tiene que alcanzar sus facturas de los dos.
+    // En el catálogo de la empresa seleccionada, que es el que lee el filtro.
+    require_once __DIR__ . '/../app/models/Sociedad.php';
+    $empresa = (int) Sociedad::seleccionadaIdActual();
     $alta = $pdo->prepare(
-        'INSERT INTO proveedor_codigo_erp (proveedor_codigo, proveedor_id, cedula, nombre_erp, origen)
-         VALUES (?, ?, ?, ?, ?)'
+        'INSERT INTO proveedor_codigo_erp (sociedad_id, proveedor_codigo, proveedor_id, cedula, nombre_erp, origen)
+         VALUES (?, ?, ?, ?, ?, ?)'
     );
-    $alta->execute([$COD_A, $proveedorId, $CEDULA, $NOMBRE, 'manual']);
-    $alta->execute([$COD_B, $proveedorId, $CEDULA, $NOMBRE, 'manual']);
+    $alta->execute([$empresa, $COD_A, $proveedorId, $CEDULA, $NOMBRE, 'manual']);
+    $alta->execute([$empresa, $COD_B, $proveedorId, $CEDULA, $NOMBRE, 'manual']);
     ProveedorCatalogo::olvidar();
 
     // ── Las dos formas de nombrar al mismo proveedor se entienden ──

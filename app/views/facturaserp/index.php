@@ -17,6 +17,8 @@ $ultimaCarga = $ultimaCarga ?? null;
 $incidenciasTotal = (int) ($incidenciasTotal ?? 0);
 $incidenciasAbiertas = (int) ($incidenciasAbiertas ?? 0);
 $revisionPendientes = (int) ($revisionPendientes ?? 0);
+$quitadasTotal = (int) ($quitadasTotal ?? 0);
+$puedeQuitar = !empty($puedeQuitar);
 $notasPorFactura = is_array($notasPorFactura ?? null) ? $notasPorFactura : [];
 $pagina = (int) ($pagina ?? 1);
 $totalPaginas = (int) ($totalPaginas ?? 1);
@@ -165,10 +167,6 @@ function feMonto($v, $moneda = '')
 </div>
 
 <style>
-/* La segunda línea de una celda: lo que solo se escribe cuando pasa algo. */
-.fe-tabla .fe-sub{font-size:10.5px;color:var(--text-muted);margin-top:3px;
-                  display:flex;gap:5px;align-items:center;flex-wrap:wrap}
-.fe-tabla .fe-sub-der{justify-content:flex-end}
 .fe-tabla .fe-badge-mini{font-size:10px;padding:2px 7px;white-space:nowrap;font-family:inherit}
 /* Venció y todavía se debe. Sin saldo no se marca: no hay nada que correr. */
 .fe-tabla .fe-vencida{color:var(--miss);font-weight:700}
@@ -239,14 +237,14 @@ function feNombreArchivo(input) {
         }
         if (cua.descuadres) {
             avisos += '<div class="alert alert-warning" style="margin-bottom:10px;">' +
-                cua.descuadres + ' total(es) impresos del reporte no cuadran con lo leído. ' +
-                'Se puede aplicar igual; quedan anotados en Incidencias.' +
+                cua.descuadres + ' total(es) impresos no cuadran con lo leído. ' +
+                'Se puede aplicar igual; quedan en Incidencias.' +
                 '<div style="font-size:11.5px;margin-top:4px;">' +
                 (cua.detalle || []).map(function (t) { return esc(t); }).join('<br>') + '</div></div>';
         } else if (cua.saldo_general_ok) {
             avisos += '<div class="alert alert-success" style="margin-bottom:10px;">' +
                 'El saldo leído (' + colones(cua.saldo_leido) +
-                ') coincide con el Total General impreso del reporte.</div>';
+                ') coincide con el Total General del reporte.</div>';
         }
         if (d.repetida) {
             avisos += '<div class="alert alert-info" style="margin-bottom:10px;">' +
@@ -255,14 +253,17 @@ function feNombreArchivo(input) {
         }
         if (rev.pendientes) {
             avisos += '<div class="alert alert-warning" style="margin-bottom:10px;">' +
-                rev.pendientes + ' línea(s) van a quedar en revisión, para que decidas si entran: ' +
-                'no se pudieron leer, o son iguales a otra del mismo archivo y no hay cómo ' +
-                'distinguirlas. Ninguna se descarta sola.</div>';
+                rev.pendientes + ' línea(s) quedan en revisión: no se pudieron leer, o son ' +
+                'idénticas a otra del archivo. Ninguna se descarta sola.</div>';
+        }
+        if (imp.quitadas) {
+            avisos += '<div class="alert alert-info" style="margin-bottom:10px;">' +
+                imp.quitadas + ' factura(s) del reporte se saltan: las quitaste del listado.</div>';
         }
         if (rev.rescatadas || rev.descartadas) {
             avisos += '<div class="alert alert-info" style="margin-bottom:10px;">' +
                 (rev.rescatadas ? rev.rescatadas + ' línea(s) entran con la corrección que ya guardaste. ' : '') +
-                (rev.descartadas ? rev.descartadas + ' se descartan solas porque ya lo decidiste.' : '') +
+                (rev.descartadas ? rev.descartadas + ' se descartan: ya lo decidiste.' : '') +
                 '</div>';
         }
         // El dinero en movimiento, cuando lo hay: es la frase que dice si este
@@ -375,6 +376,15 @@ else: ?>
             </span>
             <?php endif; ?>
         </a>
+        <?php if ($quitadasTotal > 0): ?>
+        <a href="<?= $baseUrl ?>/facturas-erp/quitadas" class="btn btn-outline btn-sm"
+           title="Facturas que sacaste del listado. Las cargas del reporte las saltan; desde ahí se pueden devolver.">
+            <i class="fas fa-box-archive" style="margin-right:4px;"></i>Quitadas
+            <span class="badge badge-default" style="font-size:10px;padding:1px 6px;margin-left:4px;">
+                <?= number_format($quitadasTotal) ?>
+            </span>
+        </a>
+        <?php endif; ?>
         <a href="<?= htmlspecialchars($urlExportar) ?>" class="btn btn-outline btn-sm"
            data-exportar="facturaserp"
            title="Bajar a Excel lo que estás viendo: estos filtros y estas columnas">
@@ -459,35 +469,31 @@ else: ?>
     <div style="overflow-x:auto;">
         <table class="data-table fe-tabla" style="font-size:12.5px;min-width:820px;" data-listado="facturaserp">
             <?php /*
-             * Cuatro columnas, no diez. Las seis que se fueron no llevaban un
-             * dato que distinguiera una factura de otra, contado sobre las
-             * 5.000 del listado:
+             * Un dato por celda. Hubo un tiempo en que código y sucursal iban
+             * bajo el proveedor, el vencimiento bajo la emisión y el pago, la
+             * compra y las notas directas en insignias bajo el documento: la
+             * tabla era angosta, pero nada de eso se podía mover, apagar ni
+             * leer de arriba abajo. Cada uno tiene ahora su columna, y quien
+             * no la quiera la apaga desde la esquina.
              *
-             *   Compra    "Local" en el 100 %. Ahora solo sale la insignia
-             *             cuando NO lo es, que es cuando dice algo.
-             *   Moneda    Colones en el 100 % salvo un puñado. El símbolo se
-             *             fue pegado al importe.
-             *   Estado    "Pendiente" en el 91 %. Solo se marca el 9 % que ya
-             *             está asignado a un pago, con el nombre.
-             *   Sucursal  Dos valores en total; va bajo el proveedor.
-             *   Vence     Va bajo la fecha de emisión, que es de lo que habla.
-             *   Monto     El mismo número que el saldo en el 39,6 %. El saldo
-             *             manda —es el foco del módulo— y el monto aparece
-             *             debajo solo cuando no coinciden.
-             *
-             * La tabla pasó de 1.250 px a 820 px de ancho mínimo, y el nombre
-             * del proveedor dejó de partirse en dos renglones.
+             * Moneda y estado siguen apagadas de fábrica: el símbolo va
+             * pegado al importe, y "asignada a un pago" ya lo dice la columna
+             * Pago con el nombre.
              */ ?>
             <thead>
                 <tr>
                     <th data-col="documento">Documento</th>
                     <th data-col="proveedor">Proveedor</th>
+                    <th data-col="codigo">Código proveedor</th>
+                    <th data-col="sucursal">Sucursal</th>
                     <th data-col="fecha">Fecha</th>
+                    <th data-col="vence">Vence</th>
                     <th class="right" data-col="monto">Monto</th>
                     <th class="right" data-col="saldo">Saldo</th>
-                    <?php // Las seis que se habían retirado del listado por decir
-                          // siempre lo mismo siguen en la base, y ahora se pueden
-                          // volver a encender una por una desde la esquina. ?>
+                    <th class="center" data-col="notas_aplicables"
+                        title="Notas de crédito que se le pueden aplicar a la factura">Notas aplicables</th>
+                    <th data-col="pago">Pago</th>
+                    <th data-col="origen">Compra</th>
                     <?= Columnas::cabecerasExtra('facturaserp') ?>
                     <?php // Esta tabla no tiene columna de acciones, así que el
                           // botón necesita su propia esquina. ?>
@@ -508,17 +514,15 @@ else: ?>
                     $saldo = (float) $f['saldo'];
                     $tieneSaldo = $saldo > 0.005;
                     $doc = (string) $f['documento'];
-                    // Las notas de crédito con saldo que corrigen ESTA factura.
-                    // Es el aviso que hay que ver antes de pagarla: si se paga
-                    // completa, la nota queda sin dónde descontarse.
+                    // Las notas de crédito que se le pueden aplicar a ESTA factura.
                     $notasFactura = $notasPorFactura[(int) $f['id']] ?? [];
                     $saldoNotas = 0.0;
                     foreach ($notasFactura as $nf) { $saldoNotas += (float) $nf['saldo']; }
 
                     $asignada = ($f['estado'] ?? 'pendiente') === 'asignada_pago';
-                    // "Local" es el 100 % del listado: solo se marca lo que no lo es.
+                    // "Local" es el 100 % del listado: se escribe apagado, y
+                    // lo que no lo es resalta.
                     $importada = trim((string) $f['origen']) !== '' && $f['origen'] !== 'Local';
-                    $montoAparte = abs((float) $f['monto'] - $saldo) >= 0.005;
                     // Vencida solo cuenta si todavía se debe: sin saldo no hay nada que correr.
                     $vencida = $tieneSaldo && !empty($f['fecha_vence'])
                         && $f['fecha_vence'] < date('Y-m-d');
@@ -532,72 +536,31 @@ else: ?>
                                 <span class="muted" title="El reporte no imprime número para esta factura">sin número</span>
                             <?php endif; ?>
                         </div>
-
-                        <?php // Lo que le pasa a esta factura, todo en una línea
-                              // y solo cuando le pasa algo. ?>
-                        <?php if ($notasFactura || $asignada || $importada): ?>
-                        <div class="fe-sub">
-                            <?php if ($asignada): ?>
-                            <span class="badge badge-ok fe-badge-mini"
-                                  title="Ya entró a un pago: su saldo está reservado">
-                                <i class="fas fa-calendar-check" style="margin-right:3px;"></i>
-                                <?= htmlspecialchars((string) ($f['pago_nombre'] ?: 'Asignada a un pago')) ?>
-                            </span>
-                            <?php endif; ?>
-
-                            <?php /*
-                             * Compra "Local" en las 5.000 facturas del listado.
-                             * Escribirla en todas era decir siempre lo mismo;
-                             * la insignia sale solo cuando NO es local, que es
-                             * la que hay que ver.
-                             */
-                            if ($importada): ?>
-                            <span class="badge badge-default fe-badge-mini"
-                                  title="Compra que no es local">
-                                <?= htmlspecialchars($f['origen']) ?>
-                            </span>
-                            <?php endif; ?>
-
-                            <?php if ($notasFactura): ?>
-                            <a href="<?= $baseUrl ?>/notas-credito?factura_erp_id=<?= (int) $f['id'] ?>"
-                               data-ventana="Notas de crédito"
-                               data-ventana-titulo="<?= htmlspecialchars((string) $f['documento']) ?>"
-                               class="badge fe-badge-mini"
-                               style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d;
-                                      text-decoration:none;"
-                               title="Esta factura tiene <?= count($notasFactura) ?> nota(s) de crédito directa(s) sin aplicar por <?= number_format($saldoNotas, 2) ?>. Clic para verlas.">
-                                <i class="fas fa-file-circle-minus" style="margin-right:3px;"></i>
-                                Nota directa<?= count($notasFactura) > 1 ? ' ×' . count($notasFactura) : '' ?>
-                                · <?= feMonto($saldoNotas, $f['moneda']) ?>
-                            </a>
-                            <?php endif; ?>
-                        </div>
-                        <?php endif; ?>
                     </td>
 
-                    <td data-col="proveedor">
-                        <?= htmlspecialchars($f['proveedor_nombre']) ?>
-                        <div class="fe-sub">
-                            <?= htmlspecialchars($f['proveedor_codigo']) ?><?php
-                                if (trim((string) $f['sucursal']) !== ''): ?>
-                                · <?= htmlspecialchars($f['sucursal']) ?><?php endif; ?>
-                        </div>
+                    <td data-col="proveedor"><?= htmlspecialchars($f['proveedor_nombre']) ?></td>
+
+                    <td style="white-space:nowrap;" data-col="codigo">
+                        <?= trim((string) $f['proveedor_codigo']) !== ''
+                            ? htmlspecialchars($f['proveedor_codigo']) : '<span class="muted">—</span>' ?>
                     </td>
 
-                    <td style="white-space:nowrap;" data-col="fecha">
-                        <?= feFecha($f['fecha_emision']) ?>
-                        <?php /*
-                         * El vencimiento va debajo de la emisión, que es de lo
-                         * que habla. En el 92,9 % son los 30 días de siempre;
-                         * lo que hay que ver es el otro 7 %, y una factura
-                         * vencida con saldo se marca.
-                         */ ?>
-                        <?php if (!empty($f['fecha_vence'])): ?>
-                        <div class="fe-sub<?= $vencida ? ' fe-vencida' : '' ?>"
-                             title="<?= $vencida ? 'Venció y todavía tiene saldo' : 'Fecha de vencimiento' ?>">
-                            <?php if ($vencida): ?><i class="fas fa-triangle-exclamation"></i><?php endif; ?>
-                            vence <?= feFecha($f['fecha_vence']) ?>
-                        </div>
+                    <td style="white-space:nowrap;" data-col="sucursal">
+                        <?= trim((string) $f['sucursal']) !== ''
+                            ? htmlspecialchars($f['sucursal']) : '<span class="muted">—</span>' ?>
+                    </td>
+
+                    <td style="white-space:nowrap;" data-col="fecha"><?= feFecha($f['fecha_emision']) ?></td>
+
+                    <?php // Una factura vencida que todavía se debe se marca:
+                          // sin saldo no hay nada que correr. ?>
+                    <td style="white-space:nowrap;" data-col="vence"
+                        <?= $vencida ? 'class="fe-vencida" title="Venció y todavía tiene saldo"' : '' ?>>
+                        <?php if (empty($f['fecha_vence'])): ?>
+                        <span class="muted">—</span>
+                        <?php else: ?>
+                        <?php if ($vencida): ?><i class="fas fa-triangle-exclamation"></i><?php endif; ?>
+                        <?= feFecha($f['fecha_vence']) ?>
                         <?php endif; ?>
                     </td>
 
@@ -616,17 +579,62 @@ else: ?>
                         <span style="<?= $tieneSaldo ? 'font-weight:700;color:var(--warn);' : 'color:var(--text-muted);' ?>">
                             <?= $tieneSaldo ? feMonto($saldo, $f['moneda']) : 'sin saldo' ?>
                         </span>
-                        <?php /*
-                         * Que el saldo no sea el monto entero quiere decir que
-                         * ya se abonó algo. Con las dos columnas al lado eso
-                         * se ve solo, pero la marca lo dice sin restar.
-                         */ ?>
-                        <?php if ($montoAparte && $tieneSaldo): ?>
-                        <div class="fe-sub fe-sub-der" title="Ya tiene abonos: el saldo es menor que el monto">abonada</div>
+                    </td>
+
+                    <?php // El aviso que hay que ver antes de pagarla completa: si
+                          // se paga entera, la nota queda sin dónde descontarse.
+                          // El mismo botón que en Pago y en Seguimiento. ?>
+                    <td class="center" data-col="notas_aplicables">
+                        <?php
+                        $naFacturaId = (int) $f['id'];
+                        $naDocumento = (string) $f['documento'];
+                        $naCuantas = count($notasFactura);
+                        $naSaldo = $saldoNotas;
+                        include __DIR__ . '/../partials/notas-aplicables.php';
+                        ?>
+                    </td>
+
+                    <td style="white-space:nowrap;" data-col="pago">
+                        <?php if ($asignada): ?>
+                        <span class="badge badge-ok fe-badge-mini"
+                              title="Ya entró a un pago: su saldo está reservado">
+                            <i class="fas fa-calendar-check" style="margin-right:3px;"></i>
+                            <?= htmlspecialchars((string) ($f['pago_nombre'] ?: 'Asignada a un pago')) ?>
+                        </span>
+                        <?php else: ?>
+                        <span class="muted">—</span>
+                        <?php endif; ?>
+                    </td>
+
+                    <td style="white-space:nowrap;" data-col="origen">
+                        <?php if ($importada): ?>
+                        <span class="badge badge-default fe-badge-mini" title="Compra que no es local">
+                            <?= htmlspecialchars($f['origen']) ?>
+                        </span>
+                        <?php else: ?>
+                        <span class="muted"><?= htmlspecialchars(trim((string) $f['origen']) !== '' ? $f['origen'] : '—') ?></span>
                         <?php endif; ?>
                     </td>
                     <?= Columnas::celdasExtra('facturaserp', $f) ?>
-                    <td></td>
+                    <td style="white-space:nowrap;">
+                        <?php /*
+                         * Para la fila que no es una factura: la misma cargada
+                         * dos veces en el ERP con otra fecha. Descartar su
+                         * incidencia solo calla el aviso; esto la saca.
+                         */ ?>
+                        <?php if ($puedeQuitar): ?>
+                        <button type="button" class="btn btn-outline btn-sm fe-quitar"
+                                style="padding:2px 7px;font-size:11px;"
+                                data-id="<?= (int) $f['id'] ?>"
+                                data-factura="<?= htmlspecialchars($f['tipo'] . '-' . ($doc !== '' ? $doc : 'sin número')
+                                    . ' · ' . $f['proveedor_nombre'] . ' · emitida ' . feFecha($f['fecha_emision'])
+                                    . ' · ' . feMonto($f['monto'], $f['moneda'])) ?>"
+                                <?= $asignada ? 'disabled title="Está en un pago: quitala primero del pago, en Pagos."'
+                                              : 'title="Quitar del listado: no es una factura (por ejemplo, la misma cargada dos veces)"' ?>>
+                            <i class="fas fa-eye-slash"></i>
+                        </button>
+                        <?php endif; ?>
+                    </td>
                 </tr>
                 <?php endforeach; ?>
             </tbody>
@@ -651,6 +659,43 @@ else: ?>
     <?php endif; ?>
 </div>
 <?php endif; // fin de "ya se eligió proveedor" ?>
+
+<?php if ($puedeQuitar): ?>
+<form method="POST" action="<?= $baseUrl ?>/facturas-erp/quitar" id="fe-quitar-form" style="display:none;">
+    <input type="hidden" name="id" id="fe-quitar-id">
+    <input type="hidden" name="motivo" id="fe-quitar-motivo">
+</form>
+<script>
+document.addEventListener('click', function (e) {
+    var btn = e.target.closest ? e.target.closest('.fe-quitar') : null;
+    if (!btn || btn.disabled) { return; }
+
+    var campo = document.createElement('div');
+    campo.innerHTML =
+        '<label class="filter-label" for="fe-quitar-motivo-txt">Motivo (opcional)</label>' +
+        '<input type="text" id="fe-quitar-motivo-txt" class="form-control" maxlength="255" ' +
+        'placeholder="Ej.: cargada dos veces en el ERP">';
+
+    AppDialog.form({
+        title: 'Quitar del listado',
+        type: 'warning',
+        message: btn.dataset.factura + '\n\nDeja de verse en Facturas, Pagos y Seguimiento, y las ' +
+            'próximas cargas del reporte la saltan. Se puede devolver desde "Quitadas".',
+        content: campo,
+        confirmText: 'Quitar',
+        pendingText: 'Quitando…',
+        onConfirm: function (cuerpo) {
+            return { motivo: cuerpo.querySelector('#fe-quitar-motivo-txt').value };
+        }
+    }).then(function (r) {
+        if (!r) { return; }
+        document.getElementById('fe-quitar-id').value = btn.dataset.id;
+        document.getElementById('fe-quitar-motivo').value = r.motivo || '';
+        document.getElementById('fe-quitar-form').submit();
+    });
+});
+</script>
+<?php endif; ?>
 
 <script>
 function feMostrarArchivo(input) {

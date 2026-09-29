@@ -46,6 +46,7 @@ require_once __DIR__ . '/../helpers/XmlDocumentImporter.php';
 require_once __DIR__ . '/../helpers/EntradaAutomatica.php';
 require_once __DIR__ . '/../helpers/PaqueteDocumentos.php';
 require_once __DIR__ . '/../helpers/EstadoArchivo.php';
+require_once __DIR__ . '/../helpers/TareaProgramada.php';
 
 class CorreoController extends Controller
 {
@@ -1289,7 +1290,18 @@ class CorreoController extends Controller
             $cuentaId = (int) ($config['cuenta_id'] ?? $cuentaId);
             [$desde, $hasta] = $this->rangoGeneral();
             $correo = $this->correoBusquedaGeneral();
+
             $conteo = $this->loadModel('CorreoLote')->estimar($cuentaId, $desde, $hasta, $correo);
+
+            // Sin el buzón leído entero no hay lote, y el conteo de un índice
+            // a medias también sale a medias: en vez del número, lo que falta.
+            // Va después de contar porque la comprobación sale a la red y el
+            // conteo no: si la base falla, que falle sin haberla esperado.
+            $bloqueo = $this->buzonSinTerminarDeLeer($config, $desde);
+            if ($bloqueo !== '') {
+                $this->json(['ok' => true, 'bloqueo' => $bloqueo]);
+            }
+
             $this->json([
                 'ok' => true,
                 'total' => $conteo['total'],
@@ -1318,15 +1330,15 @@ class CorreoController extends Controller
             $correo = $this->correoBusquedaGeneral();
             $sociedad = $this->loadModel('Sociedad')->getActiva();
             if (!$sociedad) { throw new InvalidArgumentException('Selecciona una sociedad activa antes de iniciar.'); }
-            $raiz = trim((string) ($this->configLocal()['carpeta_destino'] ?? ''));
-            // La carpeta compartida hace falta solo si la empresa archiva en
-            // disco; en SharePoint los XML y PDF van a la biblioteca.
-            if ($raiz === '' && DocumentoArchivo::necesitaCarpetaCompartida((int) $sociedad['id'])) {
-                throw new InvalidArgumentException('Configura la carpeta raíz desde el engranaje de Correo.');
+            // Los XML y PDF van a SharePoint: sin sus credenciales en esta
+            // computadora, mejor decirlo antes de crear el lote que a la
+            // mitad, con la mitad del buzón ya leído.
+            if (!AlmacenDocumentos::hayPrincipal()) {
+                throw new InvalidArgumentException(AlmacenDocumentos::SIN_SHAREPOINT);
             }
-            if ($raiz !== '') {
-                new DocumentoArchivo($raiz); // valida creación y escritura antes de crear el lote
-            }
+            // La columna carpeta_raiz del lote queda vacía: ya no hay carpeta
+            // de esta computadora que anotar.
+            $raiz = '';
 
             // Actualización breve y best-effort; el lote también incluye los
             // mensajes cuyo detalle de adjuntos siga pendiente en el índice.
@@ -1334,6 +1346,13 @@ class CorreoController extends Controller
                 $indice = $this->loadModel('CorreoIndice')->setCuenta($cuentaId);
                 $this->ejecutarSincronizacion($config, $indice, 15);
             } catch (Throwable $e) {
+            }
+
+            // La misma barrera que al estimar, y la que manda: la pantalla la
+            // enseña antes, pero el lote no se arma sin pasar por acá.
+            $bloqueo = $this->buzonSinTerminarDeLeer($config, $desde);
+            if ($bloqueo !== '') {
+                throw new InvalidArgumentException($bloqueo);
             }
 
             // Por defecto se saltan los correos ya procesados en corridas
@@ -1383,6 +1402,63 @@ class CorreoController extends Controller
      *
      * Es el mismo criterio de SeguimientoController::responderFallo().
      */
+    /**
+     * Por qué todavía no se puede armar un lote de este buzón, o '' si se
+     * puede.
+     *
+     * Un lote se arma con lo que ya está en el índice. Si una carpeta del
+     * buzón no se ha leído, sus correos quedan fuera del lote sin que nadie
+     * se entere; por eso no se deja armar hasta que la tarea automática
+     * termine de leerlo. Ver CorreoSync::carpetasSinLeer().
+     *
+     * Si no se puede hablar con el servidor de correo tampoco se deja: sin la
+     * lista de carpetas no hay cómo afirmar que esté todo.
+     *
+     * Lo mismo si el rango empieza antes de lo que el índice guarda (la
+     * retención del buzón): esos correos no están en el índice y el lote
+     * saldría sin ellos.
+     */
+    private function buzonSinTerminarDeLeer(array $config, $desde = '')
+    {
+        require_once __DIR__ . '/../helpers/CorreoSync.php';
+        $cuentaId = (int) ($config['cuenta_id'] ?? 0);
+        $indice = $this->loadModel('CorreoIndice')->setCuenta($cuentaId);
+
+        $inicio = CorreoSync::inicioDelIndice($config);
+        if ($inicio !== '' && (string) $desde !== '' && (string) $desde < $inicio) {
+            return 'Este buzón solo guarda en su índice los correos de los últimos '
+                 . (int) $config['indice_retencion_dias'] . ' días, desde el '
+                 . date('d/m/Y', strtotime($inicio)) . '. Lo anterior no está, y un lote desde el '
+                 . date('d/m/Y', strtotime((string) $desde)) . ' saldría sin esos correos.'
+                 . "\n\n" . 'Empieza el rango el ' . date('d/m/Y', strtotime($inicio))
+                 . ' o después, o amplía la retención del buzón (en su configuración) y espera a que '
+                 . 'la tarea automática lo vuelva a leer.';
+        }
+
+        try {
+            $faltan = CorreoSync::carpetasSinLeer($config, $indice);
+        } catch (Throwable $e) {
+            return 'No se pudo conectar con el buzón para comprobar que ya está leído completo, '
+                 . 'así que por ahora no se arma el lote. Detalle: ' . $e->getMessage();
+        }
+        if (!$faltan) {
+            return '';
+        }
+
+        $cuantas = count($faltan);
+        $nombres = array_column(array_slice($faltan, 0, 5), 'nombre');
+        $lista = implode(', ', $nombres) . ($cuantas > 5 ? ' y ' . ($cuantas - 5) . ' más' : '');
+        $inicio = $indice->getCarpetas()
+            ? 'Todavía falta leer ' . $cuantas . ($cuantas === 1 ? ' carpeta' : ' carpetas')
+              . ' de este buzón (' . $lista . ').'
+            : 'Este buzón todavía no se ha leído: es nuevo y la tarea automática todavía no pasó por él.';
+
+        return $inicio . "\n\n"
+             . 'Hasta que termine de leerlo no se puede armar un lote: saldría incompleto, sin los '
+             . 'correos de lo que falta. La tarea automática corre cada 5 minutos y lee cada '
+             . 'carpeta completa; vuelve a intentarlo en unos minutos.';
+    }
+
     private function responderFallo(string $donde, Throwable $e): never
     {
         if (!$e instanceof PDOException
@@ -1725,7 +1801,9 @@ class CorreoController extends Controller
 
         $bandeja = $this->loadModel('CorreoBandeja');
         $facturas = $this->loadModel('Factura');
-        $importer = new XmlDocumentImporter((string) $lote['carpeta_raiz']);
+        // Sin la carpeta_raiz del lote aunque la tenga: los lotes de antes la
+        // anotaban, y todo lo nuevo se archiva en SharePoint.
+        $importer = new XmlDocumentImporter();
         $notasNuevas = 0;
 
         // Presupuesto por tanda: se procesa lo que quepa y lo no alcanzado
@@ -2135,7 +2213,6 @@ class CorreoController extends Controller
                 'importacion_id' => $importacionId,
                 'encoladas' => $encoladas,
                 'archivos_guardados' => 0,
-                'carpeta_destino' => trim((string) ($this->configLocal()['carpeta_destino'] ?? '')),
                 'aviso_carpeta' => '',
                 'avisos' => array_slice($avisosPendientes, 0, 10),
                 'repetidas' => $repetidas,
@@ -2780,8 +2857,7 @@ class CorreoController extends Controller
             }
 
             // Mover el XML de tmp/ a la bandeja (nombre con prefijo removible
-            // "__"). La bandeja vive donde archiva la empresa del comprobante
-            // —la carpeta compartida o SharePoint—: la fila que se crea abajo
+            // "__"). La bandeja vive en SharePoint: la fila que se crea abajo
             // la ve todo el grupo, así que el archivo también tiene que estar
             // donde todos lleguen. Una carpeta por mes, para que no acumule
             // miles de archivos en un solo lugar.
@@ -2938,41 +3014,9 @@ class CorreoController extends Controller
 
     // ── Configuración local (carpeta destino + cédula de la empresa) ──
 
-    /**
-     * Guarda la configuración del módulo (POST, JSON): la carpeta donde se
-     * escriben XML+PDF renombrados al importar, y la cédula de la empresa
-     * contra la que se verifica el receptor de cada factura.
-     */
-    public function config()
-    {
-        if (!$this->isPost()) {
-            $this->json(['ok' => false, 'message' => 'Metodo no permitido.'], 405);
-        }
-
-        try {
-            $carpeta = trim((string) $this->post('carpeta_destino', ''));
-
-            if ($carpeta !== '') {
-                $carpeta = rtrim(str_replace('/', DIRECTORY_SEPARATOR, $carpeta), '\\/');
-
-                if (!is_dir($carpeta) && !@mkdir($carpeta, 0777, true) && !is_dir($carpeta)) {
-                    $this->json(['ok' => false, 'message' => 'No se pudo crear la carpeta "' . $carpeta . '". Verifica la ruta.'], 422);
-                }
-                if (!RutaDocumento::permiteEscritura($carpeta)) {
-                    $this->json(['ok' => false, 'message' => 'La carpeta "' . $carpeta . '" existe, pero no dejó guardar un archivo de prueba. Si es de SharePoint, pide permiso de edición sobre la biblioteca.'], 422);
-                }
-            }
-
-            // La cédula ya no se guarda aquí: la define la sociedad activa (Inicio)
-            $configActual = $this->configLocal();
-            $configActual['carpeta_destino'] = $carpeta;
-            $this->guardarConfigLocal($configActual);
-
-            $this->json(['ok' => true, 'config' => $this->configLocal()]);
-        } catch (Throwable $e) {
-            $this->json(['ok' => false, 'message' => 'No se pudo guardar la configuración: ' . $e->getMessage()], 500);
-        }
-    }
+    // Aquí vivía config(): guardaba la carpeta compartida de documentos
+    // (carpeta_destino). Desde el 27/09/2026 los documentos van a SharePoint y
+    // no hay carpeta que elegir.
 
     // Aquí vivían organizar() y organizarPrevisualizar(), con su tarjeta en
     // Configuración: elegir el alcance, ver qué haría y confirmar.
@@ -3087,23 +3131,13 @@ class CorreoController extends Controller
             (int) ($autoGuardado['trabajadores'] ?? 1)
         )));
 
-        if ($capturarNuevos) {
-            $raiz = DocumentoArchivo::raizConfigurada();
-            // Con todas las empresas en SharePoint la Bandeja vive en la
-            // biblioteca y esta PC no necesita la carpeta compartida.
-            $sinCarpeta = $raiz === '' && !DocumentoArchivo::necesitaCarpetaCompartida();
-            if (!$sinCarpeta && ($raiz === '' || !is_dir($raiz))) {
-                $this->json([
-                    'ok' => false,
-                    'message' => 'Configura primero una carpeta compartida válida para guardar la Bandeja.',
-                ], 422);
-            }
-            if (!$sinCarpeta && !RutaDocumento::permiteEscritura($raiz)) {
-                $this->json([
-                    'ok' => false,
-                    'message' => 'La carpeta compartida no permite escritura; la captura automática no podría guardar la Bandeja.',
-                ], 422);
-            }
+        // La Bandeja y el archivo viven en SharePoint: sin sus credenciales,
+        // la captura automática no tendría dónde guardar lo que baja.
+        if ($capturarNuevos && !AlmacenDocumentos::hayPrincipal()) {
+            $this->json([
+                'ok' => false,
+                'message' => 'La captura automática guarda en SharePoint. ' . AlmacenDocumentos::SIN_SHAREPOINT,
+            ], 422);
         }
 
         $php = $this->rutaPhpCli();
@@ -3290,9 +3324,9 @@ class CorreoController extends Controller
 
     /**
      * Script PowerShell que registra la tarea "XMLConcilia_SyncCorreo": corre
-     * el lanzador .vbs cada N minutos, indefinidamente, en la sesión del
-     * usuario conectado (sin pedir contraseña ni permisos de administrador).
-     * Sin acentos: se ejecuta en PowerShell 5.1.
+     * el lanzador .vbs cada N minutos, indefinidamente, con la cuenta del
+     * servidor web y sin depender de que alguien tenga la sesión abierta
+     * (ver TareaProgramada). Sin acentos: se ejecuta en PowerShell 5.1.
      */
     private function scriptRegistrarTareaSync($vbs, $intervaloMin)
     {
@@ -3309,10 +3343,7 @@ $t = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1)
 $r = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes $intervalo)
 $t.Repetition = $r.Repetition
 
-# Correr como el usuario con sesion abierta (sin contrasena ni admin)
-$usuario = (Get-CimInstance Win32_ComputerSystem).UserName
-if (-not $usuario) { $usuario = "$env:USERDOMAIN\$env:USERNAME" }
-$principal = New-ScheduledTaskPrincipal -UserId $usuario -LogonType Interactive -RunLevel Limited
+{{PRINCIPAL}}
 $ajustes = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 
 Register-ScheduledTask -TaskName $tn -Action $accion -Trigger $t -Principal $principal -Settings $ajustes -Force | Out-Null
@@ -3323,8 +3354,8 @@ Write-Output 'OK'
 POWERSHELL;
 
         return str_replace(
-            ['{{VBS}}', '{{MIN}}'],
-            [str_replace("'", "''", $vbs), (int) $intervaloMin],
+            ['{{VBS}}', '{{MIN}}', '{{PRINCIPAL}}'],
+            [str_replace("'", "''", $vbs), (int) $intervaloMin, TareaProgramada::principalPowerShell()],
             $plantilla
         );
     }
@@ -3512,527 +3543,14 @@ POWERSHELL;
         }
     }
 
-    /**
-     * Explorador de carpetas para el modal de configuración (POST, JSON).
-     * Sin 'ruta' devuelve las unidades del equipo (C:\, D:\…); con una ruta,
-     * sus subcarpetas. accion=crear crea una subcarpeta y devuelve su listado.
-     *
-     * Se navega dentro del propio modal en vez de abrir un diálogo nativo de
-     * Windows porque Apache corre como servicio (sesión 0): un diálogo saldría
-     * en un escritorio invisible y colgaría la petición.
-     */
-    public function carpetas()
-    {
-        if (!$this->isPost()) {
-            $this->json(['ok' => false, 'message' => 'Metodo no permitido.'], 405);
-        }
-
-        try {
-            $ruta = $this->normalizarRuta((string) $this->post('ruta', ''));
-
-            if ((string) $this->post('accion', '') === 'crear') {
-                $nombre = trim((string) $this->post('nombre', ''));
-                if ($ruta === '' || $nombre === '' || preg_match('/[<>:"\/\\\\|?*]/', $nombre)) {
-                    $this->json(['ok' => false, 'message' => 'Nombre de carpeta inválido.'], 422);
-                }
-                $nueva = rtrim($ruta, '\\/') . DIRECTORY_SEPARATOR . $nombre;
-                if (!is_dir($nueva) && !@mkdir($nueva, 0777, true) && !is_dir($nueva)) {
-                    $this->json(['ok' => false, 'message' => 'No se pudo crear la carpeta "' . $nombre . '".'], 422);
-                }
-                $ruta = $nueva;
-            }
-
-            $this->json($this->listarDirectorio($ruta));
-        } catch (Throwable $e) {
-            $this->json(['ok' => false, 'message' => 'No se pudo abrir la carpeta: ' . $e->getMessage()], 500);
-        }
-    }
+    // Aquí vivían el explorador de carpetas del disco (carpetas()) y el
+    // selector con la ventana de Windows (selectorAbrir/selectorEstado): servían
+    // para elegir la carpeta compartida, que ya no existe.
 
     /**
-     * Devuelve el contenido (solo subcarpetas) de una ruta local. Ruta vacía
-     * = raíz: lista las unidades del equipo. Incluye 'padre' para el botón
-     * "subir" y 'escribible' para avisar si no se podrá guardar ahí.
-     */
-    private function listarDirectorio($ruta)
-    {
-        if ($ruta === '') {
-            return [
-                'ok' => true,
-                'ruta' => '',
-                'es_raiz' => true,
-                'padre' => null,
-                'escribible' => false,
-                'carpetas' => $this->unidadesDisco(),
-            ];
-        }
-
-        if (!is_dir($ruta)) {
-            return ['ok' => false, 'message' => 'La carpeta ya no existe: ' . $ruta];
-        }
-
-        $carpetas = [];
-        $items = @scandir($ruta);
-        if ($items !== false) {
-            foreach ($items as $item) {
-                if ($item === '.' || $item === '..') {
-                    continue;
-                }
-                $full = rtrim($ruta, '\\/') . DIRECTORY_SEPARATOR . $item;
-                if (@is_dir($full)) {
-                    $carpetas[] = ['nombre' => $item, 'ruta' => $full];
-                }
-            }
-            usort($carpetas, function ($a, $b) {
-                return strcasecmp($a['nombre'], $b['nombre']);
-            });
-        }
-
-        return [
-            'ok' => true,
-            'ruta' => $ruta,
-            'es_raiz' => false,
-            'padre' => $this->rutaPadre($ruta),
-            'escribible' => RutaDocumento::permiteEscritura($ruta),
-            'carpetas' => $carpetas,
-        ];
-    }
-
-    /**
-     * Normaliza una ruta recibida del cliente: unifica separadores y deja la
-     * barra final solo en la raíz de unidad ("C:" → "C:\", "C:\x\" → "C:\x").
-     */
-    private function normalizarRuta($ruta)
-    {
-        $ruta = trim($ruta);
-        if ($ruta === '') {
-            return '';
-        }
-
-        $ruta = str_replace('/', DIRECTORY_SEPARATOR, $ruta);
-
-        // "C:" → "C:\" (raíz de unidad necesita la barra)
-        if (preg_match('/^[A-Za-z]:$/', $ruta)) {
-            return $ruta . DIRECTORY_SEPARATOR;
-        }
-        // "C:\" se queda igual; cualquier otra, sin barra final
-        if (preg_match('/^[A-Za-z]:\\\\$/', $ruta)) {
-            return $ruta;
-        }
-
-        return rtrim($ruta, '\\/');
-    }
-
-    /**
-     * Carpeta padre de una ruta. La raíz de unidad ("C:\") sube a la lista de
-     * unidades (cadena vacía).
-     */
-    private function rutaPadre($ruta)
-    {
-        if (preg_match('/^[A-Za-z]:\\\\?$/', $ruta)) {
-            return '';
-        }
-
-        $ruta = rtrim($ruta, '\\/');
-        $pos = strrpos($ruta, DIRECTORY_SEPARATOR);
-        if ($pos === false) {
-            return '';
-        }
-
-        $padre = substr($ruta, 0, $pos);
-        if (preg_match('/^[A-Za-z]:$/', $padre)) {
-            $padre .= DIRECTORY_SEPARATOR;   // "C:" → "C:\"
-        }
-
-        return $padre;
-    }
-
-    /**
-     * Unidades de disco disponibles. En Windows prueba C:–Z: (se omiten A:/B:
-     * para no despertar lectores sin medio); en Unix devuelve la raíz "/".
-     */
-    private function unidadesDisco()
-    {
-        if (DIRECTORY_SEPARATOR !== '\\') {
-            return [['nombre' => '/', 'ruta' => '/']];
-        }
-
-        $unidades = [];
-        foreach (range('C', 'Z') as $letra) {
-            $raiz = $letra . ':\\';
-            if (@is_dir($raiz)) {
-                $unidades[] = ['nombre' => $letra . ':\\', 'ruta' => $raiz];
-            }
-        }
-
-        return $unidades;
-    }
-
-    // ── Selector nativo de carpeta (explorador de Windows) ─────────
-
-    /**
-     * Abre el diálogo nativo de Windows para elegir la carpeta destino
-     * (POST, JSON). Apache corre como servicio (sesión 0, sin escritorio),
-     * así que el diálogo no puede abrirse directo desde PHP: un script
-     * lanzador lo ejecuta en la sesión del usuario conectado mediante una
-     * tarea programada interactiva. El diálogo escribe la ruta elegida en
-     * un archivo de resultado que selectorEstado() va consultando.
-     */
-    public function selectorAbrir()
-    {
-        if (!$this->isPost()) {
-            $this->json(['ok' => false, 'message' => 'Metodo no permitido.'], 405);
-        }
-
-        if (DIRECTORY_SEPARATOR !== '\\') {
-            $this->json(['ok' => false, 'message' => 'El explorador de Windows solo está disponible cuando el servidor corre en Windows.'], 422);
-        }
-        if (!function_exists('exec')) {
-            $this->json(['ok' => false, 'message' => 'exec() está deshabilitado en PHP.'], 422);
-        }
-
-        try {
-            $dir = MailFetcher::storagePath('tmp');
-            $this->limpiarSelectorViejos($dir);
-
-            $token = bin2hex(random_bytes(8));
-            $resultado = $dir . DIRECTORY_SEPARATOR . 'pick_' . $token . '.txt';
-            // El picker vive en una ruta FIJA: la tarea programada del modo
-            // servicio apunta a ella y así solo se registra la primera vez.
-            $picker    = $dir . DIRECTORY_SEPARATOR . 'pick_selector.ps1';
-            $launcher  = $dir . DIRECTORY_SEPARATOR . 'pick_launch_' . $token . '.ps1';
-            $lanzaVbs  = $dir . DIRECTORY_SEPARATOR . 'pick_go_' . $token . '.vbs';
-            // El diálogo moderno se compila UNA vez a este dll y se reusa:
-            // recompilar el C# en cada apertura añadía varios segundos.
-            $dll = MailFetcher::storagePath() . DIRECTORY_SEPARATOR . 'selector_dialog.dll';
-
-            // El diálogo abre en la carpeta ya configurada, si existe
-            $inicial = trim((string) ($this->configLocal()['carpeta_destino'] ?? ''));
-            if ($inicial !== '' && !is_dir($inicial)) {
-                $inicial = '';
-            }
-
-            file_put_contents($picker, $this->scriptPicker($resultado, $inicial, $dll));
-            file_put_contents($launcher, $this->scriptLauncher($picker, $resultado));
-
-            // Lanzar SIN esperar (WScript.Run asíncrono, igual que la sync):
-            // el exec() de antes bloqueaba la respuesta 3-8 s mientras
-            // PowerShell arrancaba y registraba la tarea. Los errores del
-            // lanzador llegan ahora por el archivo de resultado ("ERROR ..."),
-            // que selectorEstado() ya sabe reportar.
-            $cmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' . $launcher . '"';
-            file_put_contents($lanzaVbs, 'CreateObject("WScript.Shell").Run "' . str_replace('"', '""', $cmd) . '", 0, False' . "\r\n");
-            @exec('wscript.exe //B //Nologo "' . $lanzaVbs . '"');
-
-            $this->json(['ok' => true, 'token' => $token]);
-        } catch (Throwable $e) {
-            $this->json(['ok' => false, 'message' => 'No se pudo abrir el explorador de Windows: ' . $e->getMessage()], 500);
-        }
-    }
-
-    /**
-     * Consulta si el usuario ya eligió carpeta en el diálogo (POST, JSON).
-     * Estados: esperando (diálogo abierto), ok (con 'ruta') o cancelado.
-     */
-    public function selectorEstado()
-    {
-        if (!$this->isPost()) {
-            $this->json(['ok' => false, 'message' => 'Metodo no permitido.'], 405);
-        }
-
-        $token = (string) $this->post('token', '');
-        if (!preg_match('/^[a-f0-9]{16}$/', $token)) {
-            $this->json(['ok' => false, 'message' => 'Token inválido.'], 422);
-        }
-
-        $dir = MailFetcher::storagePath('tmp');
-        $resultado = $dir . DIRECTORY_SEPARATOR . 'pick_' . $token . '.txt';
-
-        if (!is_file($resultado)) {
-            $this->json(['ok' => true, 'estado' => 'esperando']);
-        }
-
-        $contenido = trim((string) file_get_contents($resultado));
-
-        @unlink($resultado);
-        @unlink($dir . DIRECTORY_SEPARATOR . 'pick_launch_' . $token . '.ps1');
-        @unlink($dir . DIRECTORY_SEPARATOR . 'pick_go_' . $token . '.vbs');
-
-        if ($contenido === 'CANCEL') {
-            $this->json(['ok' => true, 'estado' => 'cancelado']);
-        }
-        if (strpos($contenido, 'ERROR') === 0) {
-            $this->json(['ok' => false, 'message' => 'El diálogo falló: ' . trim(substr($contenido, 5))], 500);
-        }
-        if ($contenido === '' || !is_dir($contenido)) {
-            $this->json(['ok' => false, 'message' => 'La carpeta elegida no se pudo leer.'], 422);
-        }
-
-        $this->json(['ok' => true, 'estado' => 'ok', 'ruta' => $contenido]);
-    }
-
-    /**
-     * Script PowerShell que muestra el diálogo nativo "Seleccionar carpeta"
-     * (IFileOpenDialog con FOS_PICKFOLDERS, el mismo del explorador moderno;
-     * con respaldo al diálogo clásico de carpetas) y escribe la ruta elegida
-     * en el archivo de resultado. Sin acentos: se ejecuta en PowerShell 5.1.
-     */
-    private function scriptPicker($archivoResultado, $carpetaInicial, $rutaDll)
-    {
-        $plantilla = <<<'POWERSHELL'
-# Selector de carpeta de Nexo Fiscal: muestra el diálogo nativo de Windows
-# y escribe la ruta elegida (o CANCEL / ERROR ...) en el archivo resultado.
-$ErrorActionPreference = 'Stop'
-$resultado = '{{RESULTADO}}'
-$inicial   = '{{INICIAL}}'
-$dll       = '{{DLL}}'
-
-function Escribir([string] $texto) {
-    $utf8 = New-Object System.Text.UTF8Encoding -ArgumentList $false
-    [System.IO.File]::WriteAllText($resultado, $texto, $utf8)
-}
-
-try {
-    Add-Type -AssemblyName System.Windows.Forms
-
-    # Formulario invisible siempre-encima: es el dueno del dialogo para que
-    # salga al frente del navegador en vez de quedar detras de la ventana
-    $dueno = New-Object System.Windows.Forms.Form
-    $dueno.TopMost = $true
-    $dueno.ShowInTaskbar = $false
-    $dueno.FormBorderStyle = 'None'
-    $dueno.Opacity = 0
-    $null = $dueno.Handle
-
-    $moderno = $true
-    try {
-        # Dialogo moderno "Seleccionar carpeta" del explorador de Windows.
-        # El C# se compila UNA vez al dll y las siguientes aperturas solo lo
-        # cargan: recompilarlo en cada apertura costaba varios segundos.
-        $src = @'
-using System;
-using System.Runtime.InteropServices;
-
-public static class XmlConciliaSelector
-{
-    [ComImport, Guid("DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7")]
-    private class FileOpenDialogRCW { }
-
-    [ComImport, Guid("42f85136-db7e-439c-85f1-e4075d135fc8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IFileOpenDialog
-    {
-        [PreserveSig] uint Show(IntPtr parent);
-        void SetFileTypes(uint cFileTypes, IntPtr rgFilterSpec);
-        void SetFileTypeIndex(uint iFileType);
-        void GetFileTypeIndex(out uint piFileType);
-        void Advise(IntPtr pfde, out uint pdwCookie);
-        void Unadvise(uint dwCookie);
-        void SetOptions(uint fos);
-        void GetOptions(out uint pfos);
-        void SetDefaultFolder(IShellItem psi);
-        void SetFolder(IShellItem psi);
-        void GetFolder(out IShellItem ppsi);
-        void GetCurrentSelection(out IShellItem ppsi);
-        void SetFileName([MarshalAs(UnmanagedType.LPWStr)] string pszName);
-        void GetFileName(out IntPtr pszName);
-        void SetTitle([MarshalAs(UnmanagedType.LPWStr)] string pszTitle);
-        void SetOkButtonLabel([MarshalAs(UnmanagedType.LPWStr)] string pszText);
-        void SetFileNameLabel([MarshalAs(UnmanagedType.LPWStr)] string pszLabel);
-        void GetResult(out IShellItem ppsi);
-        void AddPlace(IShellItem psi, uint fdap);
-        void SetDefaultExtension([MarshalAs(UnmanagedType.LPWStr)] string pszDefaultExtension);
-        void Close(int hr);
-        void SetClientGuid(ref Guid guid);
-        void ClearClientData();
-        void SetFilter(IntPtr pFilter);
-        void GetResults(out IntPtr ppenum);
-        void GetSelectedItems(out IntPtr ppsai);
-    }
-
-    [ComImport, Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IShellItem
-    {
-        void BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppv);
-        void GetParent(out IShellItem ppsi);
-        void GetDisplayName(uint sigdnName, out IntPtr ppszName);
-        void GetAttributes(uint sfgaoMask, out uint psfgaoAttribs);
-        void Compare(IShellItem psi, uint hint, out int piOrder);
-    }
-
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
-    private static extern void SHCreateItemFromParsingName(
-        [MarshalAs(UnmanagedType.LPWStr)] string pszPath, IntPtr pbc,
-        [In, MarshalAs(UnmanagedType.LPStruct)] Guid riid, out IShellItem ppv);
-
-    public static string Mostrar(IntPtr dueno, string titulo, string inicial)
-    {
-        IFileOpenDialog dlg = (IFileOpenDialog)new FileOpenDialogRCW();
-        uint opciones;
-        dlg.GetOptions(out opciones);
-        dlg.SetOptions(opciones | 0x20 | 0x40); // FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM
-        dlg.SetTitle(titulo);
-
-        if (!string.IsNullOrEmpty(inicial) && System.IO.Directory.Exists(inicial))
-        {
-            try
-            {
-                IShellItem carpeta;
-                SHCreateItemFromParsingName(inicial, IntPtr.Zero,
-                    new Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe"), out carpeta);
-                dlg.SetFolder(carpeta);
-            }
-            catch { }
-        }
-
-        if (dlg.Show(dueno) != 0) return null; // cancelado
-
-        IShellItem elegido;
-        dlg.GetResult(out elegido);
-        IntPtr pszRuta;
-        elegido.GetDisplayName(0x80058000, out pszRuta); // SIGDN_FILESYSPATH
-        try { return Marshal.PtrToStringUni(pszRuta); }
-        finally { Marshal.FreeCoTaskMem(pszRuta); }
-    }
-}
-'@
-        $cargado = $false
-        if (Test-Path -LiteralPath $dll) {
-            try { Add-Type -Path $dll; $cargado = $true }
-            catch { try { Remove-Item -LiteralPath $dll -Force } catch { } }
-        }
-        if (-not $cargado) {
-            try {
-                Add-Type -TypeDefinition $src -OutputAssembly $dll | Out-Null
-                Add-Type -Path $dll
-            } catch {
-                # Sin dll (p. ej. carpeta no escribible): compilar en memoria
-                Add-Type -TypeDefinition $src
-            }
-        }
-    } catch { $moderno = $false }
-
-    if ($moderno) {
-        $ruta = [XmlConciliaSelector]::Mostrar($dueno.Handle, 'Carpeta destino de XML y PDF - Nexo Fiscal', $inicial)
-        if ($null -eq $ruta) { Escribir 'CANCEL'; exit 0 }
-    } else {
-        # Respaldo: dialogo clasico de seleccion de carpeta
-        $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-        $dlg.Description = 'Carpeta destino de XML y PDF - Nexo Fiscal'
-        $dlg.ShowNewFolderButton = $true
-        if ($inicial -ne '' -and (Test-Path -LiteralPath $inicial)) { $dlg.SelectedPath = $inicial }
-        if ($dlg.ShowDialog($dueno) -ne [System.Windows.Forms.DialogResult]::OK) { Escribir 'CANCEL'; exit 0 }
-        $ruta = $dlg.SelectedPath
-    }
-
-    Escribir $ruta
-} catch {
-    try { Escribir ('ERROR ' + $_.Exception.Message) } catch { }
-    exit 1
-}
-POWERSHELL;
-
-        // BOM UTF-8: PowerShell 5.1 lee los .ps1 sin BOM como ANSI
-        return "\xEF\xBB\xBF" . str_replace(
-            ['{{RESULTADO}}', '{{INICIAL}}', '{{DLL}}'],
-            [
-                str_replace("'", "''", $archivoResultado),
-                str_replace("'", "''", $carpetaInicial),
-                str_replace("'", "''", $rutaDll),
-            ],
-            $plantilla
-        );
-    }
-
-    /**
-     * Script que lanza el selector en la sesión del usuario. Si PHP ya corre
-     * en una sesión interactiva del usuario de Windows
-     * lo abre directo; si corre como servicio (sesión 0) registra una tarea
-     * programada interactiva — la vía soportada para mostrar una ventana en
-     * el escritorio del usuario desde un servicio de Windows.
-     */
-    private function scriptLauncher($rutaPicker, $rutaResultado)
-    {
-        $plantilla = <<<'POWERSHELL'
-# Lanzador del selector de carpeta. Corre en segundo plano (la peticion
-# AJAX ya respondio), asi que sus errores se reportan escribiendo
-# "ERROR ..." en el archivo de resultado que consulta selectorEstado().
-$ErrorActionPreference = 'Stop'
-$picker    = '{{PICKER}}'
-$resultado = '{{RESULTADO}}'
-
-function EscribirError([string] $texto) {
-    try {
-        $utf8 = New-Object System.Text.UTF8Encoding -ArgumentList $false
-        [System.IO.File]::WriteAllText($resultado, 'ERROR ' + $texto, $utf8)
-    } catch { }
-}
-
-try {
-    if ((Get-Process -Id $PID).SessionId -gt 0) {
-        # Sesion interactiva: el dialogo se
-        # muestra desde este mismo proceso, sin arrancar otro PowerShell
-        & $picker
-        exit 0
-    }
-
-    # Sesion 0 (servicio): lanzar el picker en la sesion del usuario via
-    # tarea programada. El picker tiene ruta FIJA, asi que la tarea se
-    # registra la primera vez y despues solo se arranca (mucho mas rapido).
-    $usuario = (Get-CimInstance Win32_ComputerSystem).UserName
-    if (-not $usuario) {
-        EscribirError 'No hay ningun usuario con sesion abierta en Windows.'
-        exit 1
-    }
-
-    $tn = 'XMLConcilia_SelectorCarpeta'
-    $argumento = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $picker + '"'
-    $tarea = Get-ScheduledTask -TaskName $tn -ErrorAction SilentlyContinue
-
-    # Si quedo un dialogo abierto de un intento anterior, cerrarlo
-    if ($tarea) { try { Stop-ScheduledTask -TaskName $tn -ErrorAction Stop } catch { } }
-
-    $reutilizable = $false
-    if ($tarea) {
-        try {
-            $reutilizable = ($tarea.Actions[0].Arguments -eq $argumento) -and ($tarea.Principal.UserId -eq $usuario)
-        } catch { }
-    }
-
-    if (-not $reutilizable) {
-        $accion = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $argumento
-        $principal = New-ScheduledTaskPrincipal -UserId $usuario -LogonType Interactive
-        $ajustes = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
-        Register-ScheduledTask -TaskName $tn -Action $accion -Principal $principal -Settings $ajustes -Force | Out-Null
-    }
-
-    Start-ScheduledTask -TaskName $tn
-    exit 0
-} catch {
-    EscribirError $_.Exception.Message
-    exit 1
-}
-POWERSHELL;
-
-        return "\xEF\xBB\xBF" . str_replace(
-            ['{{PICKER}}', '{{RESULTADO}}'],
-            [str_replace("'", "''", $rutaPicker), str_replace("'", "''", $rutaResultado)],
-            $plantilla
-        );
-    }
-
-    /**
-     * Borra archivos pick_* de intentos viejos (más de una hora) en tmp/.
-     */
-    private function limpiarSelectorViejos($dir)
-    {
-        foreach ((array) glob($dir . DIRECTORY_SEPARATOR . 'pick_*') as $archivo) {
-            if (is_file($archivo) && filemtime($archivo) < time() - 3600) {
-                @unlink($archivo);
-            }
-        }
-    }
-
-    /**
-     * Lee storage/correo/config.json (carpeta_destino, cedula).
+     * Lee storage/correo/config.json: el buzón en uso y la captura automática.
+     * Si trae carpeta_destino —la carpeta compartida de antes— se conserva al
+     * guardar: es lo que permite seguir abriendo lo que quedó ahí sin migrar.
      */
     private function configLocal()
     {
@@ -4040,7 +3558,7 @@ POWERSHELL;
             return $this->configLocalCache;
         }
 
-        $defaults = ['carpeta_destino' => '', 'cedula' => ''];
+        $defaults = ['cedula' => ''];
         $ruta = MailFetcher::storagePath() . DIRECTORY_SEPARATOR . 'config.json';
 
         if (is_file($ruta)) {

@@ -313,11 +313,11 @@ class Factura extends Model
                 (importacion_id, pago_id, consecutivo_completo, clave, tipo_documento, receptor_id,
                  sociedad_id,
                  numero_factura_asistente, proveedor_id, fecha_emision,
-                 subtotal, iva, total, moneda, tipo_comprobante, archivo_xml, ruta_xml, ruta_pdf,
+                 subtotal, iva, total, moneda, tipo_cambio, tipo_comprobante, archivo_xml, ruta_xml, ruta_pdf,
                  archivo_pdf, hash_pdf, estado_pdf, correo_cuenta_id, correo_carpeta,
                  correo_uidvalidity, correo_uid, fecha_correo, archivado_en,
                  hash_xml, metadata)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
         // El sello de sociedad viene de quien importa; si no lo indica, es la
         // seleccionada. Nunca queda NULL: un documento sin dueño no aparecería
@@ -339,6 +339,7 @@ class Factura extends Model
             $data['iva'] ?? 0,
             $data['total'] ?? 0,
             $data['moneda'] ?? 'CRC',
+            isset($data['tipo_cambio']) && (float) $data['tipo_cambio'] > 0 ? (float) $data['tipo_cambio'] : null,
             $data['tipo_comprobante'] ?? null,
             $data['archivo_xml'] ?? 'sin_archivo.xml',
             RutaDocumento::relativa($data['ruta_xml'] ?? '') ?: null,
@@ -888,6 +889,7 @@ class Factura extends Model
         // que dos proveedores pueden compartirlo y hay que poder preguntar de
         // quién es este comprobante antes de darlo por bueno.
         $sql = "SELECT f.id, f.consecutivo_completo, f.numero_factura_asistente, f.total,
+                       f.moneda, f.tipo_cambio,
                        f.fecha_emision, f.pago_id, f.proveedor_id,
                        p.rfc AS proveedor_cedula, p.razon_social AS proveedor_nombre
                   FROM {$this->table} f

@@ -99,7 +99,7 @@ return [
             'permisos' => [
                 'facturas_erp.ver'      => 'Ver las facturas de la empresa',
                 'facturas_erp.cargar'   => 'Subir el reporte del ERP',
-                'facturas_erp.editar'   => 'Resolver incidencias y líneas en revisión',
+                'facturas_erp.editar'   => 'Resolver incidencias y líneas en revisión, y quitar facturas del listado',
                 'facturas_erp.exportar' => 'Exportar a Excel',
             ],
         ],
@@ -146,7 +146,7 @@ return [
             'permisos' => [
                 'documentos.ver'       => 'Abrir la ficha de un comprobante',
                 'documentos.descargar' => 'Descargar el XML y el PDF',
-                'documentos.recuperar' => 'Recuperar archivos que no están en su sitio',
+                'documentos.recuperar' => 'Recuperar archivos que no están en su sitio o subir el PDF que falta',
             ],
         ],
 
@@ -224,6 +224,8 @@ return [
         'POST /configuracion/proveedores/opciones' => ['permiso' => 'configuracion.proveedores'],
         'POST /configuracion/proveedores/guardar'  => ['permiso' => 'configuracion.proveedores',
                                                        'registrar' => 'Dio de alta o corrigió un código de proveedor'],
+        'POST /configuracion/proveedores/dejar-de-aceptar' => ['permiso' => 'configuracion.proveedores',
+                                                       'registrar' => 'Hizo que un código dejara de aceptar otra cédula'],
         'POST /configuracion/proveedores/eliminar' => ['permiso' => 'configuracion.proveedores',
                                                        'registrar' => 'Eliminó un código de proveedor de la lista'],
         'POST /configuracion/proveedores/ignorar'  => ['permiso' => 'configuracion.proveedores',
@@ -255,10 +257,9 @@ return [
         'POST /sociedades/editar/{id}'   => ['permiso' => 'empresas.administrar', 'registrar' => 'Editó una empresa'],
         'POST /sociedades/eliminar/{id}' => ['permiso' => 'empresas.administrar', 'registrar' => 'Eliminó una empresa'],
         'POST /sociedades/activar/{id}'  => ['permiso' => 'libre',                'registrar' => 'Cambió de empresa'],
-        // Dónde se archiva lo nuevo de una empresa: es el mismo permiso que
-        // cambiar la carpeta de documentos, porque es la misma decisión.
-        'POST /sociedades/almacen/{id}'  => ['permiso' => 'configuracion.archivo',
-                                             'registrar' => 'Cambió dónde se archivan los documentos de una empresa'],
+        // Aquí estaba 'POST /sociedades/almacen/{id}': elegir si una empresa
+        // archivaba en la carpeta compartida o en SharePoint. Desde el
+        // 27/09/2026 todas archivan en SharePoint y no hay nada que elegir.
 
         // ── Facturas XML ──────────────────────────────────────────────────
         'GET /facturas'                  => ['permiso' => 'facturas_xml.ver'],
@@ -281,20 +282,20 @@ return [
         'GET /documentos/xml/{id}'   => ['permiso' => 'documentos.descargar'],
         'GET /documentos/pdf/{id}'   => ['permiso' => 'documentos.descargar'],
         'POST /documentos/recuperar' => ['permiso' => 'documentos.recuperar', 'registrar' => 'Recuperó archivos de un comprobante'],
+        'POST /documentos/pdf/{id}/subir' => ['permiso' => 'documentos.recuperar', 'registrar' => 'Subió a mano el PDF de un comprobante'],
 
         // ── Correo ────────────────────────────────────────────────────────
         'GET /correo'                        => ['permiso' => 'correo.ver'],
         'POST /correo/listar'                => ['permiso' => 'correo.ver'],
         'POST /correo/sincronizar'           => ['permiso' => 'correo.sincronizar', 'registrar' => 'Sincronizó un buzón'],
-        'POST /correo/config'                => ['permiso' => 'correo.configurar',  'registrar' => 'Cambió la configuración del correo'],
+        // /correo/config, /correo/carpetas y /correo/selector/* elegían la
+        // carpeta compartida de documentos. Ya no hay carpeta que elegir: los
+        // documentos van a SharePoint.
         'POST /correo/cuentas/guardar'       => ['permiso' => 'correo.configurar',  'registrar' => 'Guardó una cuenta de correo'],
         'POST /correo/cuentas/eliminar'      => ['permiso' => 'correo.configurar',  'registrar' => 'Eliminó una cuenta de correo'],
         'POST /correo/cuentas/usar'          => ['permiso' => 'correo.ver'],
         'POST /correo/cuentas/probar'        => ['permiso' => 'correo.configurar'],
-        'POST /correo/carpetas'              => ['permiso' => 'correo.ver'],
         'POST /correo/carpetas-buzon'        => ['permiso' => 'correo.ver'],
-        'POST /correo/selector/abrir'        => ['permiso' => 'correo.configurar'],
-        'POST /correo/selector/estado'       => ['permiso' => 'correo.configurar'],
         'POST /correo/auto/estado'           => ['permiso' => 'correo.ver'],
         'POST /correo/auto/activar'          => ['permiso' => 'correo.configurar',  'registrar' => 'Activó la captura automática de correo'],
         'POST /correo/auto/desactivar'       => ['permiso' => 'correo.configurar',  'registrar' => 'Desactivó la captura automática de correo'],
@@ -349,6 +350,9 @@ return [
         'POST /facturas-erp/revision/enredo'       => ['permiso' => 'facturas_erp.editar',   'registrar' => 'Resolvió un enredo de filas iguales del ERP'],
         'POST /facturas-erp/revision/olvidar'      => ['permiso' => 'facturas_erp.editar',   'registrar' => 'Olvidó una corrección guardada del ERP'],
         'GET /facturas-erp/exportar'               => ['permiso' => 'facturas_erp.exportar', 'registrar' => 'Exportó las facturas del ERP'],
+        'POST /facturas-erp/quitar'                => ['permiso' => 'facturas_erp.editar',   'registrar' => 'Quitó una factura del listado del ERP'],
+        'GET /facturas-erp/quitadas'               => ['permiso' => 'facturas_erp.ver'],
+        'POST /facturas-erp/quitadas/devolver'     => ['permiso' => 'facturas_erp.editar',   'registrar' => 'Devolvió al listado una factura quitada del ERP'],
 
         // ── Notas de crédito ──────────────────────────────────────────────
         'GET /notas-credito'                     => ['permiso' => 'notas_credito.ver'],
@@ -358,6 +362,7 @@ return [
         'GET /notas-credito/buscar'              => ['permiso' => 'notas_credito.ver'],
         'POST /notas-credito/verificar/{id}'     => ['permiso' => 'notas_credito.editar', 'registrar' => 'Verificó un listado de notas de crédito'],
         'GET /notas-credito/historial/{id}'      => ['permiso' => 'notas_credito.ver'],
+        'GET /notas-credito/aplicables/{id}'     => ['permiso' => 'notas_credito.ver'],
         'GET /notas-credito/candidatas'          => ['permiso' => 'notas_credito.ver'],
         'POST /notas-credito/vincular'           => ['permiso' => 'notas_credito.editar', 'registrar' => 'Vinculó una nota de crédito a su XML'],
         'POST /notas-credito/desvincular'        => ['permiso' => 'notas_credito.editar', 'registrar' => 'Desvinculó una nota de crédito'],

@@ -71,6 +71,7 @@ class XmlInvoiceParser
 		$iva = self::getIva($xml);
 		$total = self::getTotal($xml);
 		$moneda = self::getMoneda($xml);
+		$tipoCambio = self::getTipoCambio($xml, $moneda);
 		$tipoComprobante = self::firstAttrByLocalName($xml, 'Comprobante', 'TipoDeComprobante');
 		$receptorId = self::getReceptorId($xml);
 		$tipoDocumento = self::getTipoDocumento($xml, $tipoComprobante);
@@ -88,6 +89,7 @@ class XmlInvoiceParser
 			'iva' => $iva,
 			'total' => $total,
 			'moneda' => $moneda,
+			'tipo_cambio' => $tipoCambio,
 			'tipo_comprobante' => $tipoComprobante !== '' ? $tipoComprobante : null,
 			// Sin el contenido del XML: el documento se archiva en la carpeta
 			// compartida y la base guarda dónde está, no una copia.
@@ -362,6 +364,27 @@ class XmlInvoiceParser
 		}
 
 		return 'CRC';
+	}
+
+	/**
+	 * El tipo de cambio con el que se emitió el comprobante, o null.
+	 *
+	 * Hacienda lo pide dentro de <CodigoTipoMoneda> junto a <CodigoMoneda>. Hace
+	 * falta para comparar una factura en dólares con la del sistema, que está
+	 * en colones: el total del XML por este número es lo que el sistema anota.
+	 * En colones no se guarda —sería 1 y no dice nada— y tampoco un valor que
+	 * no sea un número positivo.
+	 */
+	private static function getTipoCambio(SimpleXMLElement $xml, $moneda)
+	{
+		if (strtoupper((string) $moneda) === 'CRC') {
+			return null;
+		}
+		$texto = str_replace(',', '.', trim(self::firstNodeText($xml, 'TipoCambio')));
+		if ($texto === '' || !is_numeric($texto) || (float) $texto <= 0) {
+			return null;
+		}
+		return round((float) $texto, 5);
 	}
 
 	private static function getFechaEmision(SimpleXMLElement $xml)

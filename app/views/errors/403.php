@@ -99,8 +99,7 @@ $quienEres = $_SESSION['user_nombre'] ?? $_SESSION['user_username'] ?? '';
         <div class="error-code">403</div>
         <h1 class="error-title">Esta pantalla no es para tu rol</h1>
         <p class="error-message">
-            Tu cuenta existe y la sesión está abierta: lo que pasa es que tu rol
-            no incluye esta parte del sistema. No has hecho nada mal.
+            Tu rol no incluye esta parte del sistema.
         </p>
 
         <?php if ($queHaceFalta !== ''): ?>
@@ -111,8 +110,7 @@ $quienEres = $_SESSION['user_nombre'] ?? $_SESSION['user_username'] ?? '';
         <?php endif; ?>
 
         <p class="error-message">
-            Si necesitas entrar aquí para tu trabajo, pídeselo al administrador
-            del sistema: puede añadir este permiso a tu rol sin tocar nada más.
+            Si lo necesitas, pídele el permiso al administrador.
         </p>
 
         <div class="acciones">

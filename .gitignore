@@ -1,5 +1,6 @@
 # Runtime logs
 storage/logs/*.log
+storage/logs/*.log.*
 
 # Archivos que sube la gente (artefactos de ejecución).
 # Son reportes reales del ERP: proveedores, cédulas y montos de la empresa.

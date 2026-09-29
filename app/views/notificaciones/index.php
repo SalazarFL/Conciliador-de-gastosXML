@@ -47,7 +47,7 @@ $moneda = function ($n) { return number_format((float) $n, 2, ',', '.'); };
     <i class="fas fa-check-circle" style="font-size:34px;color:#38a169;"></i>
     <p style="margin-top:12px;font-size:13.5px;font-weight:700;color:var(--navy);">Nada que revisar</p>
     <p style="font-size:12px;color:var(--text-muted);margin-top:4px;">
-        Cuando aparezca algo que no se pueda resolver solo, va a salir acá.
+        Lo que no se pueda resolver solo sale acá.
     </p>
 </div>
 <?php else: ?>

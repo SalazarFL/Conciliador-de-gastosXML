@@ -208,7 +208,7 @@ foreach ($resumenTipos as $r) { if ($r['severidad'] === 'alerta') { $alertas += 
                         <?php if ($viendoDescartadas): ?>
                             No hay incidencias descartadas.
                         <?php elseif ($total === 0 && !$query): ?>
-                            Todavía no hay incidencias registradas. Aparecen al cargar un listado.
+                            Todavía no hay incidencias. Aparecen al cargar un listado.
                         <?php else: ?>
                             Ninguna incidencia vigente coincide con el filtro.
                         <?php endif; ?>

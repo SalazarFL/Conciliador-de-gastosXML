@@ -12,9 +12,10 @@
  * público. El secreto no se manda por correo ni por chat; se escribe aquí,
  * en la computadora, y en ningún otro lado.
  *
- * Solo lo necesitan las computadoras que trabajan con empresas que archivan
- * en SharePoint. Sin este archivo, esas empresas no se pueden abrir desde esta
- * computadora y Diagnóstico lo dice; las que archivan en disco funcionan igual.
+ * Todas las computadoras que usan Nexo Fiscal lo necesitan: los XML y los PDF
+ * de todas las empresas viven en SharePoint, y sin este archivo esta
+ * computadora no puede ni guardarlos ni abrirlos. Diagnóstico lo dice, y los
+ * módulos que trabajan con documentos se cierran hasta que esté.
  *
  * Mientras un valor siga empezando por "PEGA-", el archivo cuenta como vacío.
  *
@@ -36,5 +37,20 @@ return [
 
     // La biblioteca de documentos: el id del "drive" (empieza por "b!").
     // Lo da: php cli/probar_sharepoint.php --bibliotecas=https://<empresa>.sharepoint.com/sites/<sitio>
+    // (o el administrador, si a la aplicación solo se le dio una carpeta).
     'drive_id'      => 'PEGA-EL-ID-DE-LA-BIBLIOTECA',
+
+    // Si Nexo Fiscal vive en UNA carpeta de una biblioteca que ya se usaba,
+    // su ruta dentro de la biblioteca, sin el nombre de la biblioteca: por
+    // ejemplo 'Contabilidad/Nexo Fiscal'. Vacío = la biblioteca entera.
+    //
+    // Es la misma en todas las computadoras y se elige una sola vez: las
+    // rutas que guarda la base son relativas a esta carpeta.
+    'carpeta'       => '',
+
+    // El id de esa carpeta. Opcional: si falta, se averigua por la ruta. Hace
+    // falta cuando el administrador le dio a la aplicación permiso SOLO sobre
+    // la carpeta y SharePoint no deja buscarla por su ruta; es el mismo id que
+    // él usó para dar el permiso.
+    'carpeta_id'    => '',
 ];

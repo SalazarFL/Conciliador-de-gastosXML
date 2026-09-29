@@ -110,7 +110,7 @@ $seccionesPanel = Navegacion::secciones();
 
 /*
  * ── Lo que le falta a la instalación ──────────────────────────────────────
- * Mientras falte alguno de los tres pasos, casi ningún módulo se abre. Así
+ * Mientras falte alguno de los pasos, casi ningún módulo se abre. Así
  * que se dice aquí arriba, con nombre y botón, y no abajo en letra pequeña:
  * el que entra el primer día tiene que saber por dónde empezar sin que nadie
  * se lo explique.
@@ -129,8 +129,7 @@ $pasosQueFaltan = Requisitos::faltantes();
         </span>
     </div>
     <p class="panel-arranque-texto">
-        Los módulos que dependen de estos pasos están a la vista pero cerrados: sin
-        ellos no tendrían con qué trabajar, y lo que se cargara ahora entraría mal.
+        Los módulos que dependen de estos pasos están cerrados hasta completarlos.
         Se hace una sola vez.
     </p>
     <div class="panel-arranque-pasos">
@@ -193,12 +192,11 @@ $pasosQueFaltan = Requisitos::faltantes();
     <?php if (empty($sociedades)): ?>
     <div class="panel-empresa-aviso">
         <?php if (Permisos::puede('empresas.administrar')): ?>
-        Todavía no hay ninguna empresa registrada. La que elijas es con la que trabajas:
-        su cédula se compara contra el receptor de cada factura del correo.
+        Todavía no hay ninguna empresa registrada. La que elijas es con la que trabajas.
         <a href="<?= $baseUrl ?>/configuracion?ir=empresas">Registra la primera</a>.
         <?php else: ?>
-        No tienes ninguna empresa asignada todavía. Pídele al administrador que te
-        dé acceso a la que te toque: hasta entonces los listados saldrán vacíos.
+        No tienes ninguna empresa asignada. Pídesela al administrador: hasta
+        entonces los listados saldrán vacíos.
         <?php endif; ?>
     </div><!-- /panel-empresa-aviso -->
     <?php else: ?>
@@ -214,7 +212,7 @@ $pasosQueFaltan = Requisitos::faltantes();
                 <span class="empresa-chip-cedula">
                     <?= htmlspecialchars($soc['cedula']) ?>
                     <?php if (!empty($soc['activa'])): ?>
-                    · <span title="Con esta empresa arranca quien nunca ha elegido, y con ella trabajan las tareas automáticas">por omisión</span>
+                    · <span title="Con la que arranca quien nunca ha elegido y con la que corren las tareas automáticas">por omisión</span>
                     <?php endif; ?>
                 </span>
             </button>

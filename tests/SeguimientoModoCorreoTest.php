@@ -244,25 +244,47 @@ assertModoCorreo(
 assertModoCorreo(Seguimiento::normalizarItems(['xml_inventado|3']) === [],
     'un origen que no existe se descarta');
 
-// ── La tabla enseña Monto y Saldo como dos columnas ─────────────────────────
+// ── Un dato por columna, y la cabecera y las filas cuentan lo mismo ─────────
 //
-// El saldo vivió plegado bajo el monto, escribiéndose solo cuando los dos
-// números diferían. Leerlos en paralelo —cuánto se facturó, cuánto queda— pide
-// dos columnas, y la cabecera y cada fila tienen que contar lo mismo o la
-// tabla sale corrida.
+// El saldo vivió plegado bajo el monto, y la fecha, la sucursal y la
+// diferencia colgaban de otras celdas. Cada dato tiene ahora su columna, y la
+// cabecera, la fila de buscadores y cada renglón tienen que declarar las
+// mismas, o la tabla sale corrida.
 $vistaSeg = file_get_contents(__DIR__ . '/../app/views/seguimiento/index.php');
 
 preg_match('~<tr class="seg-head-labels">.*?</tr>~s', $vistaSeg, $mCab);
-// Siete escritas a mano: la casilla de marcar, las cinco de datos y la de las
-// acciones. Las demás las añade el catálogo de columnas, apagadas de fábrica,
-// y por eso no se cuentan aquí.
-assertModoCorreo($mCab && substr_count($mCab[0], '<th') === 7,
-    'la cabecera declara sus siete columnas fijas');
+preg_match('~<tr class="seg-search-row">.*?</tr>~s', $vistaSeg, $mBusca);
+preg_match('~<tbody>.*</tbody>~s', $vistaSeg, $mCuerpo);
+$colsDe = static function ($html, $etiqueta) {
+    preg_match_all('~<' . $etiqueta . '[^>]*data-col="([a-z0-9_]+)"~', (string) $html, $m);
+    $ids = array_unique($m[1]);
+    sort($ids);
+    return $ids;
+};
+$enCabecera = $colsDe($mCab[0] ?? '', 'th');
+assertModoCorreo($mCab && $mBusca && $mCuerpo && $enCabecera !== [],
+    'la vista tiene cabecera, fila de buscadores y cuerpo');
+assertModoCorreo($colsDe($mBusca[0] ?? '', 'th') === $enCabecera,
+    'la fila de buscadores tiene un hueco por cada columna de la cabecera');
+assertModoCorreo($colsDe($mCuerpo[0] ?? '', 'td') === $enCabecera,
+    'cada columna de la cabecera tiene su celda en el renglón, y ninguna de más');
+foreach (['fecha', 'sucursal', 'diferencia'] as $suelta) {
+    assertModoCorreo(in_array($suelta, $enCabecera, true),
+        "«{$suelta}» es una columna propia, no una sub-línea de otra celda");
+}
+assertModoCorreo($mCab && (bool) preg_match(
+        '~<\?php if \(!\$esModoCorreo\): \?>\s*<th[^>]*data-col="notas_aplicables"~', $mCab[0]),
+    'la columna de notas aplicables no sale en el modo Correo');
 assertModoCorreo($mCab && strpos($mCab[0], 'Columnas::cabecerasExtra') !== false,
     'y detrás de ellas van las que se pueden encender');
-assertModoCorreo($mCab && strpos($mCab[0], '>Monto<') !== false
+assertModoCorreo($mCab && strpos($mCab[0], "'Monto sistema'") !== false
     && strpos($mCab[0], '>Saldo<') !== false,
     'Monto y Saldo son dos columnas, no una');
+// El monto del XML va a la par del del sistema, y solo donde hay sistema: en
+// el modo Correo el monto de la fila ya es el del comprobante.
+assertModoCorreo($mCab && (bool) preg_match(
+        '~<\?php if \(!\$esModoCorreo\): \?>\s*<th[^>]*data-col="monto_xml"~', $mCab[0]),
+    'la columna Monto XML no sale en el modo Correo');
 
 // La fila de "no hay nada" tiene que cruzar la tabla entera, con todas las
 // columnas encendidas: si se quedara en siete, al encender unas cuantas el

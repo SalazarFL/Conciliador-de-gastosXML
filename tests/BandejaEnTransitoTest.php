@@ -106,19 +106,18 @@ $subidasABandeja = function () use ($biblioteca) {
 };
 
 try {
-    $pdo->prepare("INSERT INTO sociedades (nombre, cedula, activa, almacen_documentos)
-                   VALUES (?, ?, 0, 'sharepoint')")->execute([$empresa, $cedulaEmpresa]);
+    $pdo->prepare("INSERT INTO sociedades (nombre, cedula, activa) VALUES (?, ?, 0)")
+        ->execute([$empresa, $cedulaEmpresa]);
     $sociedadId = (int) $pdo->lastInsertId();
     $proveedores = new Proveedor();
     $proveedorCreado = $proveedores->findByRfc($cedulaProveedor) === null;
     $proveedorId = (int) $proveedores->obtenerOCrear($cedulaProveedor, 'PROVEEDOR TRANSITO ' . $marca);
     // Sin lista de proveedores cargada no se importa nada: el importador se
     // niega a enganchar a ciegas.
-    $pdo->prepare("INSERT INTO proveedor_codigo_erp (proveedor_codigo, proveedor_id, cedula, nombre_erp, origen)
-                   VALUES (?, ?, ?, 'TRANSITO', 'manual')")
-        ->execute(['TRA-' . $marca, $proveedorId, $cedulaProveedor]);
+    $pdo->prepare("INSERT INTO proveedor_codigo_erp (sociedad_id, proveedor_codigo, proveedor_id, cedula, nombre_erp, origen)
+                   VALUES (?, ?, ?, ?, 'TRANSITO', 'manual')")
+        ->execute([$sociedadId, 'TRA-' . $marca, $proveedorId, $cedulaProveedor]);
     ProveedorCodigoErp::olvidarMapa();
-    AlmacenDocumentos::olvidarAjustes();
     Model::olvidarMemoria();
 
     $sociedades = [['id' => $sociedadId, 'cedula' => $cedulaEmpresa]];

@@ -107,9 +107,18 @@ foreach ($vistas as $listado => $ruta) {
     }
 
     // Y al revés: nada marcado en la vista que el catálogo no conozca, o sería
-    // una columna que no se puede ni apagar ni exportar.
+    // una columna que no se puede ni apagar ni exportar. Una vista que sirve a
+    // dos listados —Seguimiento en sus dos modos— escribe las columnas de los
+    // dos, cada una dentro de su modo: basta con que la conozca alguno de los
+    // catálogos que comparten la vista.
+    $conocidas = [];
+    foreach ($vistas as $otro => $otraRuta) {
+        if ($otraRuta === $ruta) {
+            $conocidas += Columnas::catalogo($otro);
+        }
+    }
     foreach (array_merge($enCabecera, $enCeldas) as $id) {
-        comprueba(isset($catalogo[$id]),
+        comprueba(isset($conocidas[$id]),
             "«{$listado}»: «{$id}» está marcado en {$ruta} pero no en el catálogo");
     }
 

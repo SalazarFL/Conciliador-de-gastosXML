@@ -140,7 +140,7 @@ $campo = function ($etiqueta, $valor, $mono = false) {
             <?php endif; ?>
             <?php if (empty($estado['xml_ok']) && empty($estado['pdf_ok'])): ?>
             <span style="font-size:12.5px;color:var(--text-muted);align-self:center;">
-                No hay archivos que abrir: no está ninguno de los dos donde se archivaron.
+                No hay archivos que abrir: ninguno está donde se archivó.
             </span>
             <?php endif; ?>
         </div>

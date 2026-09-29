@@ -4,7 +4,7 @@
  *
  * Un menú de temas a la izquierda y UNA sección a la vez a la derecha. El
  * engranaje de la barra superior llega aquí desde cualquier módulo: lo que se
- * ajusta acá —dónde se guardan los XML y PDF, con qué empresa se trabaja, qué
+ * ajusta acá —dónde están los XML y PDF, con qué empresa se trabaja, qué
  * buzones se leen— lo usan todos, no solo el correo, donde vivía escondido.
  *
  * Antes las nueve secciones se apilaban en una página larguísima y el índice
@@ -21,13 +21,14 @@
 $baseUrl        = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 $esAdmin        = !empty($esAdmin);
 $imapDisponible = !empty($imapDisponible);
-$configLocal    = is_array($configLocal ?? null) ? $configLocal : ['carpeta_destino' => ''];
+$configLocal    = is_array($configLocal ?? null) ? $configLocal : [];
 $cuentas        = is_array($cuentas ?? null) ? $cuentas : [];
 $cuentaActivaId = (int) ($cuentaActivaId ?? 0);
 $sociedades     = is_array($sociedades ?? null) ? $sociedades : [];
 $sociedadActiva = $sociedadActiva ?? null;
 $sociedadEnUsoId = (int) ($sociedadEnUsoId ?? 0);
-$sharepointDisponible = !empty($sharepointDisponible);
+$sharepoint     = (is_array($sharepoint ?? null) ? $sharepoint : [])
+    + ['disponible' => false, 'archivo_existe' => false, 'drive_id' => '', 'carpeta' => '', 'carpeta_anterior' => ''];
 $pagos        = is_array($pagos ?? null) ? $pagos : [];
 $pagoActivo   = (int) ($pagoActivo ?? 0);
 $usuarios       = is_array($usuarios ?? null) ? $usuarios : [];
@@ -45,12 +46,11 @@ $selfId         = (int) ($_SESSION['user_id'] ?? 0);
 $puede = is_array($puede ?? null) ? $puede : [];
 $puedeVer = fn(string $que): bool => !empty($puede[$que]);
 
-$carpetaRaiz    = trim((string) ($configLocal['carpeta_destino'] ?? ''));
 
 // El índice se arma de una lista, no a mano en el HTML: así el buscador del
 // índice y las secciones no se pueden desincronizar.
 $secciones = [
-    ['archivo',        'fa-folder-tree',        'Archivo de documentos', 'Dónde se guardan los XML y PDF'],
+    ['archivo',        'fa-cloud',              'Archivo de documentos', 'SharePoint, donde se guardan los XML y PDF'],
     ['correo',         'fa-at',                 'Cuentas de correo',     'Buzones de los que se bajan las facturas'],
     ['automatizacion', 'fa-rotate',             'Automatización',        'Qué hace el sistema solo, en segundo plano'],
     ['empresas',       'fa-building',           'Empresas',              'Con cuál se trabaja y contra qué cédula se verifica'],
@@ -68,7 +68,7 @@ if ($puedeVer('bitacora')) {
     $secciones[] = ['actividad', 'fa-clock-rotate-left', 'Actividad', 'Quién hizo qué, y cuándo'];
 }
 if ($puedeVer('respaldo')) {
-    $secciones[] = ['respaldo', 'fa-database', 'Respaldo', 'Copias de la base en la carpeta compartida'];
+    $secciones[] = ['respaldo', 'fa-database', 'Respaldo', 'Copias de la base en esta computadora'];
 }
 $secciones[] = ['sistema', 'fa-desktop', 'Esta computadora', 'Estado de la instalación local'];
 
@@ -113,31 +113,81 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
         <!-- ── Archivo de documentos ───────────────────────── -->
         <section class="cfg-section<?= $seccionAbierta === 'archivo' ? ' is-activa' : '' ?>"
                  id="archivo" data-cfg-seccion="archivo" role="tabpanel"
-                 data-cfg-buscar="archivo documentos carpeta raiz raíz xml pdf ruta sharepoint ordenar mover mes">
+                 data-cfg-buscar="archivo documentos sharepoint biblioteca carpeta xml pdf credenciales graph migrar">
             <div class="cfg-card">
                 <div class="cfg-card-head">
-                    <div class="cfg-card-icono gold"><i class="fas fa-folder-tree"></i></div>
+                    <div class="cfg-card-icono gold"><i class="fas fa-cloud"></i></div>
                     <div class="cfg-card-titulo">
                         <h2>Archivo de documentos</h2>
-                        <p>Dónde quedan guardados los XML y los PDF de esta computadora.</p>
+                        <p>Los XML y los PDF de todas las empresas se guardan en SharePoint.</p>
                     </div>
                 </div>
 
                 <div class="cfg-row apilada">
                     <div>
                         <div class="cfg-row-label">
-                            <i class="fas fa-folder-open" style="color:var(--gold);"></i>Carpeta raíz de XML y PDF
+                            <i class="fas fa-plug" style="color:var(--gold);"></i>SharePoint en esta computadora
+                        </div>
+                        <div class="cfg-row-ayuda">
+                            <?php if ($sharepoint['disponible']): ?>
+                            <?php /*
+                             * Solo lo que dice local.graph.php: dibujar la pantalla no sale a
+                             * la red. Si de verdad contesta lo dice Diagnóstico, que sí pregunta.
+                             */ ?>
+                            <i class="fas fa-circle-check" style="color:var(--ok);margin-right:4px;"></i>
+                            Con credenciales. Guarda en
+                            <?php if ($sharepoint['carpeta'] !== ''): ?>
+                            la carpeta <span class="cfg-ruta"><?= htmlspecialchars($sharepoint['carpeta']) ?></span>
+                            de la biblioteca
+                            <?php else: ?>
+                            la biblioteca
+                            <?php endif; ?>
+                            <?php /* El nombre, que es como la gente la reconoce; el id
+                                     queda en el título por si hay que compararlo
+                                     con local.graph.php. Sin nombre, el id. */ ?>
+                            <?php if (($sharepoint['biblioteca'] ?? '') !== ''): ?>
+                            <?php if (($sharepoint['biblioteca_url'] ?? '') !== ''): ?>
+                            <a href="<?= htmlspecialchars($sharepoint['biblioteca_url']) ?>" target="_blank" rel="noopener"
+                               title="Abrir en SharePoint · Id: <?= htmlspecialchars($sharepoint['drive_id']) ?>"><strong><?= htmlspecialchars($sharepoint['biblioteca']) ?></strong></a>.
+                            <?php else: ?>
+                            <strong title="Id: <?= htmlspecialchars($sharepoint['drive_id']) ?>"><?= htmlspecialchars($sharepoint['biblioteca']) ?></strong>.
+                            <?php endif; ?>
+                            <?php else: ?>
+                            <code title="<?= htmlspecialchars($sharepoint['drive_id']) ?>"><?= htmlspecialchars(mb_strimwidth($sharepoint['drive_id'], 0, 18, '…')) ?></code>.
+                            <?php endif; ?>
+                            <?php else: ?>
+                            <i class="fas fa-triangle-exclamation" style="color:var(--warn);margin-right:4px;"></i>
+                            <strong>Sin credenciales.</strong> Esta computadora no puede guardar ni abrir
+                            comprobantes, y Correo, Facturas XML, Notas XML, Devoluciones y Por pagar
+                            quedan cerrados hasta configurarla.
+                            <?= $sharepoint['archivo_existe'] ? 'El archivo existe pero le faltan datos.' : '' ?>
+                            <div class="cfg-arbol" style="margin-top:6px;">
+                                <div class="cfg-arbol-hijo">
+                                    1. <code>copy app\config\graph.ejemplo.php app\config\local.graph.php</code><br>
+                                    2. Completarlo con los datos que da quien administra la aplicación en
+                                    Microsoft Entra ID. El secreto no se manda por correo ni por chat.<br>
+                                    3. Comprobarlo: <code>php cli/probar_sharepoint.php</code>
+                                </div>
+                            </div>
+                            La guía completa está en <code>docs/SHAREPOINT.md</code>.
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="cfg-row apilada">
+                    <div>
+                        <div class="cfg-row-label">
+                            <i class="fas fa-folder-tree" style="color:var(--gold);"></i>Qué hay adentro
                         </div>
                         <div class="cfg-row-ayuda">
                             <?php /*
                              * El árbol, dibujado, en vez de la ruta escrita en prosa: la
                              * pregunta que trae a la gente a esta pantalla no es cómo se
                              * llama la carpeta, sino cuál se puede tocar. SISTEMA es lo
-                             * que la aplicación administra —y lleva dentro su propia nota
-                             * de advertencia—; PAGOS es donde se trabaja.
+                             * que la aplicación administra; PAGOS es donde se trabaja.
                              */ ?>
-                            Dentro de esta raíz la aplicación arma su propia estructura, y no
-                            todas las carpetas son iguales:
+                            Dentro se arman tres carpetas:
                             <div class="cfg-arbol">
                                 <div class="cfg-arbol-linea">
                                     <i class="fas fa-folder-closed" style="color:var(--navy-light);"></i>
@@ -145,11 +195,10 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                                     <span class="cfg-arbol-tag no-tocar">no se toca</span>
                                 </div>
                                 <div class="cfg-arbol-hijo">
+                                    Lo que bajó del correo, por empresa y mes de emisión:
                                     <code>AAAA/MM MES/Facturas</code> · <code>Notas de crédito</code> ·
-                                    <code>Notas de débito</code>, según la fecha de emisión, con el nombre
-                                    <code>FE_PROVEEDOR_120726_00004354</code>. Es lo que bajó del correo:
-                                    la aplicación guarda dónde está cada archivo, así que moverlos a mano
-                                    los da por perdidos.
+                                    <code>Notas de débito</code>. Si alguien los mueve el sistema los
+                                    encuentra, pero es mejor no tocarlos.
                                 </div>
                                 <div class="cfg-arbol-linea">
                                     <i class="fas fa-folder-open" style="color:var(--gold);"></i>
@@ -157,8 +206,8 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                                     <span class="cfg-arbol-tag para-trabajar">para trabajar</span>
                                 </div>
                                 <div class="cfg-arbol-hijo">
-                                    Una carpeta por pago, con una <strong>copia</strong> de cada respaldo.
-                                    Se arma sola, se envía y se puede borrar sin afectar nada.
+                                    Una carpeta por pago, con una <strong>copia</strong> de cada
+                                    respaldo. Se arma sola y se puede borrar.
                                 </div>
                                 <div class="cfg-arbol-linea">
                                     <i class="fas fa-folder-closed" style="color:var(--text-muted);"></i>
@@ -166,70 +215,54 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                                     <span class="cfg-arbol-tag no-tocar">no se toca</span>
                                 </div>
                                 <div class="cfg-arbol-hijo">
-                                    Lo que está en tránsito: adjuntos de la bandeja sin importar,
-                                    archivos subidos a mano y los respaldos de la base.
+                                    En tránsito: adjuntos que esperan en la Bandeja y subidas a mano.
                                 </div>
                             </div>
                         </div>
                     </div>
-                    <div class="cfg-row-ancha" style="display:flex;gap:6px;">
-                        <input type="text" id="cfg-carpeta" class="form-control" style="flex:1;"
-                               placeholder="Elige una carpeta con «Examinar»…"
-                               value="<?= htmlspecialchars($carpetaRaiz) ?>">
-                        <button type="button" class="btn btn-outline btn-sm" id="cfg-examinar" style="white-space:nowrap;">
-                            <i class="fas fa-folder-open"></i> Examinar
-                        </button>
-                    </div>
-
-                    <!-- Explorador integrado: respaldo de «Examinar» -->
-                    <div class="cfg-explorador cfg-row-ancha" id="cfg-explorador" style="display:none;">
-                        <div class="cfg-explorador-barra">
-                            <button type="button" class="btn btn-outline btn-sm" id="exp-subir"
-                                    title="Subir un nivel" style="padding:2px 8px;">
-                                <i class="fas fa-arrow-up"></i>
-                            </button>
-                            <span id="exp-ruta" class="cfg-ruta" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Este equipo</span>
-                        </div>
-                        <div id="exp-lista" class="cfg-explorador-lista">
-                            <div class="cfg-vacio">Cargando…</div>
-                        </div>
-                        <div class="cfg-explorador-barra" style="border-bottom:none;border-top:1px solid var(--border-light);">
-                            <input type="text" id="exp-nueva" class="form-control"
-                                   placeholder="Nueva carpeta…" style="font-size:11.5px;padding:4px 8px;flex:1;">
-                            <button type="button" class="btn btn-outline btn-sm" id="exp-crear"
-                                    title="Crear carpeta aquí" style="padding:2px 8px;">
-                                <i class="fas fa-folder-plus"></i>
-                            </button>
-                            <button type="button" class="btn btn-primary btn-sm" id="exp-usar" title="Usar la carpeta abierta">
-                                <i class="fas fa-check"></i> Usar esta
-                            </button>
-                        </div>
-                    </div>
-
-                    <div class="cfg-row-ancha cfg-msg" id="cfg-msg" style="display:none;"></div>
                 </div>
+
+                <?php
+                // Lo que se archivó antes en la carpeta compartida y no se migró.
+                // Se abre mientras esa carpeta esté en la computadora, pero no está
+                // en SharePoint. Desaparece solo cuando la migración termina.
+                $sinMigrar = array_filter($sociedades, function ($s) {
+                    return (int) ($s['documentos_en_disco'] ?? 0) > 0;
+                });
+                ?>
+                <?php if ($sinMigrar): ?>
+                <div class="cfg-row apilada">
+                    <div>
+                        <div class="cfg-row-label">
+                            <i class="fas fa-triangle-exclamation" style="color:var(--warn);"></i>Todavía en la carpeta compartida
+                        </div>
+                        <div class="cfg-row-ayuda">
+                            Comprobantes archivados antes de SharePoint que todavía no se pasaron.
+                            Se abren solo en las computadoras que tengan la carpeta de antes:
+                            <div class="cfg-arbol">
+                                <?php foreach ($sinMigrar as $soc): ?>
+                                <div class="cfg-arbol-hijo">
+                                    <strong><?= htmlspecialchars($soc['nombre']) ?></strong>:
+                                    <?= number_format((int) $soc['documentos_en_disco'], 0, ',', '.') ?> ·
+                                    <code>php cli/migrar_documentos_a_graph.php --sociedad=<?= (int) $soc['id'] ?> --todo</code>
+                                </div>
+                                <?php endforeach; ?>
+                            </div>
+                            Se corre con el usuario de Windows que sincroniza esa carpeta.
+                        </div>
+                    </div>
+                </div>
+                <?php endif; ?>
 
                 <div class="cfg-foot">
                     <div class="cfg-foot-nota">
-                        <?php if ($carpetaRaiz === '' && empty($necesitaCarpeta)): ?>
-                        <i class="fas fa-circle-check" style="color:var(--ok);margin-right:4px;"></i>
-                        Sin carpeta compartida, y no hace falta: todas las empresas archivan sus XML y PDF
-                        en <strong>SharePoint</strong>. Lo demás —temporales, respaldos, Excel y CSV— queda
-                        en esta computadora.
-                        <?php elseif ($carpetaRaiz === ''): ?>
-                        <i class="fas fa-triangle-exclamation" style="color:var(--warn);margin-right:4px;"></i>
-                        Sin carpeta raíz no se pueden archivar documentos ni ordenar el archivo.
-                        <?php else: ?>
-                        <i class="fas fa-circle-check" style="color:var(--ok);margin-right:4px;"></i>
-                        Guardando en <span class="cfg-ruta"><?= htmlspecialchars($carpetaRaiz) ?></span>
-                        · el archivo se acomoda solo: cada documento a su mes dentro de
-                        <code>SISTEMA</code> y una <strong>copia</strong> a la carpeta del pago
-                        al que entre. Nunca se borra nada.
-                        <?php endif; ?>
+                        <i class="fas fa-circle-info" style="color:var(--text-muted);margin-right:4px;"></i>
+                        Ya no se usa la carpeta compartida. Temporales y respaldos de la base quedan en
+                        esta computadora.
                     </div>
-                    <button type="button" class="btn btn-primary btn-sm" id="cfg-guardar">
-                        <i class="fas fa-check"></i> Guardar carpeta
-                    </button>
+                    <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/diagnostico">
+                        <i class="fas fa-stethoscope"></i> Probar la conexión
+                    </a>
                 </div>
             </div>
 
@@ -246,8 +279,7 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                         <h2>Cuentas de correo</h2>
                         <p>
                             Buzones IMAP de los que se bajan facturas.
-                            Aquí se ven <strong>todos</strong>, también los de otras empresas: es el único
-                            sitio donde se corrige una asignación equivocada.
+                            Se ven <strong>todos</strong>, también los de otras empresas.
                         </p>
                     </div>
                     <button type="button" class="btn btn-outline btn-sm" id="cta-nueva">
@@ -259,8 +291,8 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                 <div class="cfg-row apilada">
                     <div class="cfg-msg warn">
                         <i class="fas fa-triangle-exclamation"></i>
-                        La extensión <code>imap</code> de PHP no está activa en este servidor: las cuentas se
-                        pueden registrar, pero no se podrá leer ningún buzón hasta activarla.
+                        La extensión <code>imap</code> de PHP no está activa: se pueden registrar
+                        cuentas, pero no leer buzones.
                     </div>
                 </div>
                 <?php endif; ?>
@@ -377,7 +409,6 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                                 <?php endif; ?>
                             </div>
                             <div class="cfg-row-ayuda">
-                                Un mismo buzón puede recibir facturas de varias empresas del grupo.
                                 Solo aparece en las que marques.
                             </div>
                         </div>
@@ -406,9 +437,8 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                     <div class="cfg-card-titulo">
                         <h2>Automatización de correo</h2>
                         <p>
-                            Una tarea programada de Windows mantiene el índice del buzón al día
-                            <strong>aunque cierres esta página</strong>. Requiere que el equipo y MariaDB
-                            estén encendidos.
+                            Revisa los buzones <strong>aunque cierres esta página</strong>.
+                            Requiere el equipo y MariaDB encendidos.
                         </p>
                     </div>
                 </div>
@@ -425,7 +455,7 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                         <label class="cfg-check">
                             <input id="auto-capturar" type="checkbox"> Capturar correos nuevos
                         </label>
-                        <label class="cfg-check" title="Sin esto, cada comprobante espera en la Bandeja a que alguien lo autorice">
+                        <label class="cfg-check" title="Sin esto, todo espera en la Bandeja">
                             <input id="auto-entrada" type="checkbox" checked> Entrada automática
                         </label>
                         <label class="cfg-check">Máximo por corrida
@@ -442,22 +472,9 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                         <strong>Capturar correos nuevos</strong> baja a la Bandeja los XML y PDF que
                         lleguen a los buzones.
                         <br>
-                        <strong>Entrada automática</strong> decide qué pasa después con ellos:
-                        <ul style="margin:5px 0 0 16px;padding:0;">
-                            <li>
-                                <strong>Activada</strong> (recomendado): el comprobante que se lee bien,
-                                que Hacienda no rechazó y que viene a nombre de la empresa entra solo —se
-                                archiva en la carpeta de su mes, queda registrado y se cruza con el
-                                listado que le toca: la factura con el reporte del sistema, la nota de
-                                crédito con sus listados—. En la <strong>Bandeja</strong> solo queda lo
-                                que hay que resolver a mano: rechazados por Hacienda, de otra cédula y
-                                lo que no se pudo guardar.
-                            </li>
-                            <li>
-                                <strong>Desactivada</strong>: todo espera en la Bandeja hasta que una
-                                persona lo seleccione y confirme la importación.
-                            </li>
-                        </ul>
+                        <strong>Entrada automática</strong>: activada, el comprobante limpio entra
+                        solo y en la Bandeja solo queda lo que hay que resolver a mano.
+                        Desactivada, todo espera a que alguien lo confirme.
                     </div>
 
                     <div class="cfg-msg" id="auto-msg" style="display:none;"></div>
@@ -486,9 +503,8 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                     <div class="cfg-card-titulo">
                         <h2>Empresas del grupo</h2>
                         <p>
-                            Con la empresa marcada es con la que trabajas: su cédula se compara contra
-                            el receptor de cada factura, y las facturas a nombre de otra cédula quedan
-                            bloqueadas en la bandeja.
+                            La empresa marcada es con la que trabajas. Las facturas a nombre de
+                            otra cédula quedan en la bandeja.
                         </p>
                     </div>
                 </div>
@@ -537,50 +553,25 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                             <?php endif; ?>
                             <?php if (!empty($soc['activa'])): ?>
                             <span class="badge badge-default" style="margin-left:4px;"
-                                  title="Con esta empresa arranca quien nunca ha elegido, y con ella trabajan las tareas automáticas">
+                                  title="Con la que arranca quien nunca ha elegido y con la que corren las tareas automáticas">
                                 por omisión
                             </span>
                             <?php endif; ?>
                         </div>
                         <div class="cfg-item-sub">
                             Cédula <?= htmlspecialchars($soc['cedula']) ?>
-                            <?php $enSharepoint = ($soc['almacen_documentos'] ?? 'disco') === 'sharepoint'; ?>
-                            · <span title="Dónde se archivan los documentos nuevos de esta empresa">
-                                <i class="fas <?= $enSharepoint ? 'fa-cloud' : 'fa-folder' ?>"></i>
-                                <?= $enSharepoint ? 'SharePoint' : 'Carpeta compartida' ?>
-                            </span>
-                            <?php // Lo que ya estaba cuando se cambió el ajuste no se movió: sin
-                                  // esto, quien va a buscarlo a SharePoint no lo encuentra y no
-                                  // sabe por qué. Desaparece solo cuando la migración termina. ?>
-                            <?php if ($enSharepoint && (int) ($soc['documentos_en_disco'] ?? 0) > 0): ?>
+                            <?php // Lo que se archivó antes en la carpeta compartida no está en
+                                  // SharePoint: sin esto, quien lo va a buscar allá no lo encuentra
+                                  // y no sabe por qué. Desaparece solo cuando la migración termina. ?>
+                            <?php if ((int) ($soc['documentos_en_disco'] ?? 0) > 0): ?>
                             <div style="margin-top:2px;color:var(--warning,#b26a00);">
                                 <i class="fas fa-triangle-exclamation"></i>
                                 <?= number_format((int) $soc['documentos_en_disco'], 0, ',', '.') ?>
-                                comprobantes anteriores siguen en la carpeta compartida: se abren
-                                desde aquí, pero no están en SharePoint hasta migrarlos con
+                                comprobantes siguen en la carpeta compartida de antes, sin pasar a SharePoint:
                                 <code>php cli/migrar_documentos_a_graph.php --sociedad=<?= (int) $soc['id'] ?> --todo</code>
                             </div>
                             <?php endif; ?>
                         </div>
-                        <?php // Solo quien puede cambiar la carpeta de documentos, y solo si la
-                              // base ya tiene la columna: sin ella no hay dónde guardarlo. ?>
-                        <?php if ($puedeVer('archivo') && array_key_exists('almacen_documentos', $soc)): ?>
-                        <form method="POST" action="<?= $baseUrl ?>/sociedades/almacen/<?= (int) $soc['id'] ?>"
-                              style="display:flex;gap:6px;align-items:center;margin-top:6px;"
-                              data-confirm="Los documentos NUEVOS de <?= htmlspecialchars($soc['nombre'], ENT_QUOTES) ?> se van a archivar en otro lugar, para todas las computadoras. Lo que ya está no se mueve."
-                              data-confirm-title="Cambiar dónde se archiva"
-                              data-confirm-accept="Cambiar">
-                            <input type="hidden" name="volver" value="empresas">
-                            <select name="almacen" class="form-control" style="max-width:220px;height:30px;padding:2px 8px;font-size:12.5px;">
-                                <option value="disco" <?= $enSharepoint ? '' : 'selected' ?>>Carpeta compartida</option>
-                                <option value="sharepoint" <?= $enSharepoint ? 'selected' : '' ?>
-                                        <?= $sharepointDisponible || $enSharepoint ? '' : 'disabled' ?>>
-                                    SharePoint<?= $sharepointDisponible ? '' : ' (esta PC no tiene credenciales)' ?>
-                                </option>
-                            </select>
-                            <button type="submit" class="btn btn-outline btn-sm">Cambiar</button>
-                        </form>
-                        <?php endif; ?>
                     </div>
                     <?php // Registrar y borrar empresas es de administración;
                           // elegir con cuál se trabaja lo hace cualquiera. ?>
@@ -612,8 +603,8 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                 <?php if (!$puedeVer('empresas')): ?>
                 <div class="cfg-foot">
                     <div class="cfg-foot-nota">
-                        Aquí eliges con cuál de tus empresas trabajas. Darlas de alta o
-                        quitarlas es cosa del administrador.
+                        Aquí eliges con cuál trabajas. Darlas de alta o quitarlas
+                        es del administrador.
                     </div>
                 </div>
                 <?php endif; ?>
@@ -676,8 +667,9 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                     <div class="cfg-card-icono gold"><i class="fas fa-address-book"></i></div>
                     <div class="cfg-card-titulo">
                         <h2>Proveedores del sistema</h2>
-                        <p>Qué código del sistema pertenece a qué cédula. Es lo que impide que el
-                           comprobante de un proveedor se le cuelgue a la factura de otro.</p>
+                        <p>Qué código del sistema pertenece a qué cédula<?php if ($sociedadActiva): ?>,
+                           en <strong><?= htmlspecialchars($sociedadActiva['nombre']) ?></strong>.
+                           Cada empresa tiene su propia lista<?php endif; ?>.</p>
                     </div>
                 </div>
 
@@ -691,25 +683,23 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                 <div class="cat-resumen">
                     <span><b data-cat-cuenta="total"><?= number_format($cat['total']) ?></b> códigos</span>
                     <span class="cat-punto">·</span>
-                    <span title="Varios códigos pueden ser del mismo proveedor: uno por punto de venta">
+                    <span title="Un mismo proveedor puede tener un código por punto de venta">
                         <b data-cat-cuenta="cedulas"><?= number_format($cat['cedulas']) ?></b> proveedores distintos</span>
                     <details class="cat-ayuda">
                         <summary><i class="fas fa-circle-info"></i>¿Para qué sirve esta lista?</summary>
                         <div>
-                            <p><strong>Que una factura no se quede con el comprobante de otro.</strong> Si la
-                               factura viene con el código 140001807, solo acepta comprobantes de la cédula
-                               que ese código tiene anotada acá.</p>
-                            <p><strong>Que no se cuele un proveedor desconocido.</strong> Si llega un
-                               comprobante de una cédula que no está en esta lista, se pregunta de quién es
-                               en lugar de adivinarlo.</p>
+                            <p>Cada factura solo acepta comprobantes de la cédula que su código
+                               tiene anotada acá.</p>
+                            <p>Si llega un comprobante de una cédula que no está en la lista,
+                               se pregunta de quién es en vez de adivinarlo.</p>
                         </div>
                     </details>
                 </div>
 
                 <?php if ((int) $cat['total'] === 0): ?>
                 <div class="cfg-msg warn" style="margin:10px 14px 0;">
-                    <strong>La lista todavía está vacía.</strong> Hasta que importés el listado, nada de
-                    esto se revisa. Todo sigue funcionando como antes; lo que no hay es red.
+                    <strong>La lista está vacía.</strong> Hasta que importés el listado,
+                    nada de esto se revisa.
                 </div>
                 <?php endif; ?>
 
@@ -742,8 +732,8 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                 <div class="cat-panel" data-cat-panel="pendientes" <?= $catPestana === 'pendientes' ? '' : 'hidden' ?>>
                     <div class="cat-panel-barra">
                         <p class="cat-panel-nota">
-                            Mandaron comprobantes y no tienen código. Lo que mandaron está guardado, pero no
-                            se les puede buscar factura hasta saber de quién son.
+                            Mandaron comprobantes y no tienen código. Están guardados, pero no
+                            se les busca factura.
                         </p>
                         <input type="search" id="cat-huer-filtro" class="form-control cat-filtro"
                                placeholder="Filtrar por nombre o cédula">
@@ -771,18 +761,17 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
 
                 <div class="cat-panel" data-cat-panel="ignoradas" <?= $catPestana === 'ignoradas' ? '' : 'hidden' ?>>
                     <p class="cat-panel-nota" style="margin-bottom:10px;">
-                        Cédulas de las que ya se dijo que no facturan. Sus comprobantes siguen guardados;
-                        lo que no hacen es volver a preguntar.
+                        Cédulas marcadas como que no facturan. Sus comprobantes se guardan
+                        y no vuelven a preguntar.
                     </p>
                     <div id="cat-ignoradas" class="cat-carga">Cargando…</div>
                 </div>
 
                 <div class="cat-panel" data-cat-panel="importar" <?= $catPestana === 'importar' ? '' : 'hidden' ?>>
                     <ol class="cat-pasos">
-                        <li>En el sistema, abrí el reporte <strong>Lista de Proveedores</strong> y exportalo a CSV
-                            <strong>sin filtrar por grupo</strong>; si lo filtrás, los códigos de los demás grupos
-                            quedan fuera y van a seguir preguntando.</li>
-                        <li>Elegí el archivo y mirá qué cambiaría. Nada se guarda hasta confirmar.</li>
+                        <li>En el sistema, exportá el reporte <strong>Lista de Proveedores</strong> a CSV
+                            <strong>sin filtrar por grupo</strong>.</li>
+                        <li>Elegí el archivo. Nada se guarda hasta confirmar.</li>
                     </ol>
 
                     <form id="cat-form" enctype="multipart/form-data" class="cat-subir">
@@ -799,10 +788,10 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                     <details class="cat-ayuda" style="margin-top:10px;">
                         <summary><i class="fas fa-circle-info"></i>Qué se lee del archivo</summary>
                         <div>
-                            <p>Solo el código y la cédula: el nombre y el correo vienen cortados por el ancho
-                               de la columna, así que no se usan.</p>
-                            <p>Que varios códigos tengan la misma cédula es normal: una empresa con varios
-                               puntos de venta tiene un código por punto. Se anotan todos.</p>
+                            <p>Solo el código y la cédula. El nombre y el correo vienen cortados
+                               por el ancho de la columna.</p>
+                            <p>Varios códigos con la misma cédula es normal: uno por punto de venta.
+                               Se anotan todos.</p>
                         </div>
                     </details>
 
@@ -1000,8 +989,7 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
 
                 <div class="cfg-foot">
                     <div class="cfg-foot-nota">
-                        Un cambio en un rol surte efecto en la siguiente pantalla de quien lo
-                        tenga: no hace falta que vuelva a entrar.
+                        Un cambio en un rol surte efecto en la siguiente pantalla de quien lo tenga.
                     </div>
                 </div>
             </div>
@@ -1054,8 +1042,7 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                 <?php if (empty($actividad)): ?>
                 <div class="cfg-vacio">
                     <i class="fas fa-clock-rotate-left"></i>
-                    Todavía no hay movimientos registrados. Aparecerán en cuanto alguien
-                    cargue, edite o borre algo.
+                    Todavía no hay movimientos registrados.
                 </div>
                 <?php else: ?>
                 <?php foreach ($actividad as $a): ?>
@@ -1076,9 +1063,8 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
 
                 <div class="cfg-foot">
                     <div class="cfg-foot-nota">
-                        La bitácora también recoge el historial que cada módulo venía guardando
-                        por su cuenta —las anotaciones de Seguimiento, las cargas, los avisos
-                        cerrados—, ordenado en la misma línea de tiempo.
+                        Recoge también el historial de cada módulo: anotaciones de Seguimiento,
+                        cargas y avisos cerrados.
                     </div>
                     <a href="<?= $baseUrl ?>/bitacora" class="btn btn-outline btn-sm">
                         Buscar en la bitácora
@@ -1098,17 +1084,15 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
         ?>
         <section class="cfg-section<?= $seccionAbierta === 'respaldo' ? ' is-activa' : '' ?>"
                  id="respaldo" data-cfg-seccion="respaldo" role="tabpanel"
-                 data-cfg-buscar="respaldo copia base datos sharepoint mysqldump nocturno restaurar">
+                 data-cfg-buscar="respaldo copia base datos mysqldump nocturno restaurar">
             <div class="cfg-card">
                 <div class="cfg-card-head">
                     <div class="cfg-card-icono"><i class="fas fa-database"></i></div>
                     <div class="cfg-card-titulo">
                         <h2>Respaldo de la base de datos</h2>
                         <p>
-                            Deja una copia en la carpeta compartida, donde SharePoint la sincroniza al resto
-                            de las computadoras. <strong>Hay que apretarlo en la computadora que sí alcanza
-                            la base</strong> — desde otra saldría por la red, que es justo lo que falla
-                            cuando este respaldo hace falta.
+                            Deja una copia en esta computadora.
+                            <strong>Hay que apretarlo en la computadora que alcanza la base.</strong>
                         </p>
                     </div>
                 </div>
@@ -1120,8 +1104,8 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                 <?php elseif (($respaldo['mysqldump'] ?? null) === null): ?>
                 <div class="cfg-row apilada">
                     <div class="cfg-msg error">
-                        No se encontró <code>mysqldump.exe</code> en esta computadora (se buscó en la
-                        instalación de MariaDB y en el PATH). Sin él no se puede respaldar.
+                        No se encontró <code>mysqldump.exe</code> (ni en MariaDB ni en el PATH).
+                        Sin él no se puede respaldar.
                     </div>
                 </div>
                 <?php endif; ?>
@@ -1130,9 +1114,8 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                     <div>
                         <div class="cfg-row-label">Respaldo automático</div>
                         <div class="cfg-row-ayuda">
-                            Un respaldo que depende de que alguien se acuerde no es un respaldo.
                             Se conservan los últimos <?= (int) ($respaldo['conserva'] ?? 5) ?>;
-                            los más viejos se borran solos para no llenarle el SharePoint a nadie.
+                            los más viejos se borran solos.
                         </div>
                     </div>
                     <div class="cfg-row-control">
@@ -1157,15 +1140,15 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
 
                 <div class="cfg-row apilada">
                     <div>
-                        <div class="cfg-row-label">Respaldos en la carpeta compartida</div>
+                        <div class="cfg-row-label">Respaldos en esta computadora</div>
                         <div class="cfg-row-ayuda">
                             <span class="cfg-ruta"><?= htmlspecialchars((string) ($respaldo['carpeta'] ?? '')) ?></span>
                         </div>
                     </div>
                     <div class="cfg-row-ancha" id="respaldo-lista"></div>
                     <div class="cfg-row-ayuda">
-                        Lo mismo desde la consola: <code>php cli/respaldar_base.php</code>.
-                        Para levantarlo en la otra computadora, cuando el archivo ya sincronizó:
+                        Desde la consola: <code>php cli/respaldar_base.php</code>.
+                        Para levantarlo en otra computadora, se copia el archivo a su misma carpeta y ahí:
                         <code>.\scripts\copiar-base.ps1 -Desde ultimo</code>
                     </div>
                 </div>
@@ -1190,7 +1173,7 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                     <div class="cfg-card-icono"><i class="fas fa-desktop"></i></div>
                     <div class="cfg-card-titulo">
                         <h2>Esta computadora</h2>
-                        <p>La aplicación corre en cada equipo: lo que le falte a este se revisa aparte.</p>
+                        <p>Lo que le falte a este equipo se revisa aquí.</p>
                     </div>
                 </div>
 
@@ -1198,8 +1181,7 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                     <div>
                         <div class="cfg-row-label">Diagnóstico de la instalación</div>
                         <div class="cfg-row-ayuda">
-                            Qué le falta a <em>esta</em> instalación: extensiones de PHP, permisos de
-                            carpetas, conexión a la base. Si vas a pedir ayuda, manda una captura de ahí.
+                            Extensiones de PHP, permisos de carpetas y conexión a la base.
                         </div>
                     </div>
                     <div class="cfg-row-control">
@@ -1406,203 +1388,9 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
         }
     })();
 
-    // ══ Carpeta raíz de XML y PDF ═══════════════════════════════════
-    var cfgCarpeta = document.getElementById('cfg-carpeta');
-    var cfgMsg     = document.getElementById('cfg-msg');
-    var cfgGuardar = document.getElementById('cfg-guardar');
-
-    cfgGuardar.addEventListener('click', function () {
-        cfgGuardar.disabled = true;
-        postJson(BASE + '/correo/config', { carpeta_destino: cfgCarpeta.value.trim() })
-            .then(function () {
-                decir(cfgMsg, 'Carpeta guardada. Vuelve a cargar la página para verla reflejada abajo.', 'ok');
-            })
-            .catch(function (err) { decir(cfgMsg, err.message, 'error'); })
-            .then(function () { cfgGuardar.disabled = false; });
-    });
-
-    // ── Explorador de carpetas (respaldo de «Examinar») ──
-    var cfgExaminar = document.getElementById('cfg-examinar');
-    var cfgExplor   = document.getElementById('cfg-explorador');
-    var expSubir    = document.getElementById('exp-subir');
-    var expRutaEl   = document.getElementById('exp-ruta');
-    var expLista    = document.getElementById('exp-lista');
-    var expNueva    = document.getElementById('exp-nueva');
-    var expCrear    = document.getElementById('exp-crear');
-    var expUsar     = document.getElementById('exp-usar');
-
-    var expEstado = { ruta: '', esRaiz: true, padre: null, cargando: false };
-
-    function expInfo(texto, esError) {
-        expLista.innerHTML = '';
-        var d = document.createElement('div');
-        d.className = 'cfg-vacio';
-        if (esError) d.style.color = 'var(--miss)';
-        d.textContent = texto;
-        expLista.appendChild(d);
-    }
-
-    function cargarExplorador(ruta, accion, nombre) {
-        if (!expLista || expEstado.cargando) return;
-        expEstado.cargando = true;
-        expInfo('Cargando…');
-
-        var datos = { ruta: ruta || '' };
-        if (accion) { datos.accion = accion; datos.nombre = nombre || ''; }
-
-        postJson(BASE + '/correo/carpetas', datos)
-            .then(function (r) {
-                expEstado.ruta   = r.ruta || '';
-                expEstado.esRaiz = !!r.es_raiz;
-                expEstado.padre  = (r.padre === undefined ? null : r.padre);
-
-                expRutaEl.textContent = r.es_raiz ? 'Este equipo' : (r.ruta || '');
-                expRutaEl.title       = expRutaEl.textContent;
-                expSubir.disabled = r.es_raiz;
-                expUsar.disabled  = r.es_raiz;   // no se "usa" la lista de unidades
-                expNueva.disabled = r.es_raiz;
-                expCrear.disabled = r.es_raiz;
-                expNueva.value = '';
-
-                var carpetas = r.carpetas || [];
-                expLista.innerHTML = '';
-
-                if (!r.es_raiz && r.escribible === false) {
-                    var aviso = document.createElement('div');
-                    aviso.className = 'cfg-msg warn';
-                    aviso.style.borderRadius = '0';
-                    aviso.textContent = 'No se puede escribir en esta carpeta; elige o crea otra.';
-                    expLista.appendChild(aviso);
-                }
-
-                if (!carpetas.length) {
-                    var vac = document.createElement('div');
-                    vac.className = 'cfg-vacio';
-                    vac.textContent = r.es_raiz
-                        ? 'No se detectaron unidades.'
-                        : '(Sin subcarpetas — puedes usar esta o crear una)';
-                    expLista.appendChild(vac);
-                }
-
-                carpetas.forEach(function (c) {
-                    var fila = document.createElement('div');
-                    fila.className = 'cfg-explorador-fila';
-
-                    var ic = document.createElement('i');
-                    ic.className = r.es_raiz ? 'fas fa-hard-drive' : 'fas fa-folder';
-                    ic.style.color = r.es_raiz ? 'var(--navy-light)' : 'var(--gold)';
-                    ic.style.width = '14px';
-
-                    var nom = document.createElement('span');
-                    nom.textContent = c.nombre;
-                    nom.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-
-                    var flecha = document.createElement('i');
-                    flecha.className = 'fas fa-chevron-right';
-                    flecha.style.cssText = 'color:var(--border);font-size:10px;';
-
-                    fila.appendChild(ic);
-                    fila.appendChild(nom);
-                    fila.appendChild(flecha);
-                    fila.addEventListener('click', function () { cargarExplorador(c.ruta); });
-                    expLista.appendChild(fila);
-                });
-            })
-            .catch(function (err) { expInfo(err.message, true); })
-            .then(function () { expEstado.cargando = false; });
-    }
-
-    // «Examinar» abre el explorador NATIVO de Windows: el servidor lo lanza en
-    // el escritorio del usuario y aquí se consulta cada segundo si ya eligió.
-    // Si el diálogo no se puede abrir, se cae al explorador integrado.
-    var selectorNativo = { activo: false, timer: null };
-
-    function detenerSelector() {
-        selectorNativo.activo = false;
-        if (selectorNativo.timer) { clearTimeout(selectorNativo.timer); selectorNativo.timer = null; }
-        cfgExaminar.disabled = false;
-        cfgExaminar.innerHTML = '<i class="fas fa-folder-open"></i> Examinar';
-    }
-
-    function explorarAqui(motivo) {
-        decir(cfgMsg, 'No se pudo abrir el explorador de Windows (' + motivo + '). Elige la carpeta aquí:', 'warn');
-        cfgExplor.style.display = 'block';
-        cargarExplorador((cfgCarpeta.value || '').trim());
-    }
-
-    cfgExaminar.addEventListener('click', function () {
-        if (selectorNativo.activo) return;
-        selectorNativo.activo = true;
-        cfgExaminar.disabled = true;
-        cfgExaminar.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Abriendo…';
-        callar(cfgMsg);
-        cfgExplor.style.display = 'none';
-
-        postJson(BASE + '/correo/selector/abrir', {})
-            .then(function (r) {
-                decir(cfgMsg, 'Elige la carpeta en la ventana del explorador de Windows '
-                    + '(puede tardar unos segundos en aparecer)…', null);
-
-                var intentos = 0;
-                function consultar() {
-                    if (!selectorNativo.activo) return;
-                    if (++intentos > 300) {   // ~5 minutos
-                        detenerSelector();
-                        decir(cfgMsg, 'Se agotó el tiempo de espera del explorador de Windows.', 'error');
-                        return;
-                    }
-
-                    postJson(BASE + '/correo/selector/estado', { token: r.token })
-                        .then(function (e) {
-                            if (e.estado === 'esperando') {
-                                selectorNativo.timer = setTimeout(consultar, 1000);
-                                return;
-                            }
-                            detenerSelector();
-                            if (e.estado === 'ok') {
-                                cfgCarpeta.value = e.ruta;
-                                decir(cfgMsg, 'Carpeta elegida: ' + e.ruta
-                                    + ' — pulsa «Guardar carpeta» para aplicarla.', 'ok');
-                            } else {
-                                callar(cfgMsg);   // canceló el diálogo
-                            }
-                        })
-                        .catch(function (err) {
-                            // El lanzador falló en segundo plano: mismo
-                            // respaldo que si /selector/abrir fallara.
-                            detenerSelector();
-                            explorarAqui(err.message);
-                        });
-                }
-
-                selectorNativo.timer = setTimeout(consultar, 900);
-            })
-            .catch(function (err) {
-                detenerSelector();
-                explorarAqui(err.message);
-            });
-    });
-
-    expSubir.addEventListener('click', function () {
-        if (!expEstado.esRaiz) cargarExplorador(expEstado.padre || '');
-    });
-
-    expUsar.addEventListener('click', function () {
-        if (expEstado.esRaiz || !expEstado.ruta) return;
-        cfgCarpeta.value = expEstado.ruta;
-        cfgExplor.style.display = 'none';
-        decir(cfgMsg, 'Carpeta elegida: ' + expEstado.ruta + ' — pulsa «Guardar carpeta» para aplicarla.', 'ok');
-    });
-
-    expCrear.addEventListener('click', function () {
-        var nombre = (expNueva.value || '').trim();
-        if (!nombre) { expNueva.focus(); return; }
-        cargarExplorador(expEstado.ruta, 'crear', nombre);
-    });
-
-    expNueva.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') { e.preventDefault(); expCrear.click(); }
-    });
+    // Aquí vivían el campo de la carpeta raíz, «Examinar» (la ventana de Windows)
+    // y el explorador de carpetas integrado. Ya no hay carpeta que elegir: los
+    // documentos van a SharePoint, que se configura en app/config/local.graph.php.
 
     // Aquí vivía «Ordenar el archivo»: un desplegable de alcance, un botón de
     // previsualización y otro de confirmación. Salió porque no había nada que
@@ -1684,7 +1472,7 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
             linea = '<span style="color:var(--warn);">Configurada, pero la tarea de Windows no aparece. '
                 + 'Pulsa «Activar» para recrearla.</span>';
         } else {
-            linea = '<strong>Desactivada</strong> — el índice solo se actualiza con el módulo de correo abierto.';
+            linea = '<strong>Desactivada</strong> — solo se revisa con el módulo de correo abierto.';
         }
 
         var ultima = autoFmtUltima(info.ultima);
@@ -2104,46 +1892,58 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
            + esc(r.archivo) + (r.impreso_en ? ' · impreso el ' + esc(r.impreso_en) : '')
            + (r.grupos && r.grupos.length ? ' · Grupo: ' + esc(r.grupos.join(', ')) : '') + '</div>';
 
+        // El catálogo es por empresa: que quede a la vista en cuál entra.
+        if (r.empresa) {
+            h += '<div class="alert alert-info" style="margin-bottom:10px;font-size:12px;">'
+               + 'Este listado entra en el catálogo de <b>' + esc(r.empresa) + '</b>. '
+               + 'Las demás empresas tienen el suyo y no se tocan.</div>';
+        }
+
         h += '<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;margin-bottom:10px;">'
            + '<span>Códigos en el archivo: <b>' + num(p.leidos) + '</b></span>'
            + '<span style="color:#16a34a;">Ya estaban así: <b>' + num(p.confirmados) + '</b></span>'
            + '<span style="color:#b45309;">Les cambia la cédula: <b>' + num(p.corregidos) + '</b></span>'
            + '<span>Se agregan: <b>' + num(p.nuevos) + '</b></span>'
+           + (p.choca_con_manual
+               ? '<span style="color:#b91c1c;">Contradicen lo asignado a mano: <b>' + num(p.choca_con_manual) + '</b></span>'
+               : '')
            + '</div>';
 
         // Alta de proveedores: es el efecto menos evidente del botón, así que
         // se dice antes y no en el mensaje de después.
         if (p.proveedores_creados) {
             h += '<div class="alert alert-info" style="margin-bottom:10px;font-size:12px;">'
-               + 'Se van a registrar <b>' + num(p.proveedores_creados) + '</b> proveedores nuevos, solo con '
-               + 'su cédula. Son códigos que todavía no han mandado ningún comprobante. Anotarlos desde '
-               + 'ya es lo que permite, cuando llegue uno, saber si es de ellos o no.</div>';
+               + 'Se van a registrar <b>' + num(p.proveedores_creados) + '</b> proveedores nuevos, '
+               + 'solo con su cédula. Todavía no han mandado ningún comprobante.</div>';
         }
 
-        // Las cédulas repartidas entre varios códigos. Van antes que todo lo
-        // demás y bloquean el botón: son la única pregunta del archivo que no
-        // se puede contestar sola.
+        // Las cédulas repartidas entre varios códigos. Entran todos, que es lo
+        // normal —los puntos de venta de una misma empresa—; se muestran para
+        // poder desmarcar un alta duplicada, que el archivo no distingue.
         var grupos = r.compartidas || [];
         if (grupos.length) {
             h += '<div class="alert alert-warning" style="margin-bottom:10px;font-size:12px;">'
                + '<b>' + num(grupos.length) + ' cédula(s) tienen más de un código.</b> '
-               + 'Puede ser que sean puntos de venta distintos de la misma empresa, o que alguien la '
-               + 'haya dado de alta dos veces por error. El archivo no lo dice, y mientras la cédula '
-               + 'esté repartida no sirve para identificar a nadie.'
-               + '<br><b>Marcá cuál es el código bueno de cada una.</b> Los demás no entran en esta '
-               + 'importación; si ya estaban en la lista, se quedan como están.</div>';
+               + 'Pueden ser puntos de venta de la misma empresa o un alta duplicada; el archivo '
+               + 'no lo dice.'
+               + '<br><b>Entran todos.</b> Desmarcá solo el que sea un alta duplicada; cada cédula '
+               + 'tiene que conservar al menos uno. Un comprobante de estas cédulas se engancha solo '
+               + 'cuando el consecutivo coincide exacto y el monto cuadra; si no, lo decide una persona.</div>';
 
             grupos.forEach(function (g, gi) {
                 h += '<div style="border:1px solid #fcd34d;border-radius:8px;margin-bottom:9px;overflow:hidden;">'
                    + '<div style="background:#fffbeb;padding:6px 10px;font-size:11.5px;font-weight:700;'
                    + 'color:#92400e;">Cédula ' + esc(g.cedula) + ' · ' + num(g.codigos.length)
-                   + ' códigos</div>';
-                g.codigos.forEach(function (c, ci) {
+                   + ' códigos</div>'
+                   // Siempre viaja, aunque se desmarquen todas: así el servidor
+                   // distingue "ninguno" de un formulario que no sabe de esto.
+                   + '<input type="hidden" name="incluir[' + esc(g.cedula) + '][]" value="" form="cat-aplicar">';
+                g.codigos.forEach(function (c) {
                     h += '<label style="display:flex;gap:8px;align-items:baseline;padding:6px 10px;'
                        + 'border-top:1px solid var(--border-light);cursor:pointer;font-size:12px;">'
-                       + '<input type="radio" name="elegido[' + esc(g.cedula) + ']" '
+                       + '<input type="checkbox" name="incluir[' + esc(g.cedula) + '][]" '
                        + 'value="' + esc(c.codigo) + '" form="cat-aplicar" '
-                       + 'data-grupo="' + gi + '"' + (ci === 0 ? '' : '') + '>'
+                       + 'data-grupo="' + gi + '" checked>'
                        + '<span style="font-family:ui-monospace,monospace;">' + esc(c.codigo) + '</span>'
                        + '<span style="color:var(--text-muted);">' + esc(c.nombre) + '</span>'
                        + '<span style="margin-left:auto;color:var(--text-muted);font-size:11px;">fila '
@@ -2156,8 +1956,8 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
         // Los grupos que faltan: el archivo real venía filtrado por uno solo.
         if (r.sin_cedula) {
             h += '<div class="alert alert-warning" style="margin-bottom:10px;font-size:12px;">'
-               + 'A <b>' + num(r.sin_cedula) + '</b> código(s) del archivo les falta la cédula, así que no '
-               + 'se puede saber de quién son. No se tocan: quedan como están.</div>';
+               + 'A <b>' + num(r.sin_cedula) + '</b> código(s) del archivo les falta la cédula. '
+               + 'No se tocan.</div>';
         }
 
         if (p.cambios && p.cambios.length) {
@@ -2178,16 +1978,37 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
             h += '</tbody></table></div>';
         }
 
+        // Lo asignado a mano no se pisa, pero que el ERP diga otra cosa es
+        // justo lo que alguien tiene que saber: o la asignación estaba mal o
+        // el alta del ERP tiene la cédula equivocada.
+        if (p.manuales && p.manuales.length) {
+            h += '<div class="alert alert-warning" style="margin-top:12px;font-size:12px;">'
+               + '<b>' + num(p.choca_con_manual) + ' código(s) asignados a mano tienen otra cédula en el archivo.</b> '
+               + 'No se tocan: se queda la cédula asignada a mano. Si el archivo tiene razón, corregilos en el catálogo.'
+               + '<div style="overflow-x:auto;margin-top:6px;"><table style="width:100%;border-collapse:collapse;font-size:11px;">'
+               + '<thead><tr style="color:var(--text-muted);text-align:left;">'
+               + '<th style="padding:3px 6px;">Código</th><th style="padding:3px 6px;">Nombre en el archivo</th>'
+               + '<th style="padding:3px 6px;">Cédula asignada a mano (se queda)</th>'
+               + '<th style="padding:3px 6px;">Cédula según el archivo</th>'
+               + '</tr></thead><tbody>';
+            p.manuales.forEach(function (x) {
+                h += '<tr style="border-top:1px solid var(--border-light);">'
+                   + '<td style="padding:3px 6px;font-family:ui-monospace,monospace;">' + esc(x.codigo) + '</td>'
+                   + '<td style="padding:3px 6px;">' + esc(x.nombre) + '</td>'
+                   + '<td style="padding:3px 6px;font-weight:700;">' + esc(x.cedula_manual) + '</td>'
+                   + '<td style="padding:3px 6px;color:#b45309;">' + esc(x.cedula_erp) + '</td></tr>';
+            });
+            h += '</tbody></table></div></div>';
+        }
+
         // Lo que el catálogo desmiente. Va con su propia casilla porque
         // soltarlos borra trabajo y no puede ir de arrastre.
         if (c.total) {
             h += '<div class="alert alert-warning" style="margin-top:12px;font-size:12px;">'
                + '<b>' + num(c.total) + ' factura(s) tienen enganchado el comprobante de otro proveedor.</b> '
-               + 'El archivo dice que esos códigos son de otra cédula, así que el comprobante que tienen '
-               + 'no puede ser de ellas.'
+               + 'Según el catálogo, con este archivo aplicado, esos códigos son de otra cédula.'
                + (c.respaldadas
-                   ? ' <b>' + num(c.respaldadas) + '</b> de esas facturas figuran hoy como respaldadas: '
-                   + 'están dadas por resueltas y no lo están, que es lo más delicado de la lista.'
+                   ? ' <b>' + num(c.respaldadas) + '</b> figuran hoy como respaldadas sin estarlo.'
                    : '')
                + '<details style="margin-top:6px;"><summary style="cursor:pointer;font-size:11px;">Ver cuáles</summary>'
                + '<div style="overflow-x:auto;margin-top:6px;"><table style="width:100%;border-collapse:collapse;font-size:11px;">'
@@ -2211,8 +2032,7 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
         h += '<form method="POST" id="cat-aplicar" action="' + BASE + '/configuracion/proveedores/importar" '
            + 'style="margin-top:13px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">'
            + '<input type="hidden" name="archivo_token" value="' + esc(r.token) + '">'
-           + '<button type="submit" class="btn btn-primary btn-sm" id="cat-aplicar-btn"'
-           + (grupos.length ? ' disabled' : '') + '>'
+           + '<button type="submit" class="btn btn-primary btn-sm" id="cat-aplicar-btn">'
            + '<i class="fas fa-check" style="margin-right:4px;"></i>Importar el listado</button>';
         if (grupos.length) {
             h += '<span id="cat-faltan" style="font-size:11.5px;color:#b45309;"></span>';
@@ -2222,32 +2042,30 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                + 'max-width:430px;line-height:1.5;">'
                + '<input type="checkbox" name="desatar" value="1" style="margin-right:5px;"> '
                + 'Desenganchar también esas ' + num(c.total) + ' facturas'
-               + '<span style="display:block;margin-left:19px;">Vuelven a quedar sin respaldo y se les '
-               + 'busca comprobante de nuevo. Esta vez, con el archivo ya importado, no se les puede '
-               + 'volver a enganchar el de otro proveedor.</span></label>';
+               + '<span style="display:block;margin-left:19px;">Quedan sin respaldo y se les busca '
+               + 'comprobante de nuevo.</span></label>';
         }
         h += '</form>';
 
         caja.innerHTML = h;
         caja.style.display = 'block';
 
-        // El botón no se habilita hasta que las cédulas repartidas estén todas
-        // decididas, y mientras tanto dice cuántas faltan: un botón apagado sin
-        // explicación se lee como que la pantalla se rompió.
+        // Una cédula con todos sus códigos desmarcados apaga el botón, y se
+        // dice por qué: un botón apagado sin explicación se lee como que la
+        // pantalla se rompió.
         if (grupos.length) {
             var boton = document.getElementById('cat-aplicar-btn');
             var faltan = document.getElementById('cat-faltan');
             var repasar = function () {
-                var hechas = 0;
-                grupos.forEach(function (g) {
-                    if (caja.querySelector('input[name="elegido[' + g.cedula + ']"]:checked')) {
-                        hechas++;
+                var vacias = 0;
+                grupos.forEach(function (g, gi) {
+                    if (!caja.querySelector('input[type="checkbox"][data-grupo="' + gi + '"]:checked')) {
+                        vacias++;
                     }
                 });
-                var restan = grupos.length - hechas;
-                boton.disabled = restan > 0;
-                faltan.textContent = restan > 0
-                    ? 'Faltan ' + num(restan) + ' de ' + num(grupos.length) + ' por decidir'
+                boton.disabled = vacias > 0;
+                faltan.textContent = vacias > 0
+                    ? num(vacias) + ' cédula(s) sin ningún código marcado'
                     : '';
             };
             caja.addEventListener('change', repasar);
@@ -2360,7 +2178,17 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                 h += '<tr>'
                    + '<td class="mono"><b>' + esc(f.proveedor_codigo) + '</b></td>'
                    + '<td><div class="cat-nombre">' + esc(f.nombre_erp || f.razon_social || '—') + '</div>'
-                   + '<div class="cat-sub mono">' + esc(f.cedula) + '</div></td>'
+                   + '<div class="cat-sub mono">' + esc(f.cedula) + '</div>'
+                   + (f.tambien || []).map(function (t) {
+                         return '<div class="cat-tambien" title="Este código acepta también sus comprobantes">'
+                              + '<i class="fas fa-plus"></i> ' + esc(t.nombre || t.cedula)
+                              + ' <span class="mono">' + esc(t.cedula) + '</span>'
+                              + ' <button type="button" class="cat-tambien-quitar" title="Dejar de aceptarlo"'
+                              + ' data-cat-no-tambien="' + esc(f.proveedor_codigo) + '"'
+                              + ' data-cedula="' + esc(t.cedula) + '" data-nombre="' + esc(t.nombre || '') + '">'
+                              + '<i class="fas fa-xmark"></i></button></div>';
+                     }).join('')
+                   + '</td>'
                    + '<td><span class="badge ' + (f.origen === 'manual' ? 'badge-gold' : 'badge-navy') + '">'
                    + (f.origen === 'manual' ? 'a mano' : 'del sistema') + '</span></td>'
                    + '<td class="accion"><div class="cat-iconos">'
@@ -2576,7 +2404,7 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                 var estado = suyo
                     ? '<span class="badge badge-ok">Ya es de este proveedor</span>'
                     : (o.cedula
-                        ? '<span class="badge badge-warn" title="Si lo elegís, pasa a ser de este proveedor">'
+                        ? '<span class="badge badge-warn" title="Si lo elegís, te pregunta si lo acepta también o si pasa a este proveedor">'
                           + 'Es de ' + esc(o.razon_social || o.cedula) + '</span>'
                         : '<span class="badge badge-green">Sin dueño</span>');
                 var detalle = [];
@@ -2614,32 +2442,57 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
             var codigo = b.getAttribute('data-cat-opcion');
             var cedulaActual = b.getAttribute('data-cedula-actual') || '';
 
-            // Guardar un código que ya tiene dueño se lo quita a ese dueño:
-            // es la única elección de la lista que deshace algo.
+            // Un código que ya tiene dueño: o se le pasa a este proveedor (y
+            // el dueño deja de valer) o lo acepta también, sin quitarle nada.
+            var modo = 'pasar';
             if (cedulaActual && cedulaActual !== ced) {
-                var dueno = b.getAttribute('data-dueno') || cedulaActual;
-                var seguir = await AppDialog.confirm(
-                    'El código ' + codigo + ' hoy es de ' + dueno + ' (cédula ' + cedulaActual + ').\n\n'
-                    + 'Si lo pasás a ' + (nombre || ced) + ', sus facturas van a aceptar los comprobantes de '
-                    + 'este proveedor y dejan de aceptar los de aquel.',
-                    { title: 'Ese código ya tiene dueño', type: 'warning', confirmText: 'Pasarlo a este proveedor' }
-                );
-                if (!seguir) { return; }
+                modo = await AppDialog.codigoConDueno({
+                    codigo: codigo, cedula: ced, nombre: nombre,
+                    cedulaDueno: cedulaActual, dueno: b.getAttribute('data-dueno') || ''
+                });
+                if (!modo) { return; }
             }
 
             tr.querySelectorAll('[data-cat-opcion]').forEach(function (x) { x.disabled = true; });
-            post('/configuracion/proveedores/guardar', { codigo: codigo, cedula: ced, nombre: nombre, existente: '1' })
+            post('/configuracion/proveedores/guardar', {
+                codigo: codigo, cedula: ced, nombre: nombre, existente: '1', modo: modo
+            })
                 .then(function (r) {
                     if (!r.ok) {
                         AppDialog.alert(r.message || 'No se pudo guardar.', { title: 'No se guardó', type: 'danger' });
                         tr.querySelectorAll('[data-cat-opcion]').forEach(function (x) { x.disabled = false; });
                         return;
                     }
+                    avisarReparadas(r, codigo);
                     cargar(paginaActual);
                 })
                 .catch(function () {
                     AppDialog.alert('No se pudo guardar.', { title: 'No se guardó', type: 'danger' });
                     tr.querySelectorAll('[data-cat-opcion]').forEach(function (x) { x.disabled = false; });
+                });
+        }
+
+        // Quitarle a un código una cédula que aceptaba además de su dueño.
+        async function dejarDeAceptar(b) {
+            var codigo = b.getAttribute('data-cat-no-tambien');
+            var ced = b.getAttribute('data-cedula');
+            var nombre = b.getAttribute('data-nombre') || ced;
+            if (!(await AppDialog.confirm(
+                'Las facturas del código ' + codigo + ' dejan de aceptar los comprobantes de ' + nombre
+                + ' (cédula ' + ced + '). Su dueño no cambia.',
+                { title: 'Dejar de aceptar', type: 'warning', confirmText: 'Dejar de aceptarlo' }
+            ))) { return; }
+
+            post('/configuracion/proveedores/dejar-de-aceptar', { codigo: codigo, cedula: ced })
+                .then(function (r) {
+                    if (!r.ok) {
+                        AppDialog.alert(r.message || 'No se pudo quitar.', { title: 'No se quitó', type: 'danger' });
+                        return;
+                    }
+                    cargar(paginaActual);
+                })
+                .catch(function () {
+                    AppDialog.alert('No se pudo quitar.', { title: 'No se quitó', type: 'danger' });
                 });
         }
 
@@ -2649,8 +2502,13 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
         document.addEventListener('click', function (e) {
             var b = e.target.closest ? e.target.closest('[data-cat-pagina],[data-cat-editar],[data-cat-borrar],'
                   + '[data-cat-elegir],[data-cat-opcion],[data-cat-cerrar],[data-cat-ignorar],'
-                  + '[data-cat-despertar],[data-cat-hpagina]') : null;
+                  + '[data-cat-despertar],[data-cat-hpagina],[data-cat-no-tambien]') : null;
             if (!b) { return; }
+
+            if (b.hasAttribute('data-cat-no-tambien')) {
+                dejarDeAceptar(b);
+                return;
+            }
 
             if (b.hasAttribute('data-cat-hpagina')) {
                 huerPagina = parseInt(b.getAttribute('data-cat-hpagina'), 10) || 1;
@@ -2786,10 +2644,21 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                         .then(function (r) {
                             if (!r || !r.ok) { return (r && r.message) || 'No se pudo guardar.'; }
                             cargar(nuevo ? 1 : paginaActual);
+                            // Después de cerrar este cuadro, no encima de él.
+                            setTimeout(function () { avisarReparadas(r, codigo); }, 0);
                             return true;
                         }, function () { return 'No se pudo guardar. Probá de nuevo.'; });
                 }
             });
+        }
+
+        /* Darle su cédula a un código destraba las facturas que ya tenían el
+         * comprobante en el sistema y lo estaban esperando: vale decir cuántas. */
+        function avisarReparadas(r, codigo) {
+            if (Number(r && r.reparadas) > 0) {
+                AppDialog.alert(r.reparadas + ' factura(s) que estaban sin respaldo acaban de encontrar su comprobante.',
+                    { title: 'Código ' + codigo + ' guardado', type: 'info' });
+            }
         }
 
         async function borrarCodigo(codigo, nombre) {

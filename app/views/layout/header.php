@@ -233,7 +233,10 @@ if (!isset($sociedadActiva)) {
                             border-left:1px solid var(--border-light);"
                      title="El buzón y su árbol de carpetas se mantienen en los tres modos.">
                     <?php foreach ([
-                        'facturas'  => ['fa-file-invoice',   'Facturas'],
+                        // "Documentos" y no "Facturas": del correo bajan también
+                        // notas de crédito y de débito. La clave sigue siendo
+                        // 'facturas' para no romper los enlaces ya guardados.
+                        'facturas'  => ['fa-file-invoice',   'Documentos'],
                         'descargas' => ['fa-cloud-arrow-down', 'Descargas'],
                     ] as $clave => [$icono, $etiqueta]):
                         $actual = $modoCorreo === $clave; ?>
@@ -260,7 +263,7 @@ if (!isset($sociedadActiva)) {
                     && $puedeVerMenu('avisos.ver')): ?>
                 <button type="button" id="btn-sin-codigo" class="btn btn-outline btn-sm"
                         style="white-space:nowrap;"
-                        title="Comprobantes que llegaron de proveedores que el sistema todavía no conoce">
+                        title="Comprobantes de proveedores que el sistema no conoce">
                     <i class="fas fa-user-tag"></i> Comprobantes sin código
                     <span id="sin-codigo-badge" class="badge badge-navy"
                           style="font-size:9px;padding:1px 5px;margin-left:2px;<?= (int) ($sinCodigoPendientes ?? 0) > 0 ? '' : 'display:none;' ?>">
@@ -283,7 +286,7 @@ if (!isset($sociedadActiva)) {
                 if (isset($modoSeguimiento) && strpos($uriClean, '/seguimiento') !== false): ?>
                 <div style="display:flex;align-items:center;gap:5px;padding-left:9px;
                             border-left:1px solid var(--border-light);"
-                     title="Sistema: qué le falta a las facturas que ya están registradas. Correo: qué comprobantes llegaron y todavía no están registrados.">
+                     title="Sistema: qué le falta a lo registrado. Correo: qué llegó y no está registrado.">
                     <?php foreach ([
                         'sistema' => ['fa-database',           'Sistema'],
                         'correo'  => ['fa-envelope-open-text', 'Correo'],
@@ -540,7 +543,7 @@ if (!isset($sociedadActiva)) {
                    onmouseover="this.style.background='#eef3fb'"
                    onmouseout="this.style.background='<?= $enConfiguracion ? '#eef3fb' : 'transparent' ?>'"
                    <?= $enConfiguracion ? 'aria-current="page"' : '' ?>
-                   title="Configuración: carpeta de XML y PDF, cuentas de correo, empresas, usuarios y roles">
+                   title="Documentos en SharePoint, correo, empresas, usuarios y roles">
                     <i class="fas fa-gear"></i>
                 </a>
                 <?php endif; ?>
@@ -558,7 +561,7 @@ if (!isset($sociedadActiva)) {
                       // acotada, y el aviso va en la barra y no en cada
                       // pantalla porque el problema es el mismo en todas. ?>
                 <span class="topbar-society" style="font-size:11.5px;color:#9a3412;background:#fff7ed;border:1px solid #fdba74;border-radius:999px;padding:3px 8px;display:flex;align-items:center;gap:5px;font-weight:600;"
-                      title="No hay ninguna empresa seleccionada, así que los listados salen vacíos. Elegí una en Configuración → Empresas.">
+                      title="Sin empresa seleccionada los listados salen vacíos. Elegí una en Configuración → Empresas.">
                     <i class="fas fa-triangle-exclamation" style="color:#c2410c;font-size:13px;"></i>
                     Sin empresa
                 </span>

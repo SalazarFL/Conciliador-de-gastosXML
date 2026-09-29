@@ -94,6 +94,11 @@ class BuzonFalso
 // ── Preparación ─────────────────────────────────────────────────────────────
 
 $raiz = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'xmlconcilia_recuperador_' . bin2hex(random_bytes(5));
+// Reponer archiva para la empresa del documento, y eso iría a SharePoint: acá
+// una carpeta de disco hace de archivo (ver tests/soporte/ArchivoDePrueba.php).
+require_once __DIR__ . '/../app/helpers/AlmacenEnDisco.php';
+RutaDocumento::fijarRaiz($raiz);
+AlmacenDocumentos::fijar(new AlmacenEnDisco());
 // Lo archivado vive bajo SISTEMA: la carpeta que la aplicación administra
 // y que no se toca a mano (ver DocumentoArchivo). Y dentro, la de su empresa:
 // reponer un documento lo devuelve a la carpeta donde debió estar siempre.

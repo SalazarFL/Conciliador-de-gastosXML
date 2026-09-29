@@ -108,7 +108,7 @@ $resumirDetalle = function ($detalle): string {
     <div style="margin-left:auto;display:flex;gap:6px;align-items:center;">
         <a class="btn btn-outline btn-sm" href="<?= $baseUrl ?>/bitacora/exportar?<?= $qs() ?>"
            data-exportar="bitacora"
-           title="Bajar a Excel exactamente lo que estás viendo: estos filtros y estas columnas">
+           title="Bajar a Excel lo que estás viendo: estos filtros y estas columnas">
             <i class="fas fa-file-excel"></i> Exportar
         </a>
         <?php if ($puedeDepurar): ?>
@@ -135,8 +135,7 @@ $resumirDetalle = function ($detalle): string {
     </select>
     <button type="submit" class="btn btn-danger btn-sm"><i class="fas fa-broom"></i> Depurar</button>
     <span class="bit-depurar-nota">
-        Solo se borra la bitácora. El historial de cada módulo —las anotaciones de
-        Seguimiento, las cargas— es dato de trabajo y se queda donde está.
+        Solo se borra la bitácora. El historial de cada módulo se queda.
     </span>
 </form>
 <?php endif; ?>
@@ -207,7 +206,7 @@ $resumirDetalle = function ($detalle): string {
     </div>
     <?php endif; ?>
 
-    <label class="bit-historial" title="Mezcla el rastro que cada módulo venía guardando desde antes de que existiera la bitácora">
+    <label class="bit-historial" title="Añade el rastro que cada módulo guardaba antes de la bitácora">
         <input type="checkbox" name="historial" value="1" <?= !empty($filtros['historial']) ? 'checked' : '' ?>>
         <span>Incluir el historial anterior</span>
     </label>
@@ -237,8 +236,7 @@ $resumirDetalle = function ($detalle): string {
     No hay movimientos con esos criterios.
     <?php if (empty($filtros['historial'])): ?>
     <div style="margin-top:5px;font-size:11.5px;">
-        Si buscas algo anterior a la puesta en marcha de la bitácora, marca
-        <strong>Incluir el historial anterior</strong>.
+        Para lo anterior a la bitácora, marca <strong>Incluir el historial anterior</strong>.
     </div>
     <?php endif; ?>
 </div>
@@ -254,8 +252,9 @@ $resumirDetalle = function ($detalle): string {
                 <th style="width:120px;" data-col="modulo">Módulo</th>
                 <th data-col="accion">Qué hizo</th>
                 <th style="width:96px;" data-col="resultado">Resultado</th>
-                <?php // El detalle entero y de qué fuente sale el renglón: dos
-                      // cosas que estaban en la base y solo se veían recortadas. ?>
+                <th data-col="detalle">Detalle</th>
+                <th style="width:140px;" data-col="origen"
+                    title="La bitácora, o el historial que el módulo llevaba antes de ella">Origen</th>
                 <?= Columnas::cabecerasExtra('bitacora') ?>
                 <th style="width:38px;" data-columnas-boton></th>
             </tr>
@@ -277,20 +276,21 @@ $resumirDetalle = function ($detalle): string {
             <td data-col="modulo">
                 <span class="badge badge-default"><?= htmlspecialchars((string) $tituloModulo) ?></span>
             </td>
-            <td data-col="accion">
-                <div class="bit-accion"><?= htmlspecialchars((string) $f['accion']) ?></div>
-                <?php if ($detalle !== ''): ?>
-                <div class="bit-detalle"><?= htmlspecialchars($detalle) ?></div>
-                <?php endif; ?>
+            <td class="bit-accion" data-col="accion"><?= htmlspecialchars((string) $f['accion']) ?></td>
+            <td data-col="resultado">
+                <span class="badge <?= $clase ?>"><i class="fas <?= $icono ?>"></i> <?= $texto ?></span>
+            </td>
+            <?php // Recortado a una línea que se lea; entero, en la lupa y en el Excel. ?>
+            <td class="bit-detalle" data-col="detalle"><?= $detalle !== '' ? htmlspecialchars($detalle) : '—' ?></td>
+            <td class="bit-origen" data-col="origen">
                 <?php if (!$propio): ?>
-                <span class="bit-origen" title="Viene del historial propio del módulo, de antes de la bitácora">
+                <span title="Viene del historial propio del módulo, de antes de la bitácora">
                     <i class="fas fa-clock-rotate-left"></i>
                     <?= htmlspecialchars($fuentes[$f['origen']]['titulo'] ?? (string) $f['origen']) ?>
                 </span>
+                <?php else: ?>
+                Bitácora
                 <?php endif; ?>
-            </td>
-            <td data-col="resultado">
-                <span class="badge <?= $clase ?>"><i class="fas <?= $icono ?>"></i> <?= $texto ?></span>
             </td>
             <?= Columnas::celdasExtra('bitacora', $f) ?>
             <td>
@@ -377,17 +377,14 @@ $resumirDetalle = function ($detalle): string {
 .bit-tabla td { vertical-align: top; }
 .bit-fila.denegada { background: #FEF6F6; }
 .bit-cuando { font-size: 12px; color: var(--navy); white-space: nowrap; }
-.bit-cuando span { display: block; font-size: 11px; color: var(--text-muted, #5A6E8A); }
+.bit-cuando span { margin-left: 4px; font-size: 11px; color: var(--text-muted, #5A6E8A); }
 .bit-quien { font-size: 12.5px; font-weight: 600; color: var(--navy); }
 .bit-accion { font-size: 12.5px; color: #1a2b4a; }
 .bit-detalle {
-    font-size: 11.5px; color: var(--text-muted, #5A6E8A); line-height: 1.4; margin-top: 2px;
+    font-size: 11.5px; color: var(--text-muted, #5A6E8A); line-height: 1.4;
     overflow-wrap: anywhere;
 }
-.bit-origen {
-    display: inline-flex; align-items: center; gap: 4px; margin-top: 3px;
-    font-size: 10.5px; color: #94A3B8;
-}
+.bit-origen { font-size: 11px; color: #94A3B8; white-space: nowrap; }
 
 .bit-modal {
     position: fixed; inset: 0; background: rgba(12,36,97,.34);

@@ -3,6 +3,7 @@ require_once __DIR__ . '/../app/core/Model.php';
 require_once __DIR__ . '/../app/core/Controller.php';
 require_once __DIR__ . '/../app/helpers/XmlParser.php';
 require_once __DIR__ . '/../app/controllers/CorreoController.php';
+require_once __DIR__ . '/../app/helpers/AlmacenEnDisco.php';
 
 function assertCorreoReproceso($condition, $message)
 {
@@ -44,6 +45,9 @@ $pdfAnterior = tempnam(sys_get_temp_dir(), 'correo_old_pdf_');
 $raizTrabajo = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'xmlconcilia_reproceso_' . uniqid();
 mkdir($raizTrabajo, 0777, true);
 RutaDocumento::fijarRaiz($raizTrabajo);
+// Lo nuevo iría a SharePoint; acá lo que se prueba es el reproceso, así que
+// una carpeta de disco hace de archivo (ver tests/soporte/ArchivoDePrueba.php).
+AlmacenDocumentos::fijar(new AlmacenEnDisco());
 $xml = '<?xml version="1.0" encoding="UTF-8"?>'
     . '<FacturaElectronica xmlns="https://cdn.comprobanteselectronicos.go.cr/xml-schemas/v4.4/facturaElectronica">'
     . '<Clave>' . $clave . '</Clave>'
@@ -123,4 +127,5 @@ try {
     }
     @rmdir($raizTrabajo);
     RutaDocumento::olvidarRaiz();
+    AlmacenDocumentos::olvidar();
 }

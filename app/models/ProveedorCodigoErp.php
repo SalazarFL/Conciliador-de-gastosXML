@@ -34,23 +34,50 @@
  *   conoceCedula()   Desde el XML: "este comprobante que acaba de llegar,
  *                    ¿pertenece a algún código del ERP?" Si no, no hay a qué
  *                    factura pegarlo y hay que preguntarle a una persona.
+ *
+ * ── Un código, una cédula… salvo que alguien diga lo contrario ─────────
+ *
+ * Cada código tiene UNA cédula dueña, la del listado del ERP. Pero hay
+ * códigos que en la práctica reciben comprobantes de dos: BANCO BAC SAN JOSE
+ * y BAC SAN JOSE LEASING facturan contra el mismo código del sistema. Pasarle
+ * el código a la segunda se lo quitaba a la primera, y eso no es lo que pasa.
+ *
+ * Para eso está proveedor_codigo_tambien: una cédula que el código ACEPTA
+ * además de la suya, porque una persona lo decidió para ese código en
+ * concreto. No es una regla general —dos cédulas no comparten código porque
+ * sí—, y el importador del listado no la toca ni la desmiente.
+ *
+ * ── Uno por empresa ────────────────────────────────────────────────────
+ *
+ * Cada empresa tiene su propio catálogo: el listado que se importa es el de
+ * la empresa en la que se está trabajando, y el mismo código puede ser un
+ * proveedor en una y otro en la otra. Lo mismo vale para lo que un código
+ * acepta además de su dueña y para las cédulas que se decidió no procesar:
+ * que un proveedor no le facture a una empresa no dice nada de las demás.
+ *
+ * Sin empresa no hay catálogo —ni para leer ni para escribir—, igual que en
+ * el resto de la aplicación (ver AlcanceSociedad).
  */
 
 class ProveedorCodigoErp extends Model
 {
+    use AlcanceSociedad;
+
     protected $table = 'proveedor_codigo_erp';
 
     /**
-     * El catálogo completo, leído una vez por petición.
+     * El catálogo de cada empresa, leído una vez por petición.
      *
      * Son unos miles de filas y las consulta cada comparación del bucle de
      * emparejamiento; traerlas de a una contra el servidor sería el mismo
      * error que ya costó segundos por pantalla en Correo.
+     *
+     * sociedad_id => mapa (ver mapa()).
      */
-    private static $mapa = null;
+    private static $mapa = [];
 
-    /** Las cédulas que el catálogo conoce, para preguntar por cédula. */
-    private static $cedulas = null;
+    /** sociedad_id => las cédulas que su catálogo conoce. */
+    private static $cedulas = [];
 
     public function __construct()
     {
@@ -59,7 +86,10 @@ class ProveedorCodigoErp extends Model
 
     private function ensureTables()
     {
+        // sociedad_id sin valor por omisión, a propósito: una fila escrita
+        // sin decir de qué empresa es tiene que fallar, no caer en una.
         $this->execute("CREATE TABLE IF NOT EXISTS proveedor_codigo_erp (
+            `sociedad_id` INT UNSIGNED NOT NULL,
             `proveedor_codigo` VARCHAR(30) NOT NULL,
             `proveedor_id` INT UNSIGNED NOT NULL,
             `cedula` VARCHAR(20) NOT NULL DEFAULT '',
@@ -70,7 +100,7 @@ class ProveedorCodigoErp extends Model
             `confirmado_por` INT UNSIGNED NULL DEFAULT NULL,
             `creado_en` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             `actualizado_en` DATETIME NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
-            PRIMARY KEY (`proveedor_codigo`),
+            PRIMARY KEY (`sociedad_id`, `proveedor_codigo`),
             KEY `idx_proveedor` (`proveedor_id`),
             KEY `idx_origen` (`origen`),
             KEY `idx_cedula` (`cedula`)
@@ -86,13 +116,45 @@ class ProveedorCodigoErp extends Model
          * pregunta volvería con cada comprobante que llegara de esa cédula.
          */
         $this->execute("CREATE TABLE IF NOT EXISTS proveedor_cedula_ignorada (
+            `sociedad_id` INT UNSIGNED NOT NULL,
             `cedula` VARCHAR(20) NOT NULL,
             `nombre` VARCHAR(255) NOT NULL DEFAULT '',
             `motivo` VARCHAR(255) NULL DEFAULT NULL,
             `usuario_id` INT UNSIGNED NULL DEFAULT NULL,
             `creado_en` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (`cedula`)
+            PRIMARY KEY (`sociedad_id`, `cedula`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        /*
+         * Las cédulas que un código acepta además de la suya (ver arriba).
+         *
+         * Con sus claves foráneas: si el proveedor se borra, lo que aceptaba
+         * se va con él; si la persona que lo decidió se va, la decisión queda.
+         * Una instalación donde usuarios.id todavía tiene signo no puede crear
+         * esa clave: ahí la tabla nace sin claves y funciona igual.
+         */
+        $tambien = "CREATE TABLE IF NOT EXISTS proveedor_codigo_tambien (
+            `sociedad_id` INT UNSIGNED NOT NULL,
+            `proveedor_codigo` VARCHAR(30) NOT NULL,
+            `cedula` VARCHAR(20) NOT NULL,
+            `proveedor_id` INT UNSIGNED NOT NULL,
+            `nombre` VARCHAR(255) NOT NULL DEFAULT '',
+            `usuario_id` INT UNSIGNED NULL DEFAULT NULL,
+            `creado_en` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`sociedad_id`, `proveedor_codigo`, `cedula`),
+            KEY `idx_cedula` (`cedula`),
+            KEY `idx_proveedor` (`proveedor_id`),
+            KEY `idx_usuario` (`usuario_id`)%s
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci";
+        try {
+            $this->execute(sprintf($tambien, ",
+            CONSTRAINT `fk_codigo_tambien_proveedor` FOREIGN KEY (`proveedor_id`)
+                REFERENCES `proveedores` (`id`) ON DELETE CASCADE,
+            CONSTRAINT `fk_codigo_tambien_usuario` FOREIGN KEY (`usuario_id`)
+                REFERENCES `usuarios` (`id`) ON DELETE SET NULL"));
+        } catch (Throwable $e) {
+            $this->execute(sprintf($tambien, ''));
+        }
 
         $this->ponerseAlDia();
     }
@@ -131,6 +193,86 @@ class ProveedorCodigoErp extends Model
         } catch (Throwable $e) {
             // Sin permisos de DDL el catálogo funciona igual.
         }
+
+        $this->pasarAPorEmpresa();
+    }
+
+    /**
+     * Las tablas nacieron siendo una sola para todo el grupo. Ahora cada
+     * empresa tiene la suya: se les agrega la empresa a la llave.
+     *
+     * Las filas que ya estaban se le dan a una empresa solo si hay UNA: ahí no
+     * hay nada que adivinar. Con varias, no se sabe de cuál salió cada listado
+     * —el archivo no lo guarda, y deducirlo de las facturas es justo el tipo
+     * de conjetura que este catálogo vino a eliminar—, así que quedan en la
+     * empresa 0, que nadie ve, y cada empresa tiene que importar su listado.
+     * El portón de "sin listado no se importa nada" se encarga de pedirlo.
+     */
+    private function pasarAPorEmpresa()
+    {
+        $tablas = [
+            'proveedor_codigo_erp'      => '`proveedor_codigo`',
+            'proveedor_codigo_tambien'  => '`proveedor_codigo`, `cedula`',
+            'proveedor_cedula_ignorada' => '`cedula`',
+        ];
+        foreach ($tablas as $tabla => $llave) {
+            try {
+                $tiene = (int) $this->fetchColumn(
+                    "SELECT COUNT(*) FROM information_schema.COLUMNS
+                      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = 'sociedad_id'",
+                    [$tabla]
+                );
+                if ($tiene > 0) {
+                    continue;
+                }
+                // Todo en una sola sentencia: si el cambio de llave falla, la
+                // columna tampoco queda a medias.
+                $this->execute(
+                    "ALTER TABLE `{$tabla}`
+                        ADD COLUMN `sociedad_id` INT UNSIGNED NOT NULL FIRST,
+                        DROP PRIMARY KEY,
+                        ADD PRIMARY KEY (`sociedad_id`, {$llave})"
+                );
+                $unica = $this->fetchAll('SELECT id FROM sociedades LIMIT 2') ?: [];
+                if (count($unica) === 1) {
+                    $this->execute(
+                        "UPDATE `{$tabla}` SET sociedad_id = ?",
+                        [(int) $unica[0]['id']]
+                    );
+                }
+            } catch (Throwable $e) {
+                // Sin permisos de DDL queda como estaba; las consultas por
+                // empresa fallarán y lo dirán, que es mejor que mezclarlas.
+            }
+        }
+    }
+
+    /**
+     * La empresa cuyo catálogo toca este modelo. 0 si no hay ninguna.
+     *
+     * "Todas" no existe para el catálogo: un código es de una empresa, y
+     * mezclarlos es exactamente lo que dejaría de separar a dos proveedores
+     * con el mismo código en empresas distintas.
+     */
+    private function empresa()
+    {
+        return $this->alcanceEsTodas() ? 0 : (int) $this->sociedadId();
+    }
+
+    /**
+     * Lo mismo para las preguntas estáticas: la empresa que se diga o, si no
+     * se dice, la que tiene seleccionada quien hace la petición.
+     */
+    private static function empresaDe($sociedadId)
+    {
+        $sociedadId = (int) $sociedadId;
+        return $sociedadId > 0 ? $sociedadId : (int) self::sociedadSeleccionadaId();
+    }
+
+    /** El error que devuelven las escrituras cuando no hay empresa. */
+    private static function sinEmpresa()
+    {
+        return ['ok' => false, 'message' => 'Elegí una empresa: cada una tiene su propio catálogo de proveedores.'];
     }
 
     // ── El catálogo del ERP ────────────────────────────────────────────
@@ -155,6 +297,9 @@ class ProveedorCodigoErp extends Model
      * los que más sirven: es el que permite decir "este comprobante NO es de
      * este código" cuando el emparejador ofrece el de otro.
      *
+     * El listado entra en el catálogo de la empresa de este modelo, y solo en
+     * ese: es el listado de proveedores de esa empresa en el ERP.
+     *
      * @param array $filas  Del parser: codigo, cedula, nombre.
      * @param bool  $simular Si es true no escribe nada y solo devuelve el plan.
      */
@@ -162,13 +307,19 @@ class ProveedorCodigoErp extends Model
     {
         require_once __DIR__ . '/Proveedor.php';
 
+        $empresa = $this->empresa();
+        if ($empresa <= 0) {
+            throw new RuntimeException(self::sinEmpresa()['message']);
+        }
+
         $r = [
+            'sociedad_id' => $empresa,
             'leidos' => 0, 'confirmados' => 0, 'corregidos' => 0, 'nuevos' => 0,
             'proveedores_creados' => 0, 'sin_cedula' => 0, 'choca_con_manual' => 0,
             'cambios' => [], 'manuales' => [],
         ];
 
-        $mapa = self::mapa();
+        $mapa = self::mapa($empresa);
         $proveedores = new Proveedor();
         $porCedula = $this->proveedoresPorCedula();
 
@@ -192,6 +343,20 @@ class ProveedorCodigoErp extends Model
                 $r['nuevos']++;
             } elseif ($cedulaActual === $cedula) {
                 $r['confirmados']++;
+            } elseif (($actual['origen'] ?? '') === 'manual') {
+                // guardarDesdeErp no le toca la cédula a lo que se decidió a
+                // mano. Contarlo como corregido anunciaba un cambio que no
+                // ocurre y escondía que el ERP opina distinto: eso es lo que
+                // alguien tiene que mirar.
+                $r['choca_con_manual']++;
+                if (count($r['manuales']) < 200) {
+                    $r['manuales'][] = [
+                        'codigo' => $codigo,
+                        'nombre' => $nombre,
+                        'cedula_erp' => $cedula,
+                        'cedula_manual' => $cedulaActual,
+                    ];
+                }
             } else {
                 $r['corregidos']++;
                 if (count($r['cambios']) < 200) {
@@ -231,7 +396,7 @@ class ProveedorCodigoErp extends Model
                 $r['proveedores_creados']++;
             }
 
-            $this->guardarDesdeErp($codigo, $proveedorId, $cedula, $nombre);
+            $this->guardarDesdeErp($empresa, $codigo, $proveedorId, $cedula, $nombre);
         }
 
         if (!$simular) {
@@ -248,18 +413,18 @@ class ProveedorCodigoErp extends Model
      * sabía algo que el archivo no decía, y volver a exportarlo no puede
      * deshacerlo en silencio.
      */
-    private function guardarDesdeErp($codigo, $proveedorId, $cedula, $nombre)
+    private function guardarDesdeErp($empresa, $codigo, $proveedorId, $cedula, $nombre)
     {
         try {
             $this->execute(
                 "INSERT INTO proveedor_codigo_erp
-                    (proveedor_codigo, proveedor_id, cedula, nombre_erp, origen)
-                 VALUES (?, ?, ?, ?, 'erp')
+                    (sociedad_id, proveedor_codigo, proveedor_id, cedula, nombre_erp, origen)
+                 VALUES (?, ?, ?, ?, ?, 'erp')
                  ON DUPLICATE KEY UPDATE
                     proveedor_id = IF(origen = 'manual', proveedor_id, VALUES(proveedor_id)),
                     cedula       = IF(origen = 'manual', cedula, VALUES(cedula)),
                     nombre_erp   = IF(VALUES(nombre_erp) = '', nombre_erp, VALUES(nombre_erp))",
-                [$codigo, (int) $proveedorId, $cedula, $nombre]
+                [(int) $empresa, $codigo, (int) $proveedorId, $cedula, $nombre]
             );
             return true;
         } catch (Throwable $e) {
@@ -287,12 +452,21 @@ class ProveedorCodigoErp extends Model
      * Los emparejamientos que el catálogo del ERP deja sin sustento.
      *
      * Una factura de un código enganchada a un XML de otra cédula estaba mal
-     * desde el principio: ahora hay con qué probarlo. Se listan aparte de la
+     * desde el principio: ahora hay con qué probarlo. "Otra cédula" es la del
+     * catálogo tal como queda después de importar: la del archivo, salvo en
+     * los códigos fijados a mano, que conservan la suya. Se listan aparte de la
      * importación porque deshacerlos borra trabajo ya hecho y esa es una
      * decisión de quien mira, no del importador.
      */
     public function emparejamientosQueContradice(array $filas, $limite = 500)
     {
+        // Solo las facturas de la empresa del listado: el mismo código en
+        // otra empresa puede ser otro proveedor, y el archivo no habla de él.
+        $empresa = $this->empresa();
+        if ($empresa <= 0) {
+            return [];
+        }
+
         $porCodigo = [];
         foreach ($filas as $f) {
             $cedula = preg_replace('/\D/', '', (string) ($f['cedula'] ?? ''));
@@ -305,6 +479,15 @@ class ProveedorCodigoErp extends Model
             return [];
         }
 
+        // Donde una persona fijó la cédula a mano, la importación no la
+        // cambia, así que la que manda sigue siendo esa. Medir con la del
+        // archivo soltaba justo las facturas que esa decisión emparejó.
+        foreach (self::mapa($empresa) as $codigo => $fila) {
+            if (isset($porCodigo[$codigo]) && $fila['origen'] === 'manual' && $fila['cedula'] !== '') {
+                $porCodigo[$codigo] = preg_replace('/\D/', '', $fila['cedula']);
+            }
+        }
+
         try {
             $filasErp = $this->fetchAll(
                 "SELECT e.id, e.proveedor_codigo, e.proveedor_nombre, e.documento, e.monto,
@@ -312,11 +495,20 @@ class ProveedorCodigoErp extends Model
                    FROM facturas_erp e
                    JOIN facturas_xml f ON f.id = e.factura_xml_id
                    JOIN proveedores  p ON p.id = f.proveedor_id
-                  WHERE e.proveedor_codigo <> '' AND p.rfc IS NOT NULL AND p.rfc <> ''
-                  LIMIT 20000"
+                  WHERE e.sociedad_id = ?
+                    AND e.proveedor_codigo <> '' AND p.rfc IS NOT NULL AND p.rfc <> ''
+                  LIMIT 20000",
+                [$empresa]
             ) ?: [];
         } catch (Throwable $e) {
             return [];
+        }
+
+        // Lo que una persona decidió que un código también acepta no es una
+        // contradicción del listado: el listado solo sabe de la dueña.
+        $aceptadas = [];
+        foreach (self::leerTambien($empresa) as $t) {
+            $aceptadas[(string) $t['proveedor_codigo']][self::normalizarCedula($t['cedula'])] = true;
         }
 
         $malos = [];
@@ -326,7 +518,7 @@ class ProveedorCodigoErp extends Model
                 continue;
             }
             $tiene = preg_replace('/\D/', '', (string) $f['rfc']);
-            if ($tiene === $esperada) {
+            if ($tiene === $esperada || isset($aceptadas[$f['proveedor_codigo']][$tiene])) {
                 continue;
             }
             $malos[] = $f;
@@ -383,9 +575,14 @@ class ProveedorCodigoErp extends Model
             'total' => 0, 'erp' => 0, 'manual' => 0,
             'cedulas' => 0, 'ignoradas' => 0, 'sin_codigo' => 0,
         ];
+        $empresa = $this->empresa();
+        if ($empresa <= 0) {
+            return $resumen;
+        }
         try {
             foreach ($this->fetchAll(
-                'SELECT origen, COUNT(*) n FROM proveedor_codigo_erp GROUP BY origen'
+                'SELECT origen, COUNT(*) n FROM proveedor_codigo_erp WHERE sociedad_id = ? GROUP BY origen',
+                [$empresa]
             ) ?: [] as $f) {
                 $resumen['total'] += (int) $f['n'];
                 $origen = (string) $f['origen'];
@@ -396,10 +593,12 @@ class ProveedorCodigoErp extends Model
             // Cédulas distintas, que no son lo mismo que códigos: una sociedad
             // con varios puntos de venta ocupa varios códigos y una sola.
             $resumen['cedulas'] = (int) $this->fetchColumn(
-                "SELECT COUNT(DISTINCT cedula) FROM proveedor_codigo_erp WHERE cedula <> ''"
+                "SELECT COUNT(DISTINCT cedula) FROM proveedor_codigo_erp WHERE sociedad_id = ? AND cedula <> ''",
+                [$empresa]
             );
             $resumen['ignoradas'] = (int) $this->fetchColumn(
-                'SELECT COUNT(*) FROM proveedor_cedula_ignorada'
+                'SELECT COUNT(*) FROM proveedor_cedula_ignorada WHERE sociedad_id = ?',
+                [$empresa]
             );
             $resumen['sin_codigo'] = $this->cuantosSinCodigo();
         } catch (Throwable $e) {
@@ -409,24 +608,52 @@ class ProveedorCodigoErp extends Model
 
     // ── Lectura ────────────────────────────────────────────────────────
 
-    /** proveedor_codigo => ['proveedor_id', 'cedula', 'veces', 'disputa'] */
-    public static function mapa()
+    /**
+     * proveedor_codigo => ['proveedor_id', 'cedula', 'origen', 'hermanos',
+     *                      'tambien' => [proveedor_id => ['cedula', 'hermanos']]]
+     *
+     * `tambien` son las cédulas que el código acepta además de la suya; cada
+     * una con sus propios hermanos, porque la cédula aceptada puede ser dueña
+     * de otros códigos.
+     *
+     * El de una empresa: la que se diga o, si no, la seleccionada. Sin
+     * empresa el mapa está vacío.
+     */
+    public static function mapa($sociedadId = 0)
     {
-        if (self::$mapa !== null) {
-            return self::$mapa;
+        $empresa = self::empresaDe($sociedadId);
+        if (isset(self::$mapa[$empresa])) {
+            return self::$mapa[$empresa];
+        }
+        if ($empresa <= 0) {
+            return [];
         }
 
-        self::$mapa = [];
+        $mapa = [];
         try {
             $filas = (new self())->fetchAll(
-                'SELECT proveedor_codigo, proveedor_id, cedula, origen FROM proveedor_codigo_erp'
+                'SELECT proveedor_codigo, proveedor_id, cedula, origen
+                   FROM proveedor_codigo_erp WHERE sociedad_id = ?',
+                [$empresa]
             ) ?: [];
             foreach ($filas as $f) {
-                self::$mapa[(string) $f['proveedor_codigo']] = [
+                $mapa[(string) $f['proveedor_codigo']] = [
                     'proveedor_id' => (int) $f['proveedor_id'],
                     'cedula'       => (string) $f['cedula'],
                     'origen'       => (string) $f['origen'],
+                    'tambien'      => [],
                 ];
+            }
+
+            // Un código que ya no está en el catálogo no acepta nada: su fila
+            // de "también" quedó colgando y no se lee.
+            foreach (self::leerTambien($empresa) as $t) {
+                $codigo = (string) $t['proveedor_codigo'];
+                if (isset($mapa[$codigo])) {
+                    $mapa[$codigo]['tambien'][(int) $t['proveedor_id']] = [
+                        'cedula' => (string) $t['cedula'],
+                    ];
+                }
             }
 
             /*
@@ -440,40 +667,50 @@ class ProveedorCodigoErp extends Model
              * por el que se colaron los enganches malos.
              */
             $cuantos = [];
-            foreach (self::$mapa as $fila) {
-                $ced = $fila['cedula'];
-                if ($ced !== '') {
-                    $cuantos[$ced] = ($cuantos[$ced] ?? 0) + 1;
+            foreach ($mapa as $fila) {
+                // Una cédula aceptada cuenta como un código más de esa cédula:
+                // si también es dueña de otro, su comprobante ya no dice de
+                // cuál de los dos es, y lo tiene que elegir una persona.
+                foreach (array_merge([$fila['cedula']], array_column($fila['tambien'], 'cedula')) as $ced) {
+                    if ($ced !== '') {
+                        $cuantos[$ced] = ($cuantos[$ced] ?? 0) + 1;
+                    }
                 }
             }
-            foreach (self::$mapa as $codigo => $fila) {
-                self::$mapa[$codigo]['hermanos'] = max(0, ($cuantos[$fila['cedula']] ?? 1) - 1);
+            foreach ($mapa as $codigo => $fila) {
+                $mapa[$codigo]['hermanos'] = max(0, ($cuantos[$fila['cedula']] ?? 1) - 1);
+                foreach ($fila['tambien'] as $pid => $t) {
+                    $mapa[$codigo]['tambien'][$pid]['hermanos'] = max(0, ($cuantos[$t['cedula']] ?? 1) - 1);
+                }
             }
         } catch (Throwable $e) {
             // Instalación sin la tabla todavía: sin catálogo, sin guarda.
-            self::$mapa = [];
+            $mapa = [];
         }
 
-        return self::$mapa;
+        return self::$mapa[$empresa] = $mapa;
     }
 
     /**
-     * ¿Hay listado cargado?
+     * ¿Hay listado cargado en esta empresa?
      *
      * Es la pregunta del portón: sin listado no se importa nada, porque una
      * factura que entra antes que la lista se empareja a ciegas y después
      * nadie vuelve a mirarla. Se responde con el mapa ya cacheado, así que
      * preguntarlo en cada pantalla no cuesta una consulta.
+     *
+     * Por empresa: que otra tenga su listado no le sirve a esta, sus códigos
+     * son otros.
      */
-    public static function hayListado()
+    public static function hayListado($sociedadId = 0)
     {
-        return self::mapa() !== [];
+        return self::mapa($sociedadId) !== [];
     }
 
     public static function olvidarMapa()
     {
-        self::$mapa = null;
-        self::$cedulas = null;
+        self::$mapa = [];
+        self::$cedulas = [];
     }
 
     /**
@@ -483,13 +720,18 @@ class ProveedorCodigoErp extends Model
      *   'compartido'  -> la cédula coincide, pero la comparten varios códigos
      *                    de la misma empresa. El comprobante es del grupo y no
      *                    hay forma de saber de cuál de ellos: no se engancha
-     *                    solo, lo elige una persona.
+     *                    solo, lo elige una persona. Salvo con el consecutivo
+     *                    exacto y el monto al colón, que identifican el
+     *                    documento sin preguntar de qué punto salió.
      *   'ajeno'       -> no; se rechaza y se sigue buscando
      *   'desconocido' -> no se pudo consultar el listado (sin base de datos:
      *                    pruebas, utilidades sueltas). En la aplicación no
      *                    ocurre, porque sin listado no se importa nada.
+     *
+     * $sociedadId es la empresa de la factura del ERP: el código se busca en
+     * SU catálogo. Sin ella, la seleccionada.
      */
-    public static function veredicto($codigo, $proveedorIdXml)
+    public static function veredicto($codigo, $proveedorIdXml, $sociedadId = 0)
     {
         $codigo = trim((string) $codigo);
         $proveedorIdXml = (int) $proveedorIdXml;
@@ -497,7 +739,7 @@ class ProveedorCodigoErp extends Model
             return 'desconocido';
         }
 
-        $mapa = self::mapa();
+        $mapa = self::mapa($sociedadId);
 
         /*
          * Catálogo vacío: la guarda no opina.
@@ -519,15 +761,28 @@ class ProveedorCodigoErp extends Model
          * del ERP, así que un código que no aparece ahí es uno que nadie dio
          * de alta —o que vino en un grupo que no se exportó—. Emparejarlo "a
          * ver si suena" es exactamente cómo se colaron los enlaces malos que
-         * esto vino a arreglar. La salida no es aflojar la regla: es agregar
-         * el código, que ahora se puede hacer desde la pantalla.
+         * esto vino a arreglar. La salida normal es agregar el código, que se
+         * puede hacer desde la pantalla.
+         *
+         * Hay una sola excepción, y no vive acá: con el consecutivo EXACTO y
+         * el nombre del proveedor parecido, quien empareja sí acepta el código
+         * que falta (ver fueraDelCatalogo). Lo pidió el usuario el 28/09: los
+         * códigos nuevos del ERP —viáticos, autoconsumo— no pueden quedarse
+         * sin respaldo mientras nadie exporta el listado. El número corto
+         * sigue sin tener esa salida.
          */
         $fila = $mapa[$codigo] ?? null;
         if ($fila === null) {
             return 'ajeno';
         }
         if ($fila['proveedor_id'] !== $proveedorIdXml) {
-            return 'ajeno';
+            // No es la dueña, pero puede ser una cédula que alguien decidió
+            // que este código también acepta.
+            $aceptada = $fila['tambien'][$proveedorIdXml] ?? null;
+            if ($aceptada === null) {
+                return 'ajeno';
+            }
+            return empty($aceptada['hermanos']) ? 'propio' : 'compartido';
         }
 
         // La cédula coincide, pero si la comparten varios códigos lo único
@@ -535,6 +790,27 @@ class ProveedorCodigoErp extends Model
         // puntos lo emitió no está en la cédula, y adivinarlo es justamente
         // lo que hay que dejar de hacer.
         return empty($fila['hermanos']) ? 'propio' : 'compartido';
+    }
+
+    /**
+     * ¿El código falta en un catálogo que sí existe?
+     *
+     * `veredicto` dice 'ajeno' tanto para un código que es de otra cédula como
+     * para uno que el catálogo no tiene, y no son lo mismo: el primero es una
+     * afirmación ("este comprobante no es suyo"), el segundo es no saber. Quien
+     * quiera darle al segundo otra salida —el consecutivo exacto con el nombre
+     * del proveedor— necesita poder distinguirlos.
+     *
+     * Sin catálogo responde false: ahí el veredicto ya es 'desconocido'.
+     */
+    public static function fueraDelCatalogo($codigo, $sociedadId = 0)
+    {
+        $codigo = trim((string) $codigo);
+        if ($codigo === '') {
+            return false;
+        }
+        $mapa = self::mapa($sociedadId);
+        return $mapa && !isset($mapa[$codigo]);
     }
 
     /**
@@ -548,42 +824,55 @@ class ProveedorCodigoErp extends Model
      * Una cédula que se decidió ignorar cuenta como conocida: ya se contestó
      * una vez que ese proveedor no va, y volver a preguntarlo sería empezar de
      * nuevo cada semana.
+     *
+     * $sociedadId es la empresa que recibió el comprobante: que el emisor esté
+     * en el catálogo de otra no dice que le facture a esta.
      */
-    public static function conoceCedula($cedula)
+    public static function conoceCedula($cedula, $sociedadId = 0)
     {
         $cedula = self::normalizarCedula($cedula);
         if ($cedula === '') {
             return false;
         }
-        $cedulas = self::cedulas();
+        $cedulas = self::cedulas(self::empresaDe($sociedadId));
         // Sin catálogo cargado no se puede afirmar que una cédula sea
         // desconocida: no habría con qué compararla.
         return !$cedulas || isset($cedulas[$cedula]);
     }
 
-    /** cedula => true, con las ignoradas dentro. */
-    private static function cedulas()
+    /** cedula => true, con las ignoradas dentro, de una empresa. */
+    private static function cedulas($empresa)
     {
-        if (self::$cedulas !== null) {
-            return self::$cedulas;
+        if (isset(self::$cedulas[$empresa])) {
+            return self::$cedulas[$empresa];
+        }
+        if ($empresa <= 0) {
+            return [];
         }
 
-        self::$cedulas = [];
+        $cedulas = [];
         try {
             $modelo = new self();
             foreach ($modelo->fetchAll(
-                "SELECT DISTINCT cedula FROM proveedor_codigo_erp WHERE cedula <> ''"
+                "SELECT DISTINCT cedula FROM proveedor_codigo_erp WHERE sociedad_id = ? AND cedula <> ''",
+                [$empresa]
             ) ?: [] as $f) {
-                self::$cedulas[self::normalizarCedula($f['cedula'])] = true;
+                $cedulas[self::normalizarCedula($f['cedula'])] = true;
             }
-            foreach ($modelo->fetchAll('SELECT cedula FROM proveedor_cedula_ignorada') ?: [] as $f) {
-                self::$cedulas[self::normalizarCedula($f['cedula'])] = true;
+            foreach ($modelo->fetchAll(
+                'SELECT cedula FROM proveedor_cedula_ignorada WHERE sociedad_id = ?',
+                [$empresa]
+            ) ?: [] as $f) {
+                $cedulas[self::normalizarCedula($f['cedula'])] = true;
             }
-            unset(self::$cedulas['']);
+            foreach (self::leerTambien($empresa) as $f) {
+                $cedulas[self::normalizarCedula($f['cedula'])] = true;
+            }
+            unset($cedulas['']);
         } catch (Throwable $e) {
-            self::$cedulas = [];
+            $cedulas = [];
         }
-        return self::$cedulas;
+        return self::$cedulas[$empresa] = $cedulas;
     }
 
     /**
@@ -603,13 +892,16 @@ class ProveedorCodigoErp extends Model
 
     public function porCodigo($codigo)
     {
+        if ($this->empresa() <= 0) {
+            return null;
+        }
         try {
             return $this->fetchOne(
                 'SELECT m.*, p.razon_social
                    FROM proveedor_codigo_erp m
                    LEFT JOIN proveedores p ON p.id = m.proveedor_id
-                  WHERE m.proveedor_codigo = ? LIMIT 1',
-                [(string) $codigo]
+                  WHERE m.sociedad_id = ? AND m.proveedor_codigo = ? LIMIT 1',
+                [$this->empresa(), (string) $codigo]
             ) ?: null;
         } catch (Throwable $e) {
             return null;
@@ -628,20 +920,25 @@ class ProveedorCodigoErp extends Model
     public function listar($buscar = '', $limite = 50, $desde = 0)
     {
         $buscar = trim((string) $buscar);
-        $where = '';
-        $params = [];
+        $empresa = $this->empresa();
+        if ($empresa <= 0) {
+            return ['filas' => [], 'total' => 0];
+        }
+        $where = 'WHERE m.sociedad_id = ?';
+        $params = [$empresa];
         if ($buscar !== '') {
             // También por el nombre con que el proveedor factura, que es el
             // que uno tiene a mano; el del ERP viene cortado.
-            $where = "WHERE m.proveedor_codigo LIKE ? OR m.cedula LIKE ? OR m.nombre_erp LIKE ?
+            $o = "m.proveedor_codigo LIKE ? OR m.cedula LIKE ? OR m.nombre_erp LIKE ?
                          OR p.razon_social LIKE ?";
             $like = '%' . addcslashes($buscar, '%_\\') . '%';
-            $params = [$like, $like, $like, $like];
+            array_push($params, $like, $like, $like, $like);
             $digitos = preg_replace('/[\s-]+/', '', $buscar);
             if ($digitos !== $buscar && ctype_digit($digitos)) {
-                $where .= ' OR m.cedula LIKE ?';
+                $o .= ' OR m.cedula LIKE ?';
                 $params[] = '%' . $digitos . '%';
             }
+            $where .= " AND ({$o})";
         }
 
         try {
@@ -660,6 +957,21 @@ class ProveedorCodigoErp extends Model
                    LEFT JOIN proveedores p ON p.id = m.proveedor_id {$where}",
                 $params
             );
+
+            // Lo que cada código acepta además de su dueña, para verlo y
+            // poder quitarlo desde la misma fila.
+            $porCodigo = [];
+            foreach (self::leerTambien($empresa, array_column($filas, 'proveedor_codigo')) as $t) {
+                $porCodigo[(string) $t['proveedor_codigo']][] = [
+                    'cedula' => (string) $t['cedula'],
+                    'nombre' => (string) ($t['razon_social'] ?: $t['nombre']),
+                ];
+            }
+            foreach ($filas as &$fila) {
+                $fila['tambien'] = $porCodigo[(string) $fila['proveedor_codigo']] ?? [];
+            }
+            unset($fila);
+
             return ['filas' => $filas, 'total' => $total];
         } catch (Throwable $e) {
             return ['filas' => [], 'total' => 0];
@@ -757,6 +1069,14 @@ class ProveedorCodigoErp extends Model
      */
     private function candidatosDeCodigo(array $textos)
     {
+        // De la empresa y de nada más: un código de las facturas de otra
+        // empresa puede ser otro proveedor, y elegirlo acá lo daría de alta
+        // con la cédula equivocada.
+        $empresa = $this->empresa();
+        if ($empresa <= 0) {
+            return [];
+        }
+
         $condCatalogo = [];
         $condErp = [];
         $pCatalogo = [];
@@ -784,9 +1104,9 @@ class ProveedorCodigoErp extends Model
                         COALESCE(p.razon_social, \'\') AS razon_social
                    FROM proveedor_codigo_erp m
                    LEFT JOIN proveedores p ON p.id = m.proveedor_id
-                  WHERE ' . implode(' OR ', $condCatalogo) . '
+                  WHERE m.sociedad_id = ? AND (' . implode(' OR ', $condCatalogo) . ')
                   LIMIT 200',
-                $pCatalogo
+                array_merge([$empresa], $pCatalogo)
             ) ?: [];
             foreach ($catalogo as $f) {
                 $porCodigo[(string) $f['codigo']] = [
@@ -804,10 +1124,10 @@ class ProveedorCodigoErp extends Model
             $erp = $this->fetchAll(
                 'SELECT e.proveedor_codigo AS codigo, MAX(e.proveedor_nombre) AS nombre, COUNT(*) AS facturas
                    FROM facturas_erp e
-                  WHERE e.proveedor_codigo <> \'\' AND (' . implode(' OR ', $condErp) . ')
+                  WHERE e.sociedad_id = ? AND e.proveedor_codigo <> \'\' AND (' . implode(' OR ', $condErp) . ')
                   GROUP BY e.proveedor_codigo
                   LIMIT 200',
-                $pErp
+                array_merge([$empresa], $pErp)
             ) ?: [];
             $faltan = [];
             foreach ($erp as $f) {
@@ -834,8 +1154,8 @@ class ProveedorCodigoErp extends Model
                     "SELECT m.proveedor_codigo AS codigo, m.cedula, COALESCE(p.razon_social, '') AS razon_social
                        FROM proveedor_codigo_erp m
                        LEFT JOIN proveedores p ON p.id = m.proveedor_id
-                      WHERE m.proveedor_codigo IN ({$marcas})",
-                    $faltan
+                      WHERE m.sociedad_id = ? AND m.proveedor_codigo IN ({$marcas})",
+                    array_merge([$empresa], $faltan)
                 ) ?: [] as $m) {
                     $porCodigo[(string) $m['codigo']]['cedula'] = (string) $m['cedula'];
                     $porCodigo[(string) $m['codigo']]['razon_social'] = (string) $m['razon_social'];
@@ -857,17 +1177,20 @@ class ProveedorCodigoErp extends Model
     public function codigoExiste($codigo)
     {
         $codigo = trim((string) $codigo);
-        if ($codigo === '') {
+        $empresa = $this->empresa();
+        if ($codigo === '' || $empresa <= 0) {
             return false;
         }
         if ((int) $this->fetchColumn(
-            'SELECT COUNT(*) FROM proveedor_codigo_erp WHERE proveedor_codigo = ?', [$codigo]
+            'SELECT COUNT(*) FROM proveedor_codigo_erp WHERE sociedad_id = ? AND proveedor_codigo = ?',
+            [$empresa, $codigo]
         ) > 0) {
             return true;
         }
         try {
             return (int) $this->fetchColumn(
-                'SELECT COUNT(*) FROM facturas_erp WHERE proveedor_codigo = ?', [$codigo]
+                'SELECT COUNT(*) FROM facturas_erp WHERE sociedad_id = ? AND proveedor_codigo = ?',
+                [$empresa, $codigo]
             ) > 0;
         } catch (Throwable $e) {
             return false;
@@ -928,6 +1251,10 @@ class ProveedorCodigoErp extends Model
         if (strlen($cedula) < 9 || strlen($cedula) > 12) {
             return ['ok' => false, 'message' => 'La cédula tiene que tener entre 9 y 12 dígitos.'];
         }
+        $empresa = $this->empresa();
+        if ($empresa <= 0) {
+            return self::sinEmpresa();
+        }
 
         try {
             $proveedorId = (int) (new Proveedor())->obtenerOCrear($cedula, $nombre !== '' ? $nombre : $cedula);
@@ -937,25 +1264,163 @@ class ProveedorCodigoErp extends Model
 
             $this->execute(
                 "INSERT INTO proveedor_codigo_erp
-                    (proveedor_codigo, proveedor_id, cedula, nombre_erp, origen, confirmado_por)
-                 VALUES (?, ?, ?, ?, 'manual', ?)
+                    (sociedad_id, proveedor_codigo, proveedor_id, cedula, nombre_erp, origen, confirmado_por)
+                 VALUES (?, ?, ?, ?, ?, 'manual', ?)
                  ON DUPLICATE KEY UPDATE
                     proveedor_id = VALUES(proveedor_id),
                     cedula       = VALUES(cedula),
                     nombre_erp   = IF(VALUES(nombre_erp) = '', nombre_erp, VALUES(nombre_erp)),
                     origen       = 'manual',
                     confirmado_por = VALUES(confirmado_por)",
-                [$codigo, $proveedorId, $cedula, $nombre, (int) $usuarioId > 0 ? (int) $usuarioId : null]
+                [$empresa, $codigo, $proveedorId, $cedula, $nombre, (int) $usuarioId > 0 ? (int) $usuarioId : null]
             );
 
             // Dar de alta un código puede contestar una pregunta abierta: si
             // esa cédula estaba marcada como "no procesar", ya no lo está.
-            $this->execute('DELETE FROM proveedor_cedula_ignorada WHERE cedula = ?', [$cedula]);
+            $this->execute(
+                'DELETE FROM proveedor_cedula_ignorada WHERE sociedad_id = ? AND cedula = ?',
+                [$empresa, $cedula]
+            );
 
             self::olvidarMapa();
             return ['ok' => true, 'message' => 'Código ' . $codigo . ' guardado.'];
         } catch (Throwable $e) {
             return ['ok' => false, 'message' => 'No se pudo guardar: ' . $e->getMessage()];
+        }
+    }
+
+    /**
+     * Que un código acepte, además de la de su dueño, los comprobantes de
+     * otra cédula.
+     *
+     * Es la salida para cuando el código ya tiene dueño y el comprobante de
+     * otra cédula también le corresponde: el dueño no cambia —sus facturas
+     * siguen aceptando lo suyo— y el código acepta además lo de la otra. Lo
+     * decide una persona para ESTE código; no se deduce ni se hereda.
+     *
+     * @return array ['ok' => bool, 'message' => string]
+     */
+    public function aceptarTambien($codigo, $cedula, $nombre = '', $usuarioId = 0)
+    {
+        require_once __DIR__ . '/Proveedor.php';
+
+        $codigo = trim((string) $codigo);
+        $cedula = self::normalizarCedula($cedula);
+        $nombre = trim((string) $nombre);
+
+        if ($codigo === '') {
+            return ['ok' => false, 'message' => 'Falta el código del proveedor.'];
+        }
+        if (strlen($cedula) < 9 || strlen($cedula) > 12) {
+            return ['ok' => false, 'message' => 'La cédula tiene que tener entre 9 y 12 dígitos.'];
+        }
+        $empresa = $this->empresa();
+        if ($empresa <= 0) {
+            return self::sinEmpresa();
+        }
+
+        try {
+            $dueno = $this->porCodigo($codigo);
+            // Sin dueño no hay nada que compartir: lo que corresponde es
+            // dárselo, que es guardarCodigo().
+            if (!$dueno) {
+                return ['ok' => false, 'message' => 'El código ' . $codigo . ' todavía no tiene dueño: '
+                    . 'dáselo a este proveedor en vez de compartirlo.'];
+            }
+            if (self::normalizarCedula($dueno['cedula']) === $cedula) {
+                return ['ok' => true, 'message' => 'El código ' . $codigo . ' ya es de esa cédula.'];
+            }
+
+            $proveedorId = (int) (new Proveedor())->obtenerOCrear($cedula, $nombre !== '' ? $nombre : $cedula);
+            if ($proveedorId <= 0) {
+                return ['ok' => false, 'message' => 'No se pudo registrar el proveedor de esa cédula.'];
+            }
+
+            $this->execute(
+                "INSERT INTO proveedor_codigo_tambien
+                    (sociedad_id, proveedor_codigo, cedula, proveedor_id, nombre, usuario_id)
+                 VALUES (?, ?, ?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE
+                    proveedor_id = VALUES(proveedor_id),
+                    nombre       = IF(VALUES(nombre) = '', nombre, VALUES(nombre))",
+                [$empresa, $codigo, $cedula, $proveedorId, mb_substr($nombre, 0, 255),
+                 (int) $usuarioId > 0 ? (int) $usuarioId : null]
+            );
+
+            // Igual que al darle un código: si esa cédula estaba marcada como
+            // "no procesar", la decisión de aceptarla la contesta.
+            $this->execute(
+                'DELETE FROM proveedor_cedula_ignorada WHERE sociedad_id = ? AND cedula = ?',
+                [$empresa, $cedula]
+            );
+
+            self::olvidarMapa();
+            return ['ok' => true, 'message' => 'El código ' . $codigo . ' acepta ahora también los '
+                . 'comprobantes de la cédula ' . $cedula . '.'];
+        } catch (Throwable $e) {
+            return ['ok' => false, 'message' => 'No se pudo guardar: ' . $e->getMessage()];
+        }
+    }
+
+    /** Deja de aceptar en un código los comprobantes de una cédula que no es su dueña. */
+    public function dejarDeAceptar($codigo, $cedula)
+    {
+        $codigo = trim((string) $codigo);
+        $cedula = self::normalizarCedula($cedula);
+        $empresa = $this->empresa();
+        if ($empresa <= 0) {
+            return self::sinEmpresa();
+        }
+        try {
+            $filas = (int) $this->execute(
+                'DELETE FROM proveedor_codigo_tambien WHERE sociedad_id = ? AND proveedor_codigo = ? AND cedula = ?',
+                [$empresa, $codigo, $cedula]
+            );
+            self::olvidarMapa();
+            return $filas > 0
+                ? ['ok' => true, 'message' => 'El código ' . $codigo . ' ya no acepta los comprobantes de ' . $cedula . '.']
+                : ['ok' => false, 'message' => 'Ese código no aceptaba esa cédula.'];
+        } catch (Throwable $e) {
+            return ['ok' => false, 'message' => 'No se pudo quitar: ' . $e->getMessage()];
+        }
+    }
+
+    /**
+     * Las filas de proveedor_codigo_tambien de una empresa, de todos sus
+     * códigos o de estos. Vacío si la tabla todavía no existe: sin ella el
+     * catálogo es el de antes.
+     */
+    private static function leerTambien($empresa, ?array $codigos = null)
+    {
+        $empresa = (int) $empresa;
+        if ($empresa <= 0) {
+            return [];
+        }
+        try {
+            $modelo = new self();
+            if ($codigos === null) {
+                return $modelo->fetchAll(
+                    'SELECT proveedor_codigo, cedula, proveedor_id
+                       FROM proveedor_codigo_tambien WHERE sociedad_id = ?',
+                    [$empresa]
+                ) ?: [];
+            }
+            $codigos = array_values(array_unique(array_map('strval', $codigos)));
+            if (!$codigos) {
+                return [];
+            }
+            $marcas = implode(',', array_fill(0, count($codigos), '?'));
+            return $modelo->fetchAll(
+                "SELECT t.proveedor_codigo, t.cedula, t.proveedor_id, t.nombre,
+                        COALESCE(p.razon_social, '') AS razon_social
+                   FROM proveedor_codigo_tambien t
+                   LEFT JOIN proveedores p ON p.id = t.proveedor_id
+                  WHERE t.sociedad_id = ? AND t.proveedor_codigo IN ({$marcas})
+                  ORDER BY t.creado_en",
+                array_merge([$empresa], $codigos)
+            ) ?: [];
+        } catch (Throwable $e) {
+            return [];
         }
     }
 
@@ -972,10 +1437,20 @@ class ProveedorCodigoErp extends Model
         if ($codigo === '') {
             return ['ok' => false, 'message' => 'Falta el código.'];
         }
+        $empresa = $this->empresa();
+        if ($empresa <= 0) {
+            return self::sinEmpresa();
+        }
         try {
             $filas = (int) $this->execute(
-                'DELETE FROM proveedor_codigo_erp WHERE proveedor_codigo = ?',
-                [$codigo]
+                'DELETE FROM proveedor_codigo_erp WHERE sociedad_id = ? AND proveedor_codigo = ?',
+                [$empresa, $codigo]
+            );
+            // Lo que aceptaba además de su dueño se va con él: un código fuera
+            // del catálogo no empareja con nada, tampoco con eso.
+            $this->execute(
+                'DELETE FROM proveedor_codigo_tambien WHERE sociedad_id = ? AND proveedor_codigo = ?',
+                [$empresa, $codigo]
             );
             self::olvidarMapa();
             return $filas > 0
@@ -995,12 +1470,17 @@ class ProveedorCodigoErp extends Model
         if ($cedula === '') {
             return ['ok' => false, 'message' => 'Falta la cédula.'];
         }
+        $empresa = $this->empresa();
+        if ($empresa <= 0) {
+            return self::sinEmpresa();
+        }
         try {
             $this->execute(
-                'INSERT INTO proveedor_cedula_ignorada (cedula, nombre, motivo, usuario_id)
-                 VALUES (?, ?, ?, ?)
+                'INSERT INTO proveedor_cedula_ignorada (sociedad_id, cedula, nombre, motivo, usuario_id)
+                 VALUES (?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE nombre = VALUES(nombre), motivo = VALUES(motivo)',
                 [
+                    $empresa,
                     $cedula,
                     mb_substr(trim((string) $nombre), 0, 255),
                     mb_substr(trim((string) $motivo), 0, 255) ?: null,
@@ -1018,8 +1498,15 @@ class ProveedorCodigoErp extends Model
     public function dejarDeIgnorar($cedula)
     {
         $cedula = self::normalizarCedula($cedula);
+        $empresa = $this->empresa();
+        if ($empresa <= 0) {
+            return self::sinEmpresa();
+        }
         try {
-            $this->execute('DELETE FROM proveedor_cedula_ignorada WHERE cedula = ?', [$cedula]);
+            $this->execute(
+                'DELETE FROM proveedor_cedula_ignorada WHERE sociedad_id = ? AND cedula = ?',
+                [$empresa, $cedula]
+            );
             self::olvidarMapa();
             return ['ok' => true, 'message' => 'Esa cédula vuelve a preguntarse.'];
         } catch (Throwable $e) {
@@ -1029,12 +1516,17 @@ class ProveedorCodigoErp extends Model
 
     public function ignoradas()
     {
+        if ($this->empresa() <= 0) {
+            return [];
+        }
         try {
             return $this->fetchAll(
                 'SELECT i.*, u.nombre AS usuario
                    FROM proveedor_cedula_ignorada i
                    LEFT JOIN usuarios u ON u.id = i.usuario_id
-                  ORDER BY i.creado_en DESC'
+                  WHERE i.sociedad_id = ?
+                  ORDER BY i.creado_en DESC',
+                [$this->empresa()]
             ) ?: [];
         } catch (Throwable $e) {
             return [];
@@ -1057,6 +1549,10 @@ class ProveedorCodigoErp extends Model
      */
     public function comprobantesSinCodigo($limite = 200)
     {
+        $empresa = $this->empresa();
+        if ($empresa <= 0) {
+            return [];
+        }
         try {
             return $this->fetchAll(
                 "SELECT p.id AS proveedor_id, p.rfc AS cedula, p.razon_social,
@@ -1066,17 +1562,11 @@ class ProveedorCodigoErp extends Model
                         SUM(f.total) AS total
                    FROM facturas_xml f
                    JOIN proveedores p ON p.id = f.proveedor_id
-                  WHERE p.rfc IS NOT NULL AND p.rfc <> ''
-                    AND NOT EXISTS (
-                        SELECT 1 FROM proveedor_codigo_erp m
-                         WHERE REPLACE(REPLACE(m.cedula, '-', ''), ' ', '') = p.rfc
-                    )
-                    AND NOT EXISTS (
-                        SELECT 1 FROM proveedor_cedula_ignorada i WHERE i.cedula = p.rfc
-                    )
+                  WHERE " . self::SIN_CODIGO_EN_LA_EMPRESA . "
                   GROUP BY p.id, p.rfc, p.razon_social
                   ORDER BY comprobantes DESC
-                  LIMIT " . max(1, (int) $limite)
+                  LIMIT " . max(1, (int) $limite),
+                array_fill(0, 4, $empresa)
             ) ?: [];
         } catch (Throwable $e) {
             return [];
@@ -1086,22 +1576,41 @@ class ProveedorCodigoErp extends Model
     /** Cuántos proveedores distintos están esperando que se decida por ellos. */
     public function cuantosSinCodigo()
     {
+        $empresa = $this->empresa();
+        if ($empresa <= 0) {
+            return 0;
+        }
         try {
             return (int) $this->fetchColumn(
                 "SELECT COUNT(DISTINCT p.id)
                    FROM facturas_xml f
                    JOIN proveedores p ON p.id = f.proveedor_id
-                  WHERE p.rfc IS NOT NULL AND p.rfc <> ''
-                    AND NOT EXISTS (
-                        SELECT 1 FROM proveedor_codigo_erp m
-                         WHERE REPLACE(REPLACE(m.cedula, '-', ''), ' ', '') = p.rfc
-                    )
-                    AND NOT EXISTS (
-                        SELECT 1 FROM proveedor_cedula_ignorada i WHERE i.cedula = p.rfc
-                    )"
+                  WHERE " . self::SIN_CODIGO_EN_LA_EMPRESA,
+                array_fill(0, 4, $empresa)
             );
         } catch (Throwable $e) {
             return 0;
         }
     }
+
+    /**
+     * Un comprobante de la empresa cuyo emisor no está en el catálogo de esa
+     * misma empresa. Que esté en el de otra no cuenta: a esta no le dice qué
+     * código tiene. Lleva cuatro veces la empresa, en este orden.
+     */
+    private const SIN_CODIGO_EN_LA_EMPRESA = "f.sociedad_id = ?
+                    AND p.rfc IS NOT NULL AND p.rfc <> ''
+                    AND NOT EXISTS (
+                        SELECT 1 FROM proveedor_codigo_erp m
+                         WHERE m.sociedad_id = ?
+                           AND REPLACE(REPLACE(m.cedula, '-', ''), ' ', '') = p.rfc
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM proveedor_cedula_ignorada i
+                         WHERE i.sociedad_id = ? AND i.cedula = p.rfc
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM proveedor_codigo_tambien t
+                         WHERE t.sociedad_id = ? AND t.cedula = p.rfc
+                    )";
 }

@@ -86,7 +86,7 @@
             <?php if (!empty($message)): ?>
                 <?= htmlspecialchars($message) ?>
             <?php else: ?>
-                Lo sentimos, la página que buscas no existe o ha sido movida.
+                La página que buscas no existe o fue movida.
             <?php endif; ?>
         </p>
         <a href="<?= defined('APP_URL') ? APP_URL : '/xmlconcilia/public' ?>" class="btn-home">

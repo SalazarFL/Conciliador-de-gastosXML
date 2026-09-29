@@ -25,9 +25,9 @@ $router->get('/home', 'HomeController@index');
 // siempre los atendió, ahora bajo la ruta de su propio módulo.
 
 // --- CONFIGURACIÓN (el engranaje de la barra superior) ---
-// Una sola pantalla para lo que vale en todo el sistema: la carpeta raíz de
-// XML y PDF, las cuentas de correo, la automatización, las empresas, los
-// usuarios y el respaldo. Antes era un modal dentro de Correo y había que
+// Una sola pantalla para lo que vale en todo el sistema: dónde viven los XML
+// y PDF (SharePoint), las cuentas de correo, la automatización, las empresas,
+// los usuarios y el respaldo. Antes era un modal dentro de Correo y había que
 // saber que se guardaba ahí.
 //
 // Los POST de cada sección NO se mudaron: los sigue
@@ -41,6 +41,7 @@ $router->post('/configuracion/proveedores/listar', 'ConfiguracionController@list
 $router->post('/configuracion/proveedores/opciones', 'ConfiguracionController@opcionesProveedor');
 $router->post('/configuracion/proveedores/guardar', 'ConfiguracionController@guardarProveedor');
 $router->post('/configuracion/proveedores/eliminar', 'ConfiguracionController@eliminarProveedor');
+$router->post('/configuracion/proveedores/dejar-de-aceptar', 'ConfiguracionController@dejarDeAceptarProveedor');
 $router->post('/configuracion/proveedores/ignorar', 'ConfiguracionController@ignorarProveedor');
 
 // --- AVISOS (la campana de la barra superior) ---
@@ -60,8 +61,8 @@ $router->post('/avisos/proveedor/ignorar', 'NotificacionesController@ignorarProv
 // La aplicación corre en la computadora de cada persona: esta página dice qué
 // le falta a ESTA instalación, para no depender de acceso remoto.
 $router->get('/diagnostico', 'DiagnosticoController@index');
-// Respaldo de la base a la carpeta compartida: lo genera la computadora que
-// alcanza el servidor y las demás lo levantan de SharePoint. Solo admin.
+// Respaldo de la base: lo genera la computadora que alcanza el servidor y
+// queda en esa misma computadora (storage/backups/RESPALDOS). Solo admin.
 $router->post('/diagnostico/respaldo/estado', 'DiagnosticoController@respaldoEstado');
 $router->post('/diagnostico/respaldo/iniciar', 'DiagnosticoController@respaldoIniciar');
 $router->post('/diagnostico/respaldo/auto/activar', 'DiagnosticoController@respaldoAutoActivar');
@@ -72,7 +73,6 @@ $router->post('/sociedades/crear', 'SociedadesController@crear');
 $router->post('/sociedades/editar/{id}', 'SociedadesController@editar');
 $router->post('/sociedades/eliminar/{id}', 'SociedadesController@eliminar');
 $router->post('/sociedades/activar/{id}', 'SociedadesController@activar');
-$router->post('/sociedades/almacen/{id}', 'SociedadesController@almacen');
 
 // --- RUTAS DE FACTURAS XML ---
 $router->get('/facturas', 'FacturasController@index');
@@ -96,20 +96,17 @@ $router->get('/documentos/ficha/{id}', 'DocumentosController@ficha');
 $router->get('/documentos/xml/{id}', 'DocumentosController@xml');
 $router->get('/documentos/pdf/{id}', 'DocumentosController@pdf');
 $router->post('/documentos/recuperar', 'DocumentosController@recuperar');
+$router->post('/documentos/pdf/{id}/subir', 'DocumentosController@subirPdf');
 
 // --- RUTAS DE CORREO (captura IMAP de facturas, solo local) ---
 $router->get('/correo', 'CorreoController@index');
 $router->post('/correo/listar', 'CorreoController@listar');
 $router->post('/correo/sincronizar', 'CorreoController@sincronizar');
-$router->post('/correo/config', 'CorreoController@config');
 $router->post('/correo/cuentas/guardar', 'CorreoController@cuentaGuardar');
 $router->post('/correo/cuentas/eliminar', 'CorreoController@cuentaEliminar');
 $router->post('/correo/cuentas/usar', 'CorreoController@cuentaUsar');
 $router->post('/correo/cuentas/probar', 'CorreoController@cuentaProbar');
-$router->post('/correo/carpetas', 'CorreoController@carpetas');
 $router->post('/correo/carpetas-buzon', 'CorreoController@carpetasBuzon');
-$router->post('/correo/selector/abrir', 'CorreoController@selectorAbrir');
-$router->post('/correo/selector/estado', 'CorreoController@selectorEstado');
 $router->post('/correo/auto/estado', 'CorreoController@autoSyncEstado');
 $router->post('/correo/auto/activar', 'CorreoController@autoSyncActivar');
 $router->post('/correo/auto/desactivar', 'CorreoController@autoSyncDesactivar');
@@ -172,6 +169,9 @@ $router->post('/facturas-erp/revision/descartar', 'FacturasErpController@descart
 $router->post('/facturas-erp/revision/enredo', 'FacturasErpController@resolverEnredo');
 $router->post('/facturas-erp/revision/olvidar', 'FacturasErpController@olvidarRevision');
 $router->get('/facturas-erp/exportar', 'FacturasErpController@exportar');
+$router->post('/facturas-erp/quitar', 'FacturasErpController@quitar');
+$router->get('/facturas-erp/quitadas', 'FacturasErpController@quitadas');
+$router->post('/facturas-erp/quitadas/devolver', 'FacturasErpController@devolverQuitada');
 
 // --- RUTAS DE NOTAS DE CRÉDITO (listados por período) ---
 $router->get('/notas-credito', 'NotasCreditoController@index');
@@ -181,6 +181,7 @@ $router->post('/notas-credito/subir', 'NotasCreditoController@subir');
 $router->get('/notas-credito/buscar', 'NotasCreditoController@buscar');
 $router->post('/notas-credito/verificar/{id}', 'NotasCreditoController@verificar');
 $router->get('/notas-credito/historial/{id}', 'NotasCreditoController@historial');
+$router->get('/notas-credito/aplicables/{id}', 'NotasCreditoController@aplicables');
 $router->get('/notas-credito/candidatas', 'NotasCreditoController@candidatas');
 $router->post('/notas-credito/vincular', 'NotasCreditoController@vincular');
 $router->post('/notas-credito/desvincular', 'NotasCreditoController@desvincular');

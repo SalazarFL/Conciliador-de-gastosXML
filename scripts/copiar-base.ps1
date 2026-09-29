@@ -5,7 +5,7 @@
 
         .\scripts\copiar-base.ps1                 # directo del servidor: respalda y restaura aquí
         .\scripts\copiar-base.ps1 -SoloRespaldo   # solo el archivo .sql (esto es lo que corre el servidor)
-        .\scripts\copiar-base.ps1 -Desde ultimo   # del respaldo que dejó la otra máquina en SharePoint
+        .\scripts\copiar-base.ps1 -Desde ultimo   # del último .sql.gz en storage\backups\RESPALDOS
         .\scripts\copiar-base.ps1 -Desde C:\ruta\archivo.sql.gz
         .\scripts\copiar-base.ps1 -SinPreguntar   # para tareas programadas
 
@@ -13,8 +13,11 @@
     hace: si Tailscale no llega al servidor, tampoco llega mysqldump. Entonces
     se invierte quién empieza — la máquina que SÍ tiene la base genera el
     respaldo (botón en Administración -> Diagnóstico, o `php
-    cli/respaldar_base.php`), lo deja en la carpeta compartida, SharePoint lo
-    sincroniza, y aquí se levanta sin tocar la red.
+    cli/respaldar_base.php`), que queda en su storage\backups\RESPALDOS; se
+    copia a mano a la misma carpeta de esta máquina (o se pasa la ruta con
+    -Desde) y aquí se levanta sin tocar la red. Antes viajaba solo por la
+    carpeta compartida; desde que los documentos van a SharePoint esa carpeta
+    ya no existe, y a SharePoint van XML y PDF, no volcados de la base.
 
     Va siempre en una sola dirección: servidor -> esta máquina. La copia local
     se BORRA y se vuelve a crear en cada corrida, así que nada de lo que se
@@ -103,19 +106,9 @@ function Invoke-Sql($cnf, [string]$base, [string]$sql) {
     return & $mysql "--defaults-extra-file=$cnf" --default-character-set=utf8mb4 -N -B -e $sql $base
 }
 
-# La carpeta compartida sale de la configuración de la aplicación, no de una
-# ruta escrita aquí: en cada máquina OneDrive la deja en otro lugar.
+# Donde deja los respaldos la aplicación (app/helpers/RespaldoBase.php).
 function Get-CarpetaRespaldos {
-    $cfg = Join-Path $raiz 'storage\correo\config.json'
-    if (-not (Test-Path $cfg)) {
-        throw "No hay carpeta compartida configurada (falta storage\correo\config.json). Configurala en Correo -> Carpeta de documentos."
-    }
-    $json = Get-Content $cfg -Raw -Encoding UTF8 | ConvertFrom-Json
-    $carpeta = [string]$json.carpeta_destino
-    if ([string]::IsNullOrWhiteSpace($carpeta)) {
-        throw 'La configuración no tiene carpeta_destino. Configurala en Correo -> Carpeta de documentos.'
-    }
-    return (Join-Path (Join-Path $carpeta '_TRABAJO') 'RESPALDOS')
+    return (Join-Path $destino 'RESPALDOS')
 }
 
 function Resolve-Respaldo([string]$que) {
@@ -127,7 +120,7 @@ function Resolve-Respaldo([string]$que) {
     $carpeta = Get-CarpetaRespaldos
     if (-not (Test-Path $carpeta)) {
         throw ("Todavía no existe $carpeta.`n" +
-               "Nadie ha generado un respaldo, o SharePoint aún no lo sincronizó hasta acá.")
+               "Nadie ha generado un respaldo en esta máquina: cópialo ahí desde la que tiene la base, o usa -Desde <archivo>.")
     }
     $archivos = @(Get-ChildItem $carpeta -Filter *.sql.gz -ErrorAction SilentlyContinue |
                   Sort-Object LastWriteTime -Descending)

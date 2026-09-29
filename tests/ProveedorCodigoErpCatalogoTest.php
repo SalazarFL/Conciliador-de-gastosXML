@@ -120,7 +120,17 @@ try {
     $modelo->guardarCodigo($COD[0], $CED_OTRA, 'CORREGIDO A MANO');
     ProveedorCodigoErp::olvidarMapa();
 
-    $modelo->importarDesdeErp($catalogo);
+    // Y lo dice como lo que es: no una cédula corregida —no se corrige
+    // nada— sino el ERP contradiciendo a una persona.
+    $r3 = $modelo->importarDesdeErp($catalogo);
+    assertCatIgual(0, $r3['corregidos'], 'lo fijado a mano no se anuncia como corregido');
+    assertCatIgual(1, $r3['choca_con_manual'], 'se cuenta como choque con lo asignado a mano');
+    assertCatIgual(3, $r3['confirmados'], 'los otros tres siguen confirmados');
+    assertCatIgual(
+        [['codigo' => $COD[0], 'nombre' => 'PUNTO DE VENTA 1', 'cedula_erp' => $CED_BUENA, 'cedula_manual' => $CED_OTRA]],
+        $r3['manuales'],
+        'y el detalle trae las dos cédulas para decidir cuál es la buena'
+    );
     $s->execute($COD);
     foreach ($s->fetchAll() as $f) {
         if ($f['proveedor_codigo'] === $COD[0]) {

@@ -28,14 +28,25 @@ class ProveedorCodigoErp
     /** codigo => proveedor_id que el mapa da por confirmado */
     public static $conocidos = [];
 
+    /** Con catálogo cargado: los códigos que NO están en él. */
+    public static $fuera = [];
+
     public static function veredicto($codigo, $proveedorIdXml)
     {
         $codigo = trim((string) $codigo);
         $proveedorIdXml = (int) $proveedorIdXml;
+        if (isset(self::$fuera[$codigo])) {
+            return 'ajeno';
+        }
         if ($codigo === '' || $proveedorIdXml <= 0 || !isset(self::$conocidos[$codigo])) {
             return 'desconocido';
         }
         return self::$conocidos[$codigo] === $proveedorIdXml ? 'propio' : 'ajeno';
+    }
+
+    public static function fueraDelCatalogo($codigo)
+    {
+        return isset(self::$fuera[trim((string) $codigo)]);
     }
 }
 
@@ -134,7 +145,45 @@ $r = FacturaErp::elegirCandidata($xmlCorto, [$interna, $gemela]);
 verificaEnganche($r['erp'] === null && $r['motivo'] === 'ambigua',
     'dos líneas con el mismo número corto y el mismo monto quedan ambiguas, no al azar');
 
+// ── Código que falta en el catálogo: consecutivo exacto y nombre ──────
+//
+// El ERP crea códigos entre un listado y otro —viáticos, autoconsumo— y el
+// catálogo no los tiene. Con el consecutivo exacto, el nombre del proveedor
+// reemplaza a la cédula; el monto no se exige.
 ProveedorCodigoErp::$conocidos = [];
+ProveedorCodigoErp::$fuera = ['140001733' => true];
+$viaticos = $linea(3001, '00100001010000000777', '140001733', 'BM DE UVITA S.A. (VIATICOS)', 52000.00);
+$uvita = [
+    'id' => 9001, 'consecutivo_completo' => '00100001010000000777',
+    'numero_factura_asistente' => '00000777', 'total' => 50000.00,
+    'proveedor_id' => 410, 'proveedor_nombre' => 'BM DE UVITA S.A',
+];
+$r = FacturaErp::elegirCandidata($uvita, [$viaticos]);
+verificaEnganche(($r['erp']['id'] ?? 0) === 3001,
+    'código fuera del catálogo, consecutivo exacto y nombre parecido: se engancha aunque el monto difiera');
+verificaEnganche($r['score_numero'] === 100.0 && $r['score_proveedor'] >= FacturaMatcher::UMBRAL_PROVEEDOR,
+    'por el consecutivo, y con el parecido del nombre como score del proveedor');
+
+// Otro emisor con el mismo consecutivo: el nombre no se parece y no entra.
+$otroEmisor = $uvita;
+$otroEmisor['proveedor_nombre'] = 'SOLUC DE RETAIL EN TECNOLOGIA';
+verificaEnganche(FacturaErp::elegirCandidata($otroEmisor, [$viaticos])['erp'] === null,
+    'código fuera del catálogo y otro nombre: no se engancha');
+
+// Sin consecutivo exacto no hay salida por nombre: el número corto se repite.
+$viaticosCorto = $linea(3002, 'FACT-777', '140001733', 'BM DE UVITA S.A. (VIATICOS)', 52000.00);
+verificaEnganche(FacturaErp::elegirCandidata($uvita, [$viaticosCorto])['erp'] === null,
+    'código fuera del catálogo y solo el número corto: no se engancha');
+
+// Un código que el catálogo tiene y es de otra cédula sigue vetado, aunque
+// el nombre calce.
+ProveedorCodigoErp::$fuera = [];
+ProveedorCodigoErp::$conocidos = ['140001733' => 999];
+verificaEnganche(FacturaErp::elegirCandidata($uvita, [$viaticos])['erp'] === null,
+    'un código del catálogo que es de otra cédula no se salva por el nombre');
+
+ProveedorCodigoErp::$conocidos = [];
+ProveedorCodigoErp::$fuera = [];
 
 if ($fallos > 0) {
     fwrite(STDERR, "{$fallos} verificación(es) fallaron\n");

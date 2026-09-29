@@ -7,10 +7,10 @@ require_once __DIR__ . '/../app/core/Model.php';
  */
 class ProveedorCodigoErp
 {
-    public static function hayListado() { return true; }
-    public static function conoceCedula($cedula) { return true; }
+    public static function hayListado($sociedadId = 0) { return true; }
+    public static function conoceCedula($cedula, $sociedadId = 0) { return true; }
     public static function normalizarCedula($c) { return preg_replace("/\D/", "", (string) $c); }
-    public static function veredicto($codigo, $proveedorId) { return 'propio'; }
+    public static function veredicto($codigo, $proveedorId, $sociedadId = 0) { return 'propio'; }
 }
 
 require_once __DIR__ . '/../app/helpers/XmlDocumentImporter.php';
@@ -58,6 +58,37 @@ class ArchivoImporterPagoFalso
     private $raiz;
     public function __construct($raiz) { $this->raiz = $raiz; }
     public function raiz() { return $this->raiz; }
+    public function paraEmpresa($nombre) { return $this; }
+    // Nada creado: el archivado de mentira no deja nada que deshacer.
+    public function archivar($xml, $pdf, array $doc, $emisor)
+    {
+        return ['archivo_xml' => 'FE.xml', 'ruta_xml' => $xml, 'ruta_pdf' => $pdf, 'archivo_pdf' => 'FE.pdf',
+                'hash_pdf' => '', 'estado_pdf' => 'disponible', 'archivado_en' => '2026-09-27 23:18:14',
+                'hash_xml' => '', 'xml_creado' => false, 'pdf_creado' => false];
+    }
+}
+
+/*
+ * Dos trabajadores con el mismo comprobante a la vez: la búsqueda no lo ve
+ * —el otro todavía no lo guardaba—, y al guardar la base lo rechaza porque
+ * el otro ya lo hizo. A partir del rechazo, buscarlo sí lo encuentra.
+ */
+class FacturaImporterCarreraFalsa extends FacturaImporterPagoFalsa
+{
+    public $ganador;
+    public $error;
+    public function crear(array $datos)
+    {
+        $this->existente = $this->ganador;
+        throw $this->error;
+    }
+}
+
+function rechazoDeLaBase($numero, $mensaje)
+{
+    $e = new PDOException('SQLSTATE[23000]: Integrity constraint violation: ' . $numero . ' ' . $mensaje, 23000);
+    $e->errorInfo = ['23000', $numero, $mensaje];
+    return $e;
 }
 
 function importerPagoCon(FacturaImporterPagoFalsa $facturas, $raiz)
@@ -131,6 +162,32 @@ try {
         'importar deja el par donde estaba: no lo mueve');
     assertImporterPago($misma->consultasOrganizador === 0 && $otra->consultasOrganizador === 0,
         'importar ni siquiera consulta al organizador');
+
+    // ── La carrera entre dos trabajadores ──────────────────────────────
+    // El proveedor mandó el mismo comprobante en dos correos y el lote los
+    // repartió entre la pantalla y la tarea programada. El que llega segundo
+    // no es un "XML inválido": es un duplicado, y se completa el que ganó.
+    $carrera = new FacturaImporterCarreraFalsa();
+    $carrera->ganador = $baseExistente;
+    $carrera->error = rechazoDeLaBase(1062,
+        "Duplicate entry '00100001010000001910-10-2026-06-07' for key 'uk_consecutivo'");
+    $resultadoCarrera = importerPagoCon($carrera, $dir)->importar($xmlRuta, $pdfRuta, ['tipos_permitidos' => ['FE']]);
+    assertImporterPago(in_array($resultadoCarrera['estado'] ?? '', ['duplicado', 'pdf_completado'], true),
+        'el que pierde la carrera se cuenta como duplicado: ' . json_encode($resultadoCarrera['estado'] ?? null));
+    assertImporterPago(($resultadoCarrera['id'] ?? 0) === 25, 'y apunta al comprobante que guardó el otro');
+    assertImporterPago($carrera->rollbacks >= 1, 'deshaciendo lo que había empezado a guardar');
+
+    // Cualquier otro rechazo de la base sí es un error y tiene que verse.
+    $otroError = new FacturaImporterCarreraFalsa();
+    $otroError->ganador = $baseExistente;
+    $otroError->error = rechazoDeLaBase(1452, 'Cannot add or update a child row: a foreign key constraint fails');
+    $lanzo = false;
+    try {
+        importerPagoCon($otroError, $dir)->importar($xmlRuta, $pdfRuta, ['tipos_permitidos' => ['FE']]);
+    } catch (PDOException $e) {
+        $lanzo = true;
+    }
+    assertImporterPago($lanzo, 'una clave foránea rota no se disfraza de duplicado');
 
     echo "OK: XmlDocumentImporter valida duplicados por pago y no mueve archivos\n";
 } finally {

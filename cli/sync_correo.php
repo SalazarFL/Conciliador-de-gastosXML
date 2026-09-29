@@ -269,12 +269,10 @@ $resumenCapturas = [
 if ($capturaActiva && isset($cuentasModel, $cuentas)
     && (microtime(true) - $inicioCorrida) < $topeSegundos) {
     try {
-        // Solo si alguna empresa archiva en disco: con todas en SharePoint, la
-        // Bandeja y el archivo están en la biblioteca.
-        if (DocumentoArchivo::raizConfigurada() === '' && DocumentoArchivo::necesitaCarpetaCompartida()) {
-            throw new RuntimeException(
-                'La captura automática necesita la carpeta compartida de documentos configurada.'
-            );
+        // La Bandeja y el archivo están en SharePoint: sin sus credenciales en
+        // esta computadora no hay dónde dejar lo que se capture.
+        if (!AlmacenDocumentos::hayPrincipal()) {
+            throw new RuntimeException('La captura automática guarda en SharePoint. ' . AlmacenDocumentos::SIN_SHAREPOINT);
         }
 
         $capturas = new CorreoCapturaAutomatica();
@@ -555,72 +553,12 @@ try {
     registrar($rutaLog, 'No se pudieron revisar los borrados pendientes: ' . $e->getMessage());
 }
 
-try {
-    if (DocumentoArchivo::raizConfigurada() !== '') {
-        $organizador = new OrganizadorDocumentos();
-        $completo = $organizador->requiereReconciliacionCompleta(86400);
-        $orden = $organizador->reconciliar(false, $completo);
-        registrar($rutaLog, sprintf(
-            'Archivo local (%s): %d registrados; %d rutas actualizadas; %d archivos relocalizados; %d no encontrados; %d hashes calculados; %d sin archivo; %d errores.',
-            $completo ? 'revisión completa' : 'revisión rápida',
-            (int) ($orden['registrados_revisados'] ?? 0),
-            (int) ($orden['rutas_actualizadas'] ?? 0),
-            (int) ($orden['archivos_relocalizados'] ?? 0),
-            (int) ($orden['archivos_no_encontrados'] ?? 0),
-            (int) ($orden['hashes_calculados'] ?? 0),
-            (int) ($orden['marcados_sin_archivo'] ?? 0),
-            (int) ($orden['errores'] ?? 0)
-        ));
-        if (!empty($orden['revision_suspendida'])) {
-            registrar($rutaLog, 'Archivo local: REVISIÓN SUSPENDIDA. ' . $orden['revision_suspendida']);
-        }
-
-        // No en cada corrida: la carpeta que le toca a un documento solo
-        // cambia cuando entra uno nuevo o cuando cambia su pago de pago, y
-        // recorrer el archivo entero cada cinco minutos sería tener la carpeta
-        // compartida en danza para nada.
-        if ($organizador->requiereOrden(900)) {
-            $acomodo = $organizador->ejecutar(false, false);
-            if (!empty($acomodo['omitido_por_bloqueo'])) {
-                registrar($rutaLog, 'Acomodo del archivo: omitido, hay otra corrida en curso.');
-            } else {
-                registrar($rutaLog, sprintf(
-                    'Acomodo del archivo: %d movidos a su mes; %d copias al pago (%d ya estaban); %d ya ordenados; %d carpetas vacías podadas; %d sin archivo en disco; %d errores.',
-                    (int) ($acomodo['movidos'] ?? 0),
-                    (int) ($acomodo['copias_pago'] ?? 0),
-                    (int) ($acomodo['copias_pago_vigentes'] ?? 0),
-                    (int) ($acomodo['ya_ordenados'] ?? 0),
-                    (int) ($acomodo['carpetas_podadas'] ?? 0),
-                    (int) ($acomodo['faltantes_en_disco'] ?? 0),
-                    (int) ($acomodo['errores'] ?? 0) + (int) ($acomodo['errores_copia_pago'] ?? 0)
-                ));
-
-                // Las que se quedaron fuera de la carpeta del pago, con nombre.
-                // El acomodo automático es el que corre cuando no hay nadie
-                // mirando: si acá no quedan anotadas, la única forma de saber
-                // cuáles faltan es volver a cargar el pago desde la pantalla.
-                if (!empty($acomodo['sin_par_completo'])) {
-                    registrar($rutaLog, sprintf(
-                        'Sin copiar al pago (%d): les falta el XML o el PDF.',
-                        (int) $acomodo['sin_par_completo']
-                    ));
-                    foreach (($acomodo['incompletos'] ?? []) as $doc) {
-                        registrar($rutaLog, sprintf(
-                            '  · %s · %s — falta el %s',
-                            trim((string) ($doc['numero'] ?? '')) !== ''
-                                ? (string) $doc['numero']
-                                : ('documento ' . (int) ($doc['documento_id'] ?? 0)),
-                            (string) ($doc['proveedor'] ?? ''),
-                            (string) ($doc['falta'] ?? '')
-                        ));
-                    }
-                }
-            }
-        }
-    }
-} catch (Throwable $e) {
-    registrar($rutaLog, 'Archivo local: ERROR ' . $e->getMessage());
-}
+// Aquí corría el organizador de la carpeta compartida: reconciliaba rutas
+// movidas a mano y acomodaba cada documento en su mes y en la carpeta de su
+// pago. Desde el 27/09/2026 no se archiva nada en esa carpeta, y lo que
+// quedó ahí se migra a SharePoint (cli/migrar_documentos_a_graph.php) en
+// vez de seguir ordenándolo. Para hacerlo a mano sobre lo viejo sigue
+// estando cli/organizar_documentos.php --carpeta=RUTA.
 
 // Los documentos que viven en SharePoint no los ve el organizador: de esos se
 // ocupa su reconciliador, que lee los cambios de la biblioteca en vez de
@@ -635,7 +573,8 @@ try {
             registrar($rutaLog, sprintf(
                 'SharePoint: %d cambios leídos%s; %d documentos revisados; %d rutas corregidas; %d sin archivo; %d volvieron; %d con otro contenido; %d copias al pago (%d ya estaban, %d para la próxima vuelta); %d errores.',
                 (int) $nube['cambios_leidos'],
-                $nube['delta_reiniciado'] ? ' (el enlace de cambios venció: se reinició)' : '',
+                $nube['delta_reiniciado'] ? ' (el enlace de cambios venció: se reinició)'
+                    : (!empty($nube['sin_enlace_de_cambios']) ? ' (SharePoint no da el enlace de cambios de la carpeta: solo revisión por id)' : ''),
                 (int) $nube['documentos_revisados'],
                 (int) $nube['rutas_actualizadas'],
                 (int) $nube['marcados_sin_archivo'],

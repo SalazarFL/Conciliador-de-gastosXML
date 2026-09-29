@@ -91,7 +91,6 @@ mkdir($raiz, 0777, true);
 RutaDocumento::fijarRaiz($raiz);
 AlmacenDocumentos::olvidar();
 AlmacenDocumentos::fijarCarpetaTemporales($raiz . DIRECTORY_SEPARATOR . '_tmp_almacen');
-AlmacenDocumentos::fijarFuenteAjustes(null);
 $disco = AlmacenDocumentos::actual();
 
 $marca = strtoupper(bin2hex(random_bytes(3)));
@@ -102,7 +101,6 @@ $facturaIds = [];
 $devolucionId = 0;
 $migracion = function () use (&$sociedadId, $disco, $nuevaNube) {
     Model::olvidarMemoria();
-    AlmacenDocumentos::olvidarAjustes();
     return new MigracionGraph($sociedadId, $disco, $nuevaNube());
 };
 $fila = function ($tabla, $id) use ($pdo) {
@@ -114,11 +112,11 @@ $enDisco = function ($relativa) use ($raiz) {
 };
 
 try {
-    $pdo->prepare("INSERT INTO sociedades (nombre, cedula, activa, almacen_documentos) VALUES (?, ?, 0, 'disco')")
+    $pdo->prepare("INSERT INTO sociedades (nombre, cedula, activa) VALUES (?, ?, 0)")
         ->execute([$empresa, '3109' . random_int(100000, 999999)]);
     $sociedadId = (int) $pdo->lastInsertId();
 
-    // ── La empresa, en la carpeta compartida ─────────────────────────────
+    // ── Lo que la empresa archivó antes, en la carpeta compartida ────────
     //   A: XML y PDF.  B: XML, y un PDF que la base promete y no está.
     //   C: un XML que en disco no es el que la base archivó.
     //   D: el PDF de una devolución.
@@ -188,8 +186,7 @@ try {
     paso($r['filas_pasadas'] === 2 && $r['filas_cambiadas'] === 1,
         'A y B pasan; la devolución cambió desde el inventario y no se toca: ' . json_encode($r));
     paso(!$r['empresa_cortada'] && strpos($r['falta_para_cortar'], 'sin terminar') !== false,
-        'con C y la devolución pendientes, la empresa NO se corta: ' . json_encode($r));
-    paso(AlmacenDocumentos::tipoDeSociedad($sociedadId) === 'disco', 'y sigue archivando en disco');
+        'con C y la devolución pendientes, a la empresa todavía le queda algo en disco: ' . json_encode($r));
     $filaA = $fila('facturas_xml', $a);
     paso($filaA['almacen'] === 'sharepoint' && $filaA['ruta_xml'] === "sharepoint:$mes/FE_A.xml"
         && $filaA['item_xml_id'] !== null && $filaA['item_pdf_id'] !== null,
@@ -208,10 +205,12 @@ try {
     $r = $m->reescribir();
     paso($sub['subidos'] === 1 && $sub['ya_estaban'] === 1 && $ver['verificados'] === 2,
         'la segunda pasada sube C y encuentra la devolución ya subida: ' . json_encode([$inv, $sub, $ver]));
-    paso($r['empresa_cortada'] && AlmacenDocumentos::tipoDeSociedad($sociedadId) === 'sharepoint',
-        'sin nada pendiente, la empresa se corta sola: ' . json_encode($r));
+    paso($r['empresa_cortada'] && $r['falta_para_cortar'] === '',
+        'sin nada pendiente, no le queda nada en la carpeta compartida: ' . json_encode($r));
+    paso(!array_key_exists('empresa_en', $migracion()->estado()),
+        'y el estado ya no habla de un ajuste de la empresa: todas archivan en SharePoint');
 
-    // ── 5. Después del corte ─────────────────────────────────────────────
+    // ── 5. Después de migrar ─────────────────────────────────────────────
     $leida = (new Factura())->setSociedad(0)->findById($a);
     paso(strpos((string) $leida['ruta_xml'], 'sharepoint:') === 0, 'al leerla, A apunta a SharePoint: ' . $leida['ruta_xml']);
     $fp = RutaDocumento::abrirParaLeer($leida['ruta_xml']);
@@ -226,7 +225,7 @@ try {
     $r = $migracion()->inventario();
     paso($r['inventariados'] === 0, 'correrlo otra vez no encuentra nada que pasar: ' . json_encode($r));
 
-    // Un documento que llega después del corte vive solo en SharePoint.
+    // Un documento que llega después vive solo en SharePoint.
     $local = tempnam(sys_get_temp_dir(), 'mig_');
     file_put_contents($local, '<FE>E' . $marca . '</FE>');
     $nuevo = $nuevaNube()->escribir("SISTEMA/$empresa/2026/09 SEPTIEMBRE/Facturas/FE_E.xml", $local);
@@ -239,13 +238,13 @@ try {
     $r = $migracion()->revertir(false);
     paso($r['rehusado'] !== '' && $r['por_bajar'] === 1,
         'sin --bajando se niega: E solo existe en SharePoint: ' . json_encode($r));
-    paso(AlmacenDocumentos::tipoDeSociedad($sociedadId) === 'sharepoint' && $fila('facturas_xml', $a)['almacen'] === 'sharepoint',
-        'y no toca nada');
+    paso($fila('facturas_xml', $a)['almacen'] === 'sharepoint', 'y no toca nada');
 
     $r = $migracion()->revertir(true);
     paso($r['rehusado'] === '' && $r['bajados'] === 1 && $r['filas'] === 5,
         'con --bajando baja E y devuelve las cinco filas: ' . json_encode($r));
-    paso(AlmacenDocumentos::tipoDeSociedad($sociedadId) === 'disco', 'la empresa vuelve a archivar en disco');
+    paso(AlmacenDocumentos::para($sociedadId) instanceof AlmacenEnGraph,
+        'revertir es un rescate de lo viejo: lo nuevo sigue yendo a SharePoint');
     $filaA = $fila('facturas_xml', $a);
     $filaE = $fila('facturas_xml', $e);
     paso($filaA['almacen'] === null && $filaA['item_xml_id'] === null && $filaA['ruta_xml'] === "$mes/FE_A.xml",
@@ -276,7 +275,6 @@ try {
         $pdo->exec('DELETE FROM sociedades WHERE id = ' . $sociedadId);
     }
     AlmacenDocumentos::olvidar();
-    AlmacenDocumentos::olvidarAjustes();
     AlmacenDocumentos::fijarCarpetaTemporales(null);
     RutaDocumento::olvidarRaiz();
     $it = new RecursiveIteratorIterator(

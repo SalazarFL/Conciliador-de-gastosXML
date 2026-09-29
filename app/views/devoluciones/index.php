@@ -26,7 +26,7 @@ $labelTipo = function ($tipo) {
     <form method="post" action="<?= $baseUrl ?>/devoluciones/subir" enctype="multipart/form-data" style="padding:0;display:flex;gap:7px;align-items:center;flex-wrap:wrap;">
         <input type="file" name="pdf_files[]" accept=".pdf" multiple required class="form-control" style="max-width:520px;">
         <button class="btn btn-primary" type="submit"><i class="fas fa-upload"></i> Importar reportes PDF</button>
-        <span style="font-size:12px;color:var(--text-muted);">Acepta "Facturas Boleta Local" y "Reporte de Devolución a Proveedor". Cada PDF se cuadra contra sus totales; si no cuadra, se rechaza.</span>
+        <span style="font-size:12px;color:var(--text-muted);">Acepta "Facturas Boleta Local" y "Reporte de Devolución a Proveedor". El PDF que no cuadre contra sus totales se rechaza.</span>
     </form>
 </div>
 
@@ -128,8 +128,11 @@ $labelTipo = function ($tipo) {
             <th data-col="fecha">Fecha</th><th data-col="tipo">Tipo</th><th data-col="numero">N°</th>
             <th data-col="proveedor">Proveedor</th><th data-col="factura">Factura (boleta)</th>
             <th class="right" data-col="monto">Monto</th>
-            <th class="right" data-col="esperadas">NC esperadas</th>
-            <th data-col="vinculos">Vínculos</th><th data-col="estado">Estado</th>
+            <th class="right" data-col="nc_cantidad" title="Nota de crédito esperada por cantidad">NC esperada (cant.)</th>
+            <th class="right" data-col="nc_costo" title="Nota de crédito esperada por costo">NC esperada (costo)</th>
+            <th class="center" data-col="confirmados" title="Vínculos confirmados">Confirmados</th>
+            <th class="center" data-col="sugeridos" title="Vínculos sugeridos, por confirmar">Sugeridos</th>
+            <th data-col="estado">Estado</th>
             <?php // Lo que el reporte del ERP trae y no cabía: dónde se hizo,
                   // quién la hizo, qué se anotó y cuánto se devolvió. ?>
             <?= Columnas::cabecerasExtra('devoluciones') ?>
@@ -142,18 +145,18 @@ $labelTipo = function ($tipo) {
         <?php foreach ($devoluciones as $d): ?>
         <?php
             /*
-             * El total de la devolución sale a su propia columna: estaba
-             * amontonado con las dos cifras de "NC esperadas" y no se podía
-             * comparar entre renglones, que es para lo que sirve un monto.
+             * Cada cifra en su columna: el total de la devolución estuvo
+             * amontonado con las dos de "NC esperadas", y esas dos, una
+             * encima de la otra en la misma celda. Así no se comparaban
+             * entre renglones, que es para lo que sirve un monto.
              *
              * Aquí no hay columna de saldo: una devolución no se paga, se
              * espera una nota de crédito por ella. Lo que haría de saldo es
              * justamente "NC esperadas".
              */
             $montoDevolucion = (float) $d['total'];
-            $montos = [];
-            if ((float) $d['nc_esperada_cantidad'] > 0) { $montos[] = 'Cant: ' . number_format((float) $d['nc_esperada_cantidad'], 2); }
-            if ((float) $d['nc_esperada_costo'] > 0) { $montos[] = 'Costo: ' . number_format((float) $d['nc_esperada_costo'], 2); }
+            $ncCantidad = (float) $d['nc_esperada_cantidad'];
+            $ncCosto = (float) $d['nc_esperada_costo'];
         ?>
         <tr>
             <td style="white-space:nowrap;" data-col="fecha"><?= htmlspecialchars((string) $d['fecha']) ?></td>
@@ -164,10 +167,13 @@ $labelTipo = function ($tipo) {
             <td class="right" data-col="monto" style="white-space:nowrap;<?= $montoDevolucion > 0 ? '' : 'color:var(--text-muted);' ?>">
                 <?= $montoDevolucion > 0 ? number_format($montoDevolucion, 2) : '—' ?>
             </td>
-            <td class="right" style="white-space:nowrap;" data-col="esperadas"><?= $montos ? implode('<br>', $montos) : '—' ?></td>
-            <td style="white-space:nowrap;" data-col="vinculos">
-                <?php if ((int) $d['matches_confirmados'] > 0): ?><span class="badge badge-green"><?= (int) $d['matches_confirmados'] ?> ✓</span><?php endif; ?>
-                <?php if ((int) $d['matches_sugeridos'] > 0): ?><span class="badge" style="background:#fef3c7;color:#92400e;"><?= (int) $d['matches_sugeridos'] ?> ?</span><?php endif; ?>
+            <td class="right" style="white-space:nowrap;" data-col="nc_cantidad"><?= $ncCantidad > 0 ? number_format($ncCantidad, 2) : '—' ?></td>
+            <td class="right" style="white-space:nowrap;" data-col="nc_costo"><?= $ncCosto > 0 ? number_format($ncCosto, 2) : '—' ?></td>
+            <td class="center" data-col="confirmados">
+                <?php if ((int) $d['matches_confirmados'] > 0): ?><span class="badge badge-green"><?= (int) $d['matches_confirmados'] ?> ✓</span><?php else: ?>—<?php endif; ?>
+            </td>
+            <td class="center" data-col="sugeridos">
+                <?php if ((int) $d['matches_sugeridos'] > 0): ?><span class="badge" style="background:#fef3c7;color:#92400e;"><?= (int) $d['matches_sugeridos'] ?> ?</span><?php else: ?>—<?php endif; ?>
             </td>
             <td data-col="estado"><?= $badgeEstado((string) $d['estado']) ?></td>
             <?= Columnas::celdasExtra('devoluciones', $d) ?>

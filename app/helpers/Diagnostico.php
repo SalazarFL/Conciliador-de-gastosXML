@@ -9,8 +9,8 @@
  * está bien, qué está mal y qué hay que hacer.
  *
  * Casi todo lo que puede fallar en este modelo es de instalación, no de
- * lógica: la carpeta compartida sin configurar o todavía sincronizando, PHP
- * sin una extensión, la base actualizada pero el código no (o al revés).
+ * lógica: SharePoint sin credenciales en esta computadora, PHP sin una
+ * extensión, la base actualizada pero el código no (o al revés).
  * Cada revisión devuelve estado + qué hacer, en ese orden.
  *
  * Estados: 'ok' · 'aviso' (funciona, pero algo hay que atender) ·
@@ -32,9 +32,9 @@ class Diagnostico
         ['correo_incidencias', 'descartada', 'database/migration_correo_incidencias_descarte.sql'],
         ['correo_incidencias_descartes', null, 'database/migration_correo_incidencias_descarte.sql'],
         ['facturas_xml', 'archivo_faltante_en', 'database/migration_archivo_faltante.sql'],
-        ['sociedades', 'almacen_documentos', 'database/migration_almacen_graph.sql'],
         ['facturas_xml', 'almacen', 'database/migration_almacen_graph.sql'],
         ['devoluciones', 'almacen', 'database/migration_almacen_graph.sql'],
+        ['facturas_xml', 'tipo_cambio', 'database/migration_tipo_cambio.sql'],
     ];
 
     private $pdo;
@@ -51,10 +51,9 @@ class Diagnostico
             [$this->php(), $this->extensiones(), $this->configuracionDeEstaMaquina(),
              $this->baseDeDatos()],
             $this->esquema(),
-            [$this->clavesDeBuzonCifradas(),
-             $this->carpetaCompartida(), $this->escrituraEnCarpeta(), $this->rutasAbsolutas(),
-             $this->documentosDentroDelProyecto(), $this->archivosFaltantes()],
-            $this->sharepoint()
+            [$this->clavesDeBuzonCifradas()],
+            $this->sharepoint(),
+            [$this->documentosSinMigrar(), $this->rutasAbsolutas(), $this->documentosDentroDelProyecto()]
         );
 
         $peor = 'ok';
@@ -353,52 +352,14 @@ class Diagnostico
             . 'Si alguna sale como ilegible, vuelve a escribir su contraseña en Configuración → Correo.');
     }
 
-    private function carpetaCompartida()
-    {
-        $raiz = RutaDocumento::raiz();
-        if ($raiz === '' && !DocumentoArchivo::necesitaCarpetaCompartida()) {
-            return $this->resultado('Carpeta compartida', 'ok',
-                'No hace falta: todas las empresas archivan en SharePoint',
-                'Los XML y PDF van a la biblioteca; lo demás —temporales, respaldos de la base, '
-                . 'Excel y CSV cargados— queda en esta computadora.');
-        }
-        if ($raiz === '') {
-            return $this->resultado('Carpeta compartida', 'error',
-                'Sin configurar',
-                'Entra a Correo y escribe la ruta de la carpeta sincronizada de SharePoint '
-                . 'en esta computadora (algo como C:\\Users\\<usuario>\\<Empresa>\\Documentos '
-                . 'compartidos - Facturas).');
-        }
-        if (!is_dir($raiz)) {
-            return $this->resultado('Carpeta compartida', 'error',
-                'Configurada en ' . $raiz . ', pero no existe',
-                'Si es la carpeta de SharePoint, ábrela en el Explorador y espera a que '
-                . 'termine de sincronizar. Si la ruta cambió, corrígela en Correo.');
-        }
-        return $this->resultado('Carpeta compartida', 'ok', $raiz, '');
-    }
-
-    private function escrituraEnCarpeta()
-    {
-        $raiz = RutaDocumento::raiz();
-        if ($raiz === '' && !DocumentoArchivo::necesitaCarpetaCompartida()) {
-            return $this->resultado('Permisos de escritura', 'ok',
-                'Sin carpeta compartida que probar: lo de SharePoint se revisa abajo', '');
-        }
-        if ($raiz === '' || !is_dir($raiz)) {
-            return $this->resultado('Permisos de escritura', 'aviso',
-                'No se pudo probar (la carpeta compartida no está disponible)', '');
-        }
-        $ok = RutaDocumento::permiteEscritura($raiz);
-        return $this->resultado(
-            'Permisos de escritura',
-            $ok ? 'ok' : 'error',
-            $ok ? 'Se puede escribir en la carpeta compartida' : 'La carpeta no permite escritura',
-            $ok ? '' : 'Pide permiso de edición sobre la biblioteca de SharePoint: con permiso de '
-                     . 'solo lectura se pueden consultar documentos, pero no importar.'
-        );
-    }
-
+    /**
+     * Filas que guardan la ruta completa de un disco en vez de una relativa:
+     * solo abren en la computadora que las escribió.
+     *
+     * No cuentan las de la zona de paso de cada PC (storage/correo/transito):
+     * esas son de esa computadora a propósito —lo que se captura y se archiva
+     * en la misma corrida no sale de ella—. Ver RutaDocumento::carpetaTrabajoLocal().
+     */
     private function rutasAbsolutas()
     {
         try {
@@ -407,7 +368,8 @@ class Diagnostico
                       ['correo_bandeja', 'archivo_xml'], ['devoluciones', 'ruta_pdf']] as [$tabla, $campo]) {
                 $n += (int) $this->pdo()->query(
                     "SELECT COUNT(*) FROM {$tabla}
-                     WHERE {$campo} REGEXP '^([A-Za-z]:|\\\\\\\\|/)'"
+                     WHERE {$campo} REGEXP '^([A-Za-z]:|\\\\\\\\|/)'
+                       AND REPLACE({$campo}, '\\\\', '/') NOT LIKE '%/storage/correo/transito/%'"
                 )->fetchColumn();
             }
         } catch (Throwable $e) {
@@ -420,11 +382,12 @@ class Diagnostico
             $n > 0 ? 'aviso' : 'ok',
             $n > 0
                 ? $n . ' fila(s) guardan la ruta completa en vez de la relativa'
-                : 'Todas relativas a la carpeta compartida',
+                : 'Ninguna guarda la ruta completa de un disco',
             $n > 0
-                ? "Esas filas solo abren en la computadora que las creó. Para arreglarlas:\n"
-                  . "  php cli/migrar_rutas_relativas.php            (revisa)\n"
-                  . "  php cli/migrar_rutas_relativas.php --aplicar  (corrige)"
+                ? "Esas filas solo abren en la computadora que las creó. Son de antes de SharePoint: si apuntan a la "
+                  . "carpeta compartida de antes, se pasan a relativas y después a SharePoint:\n"
+                  . "  php cli/migrar_rutas_relativas.php --raiz=RUTA   (revisa; con --aplicar, corrige)\n"
+                  . '  php cli/migrar_documentos_a_graph.php --sociedad=N --todo'
                 : ''
         );
     }
@@ -445,7 +408,7 @@ class Diagnostico
             }
         }
         return $this->resultado(
-            'Documentos fuera de la carpeta compartida',
+            'Documentos guardados dentro del proyecto',
             $encontrados ? 'aviso' : 'ok',
             $encontrados ? implode(', ', $encontrados) : 'Ninguno: el proyecto no guarda documentos',
             $encontrados
@@ -455,109 +418,118 @@ class Diagnostico
         );
     }
 
-    private function archivosFaltantes()
+    /**
+     * Lo que se archivó en la carpeta compartida antes de SharePoint y todavía
+     * no se migró. Mientras quede algo, esos documentos se abren solo en las
+     * computadoras que tengan esa carpeta, y no están en la biblioteca.
+     *
+     * Además de contarlos, prueba unos cuantos de los más recientes: si aquí
+     * no abre ninguno, esta PC no tiene la carpeta de antes, y no es que
+     * falten.
+     */
+    private function documentosSinMigrar()
     {
+        $nombre = 'Documentos todavía en la carpeta compartida';
         try {
-            // Con la fila entera y no solo la ruta: dónde está cada documento
-            // lo dicen su columna `almacen` y su sociedad, y esta consulta no
-            // pasa por los modelos que lo resuelven solos al leer.
-            // Solo los de disco: los de SharePoint serían doscientas llamadas
-            // a la red, y de esos se ocupa la revisión de SharePoint.
             $pdo = $this->pdo();
-            $conAlmacen = $this->existeColumna($pdo, 'facturas_xml', 'almacen');
-            $filas = $pdo->query(
-                'SELECT ruta_xml, sociedad_id' . ($conAlmacen ? ', almacen' : '') . " FROM facturas_xml
-                 WHERE ruta_xml IS NOT NULL AND ruta_xml <> ''"
-                 . ($conAlmacen ? " AND almacen IS NULL AND ruta_xml NOT LIKE 'sharepoint:%'" : '') . '
-                 ORDER BY id DESC LIMIT 200'
+            if (!$this->existeColumna($pdo, 'facturas_xml', 'almacen')) {
+                return $this->resultado($nombre, 'error', 'Falta la columna facturas_xml.almacen',
+                    'Aplica database/migration_almacen_graph.sql: sin ella no se sabe qué documento está en SharePoint.');
+            }
+            $porEmpresa = $pdo->query(
+                "SELECT COALESCE(s.nombre, 'Sin empresa') AS empresa, f.sociedad_id, COUNT(*) AS n
+                   FROM facturas_xml f LEFT JOIN sociedades s ON s.id = f.sociedad_id
+                  WHERE f.almacen IS NULL AND COALESCE(f.ruta_xml, '') <> '' AND f.ruta_xml NOT LIKE 'sharepoint:%'
+                  GROUP BY f.sociedad_id, s.nombre ORDER BY n DESC"
+            )->fetchAll(PDO::FETCH_ASSOC);
+            $muestra = $pdo->query(
+                "SELECT ruta_xml, sociedad_id, almacen FROM facturas_xml
+                  WHERE almacen IS NULL AND COALESCE(ruta_xml, '') <> '' AND ruta_xml NOT LIKE 'sharepoint:%'
+                  ORDER BY id DESC LIMIT 20"
             )->fetchAll(PDO::FETCH_ASSOC);
         } catch (Throwable $e) {
-            return $this->resultado('Documentos recientes en disco', 'aviso',
-                'No se pudo revisar: ' . $e->getMessage(), '');
+            return $this->resultado($nombre, 'aviso', 'No se pudo revisar: ' . $e->getMessage(), '');
         }
 
-        $revisados = count($filas);
-        if ($revisados === 0) {
-            return $this->resultado('Documentos recientes en disco', 'ok', 'No hay documentos que revisar', '');
+        $total = array_sum(array_map('intval', array_column($porEmpresa, 'n')));
+        if ($total === 0) {
+            return $this->resultado($nombre, 'ok', 'Ninguno: todo está en SharePoint', '');
         }
 
-        $faltan = 0;
-        foreach ($filas as $fila) {
+        $abren = 0;
+        foreach ($muestra as $fila) {
             $ruta = RutaDocumento::hidratarFila($fila, ['ruta_xml'])['ruta_xml'];
-            if (!RutaDocumento::existe($ruta)) {
-                $faltan++;
+            if ($ruta !== '' && RutaDocumento::existe($ruta)) {
+                $abren++;
+            }
+        }
+        $detalle = [];
+        foreach ($porEmpresa as $fila) {
+            $detalle[] = $fila['empresa'] . ': ' . (int) $fila['n'];
+        }
+        $comandos = [];
+        foreach ($porEmpresa as $fila) {
+            if ((int) $fila['sociedad_id'] > 0) {
+                $comandos[] = '  php cli/migrar_documentos_a_graph.php --sociedad=' . (int) $fila['sociedad_id'] . ' --todo';
             }
         }
 
-        // Que falten todos apunta a la carpeta compartida (mal configurada o
-        // sin sincronizar); que falten algunos, a documentos movidos a mano.
-        $estado = $faltan === 0 ? 'ok' : ($faltan === $revisados ? 'error' : 'aviso');
-        return $this->resultado(
-            'Documentos recientes en disco',
-            $estado,
-            $faltan === 0
-                ? "Los {$revisados} más recientes se abren correctamente"
-                : "{$faltan} de los {$revisados} más recientes no se encuentran",
-            $faltan === 0 ? '' : ($faltan === $revisados
-                ? 'No se encontró NINGUNO: casi seguro la carpeta compartida apunta al lugar '
-                  . 'equivocado o SharePoint no ha terminado de bajar los archivos.'
-                : "Probablemente se movieron a mano. Si siguen dentro de la carpeta "
-                  . "compartida, esto vuelve a ubicarlos sin moverlos:\n"
-                  . '  php cli/organizar_documentos.php')
-        );
+        return $this->resultado($nombre, 'aviso',
+            $total . ' comprobante(s) sin pasar a SharePoint (' . implode(', ', $detalle) . '). '
+                . ($abren === 0
+                    ? 'Esta computadora no tiene la carpeta de antes: aquí no se abren.'
+                    : $abren . ' de los ' . count($muestra) . ' más recientes se abren desde esta computadora.'),
+            "Pásalos a SharePoint desde una computadora que tenga la carpeta de antes, con el usuario de Windows "
+            . "que sincroniza OneDrive:\n" . implode("\n", $comandos)
+            . "\nSi esa computadora ya no tiene la carpeta configurada, agrega --carpeta=RUTA.");
     }
 
     /**
-     * Las empresas que archivan en SharePoint: si esta computadora llega a la
-     * biblioteca, si la tarea que la vigila sigue corriendo y si quedó algo
-     * atascado. Sin ninguna empresa allá, no dice nada: no es ruido que
-     * alguien tenga que aprender a ignorar.
+     * SharePoint, donde viven los XML y PDF de todas las empresas: si esta
+     * computadora llega, si la tarea que vigila la biblioteca sigue corriendo
+     * y si quedó algo atascado. Es obligatorio: sin credenciales, esta PC no
+     * puede ni guardar ni abrir un comprobante.
      *
-     * Pregunta a SharePoint UNA vez (el nombre de la biblioteca). Lo demás lo
-     * sabe la base.
+     * Pregunta a SharePoint UNA vez (dónde está la biblioteca o la carpeta).
+     * Lo demás lo sabe la base.
      */
     private function sharepoint()
     {
-        try {
-            $pdo = $this->pdo();
-            if (!$this->existeColumna($pdo, 'sociedades', 'almacen_documentos')) {
-                return [];
-            }
-            $empresas = $pdo->query("SELECT nombre FROM sociedades WHERE almacen_documentos = 'sharepoint' ORDER BY nombre")
-                ->fetchAll(PDO::FETCH_COLUMN);
-            $documentos = $this->existeColumna($pdo, 'facturas_xml', 'almacen')
-                ? (int) $pdo->query("SELECT COUNT(*) FROM facturas_xml WHERE almacen = 'sharepoint'")->fetchColumn()
-                : 0;
-        } catch (Throwable $e) {
-            return [$this->resultado('SharePoint', 'aviso', 'No se pudo revisar: ' . $e->getMessage(), '')];
-        }
-        if (!$empresas && $documentos === 0) {
-            return [];
-        }
-
         require_once __DIR__ . '/AlmacenEnGraph.php';
         $revisiones = [];
-        $quienes = $empresas ? implode(', ', $empresas) : 'ninguna empresa, pero hay documentos allá';
+        $documentos = null;
+        try {
+            $pdo = $this->pdo();
+            if ($this->existeColumna($pdo, 'facturas_xml', 'almacen')) {
+                $documentos = (int) $pdo->query("SELECT COUNT(*) FROM facturas_xml WHERE almacen = 'sharepoint'")->fetchColumn();
+            }
+        } catch (Throwable $e) {
+            $pdo = null;
+        }
+        $cuantos = $documentos === null ? '' : " ({$documentos} documentos allá)";
 
         // 1. ¿Esta computadora llega?
         if (!AlmacenDocumentos::disponible(AlmacenEnGraph::TIPO)) {
             $revisiones[] = $this->resultado('SharePoint en esta computadora', 'error',
-                'Sin credenciales. Archivan en SharePoint: ' . $quienes . " ({$documentos} documentos)",
-                "Esta computadora no puede abrir ni guardar esos documentos. Copia la plantilla y completa los datos:\n"
+                'Sin credenciales' . $cuantos,
+                "Esta computadora no puede guardar ni abrir documentos: todos viven en SharePoint. Copia la plantilla y completa los datos:\n"
                 . "  copy app\\config\\graph.ejemplo.php app\\config\\local.graph.php\n"
-                . 'El secreto lo tiene quien administra la aplicación en Microsoft Entra ID; no se manda por correo ni por chat.');
-        } else {
-            try {
-                $biblioteca = AlmacenDocumentos::tipo(AlmacenEnGraph::TIPO)->probar();
-                $revisiones[] = $this->resultado('SharePoint en esta computadora', 'ok',
-                    'Conectada a la biblioteca "' . $biblioteca . '". Archivan allá: ' . $quienes
-                    . " ({$documentos} documentos)", '');
-            } catch (Throwable $e) {
-                $revisiones[] = $this->resultado('SharePoint en esta computadora', 'error',
-                    'No contesta: ' . $e->getMessage(),
-                    "Prueba la conexión paso a paso con:\n  php cli/probar_sharepoint.php\n"
-                    . 'Si dice que falta un certificado raíz, revisa curl.cainfo en php.ini y reinicia Apache.');
-            }
+                . 'El secreto lo tiene quien administra la aplicación en Microsoft Entra ID; no se manda por correo ni por chat. '
+                . 'Guía: docs/SHAREPOINT.md.');
+            return $revisiones;
+        }
+        try {
+            $donde = AlmacenDocumentos::tipo(AlmacenEnGraph::TIPO)->probar();
+            $revisiones[] = $this->resultado('SharePoint en esta computadora', 'ok',
+                'Conectada: ' . $donde . $cuantos, '');
+        } catch (Throwable $e) {
+            $revisiones[] = $this->resultado('SharePoint en esta computadora', 'error',
+                'No contesta: ' . $e->getMessage(),
+                "Prueba la conexión paso a paso con:\n  php cli/probar_sharepoint.php\n"
+                . 'Si dice que falta un certificado raíz, revisa curl.cainfo en php.ini y reinicia Apache.');
+        }
+        if ($pdo === null) {
+            return $revisiones;
         }
 
         // 2. ¿La vigila alguien?
@@ -590,7 +562,7 @@ class Diagnostico
                     . $sinArchivo . ' documento(s) de SharePoint marcados sin archivo.',
                 $avisos
                     ? "Revisa que la tarea programada de correo esté corriendo en alguna PC con credenciales. Detalle:\n"
-                      . "  php cli/organizar_documentos.php --sharepoint --dry-run\n"
+                      . "  php cli/organizar_documentos.php --dry-run\n"
                       . "  php cli/migrar_documentos_a_graph.php --sociedad=N   (si hay una migración)\n"
                       . 'Los borrados atascados están en la tabla almacen_pendientes, con su error.'
                     : '');

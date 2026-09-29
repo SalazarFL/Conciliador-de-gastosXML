@@ -19,6 +19,7 @@ require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 require_once __DIR__ . '/../helpers/AlcanceProveedor.php';
 require_once __DIR__ . '/../helpers/BusquedaImporte.php';
 require_once __DIR__ . '/../helpers/Columnas.php';
+require_once __DIR__ . '/../models/BloqueoEnBase.php';
 
 class FacturasErpController extends Controller
 {
@@ -101,11 +102,92 @@ class FacturasErpController extends Controller
             'incidenciasAbiertas' => $modelo->contarIncidencias(['severidad' => 'alerta']),
             'incidenciasTotal' => $modelo->contarIncidencias([]),
             'revisionPendientes' => $this->pendientesDeRevision(),
+            'quitadasTotal' => $modelo->contarQuitadas(),
+            'puedeQuitar' => Permisos::puede('facturas_erp.editar'),
             'filtros' => $filtros,
             'pagina' => $pagina,
             'totalPaginas' => $totalPaginas,
             'total' => $total,
         ]);
+    }
+
+    /**
+     * Saca una factura del listado: el ERP la trae, pero no es una factura
+     * —típicamente la misma cargada dos veces con otra fecha—.
+     *
+     * Descartar su incidencia de "número repetido" no alcanzaba: callaba el
+     * aviso y la factura seguía en el listado, contando como sin respaldo en
+     * Pagos y en Seguimiento sin que existiera un comprobante que buscarle.
+     */
+    public function quitar()
+    {
+        $volver = $this->url('/facturas-erp');
+        if (!$this->isPost()) {
+            $this->redirect($volver);
+        }
+
+        try {
+            $modelo = $this->loadModel('FacturaErp');
+            $fila = $modelo->quitarDelListado(
+                (int) $this->post('id', 0),
+                (string) $this->post('motivo', ''),
+                $_SESSION['user_id'] ?? null
+            );
+            // La fila se llevó consigo lo que la señalaba como corregida por
+            // una nota: el cruce se rehace para que la nota busque otra.
+            $this->recalcularNotas((int) ($fila['sociedad_id'] ?? 0));
+
+            $this->redirectWithMessage(
+                $volver,
+                sprintf(
+                    'Se quitó del listado %s-%s de %s (emitida %s). Las próximas cargas del reporte la van a saltar.',
+                    $fila['tipo'],
+                    $fila['documento'] !== '' ? $fila['documento'] : 'sin número',
+                    $fila['proveedor_nombre'],
+                    $fila['fecha_emision'] ? date('d/m/Y', strtotime((string) $fila['fecha_emision'])) : '—'
+                ),
+                'success'
+            );
+        } catch (Throwable $e) {
+            $this->redirectWithMessage($volver, 'No se pudo quitar: ' . $e->getMessage(), 'error');
+        }
+    }
+
+    /** Las facturas que se quitaron del listado, para poder devolverlas. */
+    public function quitadas()
+    {
+        $this->render('facturaserp.quitadas', [
+            'titulo' => 'Quitadas · Facturas',
+            'quitadas' => $this->loadModel('FacturaErp')->quitadas(),
+            'puedeDevolver' => Permisos::puede('facturas_erp.editar'),
+        ]);
+    }
+
+    public function devolverQuitada()
+    {
+        $volver = $this->url('/facturas-erp/quitadas');
+        if (!$this->isPost()) {
+            $this->redirect($volver);
+        }
+
+        try {
+            $modelo = $this->loadModel('FacturaErp');
+            $fila = $modelo->devolverAlListado((int) $this->post('id', 0));
+            $this->engancharComprobantes($modelo);
+            $this->recalcularNotas((int) ($fila['sociedad_id'] ?? 0));
+            $this->redirectWithMessage(
+                $volver,
+                sprintf(
+                    '%s-%s de %s volvió al listado.',
+                    $fila['tipo'],
+                    $fila['documento'] !== '' ? $fila['documento'] : 'sin número',
+                    $fila['proveedor_nombre']
+                ),
+                'success'
+            );
+        } catch (Throwable $e) {
+            $this->redirectWithMessage($volver, 'No se pudo devolver: ' . $e->getMessage(), 'error');
+        }
     }
 
     /**
@@ -755,6 +837,31 @@ class FacturasErpController extends Controller
         }
         $this->exigirListadoProveedores($this->url('/facturas-erp'));
 
+        /*
+         * Una carga a la vez por empresa. Dos personas aplicando el reporte de
+         * la misma empresa al mismo tiempo no rompían nada —cada carga es una
+         * transacción y la segunda chocaba contra las claves de la primera y
+         * se deshacía— pero quien llegaba segundo se comía un error de base
+         * sin explicación. Se toma antes de mover el archivo de la vista
+         * previa, para que al reintentar siga estando.
+         *
+         * El candado es de la conexión: se suelta solo al terminar la
+         * petición, también si muere a la mitad.
+         */
+        try {
+            $activa = $this->loadModel('Sociedad')->getActiva();
+        } catch (Throwable $e) {
+            $activa = null;
+        }
+        if ($activa && BloqueoEnBase::tomar('carga_facturas_erp.' . (int) $activa['id']) === false) {
+            $this->redirectWithMessage(
+                $this->url('/facturas-erp'),
+                'Otra persona está aplicando el reporte de ' . $activa['nombre'] . ' en este momento. '
+                . 'Esperá a que termine y volvé a aplicarlo: tu vista previa sigue guardada.',
+                'warning'
+            );
+        }
+
         try {
             $archivo = $this->archivoAAplicar();
 
@@ -833,6 +940,13 @@ class FacturasErpController extends Controller
                 number_format($r['actualizadas'], 0, ',', '.'),
                 number_format($r['sin_cambio'], 0, ',', '.')
             );
+
+            if (!empty($r['quitadas'])) {
+                $mensaje .= sprintf(
+                    ' %s se saltaron porque las habías quitado del listado.',
+                    number_format($r['quitadas'], 0, ',', '.')
+                );
+            }
 
             if ($enganche['enganchadas'] > 0) {
                 $mensaje .= sprintf(
@@ -950,7 +1064,7 @@ class FacturasErpController extends Controller
     {
         try {
             return $this->loadModel('NotaCredito')
-                ->notasVivasDeFacturas(array_column($facturas, 'id'));
+                ->notasAplicablesDeFacturas(array_column($facturas, 'id'));
         } catch (Throwable $e) {
             return [];
         }
@@ -1104,6 +1218,15 @@ class FacturasErpController extends Controller
 
         try {
             $filas = $this->loadModel('FacturaErp')->listar($this->filtros(), self::TOPE_EXPORTACION, 0);
+            // Las notas aplicables no vienen en la fila: la pantalla las pide
+            // aparte, y el Excel tiene que poder decir lo mismo en su columna.
+            $notas = $this->notasDeLasFacturas($filas);
+            foreach ($filas as &$fila) {
+                $suyas = $notas[(int) $fila['id']] ?? [];
+                $fila['notas_vivas'] = count($suyas);
+                $fila['notas_vivas_saldo'] = array_sum(array_map('floatval', array_column($suyas, 'saldo')));
+            }
+            unset($fila);
             Columnas::descargar('facturaserp', $filas, $this->get('cols', ''));
         } catch (Throwable $e) {
             $this->registrarFallo('exportar las facturas del ERP', $e);

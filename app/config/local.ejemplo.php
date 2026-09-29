@@ -11,9 +11,8 @@
  *   - dónde tiene instaladas sus herramientas.
  *
  * Lo que NO va aquí:
- *   - la carpeta compartida de documentos, que se configura desde la
- *     aplicación (Correo → Carpeta de documentos) y queda en
- *     storage/correo/config.json;
+ *   - las credenciales de SharePoint, donde viven los XML y PDF: van en
+ *     app/config/local.graph.php (plantilla: graph.ejemplo.php);
  *   - nada que deba ser igual para todos: eso va en config.php, versionado.
  */
 

@@ -162,8 +162,8 @@ class EntradaAutomatica
             } catch (Throwable $e) {
                 // La fila se queda pendiente en la Bandeja, con sus archivos:
                 // son la única copia que hay del comprobante, y lo que falló
-                // puede ser cosa de esta corrida —la carpeta compartida sin
-                // responder, por ejemplo—. Reintentarlo es un clic.
+                // puede ser cosa de esta corrida —SharePoint sin responder,
+                // por ejemplo—. Reintentarlo es un clic.
                 $res['fallidos']++;
                 $res['errores'][] = 'No entró ' . $this->etiqueta($fila) . ': ' . $e->getMessage();
                 $this->compartir($filaId, $fila);
@@ -212,7 +212,7 @@ class EntradaAutomatica
      * ser cosa de esta máquina: quien lo mire puede estar en otra, y desde
      * otra no hay forma de abrir un archivo de este disco.
      *
-     * Si no se puede subir —sin carpeta compartida, sin red— la fila se queda
+     * Si no se puede subir —sin SharePoint en esta PC, sin red— la fila se queda
      * apuntando a lo de aquí: es la única copia del comprobante y perderla
      * sería peor. La próxima corrida en esta computadora lo reintenta, desde
      * rescatarLoQueQuedoAqui().
@@ -346,7 +346,7 @@ class EntradaAutomatica
         return $resumen;
     }
 
-    /** El importador se crea una sola vez: valida la carpeta raíz al nacer. */
+    /** El importador se crea una sola vez. */
     private function importer()
     {
         if ($this->importer === null) {

@@ -41,7 +41,7 @@ if (preg_match_all('/function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/', $fuente, $m, PR
     }
 }
 assertArchivosPago(isset($cuerpos['subir']), 'el controlador sigue teniendo subir()');
-assertArchivosPago(isset($cuerpos['reubicarArchivos']), 'sigue existiendo el ayudante que llama al organizador');
+assertArchivosPago(isset($cuerpos['reubicarArchivos']), 'sigue existiendo el ayudante que dice qué pasa con los archivos');
 
 // La regla: quien vuelve a cruzar el pago cambia qué comprobante respalda qué
 // factura, y eso decide qué archivos van a la carpeta de entrega. Re-cruzar
@@ -81,9 +81,13 @@ assertArchivosPago(
     strpos($cuerpos['subir'], "copias_pago") !== false,
     'subir() cuenta en pantalla cuántos comprobantes llegaron a la carpeta'
 );
+// Las copias a la carpeta del pago las hace la tarea programada, en
+// SharePoint: la pantalla no puede decir cuántas llegaron, pero sí que están
+// en camino y cuáles no van a llegar (lo que sigue en la carpeta compartida).
 assertArchivosPago(
-    strpos($cuerpos['reubicarArchivos'], "errores_copia_pago") !== false,
-    'una copia que falla no se queda callada'
+    strpos($cuerpos['reubicarArchivos'], 'tarea programada') !== false
+        && strpos($cuerpos['reubicarArchivos'], 'migrar_documentos_a_graph') !== false,
+    'una copia que todavía no se hizo, o que no se va a hacer, no se queda callada'
 );
 
 echo "OK PagoArchivosTest\n";

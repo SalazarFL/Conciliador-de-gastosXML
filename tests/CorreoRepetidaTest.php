@@ -62,6 +62,10 @@ $raiz = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'repetida_' . bin2hex(random_
 mkdir($raiz, 0777, true);
 RutaDocumento::fijarRaiz($raiz);
 AlmacenDocumentos::olvidar();
+// Lo nuevo iría a SharePoint; acá lo que se prueba es la repetida, así que
+// una carpeta de disco hace de archivo (ver tests/soporte/ArchivoDePrueba.php).
+require_once __DIR__ . '/../app/helpers/AlmacenEnDisco.php';
+AlmacenDocumentos::fijar(new AlmacenEnDisco());
 
 $sociedadId = 0;
 $sociedadOtraId = 0;

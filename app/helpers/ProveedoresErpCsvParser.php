@@ -147,11 +147,12 @@ class ProveedoresErpCsvParser
          * venta de la misma empresa —CEDI, MAYOREO, PROMOCIONES— y las tres
          * filas están bien. Otras son basura: "ALPELMUSA S.A" y "ALPEMUSA
          * S.A." con la misma cédula es un error de dedo que dio de alta dos
-         * proveedores. Meterlas todas deja la cédula sin poder identificar a
-         * nadie; descartarlas a ciegas borra códigos buenos.
+         * proveedores. Descartarlas borra códigos buenos: un código fuera del
+         * catálogo no engancha con nada.
          *
-         * Se entregan con nombre y fila para que quien mire pueda decidir, y
-         * la importación no sigue hasta que decida.
+         * Se entregan con nombre y fila. Entran todas salvo las que quien
+         * importa desmarque; la cédula compartida se engancha sola solo con el
+         * consecutivo exacto (ver PorPagarVerificador::esDeUnHermano).
          */
         $porCedula = [];
         foreach ($proveedores as $p) {

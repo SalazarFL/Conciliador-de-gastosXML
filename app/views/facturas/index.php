@@ -101,8 +101,8 @@ $urlExportar = $baseUrl . '/facturas/exportar?'
                 <i class="fas fa-cogs" style="margin-right:4px;"></i>Procesar XML
             </button>
             <span style="font-size:11px;color:var(--text-muted);margin-left:auto;max-width:420px;">
-                Se suben por tandas, sin límite de cantidad. Los mensajes de Hacienda y las notas
-                de débito se descartan solos.
+                Por tandas, sin límite. Los mensajes de Hacienda y las notas de débito
+                se descartan solos.
             </span>
         </div>
     </form>
@@ -406,8 +406,7 @@ else: ?>
          */ ?>
         <?php if (!empty($paginacion['truncado'])): ?>
         <span style="margin-left:8px;color:var(--text-muted);">
-            — se revisaron los <?= (int) $paginacion['revisados'] ?> comprobantes más recientes; hay más.
-            Acotá con los buscadores para llegar a los demás.
+            — de los <?= (int) $paginacion['revisados'] ?> más recientes; acotá con los buscadores para ver el resto.
         </span>
         <?php endif; ?>
     </div>
@@ -530,6 +529,12 @@ else: ?>
                             <span class="badge badge-green">Disponible</span>
                             <?php else: ?>
                             <span class="badge" style="background:#fef3c7;color:#92400e;">Pendiente</span>
+                            <?php if (trim((string) ($f['ruta_pdf'] ?? '')) === '' && Permisos::puede('documentos.recuperar')): ?>
+                            <button type="button" class="btn-recuperar" data-subir-pdf="<?= (int) $f['id'] ?>"
+                                    title="Subir el PDF a mano (por ejemplo, el que el proveedor mandó como enlace)">
+                                <i class="fas fa-upload"></i>
+                            </button>
+                            <?php endif; ?>
                             <?php endif; ?>
                         </td>
                         <td data-col="origen"><?= !empty($f['correo_cuenta_id']) ? 'Correo' : 'Carga XML' ?></td>

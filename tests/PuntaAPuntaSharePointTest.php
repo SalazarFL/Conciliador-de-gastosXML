@@ -56,8 +56,8 @@ try {
 }
 if (!(int) $pdo->query("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE()
                         AND TABLE_NAME = 'facturas_xml' AND COLUMN_NAME = 'almacen'")->fetchColumn()) {
-    // Sin la columna, pasar una empresa a SharePoint está prohibido (ver
-    // Sociedad::definirAlmacen): no hay recorrido que probar.
+    // Sin la columna, lo archivado en SharePoint se leería como de disco:
+    // no hay recorrido que probar.
     echo "SKIP: PuntaAPuntaSharePoint (la base aislada no tiene database/migration_almacen_graph.sql)\n";
     exit(0);
 }
@@ -94,17 +94,16 @@ $pendientesAntes = (int) $pdo->query('SELECT COALESCE(MAX(id), 0) FROM almacen_p
 $temporales = [];
 
 try {
-    $pdo->prepare("INSERT INTO sociedades (nombre, cedula, activa, almacen_documentos) VALUES (?, ?, 0, 'sharepoint')")
+    $pdo->prepare("INSERT INTO sociedades (nombre, cedula, activa) VALUES (?, ?, 0)")
         ->execute([$nombreEmpresa, $cedulaEmpresa]);
     $sociedadId = (int) $pdo->lastInsertId();
-    AlmacenDocumentos::olvidarAjustes();
-    paso(AlmacenDocumentos::tipoDeSociedad($sociedadId) === 'sharepoint',
-        'la empresa de prueba está en SharePoint según la base');
+    paso(AlmacenDocumentos::para($sociedadId) === $sharepoint,
+        'la empresa de prueba archiva en SharePoint, como todas');
 
     // El portón del importador: sin listado de proveedores no entra nada.
-    $pdo->prepare("INSERT INTO proveedor_codigo_erp (proveedor_codigo, proveedor_id, cedula, nombre_erp, origen)
-                   VALUES (?, ?, ?, 'E2E', 'manual')")
-        ->execute([$codigoProveedor, (int) $emisor['id'], (string) $emisor['rfc']]);
+    $pdo->prepare("INSERT INTO proveedor_codigo_erp (sociedad_id, proveedor_codigo, proveedor_id, cedula, nombre_erp, origen)
+                   VALUES (?, ?, ?, ?, 'E2E', 'manual')")
+        ->execute([$sociedadId, $codigoProveedor, (int) $emisor['id'], (string) $emisor['rfc']]);
     ProveedorCodigoErp::olvidarMapa();
 
     // ── 1. El correo llega y se captura ──────────────────────────────────

@@ -65,7 +65,7 @@ return [
 
     // Configuración de archivos
     // Zona de paso para lo que sube la gente antes de archivarse; los
-    // documentos definitivos nunca viven aquí, sino en la carpeta compartida.
+    // documentos definitivos nunca viven aquí, sino en SharePoint.
     'uploads_path'       => dirname(__DIR__, 2) . '/public/uploads',
     'max_upload_size'    => 10485760, // 10 MB
     'allowed_extensions' => [

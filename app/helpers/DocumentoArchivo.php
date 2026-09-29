@@ -3,8 +3,10 @@
  * Archivo durable de comprobantes fuera de la base de datos.
  *
  * Estructura: RAIZ/SISTEMA/EMPRESA/AAAA/MM MES/Facturas|Notas de crédito/ARCHIVO.ext
- * Los archivos se copian primero como .partial, se valida SHA-256 y solo
- * entonces se renombran. Nunca sobrescribe un contenido diferente.
+ * RAIZ es la biblioteca de SharePoint, o la carpeta de ella donde vive Nexo
+ * Fiscal: desde el 27/09/2026 ya no se archiva en la carpeta compartida.
+ * Nunca sobrescribe un contenido diferente, y que nadie vea un archivo a
+ * medias es cosa del almacén (en disco, .partial y renombrar).
  *
  * Por qué la empresa antes del año: los documentos de dos empresas del grupo
  * no se mezclan ni en la base ni en el disco. Quien abre la carpeta compartida
@@ -80,48 +82,56 @@ class DocumentoArchivo
     /** Tope del nombre de la empresa como carpeta. */
     public const MAX_CARPETA_EMPRESA = 60;
 
-    /** Lo que se le dice a quien archiva en disco sin carpeta compartida. */
-    public const SIN_CARPETA = 'Esta empresa archiva sus XML y PDF en la carpeta compartida, y esta '
-        . 'computadora no la tiene configurada. Configúrala en Correo, o pasa la empresa a SharePoint '
-        . 'en Configuración → Empresas del grupo.';
-
     private $raiz;
     private $empresa = '';
     private $notaSistemaLista = false;
 
-    /** @var AlmacenDocumentos Dónde se archiva: el de la sociedad, ver paraSociedad(). */
+    /**
+     * @var AlmacenDocumentos|null Dónde se archiva: SharePoint, salvo que se
+     *      haya pedido una carpeta de disco a propósito. null si esta
+     *      computadora no tiene SharePoint: se dice al escribir, no antes.
+     */
     private $almacen;
 
+    /**
+     * @param string $raiz Una carpeta de disco, solo a propósito: las pruebas
+     *        de la mecánica del archivo y las herramientas que todavía ordenan
+     *        la carpeta compartida de antes. Vacío —lo normal— es SharePoint,
+     *        que es donde se archiva todo lo nuevo.
+     */
     public function __construct($raiz = '', $empresa = '')
     {
         $this->empresa = self::carpetaEmpresa($empresa);
         $raiz = trim((string) $raiz);
+
         if ($raiz === '') {
-            // La de RutaDocumento, que es la configurada salvo que alguien la
-            // haya fijado a propósito —una prueba, una migración—: así nada
-            // que archive sin raíz explícita puede escribir en la carpeta
-            // real mientras se prueba otra cosa.
-            $raiz = RutaDocumento::raiz();
+            // Sin SharePoint en esta computadora el objeto se construye igual
+            // —hay pantallas que lo arman solo para preguntar—; lo que no se
+            // puede es escribir, y eso lo frena exigirCarpeta() con un motivo
+            // que dice qué hacer.
+            if (AlmacenDocumentos::hayPrincipal()) {
+                $this->almacen = AlmacenDocumentos::principal();
+                $this->raiz = rtrim((string) $this->almacen->direccion(''), '/\\');
+            } else {
+                $this->almacen = null;
+                $this->raiz = '';
+            }
+            return;
         }
 
         $this->raiz = rtrim($raiz, '/\\');
         $this->almacen = AlmacenDocumentos::actual();
-
-        // Sin carpeta compartida se puede seguir: una PC que solo trabaja
-        // empresas en SharePoint no la necesita —los XML y PDF van a la
-        // biblioteca y lo demás se queda en esta máquina—. Lo que no se puede
-        // es archivar en disco sin ella, y eso lo frena exigirCarpeta() en el
-        // momento de escribir, no acá: el archivo que se construye todavía no
-        // sabe de qué empresa va a ser el documento.
-        if ($this->raiz === '') {
-            return;
-        }
         $this->asegurarDirectorio($this->raiz);
         if (!$this->almacen->permiteEscritura($this->raiz)) {
             throw new RuntimeException('La carpeta raíz no permite escritura: ' . $this->raiz);
         }
     }
 
+    /**
+     * La carpeta compartida que esta computadora tenía configurada antes de
+     * SharePoint (storage/correo/config.json), o '' si nunca la tuvo. Ya no se
+     * configura: sirve para abrir y migrar lo que quedó ahí.
+     */
     public static function raizConfigurada()
     {
         $archivo = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'storage'
@@ -158,14 +168,14 @@ class DocumentoArchivo
      * El mismo archivo, para una sociedad: su carpeta Y su almacén.
      *
      * Es por donde pasan todas las escrituras de documentos —la importación,
-     * la reposición—, así que es el único lugar donde hace falta decidir
-     * dónde se archiva. Si la sociedad está en otro almacén, la raíz pasa a
-     * ser la de ese almacén: en SharePoint no hay raíz de esta máquina, las
-     * rutas son relativas a la biblioteca.
+     * la reposición—. El almacén es SharePoint para todas (ver
+     * AlmacenDocumentos::para()): si este objeto se armó sobre otro, la raíz
+     * pasa a ser la de la biblioteca, porque en SharePoint no hay raíz de
+     * esta máquina.
      *
-     * Si esta PC no puede usar el almacén de la sociedad, lanza. Archivar en
-     * disco lo que el resto de las PC busca en SharePoint es perder el
-     * documento sin que nadie se entere.
+     * Si esta PC no tiene SharePoint, lanza. Archivar en disco lo que el
+     * resto de las PC busca en SharePoint es perder el documento sin que
+     * nadie se entere.
      */
     public function paraSociedad($sociedadId, $empresa)
     {
@@ -305,21 +315,28 @@ class DocumentoArchivo
         // El XML ya archivado vive en el almacén: se le pregunta a él.
         $rutaXml = trim((string) ($registro['ruta_xml'] ?? ''));
         $archivo = $this;
-        if ($rutaXml !== '' && RutaDocumento::existe($rutaXml)) {
+        $xmlEnDisco = $rutaXml !== '' && AlmacenDocumentos::de($rutaXml) instanceof AlmacenEnDisco
+            && !$this->almacen instanceof AlmacenEnDisco;
+        if ($rutaXml !== '' && !$xmlEnDisco && RutaDocumento::existe($rutaXml)) {
             $carpeta = dirname($rutaXml);
             $base = pathinfo($rutaXml, PATHINFO_FILENAME);
-            // El PDF va al lado de su XML y en su MISMO almacén, aunque la
-            // empresa se haya pasado a otro desde entonces: la fila dice en
-            // un solo lugar dónde vive el par, y un par partido en dos
-            // almacenes tendría la mitad perdida.
+            // El PDF va al lado de su XML y en su MISMO almacén: la fila dice
+            // en un solo lugar dónde vive el par.
             $archivo = clone $this;
             $archivo->almacen = AlmacenDocumentos::de($rutaXml);
         } else {
+            // Un XML que quedó en la carpeta compartida de antes no arrastra
+            // a su PDF hasta ahí: ahí ya no se archiva nada. El PDF va a
+            // SharePoint, a su carpeta de siempre y con el nombre del XML
+            // para que el par se reconozca; su ruta lleva el prefijo, así que
+            // se abre igual. Cuando se migre el XML, quedan juntos.
             $carpeta = $this->carpetaDocumento(
                 (string) ($registro['fecha_emision'] ?? ''),
                 (string) ($registro['tipo_documento'] ?? 'FE')
             );
-            $base = self::nombreBase($registro, (string) ($registro['proveedor_nombre'] ?? 'PROVEEDOR'));
+            $base = $xmlEnDisco
+                ? pathinfo(str_replace('\\', '/', $rutaXml), PATHINFO_FILENAME)
+                : self::nombreBase($registro, (string) ($registro['proveedor_nombre'] ?? 'PROVEEDOR'));
         }
         $archivo->asegurarDirectorio($carpeta);
         $pdf = $archivo->copiarValidado($pdfOrigen, $carpeta, $base, 'pdf');
@@ -597,7 +614,7 @@ class DocumentoArchivo
      */
     public function carpetasPago()
     {
-        if (!$this->almacen->recorreElArbolBarato()
+        if ($this->almacen === null || !$this->almacen->recorreElArbolBarato()
             || ($this->raiz === '' && $this->almacen instanceof AlmacenEnDisco)) {
             return [];
         }
@@ -746,40 +763,17 @@ class DocumentoArchivo
     }
 
     /**
-     * ¿Hay dónde escribir? En SharePoint siempre: la biblioteca es la raíz.
-     * En disco hace falta la carpeta compartida de esta máquina, y sin ella
-     * se para con un motivo que dice qué hacer, en vez de dejar que una ruta
-     * relativa termine escrita quién sabe dónde.
+     * ¿Hay dónde escribir? Sin SharePoint en esta computadora, no: se para
+     * con un motivo que dice qué hacer. Y una carpeta de disco sin raíz
+     * tampoco, para que una ruta relativa no termine escrita quién sabe dónde.
      */
     private function exigirCarpeta()
     {
-        if ($this->raiz === '' && $this->almacen instanceof AlmacenEnDisco) {
-            throw new RuntimeException(self::SIN_CARPETA);
+        if ($this->almacen === null) {
+            throw new RuntimeException(AlmacenDocumentos::SIN_SHAREPOINT);
         }
-    }
-
-    /**
-     * ¿Esta máquina necesita la carpeta compartida?
-     *
-     * Solo si alguna empresa —o la indicada— archiva en disco. Con todas en
-     * SharePoint, los XML y PDF viven en la biblioteca y lo demás en esta
-     * máquina: la carpeta sincronizada sobra. Si la base no contesta, sí: es
-     * lo que se hizo siempre, y equivocarse para este lado solo pide un
-     * ajuste de más.
-     */
-    public static function necesitaCarpetaCompartida($sociedadId = null)
-    {
-        try {
-            if ($sociedadId !== null && (int) $sociedadId > 0) {
-                return AlmacenDocumentos::tipoDeSociedad((int) $sociedadId) === AlmacenDocumentos::DISCO;
-            }
-            if (!class_exists('Sociedad')) {
-                require_once dirname(__DIR__) . '/core/Model.php';
-                require_once dirname(__DIR__) . '/models/Sociedad.php';
-            }
-            return (new Sociedad())->hayEmpresasEnDisco();
-        } catch (Throwable $e) {
-            return true;
+        if ($this->raiz === '' && $this->almacen instanceof AlmacenEnDisco) {
+            throw new RuntimeException('No hay carpeta de disco donde escribir.');
         }
     }
 

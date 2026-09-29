@@ -21,6 +21,46 @@ class FacturaMatcher
     /** Umbral mínimo de similitud de proveedor para considerar candidato. */
     public const UMBRAL_PROVEEDOR = 60;
 
+    /**
+     * El total del comprobante en la moneda de la factura del sistema.
+     *
+     * El sistema anota en colones una factura que el proveedor emitió en
+     * dólares: el total del XML por su tipo de cambio. Compararlos sin
+     * convertir dejaba "con diferencia" cada factura en dólares por el monto
+     * entero —TRACTOMOTRIZ: US$927,68 contra ₡421.964,52, que es exactamente
+     * 927,68 × 454,86—.
+     *
+     * Sin convertir cuando el XML ya está en colones, cuando la factura del
+     * sistema está en la misma moneda extranjera, o cuando el XML no trae el
+     * tipo de cambio: ahí la diferencia sigue saliendo, que es lo honesto.
+     *
+     * @param array  $xml           Con total, moneda y tipo_cambio.
+     * @param string $monedaSistema La de la factura del sistema ('¢', '$ (').
+     */
+    public static function totalComparable(array $xml, $monedaSistema = '')
+    {
+        $total = (float) ($xml['total'] ?? 0);
+        $moneda = strtoupper(trim((string) ($xml['moneda'] ?? '')));
+        if ($moneda === '' || $moneda === 'CRC' || !self::sistemaEnColones($monedaSistema)) {
+            return $total;
+        }
+        $tipoCambio = (float) ($xml['tipo_cambio'] ?? 0);
+        return $tipoCambio > 0 ? round($total * $tipoCambio, 2) : $total;
+    }
+
+    /**
+     * ¿La factura del sistema está en colones?
+     *
+     * El reporte del ERP escribe la moneda como símbolo: '¢' en colones, '$ ('
+     * en dólares. Sin dato se supone colones, que es lo que es casi todo.
+     */
+    public static function sistemaEnColones($monedaSistema)
+    {
+        $m = strtoupper(trim((string) $monedaSistema));
+        return !($m !== '' && (strpos($m, '$') !== false || strpos($m, 'USD') !== false
+            || strpos($m, 'EUR') !== false || strpos($m, '€') !== false));
+    }
+
     /** El número identifica la factura: solo matches fuertes (núcleo exacto
      *  = 100, incrustado en consecutivo = 95). */
     public const UMBRAL_NUMERO = 90;

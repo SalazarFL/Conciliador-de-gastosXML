@@ -103,8 +103,7 @@
         <div class="error-code">500</div>
         <h1 class="error-title"><?= htmlspecialchars($title ?? 'Error Interno del Servidor') ?></h1>
         <p class="error-message">
-            Ocurrió un error inesperado al procesar tu solicitud. 
-            Nuestro equipo ha sido notificado y trabajará para solucionarlo.
+            Ocurrió un error inesperado. Ya quedó registrado.
         </p>
         
         <?php if (!empty($message)): ?>
@@ -118,7 +117,7 @@
         </a>
         
         <p class="help-text">
-            Si el problema persiste, por favor contacta al administrador del sistema.
+            Si sigue pasando, avisa al administrador.
         </p>
     </div>
 </body>

@@ -299,7 +299,60 @@ if (window.self !== window.top) {
 		});
 	}
 
+	/*
+	 * Elegir para un proveedor un código que ya es de otra cédula.
+	 *
+	 * Hay dos respuestas y ninguna es la obvia: a veces el código es de verdad
+	 * del proveedor nuevo y el dueño anterior estaba mal; otras veces los dos
+	 * facturan contra el mismo código (BANCO BAC y BAC LEASING) y lo que hace
+	 * falta es que acepte a los dos. La que no quita nada va marcada.
+	 *
+	 * Resuelve 'tambien', 'pasar' o false si se cancela.
+	 */
+	function codigoConDueno(datos) {
+		function esc(t) {
+			return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) {
+				return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+			});
+		}
+		var nuevo = esc(datos.nombre || datos.cedula);
+		var dueno = esc(datos.dueno || datos.cedulaDueno);
+		var contenido =
+			'<div class="dlg-codigo-dueno">' +
+				'<label class="dlg-opcion-radio">' +
+					'<input type="radio" name="modo_codigo" value="tambien" checked>' +
+					'<span><b>Que lo acepte también</b>' +
+					'<small>Sus facturas aceptan los comprobantes de los dos. ' + dueno +
+					' sigue siendo el dueño del código.</small></span>' +
+				'</label>' +
+				'<label class="dlg-opcion-radio">' +
+					'<input type="radio" name="modo_codigo" value="pasar">' +
+					'<span><b>Pasárselo a este proveedor</b>' +
+					'<small>Sus facturas aceptan los comprobantes de ' + nuevo +
+					' y dejan de aceptar los de ' + dueno + '.</small></span>' +
+				'</label>' +
+			'</div>';
+
+		return AppDialog.form({
+			title: 'Ese código ya tiene dueño',
+			type: 'warning',
+			message: 'El código ' + datos.codigo + ' hoy es de ' + (datos.dueno || datos.cedulaDueno)
+				+ ' (cédula ' + datos.cedulaDueno + '). ¿Qué hacemos con '
+				+ (datos.nombre || datos.cedula) + '?',
+			content: contenido,
+			confirmText: 'Guardar',
+			pendingText: 'Guardando…',
+			/* Un texto devuelto acá es un error que deja el cuadro abierto: la
+			 * elección viaja envuelta y se desenvuelve al resolver. */
+			onConfirm: function (cuerpo) {
+				var marcada = cuerpo.querySelector('input[name="modo_codigo"]:checked');
+				return marcada ? { modo: marcada.value } : 'Elegí una de las dos.';
+			}
+		}).then(function (r) { return r && r.modo ? r.modo : false; });
+	}
+
 	window.AppDialog = {
+		codigoConDueno: codigoConDueno,
 		alert: function (message, options) {
 			options = options || {};
 			return show(Object.assign({}, options, { message: String(message || ''), confirm: false }));
@@ -703,6 +756,49 @@ if (window.self !== window.top) {
 	});
 })();
 
+/* ══════════════════════════════════════════════════════════════════════
+   ENTER BUSCA, EN CUALQUIER CAMPO DE UNA BARRA DE FILTROS
+
+   El navegador solo envía el formulario con Enter desde una caja de texto.
+   Desde un desplegable (Sucursal, Estado), una casilla (Solo con saldo) o
+   una fecha no hacía nada, y desde el botón del proveedor volvía a abrir la
+   lista: se escribía el filtro, se pulsaba Enter y la pantalla se quedaba
+   igual, como si el filtro no funcionara.
+
+   Ahora, dentro de una barra de filtros, Enter es "Buscar" esté donde esté
+   el cursor. Va en captura para llegar antes que el selector de proveedor,
+   que con la lista cerrada usaba Enter para abrirla (Espacio la sigue
+   abriendo). Con la lista abierta no se toca: ahí Enter elige, y elegir ya
+   busca solo.
+
+   requestSubmit y no submit(): pasa por los listeners de envío, que es por
+   donde las pantallas que buscan sin recargar (Notas de crédito) hacen lo
+   suyo.
+   ══════════════════════════════════════════════════════════════════════ */
+(function () {
+	'use strict';
+
+	document.addEventListener('keydown', function (evento) {
+		if (evento.key !== 'Enter' || evento.isComposing || evento.defaultPrevented) return;
+		if (evento.shiftKey || evento.ctrlKey || evento.altKey || evento.metaKey) return;
+
+		var campo = evento.target;
+		var form = campo && campo.closest ? campo.closest('form.filter-bar') : null;
+		if (!form) return;
+
+		if (campo.closest('[data-prov-picker].is-abierto')) return;
+		if (campo.tagName === 'TEXTAREA' || campo.tagName === 'A') return;
+		// Los demás botones hacen lo suyo (Limpiar, Buscar); el del proveedor
+		// no es un botón de acción, es el campo.
+		if (campo.tagName === 'BUTTON' && !campo.matches('[data-prov-boton]')) return;
+
+		evento.preventDefault();
+		evento.stopPropagation();
+		if (typeof form.requestSubmit === 'function') form.requestSubmit();
+		else form.submit();
+	}, true);
+})();
+
 /* app.js se carga arriba del <body>, antes de que las vistas se pinten, para
  * que sus acciones puedan usar AppDialog. Cuando esto corre, la tarjeta
  * todavía no existe en el documento: por eso se busca al estar listo el DOM y
@@ -901,6 +997,70 @@ if (window.self !== window.top) {
 			window.AppDialog.alert(e.message, { title: 'No se pudo reponer' });
 		})
 		.finally(function () { enCurso = false; });
+	}, false);
+})();
+
+/* Subir a mano el PDF que el proveedor no adjuntó.
+ *
+ * Sale donde se ve que falta —el renglón del pago, el aviso de la carpeta
+ * del pago y la lista de comprobantes— con data-subir-pdf. Si el servidor
+ * no encuentra en el PDF la clave ni el consecutivo de la factura, pregunta
+ * antes de guardarlo: es la forma de no subir el PDF de otra. */
+(function () {
+	'use strict';
+
+	var enCurso = false;
+
+	function enviar(id, archivo, forzar) {
+		var datos = new FormData();
+		datos.append('pdf', archivo);
+		if (forzar) { datos.append('forzar', '1'); }
+		var base = document.body.dataset.base || '';
+		return fetch(base + '/documentos/pdf/' + encodeURIComponent(id) + '/subir', { method: 'POST', body: datos })
+			.then(function (r) { return r.json(); });
+	}
+
+	document.addEventListener('click', function (evento) {
+		var boton = evento.target.closest ? evento.target.closest('[data-subir-pdf]') : null;
+		if (!boton || enCurso) { return; }
+		evento.preventDefault();
+
+		var id = boton.dataset.subirPdf;
+		var selector = document.createElement('input');
+		selector.type = 'file';
+		selector.accept = 'application/pdf,.pdf';
+		selector.addEventListener('change', function () {
+			var archivo = selector.files && selector.files[0];
+			if (!archivo) { return; }
+			var antes = boton.innerHTML;
+			enCurso = true;
+			boton.disabled = true;
+			boton.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i>';
+
+			enviar(id, archivo, false)
+				.then(function (d) {
+					if (d.ok || !d.confirmar) { return d; }
+					return window.AppDialog.confirm(d.message + '\n\n¿Subirlo igual?', {
+						title: 'Revisá el PDF', confirmText: 'Sí, es de esta factura'
+					}).then(function (si) {
+						return si ? enviar(id, archivo, true) : { ok: false, cancelado: true };
+					});
+				})
+				.then(function (d) {
+					if (d.cancelado) { throw null; }
+					if (!d.ok) { throw new Error(d.message || 'No se pudo guardar el PDF.'); }
+					// Recargar: cambian el estado, el aviso de la carpeta y los contadores.
+					return window.AppDialog.alert(d.message, { title: 'PDF guardado' })
+						.then(function () { window.location.reload(); });
+				})
+				.catch(function (e) {
+					boton.disabled = false;
+					boton.innerHTML = antes;
+					if (e) { window.AppDialog.alert(e.message, { title: 'No se pudo subir el PDF' }); }
+				})
+				.finally(function () { enCurso = false; });
+		});
+		selector.click();
 	}, false);
 })();
 
@@ -1350,6 +1510,36 @@ document.addEventListener('DOMContentLoaded', function () {
 		});
 		html += '</div>';
 
+		/* Las facturas que la nota cita en su XML. null = el XML todavía no
+		 * se leyó, que no es lo mismo que no citar ninguna. La que ya está en
+		 * el sistema se abre acá mismo, en su propia ficha. */
+		if (f.tipo === 'NC') {
+			html += '<div class="ficha-referencias"><div class="ficha-et">Facturas de referencia</div>';
+			if (f.referencias === null || f.referencias === undefined) {
+				html += '<div class="ficha-ref-vacio">Todavía no se leyeron las referencias de este XML.</div>';
+			} else if (!f.referencias.length) {
+				html += '<div class="ficha-ref-vacio">El XML no cita ninguna factura.</div>';
+			} else {
+				f.referencias.forEach(function (r) {
+					var detalle = [r.fecha, r.tipo].filter(Boolean).join(' · ');
+					html += '<div class="ficha-ref">' +
+						'<div class="ficha-ref-texto">' +
+							'<div class="ficha-ref-numero" title="' + esc(r.consecutivo || r.numero) + '">' +
+								(r.numero ? esc(r.numero) : '<span class="ficha-vacio">sin número</span>') +
+							'</div>' +
+							(detalle ? '<div class="ficha-ref-detalle">' + esc(detalle) + '</div>' : '') +
+							(r.razon ? '<div class="ficha-ref-razon">' + esc(r.razon) + '</div>' : '') +
+						'</div>' +
+						(r.documento_id > 0
+							? '<button type="button" class="btn btn-outline btn-sm" data-ficha="' + Number(r.documento_id) + '">' +
+							  '<i class="fas fa-eye"></i> Ver</button>'
+							: '<span class="ficha-archivo-estado">no está en el sistema</span>') +
+					'</div>';
+				});
+			}
+			html += '</div>';
+		}
+
 		html += '<div class="ficha-archivos"><div class="ficha-et">Archivos</div>';
 		(f.archivos || []).forEach(function (archivo) {
 			html += '<div class="ficha-archivo' + (archivo.ok ? '' : ' es-ausente') + '">' +
@@ -1369,7 +1559,7 @@ document.addEventListener('DOMContentLoaded', function () {
 		if (f.estado && f.estado.perdido) {
 			html += '<div class="ficha-perdido">' +
 				'<i class="fas fa-link-slash"></i>' +
-				'<span>Se archivó y ya no está en la carpeta compartida.</span>' +
+				'<span>Se archivó y ya no está en el archivo de documentos.</span>' +
 				(f.estado.recuperable
 					? '<button type="button" class="btn btn-primary btn-sm" data-recuperar-doc="' + Number(f.id) + '">' +
 					  '<i class="fas fa-cloud-arrow-down"></i> Volver a bajarlo del correo</button>'
@@ -2233,12 +2423,55 @@ document.addEventListener('DOMContentLoaded', function () {
 		}
 	}
 
+	/* Con la elección se guarda cuándo se hizo, con hora: una columna que se
+	 * encienda de fábrica después (partials/columnas.php) es más nueva que
+	 * ella y se enseña; una de antes ya estaba en el panel cuando se eligió.
+	 * La hora hace falta porque una columna puede estrenarse el mismo día en
+	 * que alguien ya acomodó las suyas. */
+	function hoy() {
+		var d = new Date();
+		function dos(n) { return ('0' + n).slice(-2); }
+		return d.getFullYear() + '-' + dos(d.getMonth() + 1) + '-' + dos(d.getDate())
+			+ ' ' + dos(d.getHours()) + ':' + dos(d.getMinutes());
+	}
+
 	function guardar(listado, ids) {
-		try { localStorage.setItem(clave(listado), JSON.stringify(ids)); } catch (e) {}
+		try {
+			localStorage.setItem(clave(listado), JSON.stringify(ids));
+			localStorage.setItem(clave(listado) + ':fecha', hoy());
+		} catch (e) {}
 	}
 
 	function olvidar(listado) {
-		try { localStorage.removeItem(clave(listado)); } catch (e) {}
+		try {
+			localStorage.removeItem(clave(listado));
+			localStorage.removeItem(clave(listado) + ':fecha');
+		} catch (e) {}
+	}
+
+	/**
+	 * Las columnas que pasaron a venir de fábrica después de la elección
+	 * guardada, metidas en ella: cada una detrás de la que tiene antes en el
+	 * catálogo, que es donde estaba el dato cuando vivía dentro de otra celda.
+	 * Es la misma cuenta que hace el guion de la vista antes de pintar.
+	 */
+	function conNuevas(listado, elegidas) {
+		var cat = (window.columnasCatalogo || {})[listado];
+		if (!cat) { return elegidas; }
+		var fecha = '';
+		try { fecha = localStorage.getItem(clave(listado) + ':fecha') || ''; } catch (e) {}
+		var lista = elegidas.slice();
+		cat.orden.forEach(function (id, i) {
+			var desde = cat.nuevas[id];
+			if (!desde || desde <= fecha || lista.indexOf(id) >= 0) { return; }
+			var lugar = 0;
+			for (var j = i - 1; j >= 0; j--) {
+				var k = lista.indexOf(cat.orden[j]);
+				if (k >= 0) { lugar = k + 1; break; }
+			}
+			lista.splice(lugar, 0, id);
+		});
+		return lista;
 	}
 
 	/** Qué se está viendo ahora mismo: lo elegido, o lo de fábrica. */
@@ -2251,7 +2484,7 @@ document.addEventListener('DOMContentLoaded', function () {
 		 * nombrar una columna que ya no existe, y una que se inventó después
 		 * no puede quedar escondida para siempre por no estar en la lista
 		 * vieja —para eso el catálogo dice cuáles vienen de fábrica—. */
-		var vivas = elegidas.filter(function (id) { return todas.indexOf(id) >= 0; });
+		var vivas = conNuevas(listado, elegidas).filter(function (id) { return todas.indexOf(id) >= 0; });
 		return vivas.length ? vivas : porDefecto(tabla);
 	}
 

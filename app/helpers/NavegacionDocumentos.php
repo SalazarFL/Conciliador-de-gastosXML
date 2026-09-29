@@ -125,8 +125,9 @@ class NavegacionDocumentos
                 (string) $fila['proveedor_nombre'],
                 (string) ($fila['sucursal'] ?? ''),
                 (string) $fila['fecha_emision'],
-                // El saldo del pago, que es el que enseña el checklist.
-                (float) $fila['saldo_pago'],
+                // El monto de la factura y no el saldo: lo que se busca en el
+                // correo es el comprobante, y el comprobante trae el monto.
+                (float) $fila['monto'],
                 (string) $fila['estado'],
                 'facturas'
             );

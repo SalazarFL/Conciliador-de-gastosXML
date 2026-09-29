@@ -15,6 +15,7 @@
 
 require_once __DIR__ . '/../helpers/Diagnostico.php';
 require_once __DIR__ . '/../helpers/RespaldoBase.php';
+require_once __DIR__ . '/../helpers/TareaProgramada.php';
 
 class DiagnosticoController extends Controller
 {
@@ -34,8 +35,8 @@ class DiagnosticoController extends Controller
     // ── Respaldo de la base ────────────────────────────────────────
 
     /**
-     * Estado del último respaldo y qué hay hoy en la carpeta compartida
-     * (POST, JSON). La pantalla lo consulta cada pocos segundos mientras hay
+     * Estado del último respaldo y qué hay hoy en la carpeta de respaldos
+     * de esta computadora (POST, JSON). La pantalla lo consulta cada pocos segundos mientras hay
      * uno corriendo.
      */
     public function respaldoEstado()
@@ -48,7 +49,7 @@ class DiagnosticoController extends Controller
      * Lanza el respaldo (POST, JSON) y contesta al instante.
      *
      * No se hace aquí mismo: el volcado tarda de segundos a minutos según el
-     * tamaño y la carpeta de OneDrive, y una petición HTTP que dura eso se
+     * tamaño de la base, y una petición HTTP que dura eso se
      * come el max_execution_time y deja al usuario mirando una pestaña
      * congelada sin saber si funcionó. Se lanza `cli/respaldar_base.php` en
      * segundo plano —el mismo lanzador oculto que usa la sincronización de
@@ -63,7 +64,7 @@ class DiagnosticoController extends Controller
 
         $previo = RespaldoBase::leerEstado();
         if (is_array($previo) && ($previo['estado'] ?? '') === 'corriendo') {
-            $this->json(['ok' => true, 'yaCorriendo' => true] + $this->datosRespaldo());
+            $this->json(['ok' => true, 'yaCorriendo' => true] + RespaldoBase::panel());
         }
 
         // Lo que sí conviene comprobar antes de lanzar: un error aquí se ve en
@@ -84,7 +85,7 @@ class DiagnosticoController extends Controller
             if (!RutaDocumento::permiteEscritura($carpeta)) {
                 $this->json([
                     'ok' => false,
-                    'message' => 'No se puede escribir en la carpeta compartida: ' . $carpeta,
+                    'message' => 'No se puede escribir en la carpeta de respaldos: ' . $carpeta,
                 ], 422);
             }
         } catch (Throwable $e) {
@@ -277,10 +278,7 @@ $vbs = '{{VBS}}'
 $accion = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('//B //Nologo "' + $vbs + '"')
 $t = New-ScheduledTaskTrigger -Daily -At '{{HORA}}'
 
-# Correr como el usuario con sesion abierta (sin contrasena ni admin)
-$usuario = (Get-CimInstance Win32_ComputerSystem).UserName
-if (-not $usuario) { $usuario = "$env:USERDOMAIN\$env:USERNAME" }
-$principal = New-ScheduledTaskPrincipal -UserId $usuario -LogonType Interactive -RunLevel Limited
+{{PRINCIPAL}}
 
 # StartWhenAvailable: si la maquina estaba apagada a esa hora, corre al prender.
 $ajustes = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 2)
@@ -290,16 +288,16 @@ Write-Output 'OK'
 POWERSHELL;
 
         return str_replace(
-            ['{{TAREA}}', '{{VBS}}', '{{HORA}}'],
-            [RespaldoBase::TAREA, str_replace("'", "''", $vbs), $hora],
+            ['{{TAREA}}', '{{VBS}}', '{{HORA}}', '{{PRINCIPAL}}'],
+            [RespaldoBase::TAREA, str_replace("'", "''", $vbs), $hora, TareaProgramada::principalPowerShell()],
             $plantilla
         );
     }
 
     /**
      * El diagnóstico es para todo el mundo —de eso se trata, que quien tiene
-     * el problema lo pueda mandar—, pero generar un respaldo escribe en la
-     * carpeta compartida de la empresa. Eso sí es de administrador.
+     * el problema lo pueda mandar—, pero generar un respaldo vuelca la base
+     * entera a un archivo. Eso sí es de administrador.
      */
     private function soloAdminJson()
     {

@@ -2,23 +2,32 @@
 /**
  * Pasa los documentos de una empresa de la carpeta compartida a SharePoint.
  *
+ * Todo lo nuevo se archiva en SharePoint desde el 27/09/2026: esto es para lo
+ * que quedó de antes. Diagnóstico y Configuración → Archivo de documentos
+ * dicen cuántos quedan por empresa.
+ *
  *   php cli/migrar_documentos_a_graph.php --sociedad=N                 cómo va (lo mismo que --estado)
  *   php cli/migrar_documentos_a_graph.php --sociedad=N --todo          inventario, subir, verificar y reescribir
  *   php cli/migrar_documentos_a_graph.php --sociedad=N --inventario
  *   php cli/migrar_documentos_a_graph.php --sociedad=N --subir [--limite=500]
  *   php cli/migrar_documentos_a_graph.php --sociedad=N --verificar [--muestreo=20]
- *   php cli/migrar_documentos_a_graph.php --sociedad=N --reescribir    y, si no falta nada, corta la empresa
+ *   php cli/migrar_documentos_a_graph.php --sociedad=N --reescribir    y dice si ya no queda nada en disco
  *   php cli/migrar_documentos_a_graph.php --sociedad=N --reintentar    los fallidos vuelven a la fila
  *   php cli/migrar_documentos_a_graph.php --sociedad=N --revertir [--bajando]
  *
  * Con --dry-run cuenta lo que haría sin subir ni escribir nada.
  *
+ * La carpeta compartida de donde se leen es la que esta computadora tenía
+ * configurada. Si ya no la tiene —o para leer de otra copia—, se nombra con
+ * --carpeta=RUTA.
+ *
  * Cada paso se puede cortar (Ctrl+C, un corte de luz) y volver a correr: el
  * avance está en la tabla almacen_migracion, no en esta ventana. Tampoco
  * importa desde qué PC se retome, mientras tenga app/config/local.graph.php y
- * la carpeta compartida.
+ * acceso a la carpeta compartida de antes.
  *
- * Nunca borra nada del disco. Por eso --revertir es seguro.
+ * Nunca borra nada del disco. Por eso --revertir es seguro (y es un rescate:
+ * lo nuevo sigue yendo a SharePoint).
  *
  * Orden recomendado: la empresa más chica primero, de noche, y una semana
  * mirándola antes de pasar la siguiente. Antes de cortar conviene procesar su
@@ -43,12 +52,17 @@ $conValor = ['--sociedad=', '--limite=', '--muestreo='];
 
 $opciones = ['sociedad' => 0, 'limite' => 0, 'muestreo' => 0];
 $accion = '--estado';
+$carpeta = '';
 foreach (array_slice($argv, 1) as $arg) {
     if (in_array($arg, $acciones, true)) {
         $accion = $arg;
         continue;
     }
     if (in_array($arg, $banderas, true)) {
+        continue;
+    }
+    if (strpos($arg, '--carpeta=') === 0) {
+        $carpeta = trim(substr($arg, strlen('--carpeta=')));
         continue;
     }
     foreach ($conValor as $prefijo) {
@@ -58,7 +72,7 @@ foreach (array_slice($argv, 1) as $arg) {
         }
     }
     fwrite(STDERR, "Bandera desconocida: {$arg}\nVálidas: " . implode(' ', array_merge($acciones, $banderas))
-        . " --sociedad=N --limite=N --muestreo=N\n");
+        . " --sociedad=N --limite=N --muestreo=N --carpeta=RUTA\n");
     exit(2);
 }
 $dryRun = in_array('--dry-run', $argv, true);
@@ -72,8 +86,16 @@ if (!AlmacenDocumentos::disponible(AlmacenEnGraph::TIPO)) {
     fwrite(STDERR, "Esta computadora no tiene app/config/local.graph.php: no puede hablar con SharePoint.\n");
     exit(2);
 }
+if ($carpeta !== '') {
+    if (!is_dir($carpeta)) {
+        fwrite(STDERR, "No existe la carpeta {$carpeta}.\n");
+        exit(2);
+    }
+    RutaDocumento::fijarRaiz($carpeta);
+}
 if (RutaDocumento::raiz() === '') {
-    fwrite(STDERR, "Esta computadora no tiene configurada la carpeta compartida: no hay de dónde leer los documentos.\n");
+    fwrite(STDERR, "Esta computadora no tiene la carpeta compartida de antes: no hay de dónde leer los documentos.\n"
+        . "Nómbrala con --carpeta=RUTA.\n");
     exit(2);
 }
 

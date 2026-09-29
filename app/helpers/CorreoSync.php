@@ -165,6 +165,71 @@ class CorreoSync
     }
 
     /**
+     * Las carpetas del buzón que un lote miraría y que el índice todavía no
+     * leyó: [['carpeta' => nombre IMAP, 'nombre' => legible], …].
+     *
+     * Un lote se arma con lo que hay en el índice. Si falta una carpeta, sus
+     * correos no entran y nadie se entera; por eso Descargas no deja armarlo
+     * hasta que esto venga vacío. Una carpeta cuenta como leída cuando la
+     * sincronización la leyó entera (tiene su fila en correo_carpetas): se
+     * lee completa o no se toca, nunca a medias.
+     *
+     * Las que ningún lote mira —Spam, Enviados, Borradores, Papelera— no
+     * cuentan: no dejan nada fuera.
+     *
+     * Cuesta un viaje al servidor de correo (la lista de carpetas). Lanza si
+     * no se puede conectar: sin la lista no se puede afirmar que esté todo.
+     *
+     * @param array  $config Configuración de la cuenta (configCuenta).
+     * @param object $indice CorreoIndice ya puesto en esa cuenta.
+     */
+    public static function carpetasSinLeer(array $config, $indice)
+    {
+        require_once __DIR__ . '/../models/CorreoLote.php';
+
+        $fetcher = new MailFetcher($config);
+        try {
+            $fetcher->conectar();
+            $enElServidor = $fetcher->carpetasABuscar();
+        } finally {
+            $fetcher->cerrar();
+        }
+
+        $leidas = $indice->getCarpetas();
+        // Una carpeta leída con otra retención se va a volver a leer entera
+        // en la próxima vuelta (ver ejecutar()): hasta entonces le faltan los
+        // correos que la retención nueva sí guarda.
+        $retencion = max(0, (int) ($config['indice_retencion_dias'] ?? 0));
+        $faltan = [];
+        foreach ($enElServidor as $carpeta) {
+            $nombre = $fetcher->nombreLegibleCarpeta($carpeta);
+            // La misma regla que CorreoLote aplica al armar el lote, sobre el
+            // nombre crudo y sobre el legible.
+            $fuera = '/' . CorreoLote::CARPETAS_FUERA_DEL_LOTE . '/u';
+            if (preg_match($fuera, mb_strtolower((string) $carpeta, 'UTF-8'))
+                || preg_match($fuera, mb_strtolower($nombre, 'UTF-8'))) {
+                continue;
+            }
+            $leida = $leidas[(string) $carpeta] ?? null;
+            if ($leida === null || (int) ($leida['retencion_dias'] ?? 0) !== $retencion) {
+                $faltan[] = ['carpeta' => (string) $carpeta, 'nombre' => $nombre];
+            }
+        }
+        return $faltan;
+    }
+
+    /**
+     * Desde qué fecha guarda correos el índice de este buzón ('Y-m-d'), o ''
+     * si los guarda todos. Lo anterior no está en el índice, así que un lote
+     * que empiece antes saldría sin esos correos. Mismo corte que ejecutar().
+     */
+    public static function inicioDelIndice(array $config)
+    {
+        $dias = max(0, (int) ($config['indice_retencion_dias'] ?? 0));
+        return $dias > 0 ? date('Y-m-d', strtotime('-' . $dias . ' days', strtotime(date('Y-m-d')))) : '';
+    }
+
+    /**
      * @param MailFetcher|null $fetcherCompartido Conexión IMAP a reutilizar
      *        entre tandas (la usa el CLI para no pagar el saludo TLS cada
      *        12 s). Si se pasa, el que llama es responsable de cerrarla.

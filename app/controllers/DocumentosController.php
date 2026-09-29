@@ -1,6 +1,8 @@
 <?php
 require_once __DIR__ . '/../helpers/RecuperadorDocumentos.php';
 require_once __DIR__ . '/../helpers/FichaDocumento.php';
+require_once __DIR__ . '/../helpers/DocumentoArchivo.php';
+require_once __DIR__ . '/../helpers/NumeroFactura.php';
 
 class DocumentosController extends Controller
 {
@@ -36,7 +38,20 @@ class DocumentosController extends Controller
             $this->json(['ok' => false, 'message' => 'Este documento ya no está en el sistema.'], 404);
         }
 
-        $this->json(['ok' => true, 'ficha' => FichaDocumento::de($fila, $this->url(''))]);
+        // La nota de crédito enseña las facturas que cita su XML. Si leerlas
+        // falla, la ficha sale igual: son un dato más, no el documento.
+        $referencias = [];
+        if (strtoupper(trim((string) ($fila['tipo_documento'] ?? ''))) === 'NC') {
+            try {
+                require_once __DIR__ . '/../models/FacturaXmlDetalle.php';
+                $referencias = $this->loadModel('FacturaXmlDetalle')->referenciasConDocumento($id);
+            } catch (Throwable $e) {
+                $this->registrarFallo('Referencias de la nota ' . $id, $e);
+                $referencias = null;
+            }
+        }
+
+        $this->json(['ok' => true, 'ficha' => FichaDocumento::de($fila, $this->url(''), $referencias)]);
     }
 
     /**
@@ -87,6 +102,120 @@ class DocumentosController extends Controller
             'message' => $this->resumenEnPalabras($resumen),
             'resumen' => $resumen,
         ]);
+    }
+
+    /**
+     * Sube a mano el PDF de un comprobante que no lo tiene (POST, JSON).
+     *
+     * Para el proveedor que no lo adjunta —lo manda como enlace, o por
+     * WhatsApp—: el correo trae solo el XML y el PDF nunca entra. Se archiva al
+     * lado de su XML, con su mismo nombre, y si la factura está en un pago se
+     * copia en el acto a la carpeta del pago.
+     *
+     * No reemplaza un PDF que ya está: eso no es completar un respaldo, es
+     * cambiarlo, y no se hace desde un botón.
+     */
+    public function subirPdf($id)
+    {
+        if (!$this->isPost()) {
+            $this->json(['ok' => false, 'message' => 'Método no permitido.'], 405);
+        }
+        require_once __DIR__ . '/../helpers/PdfDeFactura.php';
+        require_once __DIR__ . '/../helpers/PdfTextoExtractor.php';
+
+        $id = (int) $id;
+        $archivo = $_FILES['pdf'] ?? null;
+        if (!is_array($archivo) || ($archivo['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK
+            || !is_uploaded_file((string) $archivo['tmp_name'])) {
+            $this->json(['ok' => false, 'message' => 'No llegó ningún archivo. Elegí el PDF otra vez.'], 422);
+        }
+        $config = require __DIR__ . '/../config/config.php';
+        if ((int) $archivo['size'] > (int) ($config['max_upload_size'] ?? 10485760)) {
+            $this->json(['ok' => false, 'message' => 'El PDF pesa más de lo permitido.'], 422);
+        }
+        $tmp = (string) $archivo['tmp_name'];
+        if (!PdfDeFactura::esPdf($tmp)) {
+            $this->json(['ok' => false, 'message' => 'Ese archivo no es un PDF.'], 422);
+        }
+
+        $facturas = $this->loadModel('Factura');
+        $fila = $facturas->getOneWithProvider($id);
+        if (!$fila) {
+            $this->json(['ok' => false, 'message' => 'Este documento ya no está en el sistema.'], 404);
+        }
+        if (trim((string) ($fila['ruta_xml'] ?? '')) === '') {
+            $this->json(['ok' => false, 'message' => 'Este documento no tiene XML: primero hay que cargar el XML.'], 422);
+        }
+        $rutaPdf = trim((string) ($fila['ruta_pdf'] ?? ''));
+        if ($rutaPdf !== '' && RutaDocumento::existe($rutaPdf)) {
+            $this->json(['ok' => false, 'message' => 'Este documento ya tiene su PDF. No se reemplaza desde aquí.'], 422);
+        }
+
+        // ¿Es de esta factura? Ver PdfDeFactura.
+        $aviso = '';
+        try {
+            $corresponde = PdfDeFactura::corresponde(PdfTextoExtractor::extraer($tmp), $fila);
+        } catch (Throwable $e) {
+            $corresponde = null;
+        }
+        if ($corresponde === false && (string) $this->post('forzar', '') !== '1') {
+            $this->json([
+                'ok' => false,
+                'confirmar' => true,
+                'message' => 'Este PDF no menciona la clave ni el consecutivo de la factura '
+                    . NumeroFactura::xmlOchoDigitos((string) ($fila['numero_factura_asistente'] ?? ''))
+                    . ' de ' . trim((string) ($fila['proveedor_nombre'] ?? '')) . '. Puede ser el PDF de otra factura.',
+            ], 409);
+        }
+        if ($corresponde === null) {
+            $aviso = ' No se pudo leer el texto del PDF para comprobar que sea de esta factura: revisalo a la vista.';
+        }
+
+        $creados = [];
+        try {
+            $sociedadId = (int) ($fila['sociedad_id'] ?? 0);
+            $sociedad = $sociedadId > 0 ? $this->loadModel('Sociedad')->findById($sociedadId) : null;
+            $documentos = (new DocumentoArchivo())->paraSociedad(
+                $sociedadId,
+                is_array($sociedad) && $sociedad['nombre'] !== '' ? $sociedad['nombre'] : DocumentoArchivo::EMPRESA_SIN_DEFINIR
+            );
+            $creados = $documentos->archivarPdfPara($fila, $tmp);
+            $facturas->actualizarArchivos($id, $creados);
+        } catch (Throwable $e) {
+            DocumentoArchivo::eliminarCreados($creados);
+            $this->registrarFallo('Subir el PDF del documento ' . $id, $e);
+            $this->json(['ok' => false, 'message' => 'No se pudo guardar el PDF: ' . $e->getMessage()], 500);
+        }
+
+        $this->json([
+            'ok' => true,
+            'message' => 'PDF guardado junto a su XML.' . $this->copiarAlPago($facturas, $id) . $aviso,
+        ]);
+    }
+
+    /**
+     * Si el documento está en un pago, su par completo va ya a la carpeta del
+     * pago: esperar a la tarea programada deja la carpeta incompleta unos
+     * minutos, justo cuando alguien la está por mandar. Si falla, la tarea lo
+     * repone igual; solo se avisa.
+     */
+    private function copiarAlPago($facturas, $id)
+    {
+        try {
+            $filas = $facturas->getParaOrganizarArchivos([$id], AlmacenDocumentos::SHAREPOINT);
+            $fila = $filas[0] ?? null;
+            $carpeta = trim((string) ($fila['carpeta_pago'] ?? ''));
+            if (!$fila || empty($fila['en_pago']) || $carpeta === '') {
+                return '';
+            }
+            DocumentoArchivo::sobreAlmacen(AlmacenDocumentos::principal())->copiarAPago(
+                (string) $fila['ruta_xml'], (string) $fila['ruta_pdf'], $fila, $carpeta,
+                (string) ($fila['proveedor_nombre'] ?? 'PROVEEDOR')
+            );
+            return ' También quedó en la carpeta del pago (PAGOS / ' . $carpeta . ').';
+        } catch (Throwable $e) {
+            return ' La copia a la carpeta del pago la hace la tarea programada en unos minutos.';
+        }
     }
 
     private function resumenEnPalabras(array $resumen)

@@ -3,6 +3,7 @@ require_once __DIR__ . '/../app/core/Model.php';
 require_once __DIR__ . '/../app/core/Controller.php';
 require_once __DIR__ . '/../app/helpers/XmlParser.php';
 require_once __DIR__ . '/../app/controllers/CorreoController.php';
+require_once __DIR__ . '/soporte/ArchivoDePrueba.php';
 
 function assertCorreoPdf($condition, $message)
 {
@@ -47,6 +48,8 @@ file_put_contents($pdfInterpretacion, 'interpretacion');
 file_put_contents($pdfPrincipal, 'factura-principal');
 
 $bandeja = new CorreoBandejaPdfFalsa();
+// La bandeja va a algún lado: a una carpeta de prueba, no a la de verdad.
+$raizPrueba = ArchivoDePrueba::enDisco('correo_pdf_duplicado');
 try {
     $ref = new ReflectionClass(CorreoController::class);
     $controller = $ref->newInstanceWithoutConstructor();
@@ -91,4 +94,5 @@ try {
             unlink($ruta);
         }
     }
+    ArchivoDePrueba::soltar($raizPrueba);
 }

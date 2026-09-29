@@ -51,6 +51,15 @@
  *                excepción, y el código que casi nunca corre es el que conviene
  *                tener simple. Ver subirPorPartes().
  *
+ *   Carpeta      Nexo Fiscal puede vivir en la biblioteca entera o en UNA
+ *                carpeta de una biblioteca que ya se usaba para otra cosa
+ *                ('carpeta' en local.graph.php). En el segundo caso todo se
+ *                dirige DESDE esa carpeta —/items/{id}:/SISTEMA/…:— y nunca
+ *                desde la raíz: el administrador puede darle a la aplicación
+ *                permiso solo sobre esa carpeta (Files.SelectedOperations.
+ *                Selected), y con ese permiso la raíz, la biblioteca y el
+ *                resto de las carpetas contestan que no. Ver carpeta().
+ *
  * Todo lo que habla con la red pasa por un TransporteGraph, así que las
  * pruebas lo ejercitan entero sin red y sin credenciales.
  */
@@ -89,8 +98,24 @@ class ClienteGraph
     private $archivoCircuito;
     private $archivoRegistro;
 
+    /** La carpeta de Nexo Fiscal dentro de la biblioteca ('' = la biblioteca entera). */
+    private $carpeta = '';
+
+    /** Su id, cuando ya se sabe. */
+    private $idCarpeta = '';
+
     /**
-     * @param array $config    tenant_id, client_id, client_secret, drive_id
+     * Cuánto se confía en el id de la carpeta averiguado por su ruta. El id de
+     * una carpeta no cambia nunca —ni aunque la renombren—; lo que puede
+     * cambiar es la configuración, y la clave de lo recordado lleva la ruta.
+     */
+    private const RECORDAR_CARPETA = 2592000;
+
+    /**
+     * @param array $config    tenant_id, client_id, client_secret, drive_id;
+     *                         y, si Nexo Fiscal vive en una carpeta de la
+     *                         biblioteca, carpeta (su ruta) y opcionalmente
+     *                         carpeta_id (su id, para no averiguarlo)
      * @param array $opciones  presupuesto (s), carpeta_estado (token y corte;
      *                         null = solo en memoria), registro (ruta o null),
      *                         reloj y dormir (para las pruebas: nadie espera
@@ -104,6 +129,11 @@ class ClienteGraph
             }
         }
         $this->config = $config;
+        $this->carpeta = self::normalizarCarpeta($config['carpeta'] ?? '');
+        $this->idCarpeta = $this->carpeta === '' ? '' : trim((string) ($config['carpeta_id'] ?? ''));
+        if (strpos($this->idCarpeta, 'PEGA-') === 0) {
+            $this->idCarpeta = '';
+        }
         $this->transporte = $transporte ?? new TransporteCurl();
         $this->presupuesto = (float) ($opciones['presupuesto'] ?? (PHP_SAPI === 'cli' ? 300 : 8));
         $this->reloj = $opciones['reloj'] ?? function () { return microtime(true); };
@@ -162,6 +192,49 @@ class ClienteGraph
         return (string) $this->config['drive_id'];
     }
 
+    /**
+     * La biblioteca como la reconoce la gente, para enseñarla en vez de su id:
+     * ['nombre' => 'Documentos compartidos', 'url' => 'https://…'].
+     *
+     * El nombre es el de la dirección (…sharepoint.com/Documentos compartidos),
+     * no el del menú lateral: la biblioteca de siempre se llama "Documentos"
+     * en el menú y "Documentos compartidos" en la dirección, y la segunda es
+     * la que se reconoce. Sin dirección, el nombre del menú.
+     *
+     * Se pregunta una vez y se recuerda un día: casi nunca cambia y la
+     * pantalla que lo enseña no tiene por qué esperar a la red cada vez. Si
+     * SharePoint no contesta, o la aplicación solo tiene permiso sobre una
+     * carpeta y no puede leer la biblioteca, devuelve nombre y url vacíos y
+     * quien pregunta enseña el id como antes. Nunca lanza.
+     */
+    public function bibliotecaVisible()
+    {
+        $vacia = ['nombre' => '', 'url' => ''];
+        $recordado = $this->recordado('biblioteca_visible', 86400);
+        if (is_array($recordado)) {
+            return $recordado + $vacia;
+        }
+        try {
+            $r = $this->pedir('GET', $this->unidad() . '?$select=name,webUrl',
+                ['presupuesto' => 4, 'aceptar' => [403, 404]]);
+        } catch (Throwable $e) {
+            // Sin red o con el circuito abierto: no se recuerda, se reintenta
+            // la próxima vez que se abra la pantalla.
+            return $vacia;
+        }
+        $biblioteca = $vacia;
+        if ($r['codigo'] === 200) {
+            $url = trim((string) ($r['json']['webUrl'] ?? ''));
+            $deLaDireccion = trim(rawurldecode(basename((string) parse_url($url, PHP_URL_PATH))));
+            $biblioteca = [
+                'nombre' => $deLaDireccion !== '' ? $deLaDireccion : trim((string) ($r['json']['name'] ?? '')),
+                'url' => preg_match('~^https://~i', $url) ? $url : '',
+            ];
+        }
+        $this->recordar('biblioteca_visible', $biblioteca);
+        return $biblioteca;
+    }
+
     /** La biblioteca, para las rutas de la API: /drives/{id}. */
     public function unidad()
     {
@@ -169,7 +242,119 @@ class ClienteGraph
     }
 
     /**
-     * Un documento por su ruta en la biblioteca: /drives/{id}/root:/a/b.xml:
+     * La carpeta de la biblioteca donde vive Nexo Fiscal, con '/' y sin
+     * barras en las puntas; '' si es la biblioteca entera.
+     *
+     * Las rutas que guarda la base son relativas a ESTA carpeta, no a la
+     * raíz de la biblioteca: 'sharepoint:SISTEMA/…' es lo mismo esté Nexo
+     * Fiscal en una biblioteca propia o en "Contabilidad/Nexo Fiscal" de la
+     * biblioteca de siempre. Por eso cambiarla con documentos ya archivados
+     * los deja fuera de alcance: se elige una vez, al instalar.
+     */
+    public function carpeta()
+    {
+        return $this->carpeta;
+    }
+
+    /**
+     * Desde dónde se dirige todo: la raíz de la biblioteca o la carpeta.
+     *
+     *   /drives/{id}/root           biblioteca entera
+     *   /drives/{id}/items/{carpeta} una carpeta
+     *
+     * Es a lo que se le pega '/children', '/delta' o nada, según qué se pida.
+     */
+    public function raizApi()
+    {
+        return $this->carpeta === ''
+            ? $this->unidad() . '/root'
+            : $this->unidad() . '/items/' . rawurlencode($this->idCarpeta());
+    }
+
+    /**
+     * El id de la carpeta de Nexo Fiscal.
+     *
+     * Si la configuración lo trae, ese: es lo que tiene quien dio el permiso
+     * sobre la carpeta, y no cuesta ninguna llamada. Si no, se averigua por
+     * su ruta UNA vez y se recuerda en storage/cache: el id de una carpeta no
+     * cambia aunque alguien la renombre o la mueva.
+     *
+     * @throws ErrorGraph Si la carpeta no está o la aplicación no la ve, con
+     *         qué hacer.
+     */
+    public function idCarpeta()
+    {
+        if ($this->carpeta === '') {
+            throw new LogicException('Nexo Fiscal usa la biblioteca entera: no hay carpeta.');
+        }
+        if ($this->idCarpeta !== '') {
+            return $this->idCarpeta;
+        }
+        $recordado = $this->recordado($this->claveCarpeta(), self::RECORDAR_CARPETA);
+        if (is_string($recordado) && $recordado !== '') {
+            return $this->idCarpeta = $recordado;
+        }
+
+        try {
+            $r = $this->pedir('GET', $this->unidad() . '/root:/' . $this->codificarRuta($this->carpeta) . ':?$select=id,folder',
+                ['aceptar' => [404]]);
+        } catch (ErrorGraph $e) {
+            if ($e->codigoHttp() !== 403) {
+                throw $e;
+            }
+            // Con permiso solo sobre la carpeta, SharePoint puede negarse a
+            // resolverla por su ruta. Con su id no hace falta resolver nada.
+            throw new ErrorGraph(403, $e->codigoGraph(), $e->detalle(),
+                'La aplicación no puede buscar la carpeta "' . $this->carpeta . '" por su ruta. Si el permiso se dio '
+                . 'solo sobre esa carpeta, pon su id en app/config/local.graph.php (\'carpeta_id\'): es el mismo '
+                . 'id que usó el administrador para dar el permiso.');
+        }
+        $id = (string) ($r['json']['id'] ?? '');
+        if ($r['codigo'] === 404 || $id === '' || !isset($r['json']['folder'])) {
+            throw new ErrorGraph(404, 'itemNotFound', '',
+                'No existe la carpeta "' . $this->carpeta . '" en la biblioteca, o no es una carpeta. Revisa '
+                . '\'carpeta\' en app/config/local.graph.php: es la ruta dentro de la biblioteca, sin el nombre '
+                . 'de la biblioteca (por ejemplo "Contabilidad/Nexo Fiscal").');
+        }
+        $this->recordar($this->claveCarpeta(), $id);
+
+        return $this->idCarpeta = $id;
+    }
+
+    /**
+     * La carpeta de Nexo Fiscal como la tiene SharePoint ahora: id, nombre y
+     * parentReference.
+     *
+     * Si el id era uno recordado —no el de la configuración— y SharePoint ya
+     * no lo conoce, alguien borró la carpeta y creó otra con el mismo nombre:
+     * se olvida, se vuelve a buscar por la ruta y se pregunta otra vez. Así lo
+     * recordado no deja a la instalación apuntando a una carpeta que no existe.
+     *
+     * @throws ErrorGraph Si no está, con el motivo.
+     */
+    public function verificarCarpeta()
+    {
+        $campos = '?$select=id,name,parentReference,webUrl,folder';
+        $r = $this->pedir('GET', $this->raizApi() . $campos, ['aceptar' => [404]]);
+        $configurado = trim((string) ($this->config['carpeta_id'] ?? '')) !== '';
+        if ($r['codigo'] === 404 && !$configurado) {
+            $this->recordar($this->claveCarpeta(), null);
+            $this->idCarpeta = '';
+            $r = $this->pedir('GET', $this->raizApi() . $campos, ['aceptar' => [404]]);
+        }
+        if ($r['codigo'] === 404) {
+            throw new ErrorGraph(404, 'itemNotFound', '',
+                'SharePoint ya no tiene la carpeta de Nexo Fiscal ("' . $this->carpeta . '"'
+                . ($configurado ? ', id ' . $this->idCarpeta : '') . '). Si la borraron, está en la papelera del sitio.');
+        }
+        return (array) $r['json'];
+    }
+
+    /**
+     * Un documento por su ruta, relativa a la carpeta de Nexo Fiscal:
+     *
+     *   /drives/{id}/root:/a/b.xml:              biblioteca entera
+     *   /drives/{id}/items/{carpeta}:/a/b.xml:   una carpeta
      *
      * Cada tramo se codifica por separado —los nombres traen espacios, eñes y
      * acentos— y se aceptan las dos barras, porque las rutas salen de Windows.
@@ -177,11 +362,68 @@ class ClienteGraph
      */
     public function rutaItem($ruta)
     {
-        $tramos = array_filter(explode('/', str_replace('\\', '/', (string) $ruta)), 'strlen');
-        if (!$tramos) {
-            return $this->unidad() . '/root';
+        $codificada = $this->codificarRuta($ruta);
+        if ($codificada === '') {
+            return $this->raizApi();
         }
-        return $this->unidad() . '/root:/' . implode('/', array_map('rawurlencode', $tramos)) . ':';
+        return $this->raizApi() . ':/' . $codificada . ':';
+    }
+
+    /**
+     * Una ruta como la da SharePoint —relativa a la RAÍZ de la biblioteca,
+     * p. ej. la de parentReference.path— pasada a relativa a la carpeta de
+     * Nexo Fiscal. null si queda fuera de la carpeta.
+     *
+     * @param string|null $rutaDeLaCarpeta La ruta actual de la carpeta, si
+     *        se la pidió a SharePoint: vale más que la de la configuración,
+     *        porque alguien pudo renombrarla. null = la de la configuración.
+     */
+    public function relativaALaCarpeta($rutaDesdeLaRaiz, $rutaDeLaCarpeta = null)
+    {
+        $ruta = trim(str_replace('\\', '/', (string) $rutaDesdeLaRaiz), '/');
+        $base = $rutaDeLaCarpeta === null ? $this->carpeta : self::normalizarCarpeta($rutaDeLaCarpeta);
+        if ($base === '') {
+            return $ruta;
+        }
+        // SharePoint no distingue mayúsculas en los nombres.
+        $largo = mb_strlen($base, 'UTF-8');
+        if (mb_strtolower($ruta, 'UTF-8') === mb_strtolower($base, 'UTF-8')) {
+            return '';
+        }
+        if (mb_strtolower(mb_substr($ruta, 0, $largo + 1, 'UTF-8'), 'UTF-8') !== mb_strtolower($base . '/', 'UTF-8')) {
+            return null;
+        }
+        return mb_substr($ruta, $largo + 1, null, 'UTF-8');
+    }
+
+    /**
+     * El alcance de este cliente: la biblioteca y, si la hay, la carpeta. Es
+     * la llave de lo que solo vale para ese alcance —el enlace de cambios—.
+     */
+    public function alcance()
+    {
+        return $this->carpeta === '' ? $this->driveId() : $this->driveId() . '#' . $this->carpeta;
+    }
+
+    /** Dónde se recuerda el id de la carpeta: uno por ruta, así cambiarla en la configuración no reusa el de otra. */
+    private function claveCarpeta()
+    {
+        return 'carpeta_' . substr(md5(mb_strtolower($this->carpeta, 'UTF-8')), 0, 12);
+    }
+
+    private function codificarRuta($ruta)
+    {
+        $tramos = array_filter(explode('/', str_replace('\\', '/', (string) $ruta)), 'strlen');
+        return implode('/', array_map('rawurlencode', $tramos));
+    }
+
+    private static function normalizarCarpeta($carpeta)
+    {
+        $carpeta = trim((string) $carpeta);
+        if (strpos($carpeta, 'PEGA-') === 0) {
+            return '';
+        }
+        return implode('/', array_filter(array_map('trim', explode('/', str_replace('\\', '/', $carpeta))), 'strlen'));
     }
 
     // ── Pedir ─────────────────────────────────────────────────────────────

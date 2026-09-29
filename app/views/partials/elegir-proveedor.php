@@ -37,11 +37,10 @@ $elegirCfg = array_merge([
         <h2 class="elegir-prov-titulo">¿De qué proveedor?</h2>
         <p class="elegir-prov-detalle">
             <?php if ($elegirCfg['cuantos'] !== null && (int) $elegirCfg['cuantos'] > 0): ?>
-            Aquí hay <strong><?= number_format((int) $elegirCfg['cuantos']) ?></strong>
+            <strong><?= number_format((int) $elegirCfg['cuantos']) ?></strong>
             <?= htmlspecialchars((string) $elegirCfg['que']) ?>.
             <?php endif; ?>
-            Elegí uno y se traen solo los suyos. La elección se recuerda: la próxima
-            vez esta pantalla se abre directo, hasta que pulses <em>Limpiar</em>.
+            Elegí uno y se traen solo los suyos. Se recuerda hasta que pulses <em>Limpiar</em>.
         </p>
     </div>
 

@@ -2,13 +2,19 @@
 /**
  * Prueba de vida de SharePoint por Microsoft Graph.
  *
- * Uso: php cli/probar_sharepoint.php [--conservar] [--grande] [--almacen] [--grabar]
+ * Uso: php cli/probar_sharepoint.php [--conservar] [--grande] [--almacen] [--grabar] [--carpeta=RUTA]
  *      php cli/probar_sharepoint.php --bibliotecas=https://<empresa>.sharepoint.com/sites/<sitio>
  *
  *   --bibliotecas=URL  solo lista las bibliotecas de ese sitio con su id
  *                —el drive_id que va en local.graph.php—. Sirve antes de
  *                tener el drive_id: basta con tenant, aplicación y secreto.
  *                Con Sites.Selected, el sitio tiene que estar autorizado.
+ *                Con permiso solo sobre una carpeta no sirve: el drive_id y
+ *                el id de la carpeta los da el administrador (docs/SHAREPOINT.md).
+ *
+ *   --carpeta=RUTA  prueba contra esa carpeta de la biblioteca en vez de la
+ *                de local.graph.php, sin tocar el archivo. Para ensayar el
+ *                paso a una carpeta antes de hacerlo.
  *
  *   --conservar  no borra lo que sube, para mirarlo en SharePoint.
  *   --grande     además sube un archivo de 5 MiB, que va por sesión de
@@ -52,9 +58,13 @@ $probarAlmacen = in_array('--almacen', $argv, true);
 // ── Configuración ─────────────────────────────────────────────────────────
 
 $sitio = '';
+$otraCarpeta = null;
 foreach ($argv as $arg) {
     if (strpos($arg, '--bibliotecas=') === 0) {
         $sitio = trim(substr($arg, strlen('--bibliotecas=')));
+    }
+    if (strpos($arg, '--carpeta=') === 0) {
+        $otraCarpeta = trim(substr($arg, strlen('--carpeta=')));
     }
 }
 
@@ -108,6 +118,11 @@ if ($cfg === null) {
     exit(1);
 }
 
+if ($otraCarpeta !== null) {
+    $cfg['carpeta'] = $otraCarpeta;
+    unset($cfg['carpeta_id']);
+}
+
 $transporte = new TransporteCurl();
 if ($grabar) {
     $transporte = new TransporteQueGraba($transporte);
@@ -150,15 +165,49 @@ echo str_repeat('-', 72), "\n";
 
 // ── 1. Token y biblioteca ─────────────────────────────────────────────────
 
-$anunciar('Pidiendo permiso a Entra ID y preguntando por la biblioteca');
-try {
-    $unidad = $graph->pedir('GET', $graph->unidad())['json'];
-} catch (Throwable $e) {
-    $morir('No se llegó a la biblioteca.', $e);
+if ($graph->carpeta() === '') {
+    $anunciar('Pidiendo permiso a Entra ID y preguntando por la biblioteca');
+    try {
+        $unidad = $graph->pedir('GET', $graph->unidad())['json'];
+    } catch (Throwable $e) {
+        $morir('No se llegó a la biblioteca.', $e);
+    }
+    $bien('Token recibido sin que nadie iniciara sesión (queda guardado en storage/cache).');
+    $bien('"' . ($unidad['name'] ?? '?') . '" · ' . ($unidad['driveType'] ?? '?')
+        . ' · ocupado ' . number_format(($unidad['quota']['used'] ?? 0) / 1048576, 1) . ' MB');
+    $bien('Nexo Fiscal usa la biblioteca entera.');
+} else {
+    // Con permiso solo sobre la carpeta, preguntar por la biblioteca da 403
+    // aunque todo esté bien: se pregunta por la carpeta.
+    $anunciar('Pidiendo permiso a Entra ID y preguntando por la carpeta "' . $graph->carpeta() . '"');
+    try {
+        $idCarpeta = $graph->idCarpeta();
+        $laCarpeta = $graph->pedir('GET', $graph->raizApi() . '?$select=id,name,webUrl,folder')['json'];
+    } catch (Throwable $e) {
+        $morir('No se llegó a la carpeta.', $e);
+    }
+    $bien('Token recibido sin que nadie iniciara sesión (queda guardado en storage/cache).');
+    $bien('Carpeta "' . ($laCarpeta['name'] ?? '?') . '" · id ' . $idCarpeta
+        . ' · ' . (int) ($laCarpeta['folder']['childCount'] ?? 0) . ' elemento(s) adentro');
+    $bien('Se ve en: ' . ($laCarpeta['webUrl'] ?? '?'));
+    try {
+        $graph->pedir('GET', $graph->unidad() . '?$select=id');
+        $aviso('La aplicación ve la biblioteca entera, no solo esta carpeta. Funciona igual; si se quiere '
+            . 'que vea solo la carpeta, el permiso tiene que ser Files.SelectedOperations.Selected sobre ella '
+            . '(docs/SHAREPOINT.md).');
+    } catch (ErrorGraph $e) {
+        $e->codigoHttp() === 403
+            ? $bien('La aplicación ve solo esta carpeta: la biblioteca le contesta 403, como debe ser.')
+            : $aviso('La biblioteca contestó ' . $e->codigoHttp() . ': ' . $e->getMessage());
+    }
+    try {
+        $graph->pedir('GET', $graph->raizApi() . '/delta?token=latest');
+        $bien('SharePoint da el enlace de cambios de la carpeta: los movimientos se ven en minutos.');
+    } catch (ErrorGraph $e) {
+        $aviso('SharePoint no da el enlace de cambios de la carpeta (' . $e->codigoHttp() . '). Funciona igual: '
+            . 'la tarea programada lo nota repasando los documentos por su id, algo más tarde.');
+    }
 }
-$bien('Token recibido sin que nadie iniciara sesión (queda guardado en storage/cache).');
-$bien('"' . ($unidad['name'] ?? '?') . '" · ' . ($unidad['driveType'] ?? '?')
-    . ' · ocupado ' . number_format(($unidad['quota']['used'] ?? 0) / 1048576, 1) . ' MB');
 
 // ── 2. Subir ──────────────────────────────────────────────────────────────
 
@@ -237,13 +286,13 @@ if ($grande) {
 
 // ── 6. Varias preguntas en una ────────────────────────────────────────────
 
-$anunciar('Preguntando por el documento y la biblioteca en un solo lote ($batch)');
+$anunciar('Preguntando por el documento y su carpeta en un solo lote ($batch)');
 try {
     $lote = $graph->lote([
         'documento' => ['url' => $graph->unidad() . '/items/' . rawurlencode($idItem)],
-        'biblioteca' => ['url' => $graph->unidad()],
+        'carpeta' => ['url' => $graph->rutaItem($carpeta)],
     ]);
-    if (($lote['documento']['codigo'] ?? 0) === 200 && ($lote['biblioteca']['codigo'] ?? 0) === 200) {
+    if (($lote['documento']['codigo'] ?? 0) === 200 && ($lote['carpeta']['codigo'] ?? 0) === 200) {
         $bien('Dos respuestas en una ida y vuelta. Así se verifica una migración en horas y no en días.');
     } else {
         $aviso('El lote volvió con ' . json_encode(array_map(function ($r) { return $r['codigo']; }, $lote)));

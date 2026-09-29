@@ -328,12 +328,12 @@ class InvoiceImportQueue
     }
 
     /**
-     * Carpeta de una importación, en _TRABAJO/IMPORTACIONES del almacén de su
-     * empresa y no en public/uploads/: una importación se procesa a lo largo
-     * de varias peticiones y quien la termine puede ser otra persona desde
-     * otra computadora. Se resuelve al usarla —y no en el constructor— para
-     * que consultar el historial de importaciones siga funcionando aunque la
-     * carpeta compartida todavía no esté configurada en esta máquina.
+     * Carpeta de una importación, en _TRABAJO/IMPORTACIONES de SharePoint y
+     * no en public/uploads/: una importación se procesa a lo largo de varias
+     * peticiones y quien la termine puede ser otra persona desde otra
+     * computadora. Se resuelve al usarla —y no en el constructor— para que
+     * consultar el historial de importaciones siga funcionando aunque esta
+     * máquina todavía no tenga SharePoint.
      */
     public function getImportacionDirectory($importacionId, $sociedadId = null)
     {

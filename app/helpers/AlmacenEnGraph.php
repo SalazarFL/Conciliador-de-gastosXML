@@ -345,16 +345,24 @@ class AlmacenEnGraph extends AlmacenDocumentos
     }
 
     /**
-     * Si la biblioteca contesta. El permiso de escritura no se prueba
-     * escribiendo —ensuciaría la biblioteca con archivos de prueba—: lo da la
-     * autorización de la aplicación sobre el sitio, y si falta, la primera
+     * Si se llega a donde vive Nexo Fiscal. El permiso de escritura no se
+     * prueba escribiendo —ensuciaría la biblioteca con archivos de prueba—:
+     * lo da la autorización de la aplicación, y si falta, la primera
      * escritura lo dice con un 403 claro.
+     *
+     * Se pregunta por la carpeta de Nexo Fiscal y no por la biblioteca: con
+     * permiso solo sobre la carpeta, la biblioteca contesta 403 aunque todo
+     * funcione.
      */
     public function permiteEscritura($ruta = '')
     {
         if ($this->alcanzable === null) {
             try {
-                $this->graph->pedir('GET', $this->graph->unidad() . '?$select=id');
+                if ($this->graph->carpeta() === '') {
+                    $this->graph->pedir('GET', $this->graph->raizApi() . '?$select=id');
+                } else {
+                    $this->graph->verificarCarpeta();
+                }
                 $this->alcanzable = true;
             } catch (Throwable $e) {
                 $this->ultimoError = $e->getMessage();
@@ -365,16 +373,48 @@ class AlmacenEnGraph extends AlmacenDocumentos
     }
 
     /**
-     * Comprueba de verdad que se llega a la biblioteca y devuelve su nombre.
-     * Es lo que se hace antes de pasar una empresa a SharePoint: el ajuste es
-     * de todas las PC, así que quien lo cambia tiene que ver que funciona.
+     * Comprueba de verdad que se llega y devuelve dónde, para decirlo en
+     * pantalla: el nombre de la biblioteca o la ruta de la carpeta.
      *
      * @throws ErrorGraph Con el motivo, dicho para quien lo va a leer.
      */
     public function probar()
     {
-        $r = $this->graph->pedir('GET', $this->graph->unidad() . '?$select=id,name,webUrl');
-        return (string) ($r['json']['name'] ?? '');
+        if ($this->graph->carpeta() === '') {
+            $r = $this->graph->pedir('GET', $this->graph->unidad() . '?$select=id,name,webUrl');
+            return 'biblioteca "' . (string) ($r['json']['name'] ?? '') . '"';
+        }
+        $actual = $this->rutaDeItem($this->graph->verificarCarpeta());
+
+        return 'carpeta "' . ($actual !== null ? $actual : $this->graph->carpeta()) . '"';
+    }
+
+    /**
+     * La ruta de la carpeta de Nexo Fiscal como la tiene HOY SharePoint, o
+     * null si no se pudo saber. Alguien pudo renombrarla o moverla: el id
+     * sigue sirviendo, pero la ruta de la configuración ya no.
+     */
+    public function rutaActualDeLaCarpeta()
+    {
+        if ($this->graph->carpeta() === '') {
+            return '';
+        }
+        try {
+            return $this->rutaDeItem($this->graph->verificarCarpeta());
+        } catch (Throwable $e) {
+            return null;
+        }
+    }
+
+    /** '/drives/{id}/root:/A/B' + nombre → 'A/B/nombre', desde la raíz de la biblioteca. */
+    private function rutaDeItem(array $item)
+    {
+        $padre = $item['parentReference']['path'] ?? null;
+        $nombre = (string) ($item['name'] ?? '');
+        if (!is_string($padre) || $nombre === '' || ($pos = strpos($padre, 'root:')) === false) {
+            return null;
+        }
+        return ltrim(trim(rawurldecode(substr($padre, $pos + 5)), '/') . '/' . $nombre, '/');
     }
 
     public function direccion($rutaRelativa)
@@ -446,6 +486,8 @@ class AlmacenEnGraph extends AlmacenDocumentos
         }
 
         $padre = $this->idCarpeta($this->padreDe($clave));
+        // Lo que se sabía de esa ruta —que no estaba— deja de ser cierto.
+        unset($this->conocidos[$clave]);
         try {
             $r = $this->graph->pedir('POST', $this->graph->unidad() . '/items/' . rawurlencode($padre) . '/children', [
                 'json' => ['name' => basename($clave), 'folder' => new stdClass(),
@@ -465,9 +507,13 @@ class AlmacenEnGraph extends AlmacenDocumentos
         }
     }
 
+    /** El id de donde vive Nexo Fiscal: la raíz de la biblioteca o su carpeta. */
     private function idRaiz()
     {
         if (!isset($this->carpetas[''])) {
+            if ($this->graph->carpeta() !== '') {
+                return $this->carpetas[''] = $this->graph->idCarpeta();
+            }
             $r = $this->graph->pedir('GET', $this->graph->unidad() . '/root?$select=id');
             $this->carpetas[''] = (string) $r['json']['id'];
         }
@@ -494,6 +540,14 @@ class AlmacenEnGraph extends AlmacenDocumentos
             if ($conHash && $e->codigoHttp() === 400) {
                 $this->saberColumnaHash(false);
                 return $this->pedirItem($rutaApi, false);
+            }
+            // Con permiso sobre una carpeta y no sobre la biblioteca, las
+            // columnas de la biblioteca pueden quedar fuera de alcance: 403.
+            // Si sin ellas contesta, era eso; si no, el 403 es del documento.
+            if ($conHash && $e->codigoHttp() === 403) {
+                $item = $this->pedirItem($rutaApi, false);
+                $this->saberColumnaHash(false);
+                return $item;
             }
             $this->ultimoError = $e->getMessage();
             throw $e;
@@ -551,7 +605,9 @@ class AlmacenEnGraph extends AlmacenDocumentos
                 $this->saberColumnaHash(true);
             }
         } catch (ErrorGraph $e) {
-            if ($e->codigoHttp() === 400) {
+            // 400: la biblioteca no tiene la columna. 403: la tiene, pero el
+            // permiso de la aplicación no alcanza a sus columnas.
+            if (in_array($e->codigoHttp(), [400, 403], true)) {
                 $this->saberColumnaHash(false);
                 return;
             }

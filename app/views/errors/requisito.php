@@ -118,9 +118,8 @@ $cuantos = count($requisitosQueFaltan);
         <h1 class="req-titulo"><?= htmlspecialchars($nombreModulo) ?> todavía no se puede usar</h1>
         <p class="req-texto">
             No es tu rol ni un error: al sistema le falta
-            <?= $cuantos === 1 ? 'un paso de configuración' : 'configuración inicial' ?>,
-            y sin <?= $cuantos === 1 ? 'él' : 'ella' ?> este módulo no tendría con qué
-            trabajar. Se hace una sola vez.
+            <?= $cuantos === 1 ? 'un paso de configuración' : 'configuración inicial' ?>.
+            Se hace una sola vez.
         </p>
 
         <?php $n = 0; foreach ($requisitosQueFaltan as $requisito): $n++;

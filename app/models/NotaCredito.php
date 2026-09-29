@@ -427,11 +427,16 @@ class NotaCredito extends Model
         // Índice de facturas por proveedor + los ocho dígitos con los que
         // cruza este módulo. Se guardan todas las candidatas: si dos facturas
         // del mismo proveedor comparten cola, la nota no se ata a ninguna.
+        //
+        // De paso, qué proveedores tienen alguna factura con saldo: es todo
+        // lo que hace falta saber de una nota de cambio, que vale para
+        // cualquiera de ellas.
         $porClave = [];
+        $proveedoresConSaldo = [];
         foreach ($this->fetchAll(
             "SELECT id, proveedor_codigo, documento, numero_corto, saldo
                FROM facturas_erp
-              WHERE sociedad_id = ? AND tipo IN ('F','FE','FACT')",
+              WHERE sociedad_id = ? AND tipo IN ('" . implode("','", AplicacionNotaCredito::TIPOS_FACTURA) . "')",
             [$sociedadId]
         ) ?: [] as $f) {
             $corto = (string) ($f['numero_corto'] ?? '');
@@ -439,6 +444,9 @@ class NotaCredito extends Model
                 $corto = substr(str_pad(preg_replace('/\D/', '', (string) $f['documento']), 8, '0', STR_PAD_LEFT), -8);
             }
             $porClave[$f['proveedor_codigo'] . '|' . $corto][] = $f;
+            if ((float) $f['saldo'] > AplicacionNotaCredito::EPSILON) {
+                $proveedoresConSaldo[(string) $f['proveedor_codigo']] = true;
+            }
         }
 
         $notas = $this->fetchAll(
@@ -474,7 +482,8 @@ class NotaCredito extends Model
                 $n['clase'],
                 $n['documento'],
                 $n['saldo'],
-                $factura
+                $factura,
+                isset($proveedoresConSaldo[(string) $n['proveedor_codigo']])
             );
             $resumen[$estado] = ($resumen[$estado] ?? 0) + 1;
 
@@ -510,10 +519,60 @@ class NotaCredito extends Model
     }
 
     /**
-     * Las notas vivas que corrigen estas facturas, para poder avisar antes de
-     * pagarlas. Devuelve factura_erp_id => [notas].
+     * Las notas aplicables de cada factura, como tabla derivada con
+     * (factura_erp_id, n, saldo): una fila por factura que tiene alguna.
+     *
+     * Son dos caminos que se suman. Las directas y las de costo ya quedaron
+     * atadas a su factura en recalcularAplicacion(), con el mínimo de las de
+     * costo aplicado ahí mismo. Las de cambio no tienen factura: valen para
+     * todas las del proveedor que todavía tienen saldo, así que se reparten
+     * aquí, en el momento, contra el saldo de hoy.
+     *
+     * Por eso el saldo de una nota de cambio aparece en cada factura de su
+     * proveedor: sirve para decir "esta factura tiene notas esperando", no
+     * para sumar entre facturas.
      */
-    public function notasVivasDeFacturas(array $facturaIds)
+    public static function sqlAplicablesPorFactura()
+    {
+        return "SELECT factura_erp_id, COUNT(*) AS n, SUM(saldo) AS saldo
+                  FROM (
+                        SELECT nl.factura_erp_id, nl.saldo
+                          FROM notas_credito_lineas nl
+                         WHERE nl.estado_aplicacion = 'aplicable'
+                           AND nl.factura_erp_id IS NOT NULL
+                        UNION ALL
+                        " . self::sqlCambioPorFactura('fa.id AS factura_erp_id, nl.saldo') . "
+                       ) na
+                 GROUP BY factura_erp_id";
+    }
+
+    /**
+     * Las notas de cambio aplicables cruzadas con cada factura con saldo de
+     * su proveedor, en la misma empresa. $columnas es lo que se quiere de
+     * cada par: `fa` es la factura y `nl` la nota.
+     */
+    private static function sqlCambioPorFactura($columnas)
+    {
+        return "SELECT {$columnas}
+                  FROM notas_credito_lineas nl
+                  JOIN notas_credito_listados li ON li.id = nl.listado_id
+                  JOIN facturas_erp fa ON fa.sociedad_id = li.sociedad_id
+                                      AND fa.proveedor_codigo = nl.proveedor_codigo
+                                      AND fa.tipo IN ('" . implode("','", AplicacionNotaCredito::TIPOS_FACTURA) . "')
+                                      AND fa.saldo > " . AplicacionNotaCredito::EPSILON . "
+                 WHERE nl.clase IN ('" . implode("','", AplicacionNotaCredito::CLASES_POR_PROVEEDOR) . "')
+                   AND nl.estado_aplicacion = 'aplicable'";
+    }
+
+    /**
+     * Las notas aplicables de estas facturas: las directas y de costo que las
+     * corrigen, más las de cambio de su proveedor. Devuelve
+     * factura_erp_id => [notas], la de más saldo primero.
+     *
+     * Una nota de cambio sale en todas las facturas de su proveedor que se
+     * pidan: quien sume saldos entre facturas tiene que contarla una vez.
+     */
+    public function notasAplicablesDeFacturas(array $facturaIds)
     {
         $ids = array_values(array_unique(array_filter(array_map('intval', $facturaIds))));
         if (!$ids) {
@@ -522,19 +581,57 @@ class NotaCredito extends Model
 
         $porFactura = [];
         foreach (array_chunk($ids, 500) as $tanda) {
+            $marcas = implode(',', array_fill(0, count($tanda), '?'));
+            // Primero qué nota va con qué factura, y después la nota entera
+            // con su comprobante: el respaldo de cada una es lo primero que
+            // se mira antes de aplicarla.
             $filas = $this->fetchAll(
-                "SELECT id, factura_erp_id, documento, clase, monto, saldo, moneda, proveedor_nombre
-                   FROM notas_credito_lineas
-                  WHERE factura_erp_id IN (" . implode(',', array_fill(0, count($tanda), '?')) . ")
-                    AND estado_aplicacion = 'aplicable'
-                  ORDER BY saldo DESC",
-                $tanda
+                "SELECT a.factura_erp_id,
+                        nl.id, nl.documento, nl.clase, nl.fecha, nl.monto, nl.saldo, nl.moneda,
+                        nl.proveedor_nombre, nl.nc_proveedor, nl.estado, nl.factura_xml_id,
+                        f.ruta_xml, f.ruta_pdf,
+                        f.sociedad_id,   -- de qué sociedad es el documento: sin eso no se sabe en qué almacén buscarlo
+                        " . EstadoArchivo::columnaRecuperable('f.') . " AS recuperable
+                   FROM (
+                        SELECT nl.factura_erp_id, nl.id AS nota_id
+                          FROM notas_credito_lineas nl
+                         WHERE nl.factura_erp_id IN ({$marcas})
+                           AND nl.estado_aplicacion = 'aplicable'
+                        UNION ALL
+                        " . self::sqlCambioPorFactura('fa.id AS factura_erp_id, nl.id AS nota_id') . "
+                           AND fa.id IN ({$marcas})
+                        ) a
+                   JOIN notas_credito_lineas nl ON nl.id = a.nota_id
+                   LEFT JOIN facturas_xml f ON f.id = nl.factura_xml_id
+                  ORDER BY nl.saldo DESC, nl.id ASC",
+                array_merge($tanda, $tanda)
             ) ?: [];
             foreach ($filas as $fila) {
                 $porFactura[(int) $fila['factura_erp_id']][] = $fila;
             }
         }
         return $porFactura;
+    }
+
+    /**
+     * Una factura de esta empresa y sus notas aplicables, para la ventana que
+     * abre el botón "Notas aplicables". La factura sale en null si no es de
+     * la empresa: el id llega de la petición.
+     */
+    public function notasAplicablesDeFactura($facturaId, $sociedadId)
+    {
+        $factura = $this->fetchOne(
+            "SELECT id, documento, proveedor_codigo, proveedor_nombre, sucursal,
+                    fecha_emision, moneda, monto, saldo
+               FROM facturas_erp
+              WHERE id = ? AND sociedad_id = ?",
+            [(int) $facturaId, (int) $sociedadId]
+        );
+        if (!$factura) {
+            return ['factura' => null, 'notas' => []];
+        }
+        $notas = $this->notasAplicablesDeFacturas([(int) $factura['id']]);
+        return ['factura' => $factura, 'notas' => $notas[(int) $factura['id']] ?? []];
     }
 
     // ------------------------------------------------------------------

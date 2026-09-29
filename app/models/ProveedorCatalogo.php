@@ -34,6 +34,9 @@ class ProveedorCatalogo extends Model
     /** proveedor_codigo => ['proveedor_id', 'cedula', 'nombre'] */
     private static $mapaCodigos = null;
 
+    /** De qué empresa es el catálogo leído en $mapaCodigos. */
+    private static $empresaDelMapa = null;
+
     /** El mapa al revés: cédula/proveedor => sus códigos del ERP. */
     private static $indiceCodigos = null;
 
@@ -410,9 +413,17 @@ class ProveedorCatalogo extends Model
      */
     private static function mapaCodigos()
     {
-        if (self::$mapaCodigos !== null) {
+        // El catálogo es por empresa: el de la seleccionada. Si cambió de
+        // empresa en medio de la petición, lo leído ya no vale.
+        if (!class_exists('Sociedad')) {
+            require_once __DIR__ . '/Sociedad.php';
+        }
+        $empresa = (int) Sociedad::seleccionadaIdActual();
+        if (self::$mapaCodigos !== null && self::$empresaDelMapa === $empresa) {
             return self::$mapaCodigos;
         }
+        self::olvidar();
+        self::$empresaDelMapa = $empresa;
 
         self::$mapaCodigos = [];
         try {
@@ -421,7 +432,9 @@ class ProveedorCatalogo extends Model
                         COALESCE(NULLIF(p.rfc, ''), m.cedula) AS cedula,
                         COALESCE(NULLIF(p.razon_social, ''), m.nombre_erp) AS nombre
                    FROM proveedor_codigo_erp m
-                   LEFT JOIN proveedores p ON p.id = m.proveedor_id"
+                   LEFT JOIN proveedores p ON p.id = m.proveedor_id
+                  WHERE m.sociedad_id = ?",
+                [$empresa]
             ) ?: [];
             foreach ($filas as $fila) {
                 self::$mapaCodigos[(string) $fila['proveedor_codigo']] = [
@@ -517,6 +530,7 @@ class ProveedorCatalogo extends Model
     public static function olvidar()
     {
         self::$mapaCodigos = null;
+        self::$empresaDelMapa = null;
         self::$indiceCodigos = null;
         self::$proveedores = null;
         self::$resueltas = [];

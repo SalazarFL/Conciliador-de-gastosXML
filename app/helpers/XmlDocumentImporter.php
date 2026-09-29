@@ -74,7 +74,7 @@ class XmlDocumentImporter
      * importación salió bien. El comprobante se queda donde está y entra
      * cuando la lista esté cargada.
      */
-    private function exigirListado()
+    private function exigirListado($empresa = 0)
     {
         if (!class_exists('ProveedorCodigoErp')) {
             $ruta = __DIR__ . '/../models/ProveedorCodigoErp.php';
@@ -83,11 +83,11 @@ class XmlDocumentImporter
             }
             require_once $ruta;
         }
-        if (ProveedorCodigoErp::hayListado()) {
+        if (ProveedorCodigoErp::hayListado($empresa)) {
             return;
         }
         throw new RuntimeException(
-            'Todavía no se ha cargado el listado de proveedores, así que este comprobante no se '
+            'Todavía no se ha cargado el listado de proveedores de esta empresa, así que este comprobante no se '
             . 'puede procesar: sin saber de quién es cada código, se engancharía a ciegas. '
             . 'Cargá la Lista de Proveedores en Configuración y volvé a intentarlo. '
             . 'El archivo no se perdió.'
@@ -147,7 +147,11 @@ class XmlDocumentImporter
      */
     private function importarLocal($xmlPath, Closure $pdf, array $contexto)
     {
-        $this->exigirListado();
+        // La empresa del lote, que puede no ser la seleccionada (cli/, la
+        // entrada automática). 0 = la seleccionada. El catálogo es por
+        // empresa, así que el portón y el aviso preguntan por la suya.
+        $empresa = (int) ($contexto['sociedad_id'] ?? 0);
+        $this->exigirListado($empresa);
 
         $doc = XmlInvoiceParser::parseCfdiFromFile($xmlPath);
         $tipo = strtoupper(trim((string) ($doc['tipo_documento'] ?? 'FE')));
@@ -190,7 +194,8 @@ class XmlDocumentImporter
         // hasta que alguien le dé un código o diga que ese proveedor no va.
         $this->avisarSiNoPerteneceANingunCodigo(
             (string) ($doc['rfc_emisor'] ?? ''),
-            (string) ($doc['razon_social_emisor'] ?? '')
+            (string) ($doc['razon_social_emisor'] ?? ''),
+            $empresa
         );
         $hash = (string) ($doc['hash_documento'] ?? ($doc['hash_xml'] ?? ''));
         $existente = $hash !== '' ? $this->facturas->findByHashRecord($hash) : null;
@@ -239,6 +244,7 @@ class XmlDocumentImporter
                 'iva' => $doc['iva'],
                 'total' => $doc['total'],
                 'moneda' => $doc['moneda'],
+                'tipo_cambio' => $doc['tipo_cambio'] ?? null,
                 'tipo_comprobante' => $doc['tipo_comprobante'] ?? null,
                 'archivo_xml' => $archivado['archivo_xml'],
                 'ruta_xml' => $archivado['ruta_xml'],
@@ -265,6 +271,29 @@ class XmlDocumentImporter
         } catch (Throwable $e) {
             $this->facturas->rollback();
             DocumentoArchivo::eliminarCreados($archivado);
+
+            /*
+             * Otro trabajador lo guardó entre la búsqueda de arriba y este
+             * INSERT. Pasa cuando el proveedor manda el mismo comprobante en
+             * dos correos y el lote los reparte entre dos trabajadores a la
+             * vez (la pantalla y la tarea programada): los dos preguntan "¿ya
+             * está?", los dos oyen que no, y el segundo choca con la llave
+             * única. No es un XML inválido: es un duplicado, y se trata como
+             * cualquier otro —se busca el que ganó y se completa ese—.
+             */
+            if (self::esClaveRepetida($e)) {
+                $ganador = $hash !== '' ? $this->facturas->findByHashRecord($hash) : null;
+                if (!$ganador && !empty($doc['consecutivo_completo'])) {
+                    $ganador = $this->facturas->findByConsecutivoRecord(
+                        (string) $doc['consecutivo_completo'],
+                        $proveedorId,
+                        (string) ($doc['fecha_emision'] ?? '')
+                    );
+                }
+                if ($ganador) {
+                    return $this->completarExistente($ganador, $xmlPath, $pdf, $doc, $contexto);
+                }
+            }
             throw $e;
         }
 
@@ -345,7 +374,7 @@ class XmlDocumentImporter
      * Nunca lanza: el comprobante ya está guardado y el aviso es un extra. Si
      * la campana falla, la importación tiene que seguir igual.
      */
-    private function avisarSiNoPerteneceANingunCodigo($cedula, $nombre)
+    private function avisarSiNoPerteneceANingunCodigo($cedula, $nombre, $empresa = 0)
     {
         try {
             // Con guardia, como arriba: quien ya tenga la clase cargada —o
@@ -356,9 +385,12 @@ class XmlDocumentImporter
             require_once __DIR__ . '/../models/Notificacion.php';
 
             $cedula = ProveedorCodigoErp::normalizarCedula($cedula);
-            if ($cedula === '' || ProveedorCodigoErp::conoceCedula($cedula)) {
+            if ($cedula === '' || ProveedorCodigoErp::conoceCedula($cedula, $empresa)) {
                 return;
             }
+            // El aviso es de la empresa que recibió el comprobante: es en SU
+            // catálogo donde falta el código.
+            $empresa = $empresa > 0 ? (int) $empresa : (int) ProveedorCodigoErp::sociedadSeleccionadaId();
 
             $nombre = trim((string) $nombre) ?: ('cédula ' . $cedula);
 
@@ -370,8 +402,7 @@ class XmlDocumentImporter
                            . 'Sus comprobantes quedan guardados, pero no se les puede buscar factura '
                            . 'hasta saber cuál es su código. Dáselo acá, o decí que no se procesa.',
                 'firma' => 'proveedor_sin_codigo|' . $cedula,
-                // Del grupo y no de una empresa: el catálogo de proveedores del
-                // ERP es uno solo, igual que el mapa de códigos que reemplazó.
+                'sociedad_id' => $empresa,
                 'ref_tabla' => 'proveedor_codigo_erp',
                 'ref_clave' => $cedula,
                 'datos' => ['cedula' => $cedula, 'nombre' => $nombre],
@@ -379,6 +410,27 @@ class XmlDocumentImporter
         } catch (Throwable $e) {
             // El comprobante ya quedó guardado; la campana es un extra.
         }
+    }
+
+    /**
+     * ¿La base rechazó el INSERT por una llave única repetida (MySQL 1062)?
+     * Solo esa: cualquier otra violación de integridad —una clave foránea,
+     * un NOT NULL— sí es un error y tiene que verse.
+     */
+    private static function esClaveRepetida(Throwable $e)
+    {
+        for ($x = $e; $x !== null; $x = $x->getPrevious()) {
+            if ($x instanceof PDOException
+                && (int) ($x->errorInfo[1] ?? 0) === 1062) {
+                return true;
+            }
+            if ($x instanceof PDOException
+                && (string) $x->getCode() === '23000'
+                && strpos($x->getMessage(), ' 1062 ') !== false) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private function completarExistente(array $existente, $xmlPath, Closure $pdf, array $doc, array $contexto)

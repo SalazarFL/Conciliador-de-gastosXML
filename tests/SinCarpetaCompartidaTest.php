@@ -1,33 +1,41 @@
 <?php
 /**
- * Una computadora SIN carpeta compartida, trabajando una empresa en SharePoint.
+ * Una computadora SIN carpeta compartida: la forma de trabajar desde el
+ * 27/09/2026, cuando SharePoint pasó a ser obligatorio.
  *
- * Es el reparto que se pidió para la instalación:
+ * Es el reparto de la instalación:
  *
  *   - la PC trabaja con sus propios temporales;
  *   - los XML y los PDF —los que llegan por correo y los de la carpeta del
- *     pago— van a SharePoint, para que todas las PC de la empresa los vean;
+ *     pago— van a SharePoint, para que todas las PC los vean;
  *   - lo que no es XML ni PDF se queda en esta máquina.
  *
- * Recorre, con los objetos de la aplicación y sin carpeta compartida
- * configurada:
+ * Y Nexo Fiscal vive en UNA carpeta de una biblioteca que ya se usaba para
+ * otra cosa ("Contabilidad/Nexo Fiscal"), con permiso SOLO sobre esa carpeta:
+ * la biblioteca y su raíz le contestan 403, como a una aplicación con
+ * Files.SelectedOperations.Selected. Recorre, con los objetos de la
+ * aplicación:
  *
  *   correo → bandeja → cola → importación → carpeta del pago → otra PC lo abre
  *
- * y comprueba además que a SharePoint no se sube nada que no sea XML o PDF
- * (ni la nota LEEME), que el respaldo de la base se queda en esta máquina,
- * que una empresa que archiva en disco frena con un motivo que dice qué hacer
- * y que no quedan temporales.
+ * y comprueba además que nada toca la raíz de la biblioteca ni sale de la
+ * carpeta, que a SharePoint no se sube nada que no sea XML o PDF (ni la nota
+ * LEEME), que el respaldo de la base se queda en esta máquina, que sin
+ * SharePoint no se archiva en ningún lado y que no quedan temporales.
  *
  * Corre contra la biblioteca en memoria (GraphEnMemoria), sin red. Con
  * XMLCONCILIA_SHAREPOINT_REAL=1 corre el MISMO recorrido contra la biblioteca
- * de app/config/local.graph.php —SharePoint de verdad— y al terminar borra lo
- * que subió. Eso sale a la red y no es parte de la certificación.
+ * de app/config/local.graph.php —SharePoint de verdad, con la carpeta que diga
+ * ahí— y al terminar borra lo que subió. Eso sale a la red y no es parte de la
+ * certificación. Con XMLCONCILIA_SHAREPOINT_CARPETA=RUTA además, lo corre
+ * dentro de esa carpeta de la biblioteca: la crea —tiene que no existir— y la
+ * borra al terminar.
  *
  * Deja la base como la encontró.
  *
  * Uso: php tests/SinCarpetaCompartidaTest.php
  *      (PowerShell) $env:XMLCONCILIA_SHAREPOINT_REAL='1'; php tests/SinCarpetaCompartidaTest.php
+ *      (PowerShell) $env:XMLCONCILIA_SHAREPOINT_CARPETA='_prueba/Nexo Fiscal'; (y lo de arriba)
  */
 require_once __DIR__ . '/../app/core/Model.php';
 require_once __DIR__ . '/../app/core/Controller.php';
@@ -100,12 +108,12 @@ $red = new class($biblioteca) implements TransporteGraph {
         $this->llamadas[] = $p['metodo'] . ' ' . $p['url'];
         return $this->destino->enviar($p);
     }
-    /** Las rutas de la biblioteca que recibieron contenido. */
+    /** Las rutas que recibieron contenido: desde la raíz o desde la carpeta de Nexo Fiscal. */
     public function subidas()
     {
         $rutas = [];
         foreach ($this->llamadas as $l) {
-            if (preg_match('~^(PUT|POST) \S*/root:/(.+?):/(content|createUploadSession)~', $l, $m)) {
+            if (preg_match('~^(PUT|POST) \S*/(?:root|items/[^/:]+):/(.+?):/(content|createUploadSession)~', $l, $m)) {
                 $rutas[] = rawurldecode($m[2]);
             }
         }
@@ -113,9 +121,35 @@ $red = new class($biblioteca) implements TransporteGraph {
     }
 };
 
+// En memoria: una biblioteca que ya se usaba, con una carpeta para Nexo
+// Fiscal que creó el administrador, y el permiso de la aplicación SOLO sobre
+// ella. El id de la carpeta es el que él usó para dar el permiso.
+$carpetaNexo = 'Contabilidad/Nexo Fiscal';
+if (!$real) {
+    $biblioteca->crearCarpetaAMano('Contabilidad/Otras cosas de la empresa');
+    $idCarpetaNexo = $biblioteca->crearCarpetaAMano($carpetaNexo);
+    $biblioteca->soloCarpeta = $carpetaNexo;
+}
 $credenciales = $real
     ? ClienteGraph::configuracion()
-    : ['tenant_id' => 't', 'client_id' => 'c', 'client_secret' => 's', 'drive_id' => 'd'];
+    : ['tenant_id' => 't', 'client_id' => 'c', 'client_secret' => 's', 'drive_id' => 'd',
+       'carpeta' => $carpetaNexo, 'carpeta_id' => $idCarpetaNexo];
+
+// Contra SharePoint de verdad, dentro de una carpeta de prueba que se crea
+// desde la raíz —como la crearía el administrador— y se borra al final.
+$carpetaReal = $real ? trim(str_replace('\\', '/', (string) getenv('XMLCONCILIA_SHAREPOINT_CARPETA')), '/') : '';
+$raizReal = null;
+if ($carpetaReal !== '') {
+    $raizReal = new AlmacenEnGraph(new ClienteGraph($credenciales, $red, ['registro' => null]));
+    if ($raizReal->identidad($carpetaReal) !== null) {
+        fwrite(STDERR, "FAIL: la carpeta de prueba {$carpetaReal} ya existe en SharePoint: elige una que no exista\n");
+        exit(1);
+    }
+    $raizReal->asegurarCarpeta($carpetaReal);
+    $credenciales['carpeta'] = $carpetaReal;
+    $credenciales['carpeta_id'] = $raizReal->identidad($carpetaReal)['item_id'];
+}
+$llamadasDePreparacion = count($red->llamadas);
 /** Un almacén recién hecho: lo que tendría otra petición, u otra PC. */
 $nuevoAlmacen = function () use ($credenciales, $red, $real) {
     return new AlmacenEnGraph(new ClienteGraph($credenciales, $red,
@@ -155,7 +189,6 @@ $carpetaPago = 'PAGO SIN CARPETA ' . $marca;
 $erpClave = 'SC-' . $marca;
 
 $sociedadId = 0;
-$sociedadDiscoId = 0;
 $proveedorId = 0;
 $proveedorCreado = false;
 $bandejaId = 0;
@@ -167,29 +200,17 @@ $pendientesAntes = (int) $pdo->query('SELECT COALESCE(MAX(id), 0) FROM almacen_p
 $deltaAntes = $pdo->query("SELECT * FROM almacen_delta WHERE almacen = 'sharepoint'")->fetch();
 
 try {
-    $pdo->prepare("INSERT INTO sociedades (nombre, cedula, activa, almacen_documentos) VALUES (?, ?, 0, 'sharepoint')")
+    $pdo->prepare("INSERT INTO sociedades (nombre, cedula, activa) VALUES (?, ?, 0)")
         ->execute([$nombreEmpresa, $cedulaEmpresa]);
     $sociedadId = (int) $pdo->lastInsertId();
-    $pdo->prepare("INSERT INTO sociedades (nombre, cedula, activa, almacen_documentos) VALUES (?, ?, 0, 'disco')")
-        ->execute(['PRUEBA EN DISCO ' . $marca, '3109992' . random_int(100, 999)]);
-    $sociedadDiscoId = (int) $pdo->lastInsertId();
-    AlmacenDocumentos::olvidarAjustes();
 
     $proveedores = new Proveedor();
     $proveedorCreado = $proveedores->findByRfc($cedulaProveedor) === null;
     $proveedorId = (int) $proveedores->obtenerOCrear($cedulaProveedor, 'PROVEEDOR NUBE ' . $marca);
-    $pdo->prepare("INSERT INTO proveedor_codigo_erp (proveedor_codigo, proveedor_id, cedula, nombre_erp, origen)
-                   VALUES (?, ?, ?, 'SIN CARPETA', 'manual')")
-        ->execute([$codigoProveedor, $proveedorId, $cedulaProveedor]);
+    $pdo->prepare("INSERT INTO proveedor_codigo_erp (sociedad_id, proveedor_codigo, proveedor_id, cedula, nombre_erp, origen)
+                   VALUES (?, ?, ?, ?, 'SIN CARPETA', 'manual')")
+        ->execute([$sociedadId, $codigoProveedor, $proveedorId, $cedulaProveedor]);
     ProveedorCodigoErp::olvidarMapa();
-
-    // ── 0. ¿Quién necesita la carpeta compartida? ────────────────────────
-    paso(!DocumentoArchivo::necesitaCarpetaCompartida($sociedadId),
-        'una empresa en SharePoint no necesita la carpeta compartida');
-    paso(DocumentoArchivo::necesitaCarpetaCompartida($sociedadDiscoId),
-        'una empresa en disco sí la necesita');
-    paso(DocumentoArchivo::necesitaCarpetaCompartida(),
-        'y como hay empresas en disco, la instalación también');
 
     // ── 1. El correo llega y se captura ──────────────────────────────────
     $clave = '5062606260031011234560010000101000000' . random_int(100, 999) . '1' . random_int(10000000, 99999999);
@@ -291,6 +312,8 @@ try {
     $vuelta = (new ReconciliadorGraph($vigente))->ejecutar(false);
     paso((int) $vuelta['copias_pago'] === 1 && (int) $vuelta['errores_copia_pago'] === 0,
         'la tarea programada arma la carpeta del pago: ' . json_encode(array_diff_key($vuelta, ['operaciones' => 1])));
+    paso(empty($vuelta['sin_enlace_de_cambios']) && empty($vuelta['errores']),
+        'y lee los cambios de la carpeta, no de la biblioteca entera: ' . json_encode(array_diff_key($vuelta, ['operaciones' => 1])));
     $copiaXml = 'PAGOS/' . $carpetaPago . '/' . basename(str_replace('\\', '/', (string) $cruda['ruta_xml']));
     $copiaPdf = 'PAGOS/' . $carpetaPago . '/' . basename(str_replace('\\', '/', (string) $cruda['ruta_pdf']));
     paso($leer($copiaXml) === $xml && $leer($copiaPdf) === $pdf,
@@ -331,6 +354,18 @@ try {
     paso($subidas !== [] && $ajenas === [],
         'en todo el recorrido solo se subieron XML y PDF: ' . json_encode($ajenas ?: $subidas));
     paso(!preg_grep('~LEEME~', $subidas), 'ni la nota LEEME, que es de la carpeta compartida');
+    if ($carpetaReal !== '') {
+        paso(!preg_grep('~/drives/[^/]+/root~', array_slice($red->llamadas, $llamadasDePreparacion)),
+            'en SharePoint de verdad, con carpeta, nada se dirigió a la raíz de la biblioteca');
+    }
+    if (!$real) {
+        paso(!preg_grep('~/drives/[^/]+/root~', $red->llamadas),
+            'nada se dirigió a la raíz de la biblioteca, que con este permiso contesta 403');
+        paso($biblioteca->buscar($carpetaNexo . '/SISTEMA/' . $nombreEmpresa) !== null
+            && $biblioteca->buscar($carpetaNexo . '/PAGOS/' . $carpetaPago) !== null
+            && $biblioteca->buscar('SISTEMA') === null && $biblioteca->buscar('PAGOS') === null,
+            'todo quedó dentro de la carpeta de Nexo Fiscal, y nada suelto en la biblioteca');
+    }
 
     $local = tempnam(sys_get_temp_dir(), 'sc_otro_');
     file_put_contents($local, 'no es un comprobante');
@@ -354,39 +389,52 @@ try {
     // ── 6. Lo que no es XML ni PDF se queda en esta computadora ─────────
     $carpetaRespaldos = RespaldoBase::carpetaDestino();
     paso(strcasecmp($carpetaRespaldos, $respaldosLocales) === 0 && is_dir($carpetaRespaldos),
-        'sin carpeta compartida, los respaldos de la base quedan en esta PC: ' . $carpetaRespaldos);
+        'los respaldos de la base quedan en esta PC: ' . $carpetaRespaldos);
 
-    // ── 7. Una empresa en disco, en esta PC, frena con un motivo ─────────
-    $xmlDisco = tempnam(sys_get_temp_dir(), 'sc_disco_');
-    file_put_contents($xmlDisco, $xml);
-    $temporales[] = $xmlDisco;
+    // ── 7. Una PC sin SharePoint frena con un motivo ─────────────────────
+    AlmacenDocumentos::olvidar();
+    $xmlSinNube = tempnam(sys_get_temp_dir(), 'sc_sin_nube_');
+    file_put_contents($xmlSinNube, $xml);
+    $temporales[] = $xmlSinNube;
     $motivo = '';
     try {
-        (new DocumentoArchivo())->paraSociedad($sociedadDiscoId, 'PRUEBA EN DISCO ' . $marca)
-            ->archivar($xmlDisco, null, ['tipo_documento' => 'FE', 'fecha_emision' => '2026-06-07',
+        (new DocumentoArchivo())->paraSociedad($sociedadId, $nombreEmpresa)
+            ->archivar($xmlSinNube, null, ['tipo_documento' => 'FE', 'fecha_emision' => '2026-06-07',
                 'numero_factura_asistente' => '1'], 'PROVEEDOR');
     } catch (RuntimeException $e) {
         $motivo = $e->getMessage();
     }
-    paso($motivo === DocumentoArchivo::SIN_CARPETA,
-        'archivar en disco sin carpeta compartida se frena y dice qué hacer: ' . $motivo);
+    paso($motivo === AlmacenDocumentos::SIN_SHAREPOINT,
+        'sin SharePoint en esta PC, archivar se frena y dice qué hacer: ' . $motivo);
     paso(!is_dir(getcwd() . DIRECTORY_SEPARATOR . DocumentoArchivo::CARPETA_SISTEMA),
         'sin escribir nada por una ruta relativa');
     $motivo = '';
     try {
-        RutaDocumento::carpetaTrabajo('BANDEJA/xml', $sociedadDiscoId);
+        RutaDocumento::carpetaTrabajo('BANDEJA/xml', $sociedadId);
     } catch (RuntimeException $e) {
         $motivo = $e->getMessage();
     }
-    paso($motivo !== '', 'la bandeja de una empresa en disco tampoco se inventa una carpeta');
+    paso($motivo !== '', 'la bandeja tampoco se inventa una carpeta de disco');
     paso((new DocumentoArchivo())->carpetasPago() === [],
-        'el selector de carpetas de disco queda vacío en vez de fallar');
+        'el selector de carpetas de pago queda vacío en vez de fallar');
 } catch (Throwable $e) {
     $fallas[] = 'se cortó el recorrido: ' . get_class($e) . ': ' . $e->getMessage()
         . ' en ' . basename($e->getFile()) . ':' . $e->getLine();
 } finally {
     // SharePoint: lo subido. En memoria no hace falta; en la de verdad, sí.
-    if ($real) {
+    if ($raizReal !== null) {
+        // La carpeta de prueba entera, con todo lo de adentro: la creó esta prueba.
+        try {
+            $raizReal->borrar($carpetaReal);
+            $primera = strtok($carpetaReal, '/');
+            if ($primera !== $carpetaReal && $raizReal->identidad($primera) !== null
+                && $raizReal->listarCarpeta($primera) === []) {
+                $raizReal->borrar($primera);
+            }
+        } catch (Throwable $e) {
+            fwrite(STDERR, 'AVISO: no se pudo borrar ' . $carpetaReal . ' de SharePoint: ' . $e->getMessage() . "\n");
+        }
+    } elseif ($real) {
         $limpiar = $nuevoAlmacen();
         foreach (['PAGOS/' . $carpetaPago, 'SISTEMA/' . $nombreEmpresa] as $carpeta) {
             try {
@@ -434,10 +482,8 @@ try {
     if ($proveedorCreado && $proveedorId > 0) {
         $pdo->exec('DELETE FROM proveedores WHERE id = ' . $proveedorId);
     }
-    foreach ([$sociedadId, $sociedadDiscoId] as $id) {
-        if ($id > 0) {
-            $pdo->exec('DELETE FROM sociedades WHERE id = ' . (int) $id);
-        }
+    if ($sociedadId > 0) {
+        $pdo->exec('DELETE FROM sociedades WHERE id = ' . (int) $sociedadId);
     }
     ProveedorCodigoErp::olvidarMapa();
     AlmacenDocumentos::olvidar();
@@ -462,5 +508,6 @@ if ($fallas) {
     exit(1);
 }
 
-echo 'OK: sin carpeta compartida, los XML y PDF de una empresa van a SharePoint'
-    . ($real ? ' (la biblioteca de verdad)' : '') . " y lo demás se queda en la PC\n";
+echo 'OK: sin carpeta compartida, los XML y PDF van a SharePoint'
+    . ($real ? ' (la biblioteca de verdad)' : ', a una sola carpeta con permiso solo sobre ella,')
+    . " y lo demás se queda en la PC\n";

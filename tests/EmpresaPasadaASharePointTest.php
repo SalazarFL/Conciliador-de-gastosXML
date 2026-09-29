@@ -106,15 +106,15 @@ $bandejaIds = [];
 $temporales = [];
 
 try {
-    $pdo->prepare("INSERT INTO sociedades (nombre, cedula, activa, almacen_documentos) VALUES (?, ?, 0, 'disco')")
+    $pdo->prepare("INSERT INTO sociedades (nombre, cedula, activa) VALUES (?, ?, 0)")
         ->execute([$empresa, $cedulaEmpresa]);
     $sociedadId = (int) $pdo->lastInsertId();
     $proveedores = new Proveedor();
     $proveedorCreado = $proveedores->findByRfc($cedulaProveedor) === null;
     $proveedorId = (int) $proveedores->obtenerOCrear($cedulaProveedor, 'PROVEEDOR HISTORIA ' . $marca);
-    $pdo->prepare("INSERT INTO proveedor_codigo_erp (proveedor_codigo, proveedor_id, cedula, nombre_erp, origen)
-                   VALUES (?, ?, ?, 'HISTORIA', 'manual')")
-        ->execute([$codigoProveedor, $proveedorId, $cedulaProveedor]);
+    $pdo->prepare("INSERT INTO proveedor_codigo_erp (sociedad_id, proveedor_codigo, proveedor_id, cedula, nombre_erp, origen)
+                   VALUES (?, ?, ?, ?, 'HISTORIA', 'manual')")
+        ->execute([$sociedadId, $codigoProveedor, $proveedorId, $cedulaProveedor]);
     ProveedorCodigoErp::olvidarMapa();
 
     // ── El escenario: tres documentos archivados en disco, dos en un pago ──
@@ -151,9 +151,9 @@ try {
         return $pdo->query('SELECT * FROM facturas_xml WHERE id = ' . (int) $id)->fetch() ?: [];
     };
 
-    // ── 1. La empresa se pasa a SharePoint desde Configuración ───────────
-    $pdo->exec("UPDATE sociedades SET almacen_documentos = 'sharepoint' WHERE id = " . $sociedadId);
-    AlmacenDocumentos::olvidarAjustes();
+    // ── 1. Lo nuevo va a SharePoint, lo de antes sigue en disco ─────────
+    // Aquel día fue una empresa pasada desde Configuración; desde el
+    // 27/09/2026 es la regla para todas. La historia en disco es la misma.
     Model::olvidarMemoria();
 
     $vistas = (new Factura())->setSociedad(0)->getParaOrganizarArchivos(array_values($facturaIds));

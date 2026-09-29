@@ -47,11 +47,11 @@ class NavFacturaErpFalso
         return [
             ['id' => 11, 'documento' => '00100001010000045587', 'proveedor_nombre' => 'MARJAVA S.A.',
              'sucursal' => 'BM Centro San Vito',
-             'fecha_emision' => '2026-08-12', 'saldo_pago' => 210359.00, 'estado' => 'sin_respaldo'],
+             'fecha_emision' => '2026-08-12', 'monto' => 250000.00, 'saldo_pago' => 210359.00, 'estado' => 'sin_respaldo'],
             // Sin la clave 'sucursal', que es como vienen las filas de antes
             // de que el reporte del ERP la trajera.
             ['id' => 12, 'documento' => '00100001010000045588', 'proveedor_nombre' => 'MARJAVA S.A.',
-             'fecha_emision' => '2026-08-13', 'saldo_pago' => 12400.50, 'estado' => 'con_diferencia'],
+             'fecha_emision' => '2026-08-13', 'monto' => 12400.50, 'saldo_pago' => 12400.50, 'estado' => 'con_diferencia'],
         ];
     }
 }
@@ -122,8 +122,8 @@ assertNavDoc($nav['items'][0]['numero'] === '00100001010000045587',
     'el número que se enseña es el documento del ERP');
 assertNavDoc($nav['items'][0]['fecha'] === '12/08/2026',
     'la fecha se enseña como se lee, no como la guarda la base');
-assertNavDoc($nav['items'][0]['total'] === 210359.00,
-    'el monto es el saldo del pago, que es el que enseña el checklist');
+assertNavDoc($nav['items'][0]['total'] === 250000.00,
+    'la tarjeta enseña el monto de la factura, no el saldo del pago');
 assertNavDoc($nav['items'][0]['destino'] === 'facturas',
     'una factura se busca entre los comprobantes de facturas');
 // A qué sucursal llegó el documento: buscando el XML de una factura de otra

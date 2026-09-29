@@ -10,6 +10,11 @@ require_once __DIR__ . '/../models/BloqueoEnBase.php';
  * Ordena el archivo local sin perder la relación XML/PDF ni romper las rutas
  * persistidas.
  *
+ * Desde el 27/09/2026 es solo para la carpeta compartida de antes —lo que
+ * quedó ahí sin migrar—, y solo a mano: la tarea programada ya no lo corre y
+ * nada nuevo se archiva en disco. Los documentos de SharePoint los sigue
+ * ReconciliadorGraph.
+ *
  * La carpeta de un documento sale de su fecha de emisión y su tipo —dos datos
  * que no cambian nunca—, así que ordenar es idempotente: correrlo dos veces no
  * mueve nada la segunda. La única excepción es PAGOS, donde se
@@ -60,6 +65,13 @@ class OrganizadorDocumentos
         // tarea programada antes de que alguien abra el módulo de pagos.
         if ($facturas === null) {
             new Pago();
+        }
+        // Ordena la carpeta compartida de antes, y nada más: lo de SharePoint
+        // lo sigue ReconciliadorGraph. Sin carpeta nombrada ni configurada no
+        // hay nada que ordenar.
+        $raiz = trim((string) $raiz) !== '' ? (string) $raiz : RutaDocumento::raiz();
+        if (trim($raiz) === '') {
+            throw new RuntimeException('No hay carpeta compartida que ordenar: los documentos están en SharePoint.');
         }
         $this->archivo = new DocumentoArchivo($raiz);
         $real = realpath($this->archivo->raiz());

@@ -333,7 +333,7 @@ Prueba::caso('[S7] un error de la base no llega crudo al navegador', function ()
 
 Prueba::caso('cada ruta POST de Correo declara un permiso real (ni libre ni pública)', function () {
     preg_match_all("#\\\$router->(get|post)\\('(/correo[^']*)'#", file_get_contents(__DIR__ . '/../app/config/routes.php'), $m, PREG_SET_ORDER);
-    verificar(count($m) >= 30, 'se encontraron las rutas de correo');
+    verificar(count($m) >= 25, 'se encontraron las rutas de correo');
     foreach ($m as [, $metodo, $uri]) {
         $regla = Permisos::reglaDeRuta($metodo, $uri);
         verificar(is_array($regla), "{$metodo} {$uri} no está en config/permisos.php");
@@ -341,7 +341,10 @@ Prueba::caso('cada ruta POST de Correo declara un permiso real (ni libre ni púb
         verificar(is_string($permiso) && strpos($permiso, 'correo.') === 0, "{$metodo} {$uri} exige {$permiso}");
     }
     igual('correo.configurar', Permisos::reglaDeRuta('POST', '/correo/cuentas/guardar')['permiso'], 'dar de alta buzones es de configuración');
-    igual('correo.configurar', Permisos::reglaDeRuta('POST', '/correo/config')['permiso'], 'la carpeta destino también');
+    // La carpeta compartida ya no se elige desde aquí: los documentos van a SharePoint.
+    foreach (['/correo/config', '/correo/carpetas', '/correo/selector/abrir', '/correo/selector/estado'] as $vieja) {
+        verificar(Permisos::reglaDeRuta('POST', $vieja) === null, "POST {$vieja} ya no existe");
+    }
 });
 
 Prueba::caso('sin token ni cabeceras de origen propio, un POST de Correo se rechaza', function () {

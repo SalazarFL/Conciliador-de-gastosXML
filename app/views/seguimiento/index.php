@@ -342,7 +342,7 @@ $fechaDia = function ($valor) {
         <?php /*
          * Nota de crédito en juego.
          *
-         * 'Con nota en juego' cruza los dos orígenes —notas que se pueden
+         * 'Con notas aplicables' cruza los dos orígenes —notas que se pueden
          * aplicar y facturas que tienen nota esperando— porque son las dos
          * caras de lo mismo y quien trabaja la cola las necesita juntas.
          *
@@ -360,7 +360,7 @@ $fechaDia = function ($valor) {
             <select id="f-aplicacion" name="aplicacion" class="form-control">
                 <option value="">Cualquiera</option>
                 <option value="con_nota" <?= ($filtros['aplicacion'] ?? '') === 'con_nota' ? 'selected' : '' ?>>
-                    Con nota en juego
+                    Con notas aplicables
                 </option>
                 <?php foreach (AplicacionNotaCredito::ESTADOS as $segApValor => $segApInfo):
                     if (in_array($segApValor, [AplicacionNotaCredito::NO_APLICA, AplicacionNotaCredito::APLICADA], true)) {
@@ -498,39 +498,59 @@ $fechaDia = function ($valor) {
         <table class="data-table seg-tabla" data-listado="<?= $listadoCols ?>">
             <thead>
                 <?php /*
-                 * Siete columnas. Dos de las tres que se habían retirado siguen
-                 * fuera, porque no llevaban ningún dato que no estuviera ya en
-                 * la fila:
+                 * Un dato por celda. El tipo, la fecha, la clase y el listado
+                 * iban amontonados bajo el número del documento, la sucursal
+                 * bajo el proveedor y la diferencia bajo el monto: así no se
+                 * podían mover, ni apagar, ni leer de arriba abajo. Lo mismo
+                 * le pasó antes al saldo, que estuvo plegado bajo el monto.
                  *
-                 *   Qué falta   Decía lo mismo que los chips de Respaldo en el
-                 *               95,8 %: "Falta el XML" al lado de un chip XML
-                 *               en rojo. Lo único suyo era "Diferencia de
-                 *               monto" (4,2 %), que va bajo el monto.
-                 *   Estado      Lo elige la pestaña, así que lo repetía en
-                 *               cada fila. Pasó a ser la franja de color del
-                 *               borde izquierdo; en "Todo", donde conviven los
-                 *               cuatro, además se escribe.
-                 *
-                 * SALDO VOLVIÓ. Se había plegado bajo el monto porque en el
-                 * 45,8 % de los renglones era el mismo número, y así solo se
-                 * escribía cuando de verdad difería. Pero el otro 54,2 % es
-                 * justo el trabajo de esta cola —lo que todavía se debe— y
-                 * plegado no se podía recorrer con la vista, ni ordenar, ni
-                 * comparar en paralelo con el monto. Un número que se lee en
-                 * columna vale más que el ancho que ahorra.
+                 * Lo que alguien pone encima del renglón —responsable,
+                 * recordatorio, anotaciones, la marca a mano, el motivo— y el
+                 * estado (que ya lo dicen la pestaña y la franja de color)
+                 * también son columnas, pero vienen apagadas: están vacías en
+                 * casi todos los renglones. Se encienden desde la esquina.
                  */ ?>
                 <tr class="seg-head-labels">
                     <th style="width:34px;" class="center"
                         title="Marcá una y, con Shift, otra más abajo: se marcan todas las del medio.">
                         <input type="checkbox" id="chk-todos" aria-label="Seleccionar todos">
                     </th>
+                    <?php if ($esModoCorreo): ?>
+                    <th data-col="tipo">Tipo</th>
+                    <?php else: ?>
+                    <th data-col="origen">Tipo</th>
+                    <?php endif; ?>
                     <th data-col="documento">Documento</th>
+                    <th data-col="fecha">Fecha</th>
+                    <?php if (!$esModoCorreo): ?>
+                    <th data-col="clase" title="Clase de nota, deducida del formato del número">Clase de nota</th>
+                    <th data-col="contexto" title="A qué listado o pago entró">Listado</th>
+                    <?php endif; ?>
                     <th data-col="proveedor">Proveedor</th>
-                    <th class="right" data-col="monto">Monto</th>
+                    <?php if (!$esModoCorreo): ?>
+                    <th data-col="sucursal">Sucursal</th>
+                    <?php endif; ?>
+                    <th class="right" data-col="monto"><?= $esModoCorreo ? 'Monto' : 'Monto sistema' ?></th>
+                    <?php if (!$esModoCorreo): ?>
+                    <th class="right" data-col="monto_xml"
+                        title="El total del comprobante electrónico enganchado">Monto XML</th>
+                    <th class="right" data-col="diferencia"
+                        title="El comprobante no coincide con el monto del documento">Diferencia</th>
+                    <?php endif; ?>
                     <th class="right" data-col="saldo" title="<?= $esModoCorreo
                         ? 'Lo que queda debiendo el registro del sistema al que está enganchado este comprobante'
                         : 'Lo que queda debiendo el documento' ?>">Saldo</th>
                     <th class="center" data-col="respaldo">Respaldo</th>
+                    <?php if (!$esModoCorreo): ?>
+                    <th class="center" data-col="notas_aplicables"
+                        title="Notas de crédito que se le pueden aplicar a la factura">Notas aplicables</th>
+                    <th data-col="nota_juego"
+                        title="Si el renglón es una nota: qué pasa con ella frente a la factura que corrige">Aplicación</th>
+                    <?php else: ?>
+                    <th data-col="llegada">Cómo llegó</th>
+                    <th data-col="sistema_doc"
+                        title="El registro del sistema al que está enganchado este comprobante">Documento del sistema</th>
+                    <?php endif; ?>
                     <?php // Y todo lo que la cola sabe de cada renglón y no cabía
                           // en seis columnas: apagado de fábrica, a un clic. ?>
                     <?= Columnas::cabecerasExtra($listadoCols) ?>
@@ -538,14 +558,27 @@ $fechaDia = function ($valor) {
                 </tr>
                 <tr class="seg-search-row">
                     <th class="center" title="Filtros por columna"><i class="fas fa-search"></i></th>
+                    <?php if ($esModoCorreo): ?>
+                    <th data-col="tipo"></th>
+                    <?php else: ?>
+                    <th data-col="origen"></th>
+                    <?php endif; ?>
                     <th data-col="documento"><input form="seg-filter-form" name="col_documento"
                                value="<?= htmlspecialchars($filtros['col_documento']) ?>"
                                placeholder="Buscar" aria-label="Buscar en documento"></th>
+                    <th data-col="fecha"></th>
+                    <?php if (!$esModoCorreo): ?>
+                    <th data-col="clase"></th>
+                    <th data-col="contexto"></th>
+                    <?php endif; ?>
                     <?php // El proveedor y la sucursal se eligen arriba, en la
                           // barra, con su buscador propio: repetir aquí un
                           // campo de texto para lo mismo solo permite pedir
                           // dos cosas distintas a la vez. ?>
                     <th data-col="proveedor"></th>
+                    <?php if (!$esModoCorreo): ?>
+                    <th data-col="sucursal"></th>
+                    <?php endif; ?>
                     <?php // Cada una con la suya: cuando compartían columna las dos
                           // casillas iban apretadas, una al lado de la otra. ?>
                     <th data-col="monto">
@@ -553,6 +586,10 @@ $fechaDia = function ($valor) {
                                value="<?= htmlspecialchars($filtros['col_monto']) ?>"
                                placeholder="Monto" aria-label="Buscar monto">
                     </th>
+                    <?php if (!$esModoCorreo): ?>
+                    <th data-col="monto_xml"></th>
+                    <th data-col="diferencia"></th>
+                    <?php endif; ?>
                     <th data-col="saldo">
                         <input form="seg-filter-form" name="col_saldo" inputmode="decimal"
                                value="<?= htmlspecialchars($filtros['col_saldo']) ?>"
@@ -566,6 +603,13 @@ $fechaDia = function ($valor) {
                             <option value="sin_pdf" <?= $filtros['col_respaldo'] === 'sin_pdf' ? 'selected' : '' ?>>Sin PDF</option>
                         </select>
                     </th>
+                    <?php if (!$esModoCorreo): ?>
+                    <th data-col="notas_aplicables"></th>
+                    <th data-col="nota_juego"></th>
+                    <?php else: ?>
+                    <th data-col="llegada"></th>
+                    <th data-col="sistema_doc"></th>
+                    <?php endif; ?>
                     <?php // Los mismos huecos que arriba, vacíos: sin ellos, al
                           // encender una columna esta fila se correría un sitio
                           // y cada buscador quedaría bajo la columna de al lado. ?>
@@ -576,7 +620,7 @@ $fechaDia = function ($valor) {
             <tbody>
             <?php if (empty($filas)): ?>
                 <tr class="empty-row">
-                    <td colspan="30">
+                    <td colspan="40">
                         <div style="font-size:34px;color:var(--ok);margin-bottom:8px;">
                             <i class="fas fa-circle-check"></i>
                         </div>
@@ -604,14 +648,6 @@ $fechaDia = function ($valor) {
                 $sinSistema = $esModoCorreo && ($f['tarea'] ?? '') !== 'completo';
                 $docSistema = $esModoCorreo ? trim((string) ($f['sistema_doc'] ?? '')) : '';
                 $estadoNombre = $estados[$f['seguimiento_estado']] ?? $f['seguimiento_estado'];
-                /*
-                 * En una pestaña de un solo estado, escribirlo en cada renglón
-                 * es repetir el título del botón que ya está apretado. La
-                 * franja de color queda igual —es la que deja ver de un
-                 * vistazo cuál se salió del molde—, y el nombre solo se escribe
-                 * en "Todo", que es donde conviven los cuatro.
-                 */
-                $mostrarEstado = ($filtros['vista'] ?? '') === 'todo';
 
                 /*
                  * No tener saldo y no saberlo son cosas distintas, y la columna
@@ -626,10 +662,9 @@ $fechaDia = function ($valor) {
 
                 /*
                  * La nota de crédito en juego, mirada desde los dos lados: si
-                 * el renglón es una nota, contra qué factura se descuenta; si
-                 * es una factura, cuánta nota tiene esperando. Es lo mismo que
-                 * sale en Facturas y en Notas de crédito, y tiene que estar
-                 * aquí porque esta es la cola donde se trabaja.
+                 * el renglón es una nota, contra qué factura se descuenta (su
+                 * columna Aplicación); si es una factura, qué notas se le
+                 * pueden aplicar (su columna Notas aplicables).
                  */
                 $segApl = (string) ($f['aplicacion_estado'] ?? '');
                 $segColor = $segApl !== '' ? AplicacionNotaCredito::color($segApl) : 'neutro';
@@ -637,12 +672,6 @@ $fechaDia = function ($valor) {
                     ? 'background:#dcfce7;color:#166534;border:1px solid #86efac;'
                     : 'background:#fef3c7;color:#92400e;border:1px solid #fcd34d;';
                 $notaEnJuego = $esNc && $segColor !== 'neutro';
-                $facturaConNota = !$esNc && (int) ($f['notas_vivas'] ?? 0) > 0;
-
-                // La tercera línea solo existe si alguien puso algo encima del
-                // renglón. Hoy eso es raro; cuando pase, no se puede esconder.
-                $hayTrabajo = !empty($f['responsable']) || !empty($f['recordar_en'])
-                    || (int) $f['anotaciones'] > 0 || !empty($f['estado_a_mano']);
 
                 // El emparejador explica por qué no encontró el comprobante.
                 // Antes ocupaba dos renglones de texto cortado en la columna
@@ -659,184 +688,111 @@ $fechaDia = function ($valor) {
                                aria-label="Seleccionar <?= htmlspecialchars($f['documento']) ?>">
                     </td>
 
-                    <td data-col="documento">
-                        <div class="seg-doc">
-                            <span class="badge badge-<?= $esNc ? 'navy' : 'gold' ?>" style="font-size:10px;">
-                                <?= $esNc ? 'NC' : 'FE' ?>
-                            </span>
-                            <?php // Cabe entero: el más largo de los 7.131 mide
-                                  // 36 caracteres y el corte estaba en 32. ?>
-                            <strong style="font-family:ui-monospace,monospace;font-size:12.5px;">
-                                <?= htmlspecialchars(mb_strimwidth((string) $f['documento'], 0, 44, '…')) ?>
-                            </strong>
-                        </div>
-
-                        <div class="seg-sub">
-                            <?= htmlspecialchars($fechaDia($f['fecha'])) ?>
-                            <?php if ($esNc && !empty($f['clase'])): ?>
-                            · <span title="Clase de nota deducida del formato del número"><?= htmlspecialchars($f['clase']) ?></span>
-                            <?php endif; ?>
-                            <?php /*
-                             * El contexto solo se enseña en las facturas, donde
-                             * dice a qué pago entró y eso cambia de una
-                             * a otra. En las notas es el listado del que salen,
-                             * y como el módulo mantiene un único acumulado, los
-                             * 1.935 renglones traían la misma frase: ocupaba
-                             * media sub-línea para no distinguir nada. Se sigue
-                             * pudiendo buscar por él.
-                             */ ?>
-                            <?php if (!$esNc && !$esModoCorreo && !empty($f['contexto'])): ?>
-                            · <?= htmlspecialchars(mb_strimwidth((string) $f['contexto'], 0, 30, '…')) ?>
-                            <?php endif; ?>
-                            <?php if ($esModoCorreo): ?>
-                            · <span title="Cómo entró este comprobante">
-                                <?= ($f['llegada'] ?? '') === 'correo' ? 'Correo' : 'Carga XML' ?>
-                            </span>
-                            <?php endif; ?>
-                            <?php if ($mostrarEstado): ?>
-                            · <span class="seg-estado-txt"><?= htmlspecialchars($estadoNombre) ?></span>
-                            <?php endif; ?>
-
-                            <?php /*
-                             * El enganche. Es la respuesta del modo Correo, y
-                             * por eso va en la primera sub-línea y no colgando
-                             * del monto: se recorre la lista buscando los que
-                             * dicen que no.
-                             */ ?>
-                            <?php if ($esModoCorreo && $sinSistema): ?>
-                            <span class="badge seg-badge-mini"
-                                  style="background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;"
-                                  title="Este comprobante está cargado pero no aparece en ningún registro del sistema">
-                                <i class="fas fa-link-slash" style="margin-right:3px;"></i>
-                                Sin registro en el sistema
-                            </span>
-                            <?php elseif ($esModoCorreo && $docSistema !== ''): ?>
-                            <a class="badge seg-badge-mini"
-                               style="background:#dcfce7;color:#166534;border:1px solid #86efac;"
-                               href="<?= $baseUrl ?><?= $esNc ? '/notas-credito?buscar=' : '/facturas-erp?q=' ?><?= urlencode($docSistema) ?>"
-                               data-ventana="<?= $esNc ? 'Notas de crédito' : 'Facturas del sistema' ?>"
-                               data-ventana-titulo="<?= htmlspecialchars($docSistema) ?>"
-                               title="Está registrado en el sistema como <?= htmlspecialchars($docSistema) ?>. Clic para abrirlo.">
-                                <i class="fas fa-link" style="margin-right:3px;"></i>
-                                <?= htmlspecialchars(mb_strimwidth($docSistema, 0, 26, '…')) ?>
-                            </a>
-                            <?php elseif ($esModoCorreo): ?>
-                            <span class="badge seg-badge-mini"
-                                  style="background:#dcfce7;color:#166534;border:1px solid #86efac;"
-                                  title="Está registrado en el sistema, pero ese registro no imprime número de documento">
-                                <i class="fas fa-link" style="margin-right:3px;"></i> En el sistema
-                            </span>
-                            <?php endif; ?>
-
-                            <?php /*
-                             * La insignia va en esta misma línea y sin el
-                             * número de la factura: en los 915 renglones que la
-                             * llevan, ese número ya está dentro del documento
-                             * de la nota, tres centímetros más arriba. Sigue en
-                             * el tooltip y en el enlace.
-                             */ ?>
-                            <?php if ($notaEnJuego): ?>
-                                <?php if (!empty($f['aplicacion_factura_id'])): ?>
-                                <a href="<?= $baseUrl ?>/facturas-erp?q=<?= urlencode((string) $f['aplicacion_factura_doc']) ?>"
-                                   data-ventana="Facturas del sistema"
-                                   data-ventana-titulo="<?= htmlspecialchars((string) $f['aplicacion_factura_doc']) ?>"
-                                   class="badge seg-badge-mini" style="<?= $segEstilo ?>"
-                                   title="<?= htmlspecialchars(AplicacionNotaCredito::etiqueta($segApl)) ?>. Su factura: <?= htmlspecialchars((string) $f['aplicacion_factura_doc']) ?>, saldo <?= number_format((float) $f['aplicacion_factura_saldo'], 2) ?>. Clic para abrirla.">
-                                    <?= htmlspecialchars(AplicacionNotaCredito::etiqueta($segApl)) ?>
-                                </a>
-                                <?php else: ?>
-                                <span class="badge seg-badge-mini" style="<?= $segEstilo ?>">
-                                    <?= htmlspecialchars(AplicacionNotaCredito::etiqueta($segApl)) ?>
-                                </span>
-                                <?php endif; ?>
-                            <?php endif; ?>
-
-                            <?php if ($facturaConNota): ?>
-                            <a href="<?= $baseUrl ?>/notas-credito?factura_erp_id=<?= (int) $f['referencia_id'] ?>"
-                               data-ventana="Notas de crédito"
-                               data-ventana-titulo="<?= htmlspecialchars((string) $f['documento']) ?>"
-                               class="badge seg-badge-mini"
-                               style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d;"
-                               title="Esta factura tiene <?= (int) $f['notas_vivas'] ?> nota(s) de crédito sin aplicar. Si se paga completa, la nota queda para otra factura del proveedor.">
-                                <i class="fas fa-file-circle-minus" style="margin-right:3px;"></i>
-                                Nota<?= (int) $f['notas_vivas'] > 1 ? ' ×' . (int) $f['notas_vivas'] : '' ?>
-                                · <?= number_format((float) $f['notas_vivas_saldo'], 2) ?>
-                            </a>
-                            <?php endif; ?>
-                        </div>
-
-                        <?php // Tercera línea: solo si alguien puso algo encima. ?>
-                        <?php if ($hayTrabajo): ?>
-                        <div class="seg-sub">
-                            <?php if (!empty($f['estado_a_mano'])): ?>
-                                <span class="seg-mano" title="Alguien lo puso aquí a mano; no se mueve solo">
-                                    <i class="fas fa-hand"></i>
-                                </span>
-                            <?php endif; ?>
-                            <?php if (!empty($f['responsable'])): ?>
-                                <span><i class="fas fa-user" style="opacity:.5;"></i> <?= htmlspecialchars($f['responsable']) ?></span>
-                            <?php endif; ?>
-                            <?php if (!empty($f['recordar_en'])):
-                                // Ya pasado el momento, la fecha sobra: lo que
-                                // importa es que está esperando desde hace rato.
-                                $cada = (int) $f['recordar_cada'];
-                                $insiste = $cada > 0 ? ' · insiste cada ' . $cada . ($cada === 1 ? ' día' : ' días') : '';
-                            ?>
-                                <span style="<?= $f['vencido'] ? 'color:var(--miss);font-weight:700;' : '' ?>"
-                                      title="Recordatorio<?= htmlspecialchars($insiste) ?>">
-                                    <i class="fas fa-clock" style="opacity:.5;"></i>
-                                    <?= htmlspecialchars(substr((string) $f['recordar_en'], 0, 16)) ?>
-                                    <?php if ($f['vencido']): ?>· avisando<?php endif; ?>
-                                </span>
-                            <?php endif; ?>
-                            <?php if ((int) $f['anotaciones'] > 0): ?>
-                                <span><i class="fas fa-comment-dots" style="opacity:.5;"></i> <?= (int) $f['anotaciones'] ?></span>
-                            <?php endif; ?>
-                        </div>
-                        <?php endif; ?>
-
-                        <?php // El aviso no cambia nada: dice qué pasó y deja que
-                              // una persona decida si mover el renglón o no. ?>
-                        <?php if (!empty($f['desajustada'])): ?>
-                        <div class="seg-desajuste"
-                             title="Los datos cambiaron después de que alguien lo puso aquí">
-                            <i class="fas fa-triangle-exclamation"></i>
-                            Le tocaría <strong><?= htmlspecialchars(mb_strtolower(
-                                $estados[$f['estado_calculado']] ?? $f['estado_calculado'])) ?></strong>
-                        </div>
-                        <?php endif; ?>
-
-                        <?php // El motivo es obligatorio al mandar a revisión, así
-                              // que es lo primero que hay que poder leer sin abrir nada.
-                              // Fuera de revisión no se muestra: describe un enredo que
-                              // ya no aplica, y sigue guardado en la bitácora. ?>
-                        <?php if (!empty($f['motivo']) && $f['seguimiento_estado'] === 'revision'): ?>
-                        <div class="seg-motivo" title="<?= htmlspecialchars((string) $f['motivo']) ?>">
-                            <?= htmlspecialchars(mb_strimwidth((string) $f['motivo'], 0, 70, '…')) ?>
-                        </div>
-                        <?php endif; ?>
+                    <?php if ($esModoCorreo): ?>
+                    <td data-col="tipo">
+                    <?php else: ?>
+                    <td data-col="origen">
+                    <?php endif; ?>
+                        <span class="badge badge-<?= $esNc ? 'navy' : 'gold' ?>" style="font-size:10px;"
+                              title="<?= $esNc ? 'Nota de crédito' : 'Factura' ?>">
+                            <?= $esNc ? 'NC' : 'FE' ?>
+                        </span>
                     </td>
+
+                    <td data-col="documento">
+                        <?php // Cabe entero: el más largo de los 7.131 mide
+                              // 36 caracteres y el corte estaba en 32. ?>
+                        <strong style="font-family:ui-monospace,monospace;font-size:12.5px;">
+                            <?= htmlspecialchars(mb_strimwidth((string) $f['documento'], 0, 44, '…')) ?>
+                        </strong>
+                    </td>
+
+                    <td style="white-space:nowrap;" data-col="fecha"><?= htmlspecialchars($fechaDia($f['fecha'])) ?></td>
+
+                    <?php if (!$esModoCorreo): ?>
+                    <td data-col="clase">
+                        <?= $esNc && !empty($f['clase'])
+                            ? htmlspecialchars((string) $f['clase'])
+                            : '<span class="seg-nada">—</span>' ?>
+                    </td>
+
+                    <?php // A qué listado o pago entró. ?>
+                    <td data-col="contexto" title="<?= htmlspecialchars((string) ($f['contexto'] ?? '')) ?>">
+                        <?= !empty($f['contexto'])
+                            ? htmlspecialchars(mb_strimwidth((string) $f['contexto'], 0, 30, '…'))
+                            : '<span class="seg-nada">—</span>' ?>
+                    </td>
+                    <?php endif; ?>
 
                     <td data-col="proveedor">
                         <?php // Con el ancho que soltaron las tres columnas que se
                               // fueron, el nombre entra: se cortaba en 3 de cada 10. ?>
                         <?= htmlspecialchars(mb_strimwidth((string) $f['proveedor'], 0, 46, '…')) ?>
-                        <?php if (!empty($f['sucursal'])): ?>
-                        <div class="seg-sub"><?= htmlspecialchars((string) $f['sucursal']) ?></div>
-                        <?php endif; ?>
                     </td>
+
+                    <?php if (!$esModoCorreo): ?>
+                    <td style="white-space:nowrap;" data-col="sucursal">
+                        <?= !empty($f['sucursal'])
+                            ? htmlspecialchars((string) $f['sucursal'])
+                            : '<span class="seg-nada">—</span>' ?>
+                    </td>
+                    <?php endif; ?>
 
                     <td class="right" data-col="monto">
                         <strong><?= $moneda($f['monto'], $f['moneda']) ?></strong>
-                        <?php // Lo único que decía "Qué falta" y no estaba ya en
-                              // los chips. Va acá, pegado al número del que habla:
-                              // la diferencia es contra el monto, no contra el saldo. ?>
-                        <?php if ($hayDif): ?>
-                        <div class="seg-sub seg-dif" title="El comprobante no coincide con el monto del documento">
-                            dif. <?= $moneda(abs((float) $f['diferencia']), $f['moneda']) ?>
-                        </div>
+                    </td>
+
+                    <?php // El monto del comprobante, a la par del del sistema: la
+                          // diferencia sola no dice cuál de los dos está mal. Sin
+                          // XML enganchado no hay monto que mostrar. ?>
+                    <?php if (!$esModoCorreo): ?>
+                    <?php
+                    /*
+                     * En la moneda del comprobante, con el tipo de cambio que
+                     * declaró el emisor debajo. El sistema anota en colones lo
+                     * que el proveedor facturó en dólares: sin el tipo de
+                     * cambio a la vista, US$927,68 al lado de ₡421.964,52 se
+                     * leía como una diferencia de cuatrocientos mil colones.
+                     */
+                    $monedaXml = strtoupper((string) ($f['moneda_xml'] ?? '')) ?: 'CRC';
+                    $tcXml = (float) ($f['tipo_cambio_xml'] ?? 0);
+                    $enOtraMoneda = $monedaXml !== 'CRC';
+                    ?>
+                    <td class="right" data-col="monto_xml">
+                        <?php if (($f['monto_xml'] ?? null) !== null && $f['monto_xml'] !== ''): ?>
+                        <?= $moneda($f['monto_xml'], $monedaXml) ?>
+                        <?php if ($enOtraMoneda): ?>
+                        <span class="seg-tc" title="Tipo de cambio que declara el XML">
+                            <?= $tcXml > 0 ? 'TC ' . number_format($tcXml, 2) : 'Sin tipo de cambio' ?>
+                        </span>
+                        <?php endif; ?>
+                        <?php else: ?>
+                        <span class="seg-nada">—</span>
                         <?php endif; ?>
                     </td>
+
+                    <?php // Lo único que decía "Qué falta" y no estaba ya en los
+                          // chips: el comprobante no coincide con el monto. ?>
+                    <td class="right" data-col="diferencia">
+                        <?php if ($hayDif): ?>
+                        <span class="seg-dif" title="El comprobante no coincide con el monto del documento">
+                            <?= $moneda(abs((float) $f['diferencia']), $f['moneda']) ?>
+                        </span>
+                        <?php
+                        // En dólares, la diferencia casi siempre es de tipo de
+                        // cambio: el que usó el sistema es su monto entre el del
+                        // XML, y se pone a la par del que declara el XML.
+                        if ($enOtraMoneda && (float) ($f['monto_xml'] ?? 0) > 0):
+                            $tcSistema = (float) $f['monto'] / (float) $f['monto_xml']; ?>
+                        <span class="seg-tc" title="Monto del sistema entre el monto del XML">
+                            TC sistema <?= number_format($tcSistema, 2) ?>
+                        </span>
+                        <?php endif; ?>
+                        <?php else: ?>
+                        <span class="seg-nada">—</span>
+                        <?php endif; ?>
+                    </td>
+                    <?php endif; ?>
 
                     <?php /*
                      * El saldo, en su propia columna. Vivía colgado del monto y
@@ -930,6 +886,75 @@ $fechaDia = function ($valor) {
                             <?php endif; ?>
                         </div>
                     </td>
+                    <?php if (!$esModoCorreo): ?>
+                    <td class="center" data-col="notas_aplicables">
+                        <?php // Una nota no tiene notas que aplicarle: su celda va vacía.
+                        if (!$esNc) {
+                            $naFacturaId = (int) $f['referencia_id'];
+                            $naDocumento = (string) $f['documento'];
+                            $naCuantas = (int) ($f['notas_vivas'] ?? 0);
+                            $naSaldo = (float) ($f['notas_vivas_saldo'] ?? 0);
+                            include __DIR__ . '/../partials/notas-aplicables.php';
+                        } ?>
+                    </td>
+
+                    <?php // Contra qué factura se descuenta la nota. Una factura
+                          // no lleva nada: lo suyo es la columna de al lado. ?>
+                    <td data-col="nota_juego">
+                        <?php if ($notaEnJuego && !empty($f['aplicacion_factura_id'])): ?>
+                        <a href="<?= $baseUrl ?>/facturas-erp?q=<?= urlencode((string) $f['aplicacion_factura_doc']) ?>"
+                           data-ventana="Facturas del sistema"
+                           data-ventana-titulo="<?= htmlspecialchars((string) $f['aplicacion_factura_doc']) ?>"
+                           class="badge seg-badge-mini" style="<?= $segEstilo ?>"
+                           title="<?= htmlspecialchars(AplicacionNotaCredito::etiqueta($segApl)) ?>. Su factura: <?= htmlspecialchars((string) $f['aplicacion_factura_doc']) ?>, saldo <?= number_format((float) $f['aplicacion_factura_saldo'], 2) ?>. Clic para abrirla.">
+                            <?= htmlspecialchars(AplicacionNotaCredito::etiqueta($segApl)) ?>
+                        </a>
+                        <?php elseif ($notaEnJuego): ?>
+                        <span class="badge seg-badge-mini" style="<?= $segEstilo ?>">
+                            <?= htmlspecialchars(AplicacionNotaCredito::etiqueta($segApl)) ?>
+                        </span>
+                        <?php else: ?>
+                        <span class="seg-nada">—</span>
+                        <?php endif; ?>
+                    </td>
+                    <?php else: ?>
+                    <td data-col="llegada" title="Cómo entró este comprobante">
+                        <?= ($f['llegada'] ?? '') === 'correo' ? 'Correo' : 'Carga XML' ?>
+                    </td>
+
+                    <?php /*
+                     * El enganche: lo único que el modo Correo viene a
+                     * contestar. Con registro se dice cuál —para poder ir a
+                     * verlo—; sin registro se dice que no hay, que es el
+                     * renglón que hay que trabajar.
+                     */ ?>
+                    <td data-col="sistema_doc">
+                        <?php if ($sinSistema): ?>
+                        <span class="badge seg-badge-mini"
+                              style="background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;"
+                              title="Este comprobante está cargado pero no aparece en ningún registro del sistema">
+                            <i class="fas fa-link-slash" style="margin-right:3px;"></i>
+                            Sin registro
+                        </span>
+                        <?php elseif ($docSistema !== ''): ?>
+                        <a class="badge seg-badge-mini"
+                           style="background:#dcfce7;color:#166534;border:1px solid #86efac;"
+                           href="<?= $baseUrl ?><?= $esNc ? '/notas-credito?buscar=' : '/facturas-erp?q=' ?><?= urlencode($docSistema) ?>"
+                           data-ventana="<?= $esNc ? 'Notas de crédito' : 'Facturas del sistema' ?>"
+                           data-ventana-titulo="<?= htmlspecialchars($docSistema) ?>"
+                           title="Está registrado en el sistema como <?= htmlspecialchars($docSistema) ?>. Clic para abrirlo.">
+                            <i class="fas fa-link" style="margin-right:3px;"></i>
+                            <?= htmlspecialchars(mb_strimwidth($docSistema, 0, 26, '…')) ?>
+                        </a>
+                        <?php else: ?>
+                        <span class="badge seg-badge-mini"
+                              style="background:#dcfce7;color:#166534;border:1px solid #86efac;"
+                              title="Está registrado en el sistema, pero ese registro no imprime número de documento">
+                            <i class="fas fa-link" style="margin-right:3px;"></i> En el sistema
+                        </span>
+                        <?php endif; ?>
+                    </td>
+                    <?php endif; ?>
                     <?php // Todo lo que la cola sabe y no cabía en pantalla, con
                           // el mismo valor con el que baja al Excel. ?>
                     <?= Columnas::celdasExtra($listadoCols, $f) ?>
@@ -1080,8 +1105,7 @@ $fechaDia = function ($valor) {
                            value="08:00" aria-label="Hora del recordatorio">
                 </div>
                 <div id="dlg-recordatorio-nota" style="font-size:11px;color:var(--text-muted);margin-top:4px;">
-                    El primer aviso sale en un pago a las 08:00, y vuelve a salir
-                    cada pago mientras siga en revisión.
+                    Sale en cada pago mientras siga en revisión.
                 </div>
             </div>
 
@@ -1119,38 +1143,44 @@ $fechaDia = function ($valor) {
 
 <style>
 /* ── Seguimiento ─────────────────────────────────────────────────────── */
-.seg-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; display: flex;
-           gap: 7px; align-items: center; flex-wrap: wrap; }
+/* Donde el renglón no tiene el dato: una raya tenue, que no compita. */
+.seg-nada { color: #cbd5e1; }
 .seg-tabla tbody tr.seg-vencido { background: #FFF6F6; }
 .seg-tabla tbody tr.seg-vencido:hover { background: #FFEDED; }
 .seg-tabla tbody tr.seg-sel { background: #EEF4FF; }
-/* Siete columnas: el saldo volvió a tener la suya. */
+/* Un dato por columna: la tabla es ancha y se corre de lado; quien quiera
+   angostarla apaga lo que no usa desde la esquina. */
 .seg-tabla { min-width: 1100px; }
 .seg-tabla td { vertical-align: top; }
-
-/* El número y su tipo, en la primera línea del renglón */
-.seg-doc { display: flex; align-items: center; gap: 7px; }
 
 /*
  * El estado, que era una columna repitiendo el nombre de la pestaña abierta.
  * Como franja no ocupa ancho y se lee de un vistazo bajando la mirada por el
  * borde, que es justo lo que uno hace buscando el renglón raro. El nombre
- * sigue estando: en el title de la celda, y escrito en la pestaña "Todo".
+ * sigue estando: en el title de la celda, y en la columna Estado, que se
+ * enciende desde la esquina.
  */
 .seg-marca { box-shadow: inset 3px 0 0 0 var(--border); }
 .seg-tabla tbody tr.seg-e-pendiente .seg-marca { box-shadow: inset 3px 0 0 0 var(--warn); }
 .seg-tabla tbody tr.seg-e-revision  .seg-marca { box-shadow: inset 3px 0 0 0 var(--gold); }
 .seg-tabla tbody tr.seg-e-lista     .seg-marca { box-shadow: inset 3px 0 0 0 var(--ok); }
 .seg-tabla tbody tr.seg-e-cerrada   .seg-marca { box-shadow: inset 3px 0 0 0 #CBD5E1; }
-.seg-estado-txt { font-weight: 700; color: var(--navy); }
 
-/* Insignia de la nota en juego: va dentro de la sub-línea, no en un renglón propio */
+/* Insignias chicas: la aplicación de la nota y el enganche con el sistema */
 .seg-badge-mini {
   font-size: 9.5px; padding: 1px 6px; text-decoration: none; white-space: nowrap;
 }
 
-/* La diferencia cuelga del monto, y solo cuando dice algo */
-.seg-sub.seg-dif { justify-content: flex-end; color: var(--diff); font-weight: 700; }
+/* La diferencia contra el monto, solo cuando la hay */
+.seg-dif { color: var(--diff); font-weight: 700; }
+/* El tipo de cambio, debajo del monto: dato de apoyo, no la cifra */
+.seg-tc { display: block; font-size: 11px; font-weight: 400; color: var(--text-muted); white-space: nowrap; }
+
+/* El aviso de que la marca a mano se quedó atrás (en el expediente) */
+.seg-desajuste {
+  margin-top: 3px; font-size: 11px; font-weight: 600;
+  color: #8F1A1A; display: flex; gap: 5px; align-items: center;
+}
 
 /* Saldo cero: se escribe con palabras, en gris, para que no compita con las
    cifras de al lado —lo que se busca recorriendo la columna es dónde queda
@@ -1176,19 +1206,6 @@ $fechaDia = function ($valor) {
   background: rgba(12,36,97,.10); color: inherit;
 }
 .btn-primary .seg-cuenta { background: rgba(255,255,255,.22); }
-
-/* La manita: lo puso una persona, no el cálculo */
-.seg-mano { margin-left: 4px; font-size: 10.5px; color: var(--text-muted); }
-
-/* El aviso de que la marca a mano se quedó atrás */
-.seg-desajuste {
-  margin-top: 3px; font-size: 11px; font-weight: 600;
-  color: #8F1A1A; display: flex; gap: 5px; align-items: center;
-}
-.seg-motivo {
-  margin-top: 3px; font-size: 11px; color: var(--text); font-style: italic;
-  border-left: 2px solid var(--gold); padding-left: 6px;
-}
 
 .seg-respaldo { display: inline-flex; gap: 4px; }
 .seg-chip {

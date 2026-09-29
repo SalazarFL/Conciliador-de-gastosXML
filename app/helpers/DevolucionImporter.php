@@ -2,7 +2,7 @@
 /**
  * Importa un reporte PDF del ERP (Boleta Local o Devolución a Proveedor):
  * parsea y cuadra con ReporteErpParser, deduplica por hash del PDF, archiva
- * el original en la carpeta compartida y corre la verificación contra NC.
+ * el original en SharePoint y corre la verificación contra NC.
  * Un PDF que no cuadra se rechaza completo — nunca se importa a medias.
  */
 
@@ -87,9 +87,9 @@ class DevolucionImporter
 
     private function archivarPdf($rutaPdf, array $parsed, $hash, $sociedadId = null)
     {
-        // Donde archiva la empresa —la carpeta compartida o SharePoint— y no
-        // en storage/: la fila de la devolución la consulta todo el grupo y
-        // su PDF tiene que abrirse desde cualquier computadora.
+        // En SharePoint y no en storage/: la fila de la devolución la
+        // consulta todo el grupo y su PDF tiene que abrirse desde cualquier
+        // computadora.
         $dir = RutaDocumento::carpetaTrabajo('DEVOLUCIONES/' . date('Y'), $sociedadId);
 
         $numero = (string) ($parsed['tipo'] === 'boleta_local'

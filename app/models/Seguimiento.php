@@ -30,6 +30,7 @@ require_once __DIR__ . '/../helpers/ClaseNotaCredito.php';
 require_once __DIR__ . '/../helpers/EstadoArchivo.php';
 require_once __DIR__ . '/../helpers/AplicacionNotaCredito.php';
 require_once __DIR__ . '/Notificacion.php';
+require_once __DIR__ . '/NotaCredito.php';
 require_once __DIR__ . '/ProveedorCatalogo.php';
 require_once __DIR__ . '/../helpers/BusquedaImporte.php';
 
@@ -723,6 +724,9 @@ class Seguimiento extends Model
                 l.monto AS monto,
                 l.saldo AS saldo,
                 l.diferencia AS diferencia,
+                x.total AS monto_xml,
+                x.moneda AS moneda_xml,
+                x.tipo_cambio AS tipo_cambio_xml,
                 l.motivo_match AS motivo_match,
                 l.factura_xml_id AS factura_xml_id,
                 li.id AS contexto_id,
@@ -783,6 +787,13 @@ class Seguimiento extends Model
                 pe.monto AS monto,
                 COALESCE(pe.saldo_pago, pe.saldo) AS saldo,
                 pe.diferencia AS diferencia,
+                -- El total del comprobante, a la par del monto del sistema:
+                -- la diferencia sola no dice cuál de los dos está mal.
+                x.total AS monto_xml,
+                -- En su moneda: una factura en dólares se lee en dólares, con
+                -- el tipo de cambio que declaró el emisor.
+                x.moneda AS moneda_xml,
+                x.tipo_cambio AS tipo_cambio_xml,
                 NULL AS motivo_match,
                 pe.factura_xml_id AS factura_xml_id,
                 li.id AS contexto_id,
@@ -797,7 +808,9 @@ class Seguimiento extends Model
                 COALESCE(ABS(pe.diferencia), COALESCE(pe.saldo_pago, pe.saldo)) AS en_juego,
                 /*
                  * Del lado de la factura la pregunta se da vuelta: no contra
-                 * qué se aplica, sino cuánta nota tiene esperando.
+                 * qué se aplica, sino cuánta nota tiene esperando. Las reglas
+                 * de cuáles cuentan —directas, de costo sobre el mínimo, de
+                 * cambio del mismo proveedor— viven en NotaCredito.
                  *
                  * Sale de un agregado que se arma una vez —una fila por
                  * factura con notas aplicables— y no de un JOIN directo, que
@@ -816,11 +829,7 @@ class Seguimiento extends Model
               FROM facturas_erp pe
               LEFT JOIN pagos li ON li.id = pe.pago_id
               LEFT JOIN facturas_xml x ON x.id = pe.factura_xml_id
-              LEFT JOIN (SELECT factura_erp_id, COUNT(*) AS n, SUM(saldo) AS saldo
-                           FROM notas_credito_lineas
-                          WHERE estado_aplicacion = 'aplicable'
-                            AND factura_erp_id IS NOT NULL
-                          GROUP BY factura_erp_id) nv ON nv.factura_erp_id = pe.id";
+              LEFT JOIN (" . NotaCredito::sqlAplicablesPorFactura() . ") nv ON nv.factura_erp_id = pe.id";
 
         return "({$nc}) UNION ALL ({$fe})";
     }

@@ -44,46 +44,16 @@ class Sociedad extends Model
             // Sin permisos de DDL: la migración manual la crea
         }
 
-        // Dónde se archivan los documentos nuevos de la sociedad. Es una
-        // tabla de una fila por empresa: agregarla acá no cuesta nada, y si
-        // el usuario de la base no puede, database/migration_almacen_graph.sql.
-        try {
-            $this->execute("ALTER TABLE {$this->table}
-                ADD COLUMN IF NOT EXISTS `almacen_documentos` VARCHAR(10) NOT NULL DEFAULT 'disco' AFTER `cedula`");
-        } catch (Throwable $e) {
-            // Sin la columna todas siguen en disco: ver almacenesPorSociedad().
-        }
-    }
-
-    /** Dónde puede vivir lo nuevo de una sociedad. */
-    public const ALMACENES = ['disco' => 'Carpeta compartida', 'sharepoint' => 'SharePoint'];
-
-    /**
-     * [sociedad_id => almacén] de las que NO están en disco.
-     *
-     * Solo las que se apartan de lo de siempre: con todas en disco, que es
-     * hoy, la respuesta es una lista vacía. Sin la columna también, y eso es
-     * exactamente lo que significa no haber corrido la migración.
-     */
-    public function almacenesPorSociedad()
-    {
-        try {
-            $filas = $this->fetchAll("SELECT id, almacen_documentos FROM {$this->table}
-                                      WHERE almacen_documentos <> 'disco'") ?: [];
-        } catch (Throwable $e) {
-            return [];
-        }
-        $mapa = [];
-        foreach ($filas as $fila) {
-            $mapa[(int) $fila['id']] = (string) $fila['almacen_documentos'];
-        }
-        return $mapa;
+        // La columna `almacen_documentos` (dónde archivaba lo nuevo cada
+        // empresa) quedó en las bases que ya la tienen, pero no se crea ni se
+        // lee: desde el 27/09/2026 todas archivan en SharePoint. Ver
+        // AlmacenDocumentos, "Cuál se usa".
     }
 
     /**
-     * Cuántos comprobantes de la empresa siguen en la carpeta compartida.
-     * Es lo que hay que decir al pasarla a SharePoint: esos no se mueven
-     * solos, se migran (cli/migrar_documentos_a_graph.php).
+     * Cuántos comprobantes de la empresa siguen en la carpeta compartida de
+     * antes. Se abren mientras esa carpeta esté en la computadora, pero no
+     * están en SharePoint hasta migrarlos (cli/migrar_documentos_a_graph.php).
      */
     public function documentosEnDisco($id)
     {
@@ -112,58 +82,26 @@ class Sociedad extends Model
     }
 
     /**
-     * ¿Alguna empresa archiva todavía en la carpeta compartida?
-     *
-     * Es lo que decide si una computadora necesita esa carpeta configurada:
-     * con todas en SharePoint, no. Sin la columna —base sin la migración—,
-     * todas están en disco. Y sin ninguna empresa también hace falta: lo que
-     * no se sabe de quién es se archiva en disco, en SIN EMPRESA.
+     * Cuántos comprobantes, de todas las empresas, siguen en la carpeta
+     * compartida de antes: lo que falta migrar para que no quede nada fuera
+     * de SharePoint. [sociedad_id => cuántos], solo las que tienen alguno.
      */
-    public function hayEmpresasEnDisco()
+    public function documentosEnDiscoPorEmpresa()
     {
         try {
-            return (bool) $this->fetchColumn(
-                "SELECT NOT EXISTS (SELECT 1 FROM {$this->table})
-                     OR EXISTS (SELECT 1 FROM {$this->table}
-                                 WHERE almacen_documentos = 'disco' OR almacen_documentos IS NULL)"
-            );
+            $filas = $this->fetchAll(
+                "SELECT sociedad_id, COUNT(*) AS n FROM facturas_xml
+                  WHERE almacen IS NULL AND COALESCE(ruta_xml, '') <> '' AND ruta_xml NOT LIKE 'sharepoint:%'
+                  GROUP BY sociedad_id"
+            ) ?: [];
         } catch (Throwable $e) {
-            return true;
+            return [];
         }
-    }
-
-    /**
-     * Cambia dónde se archiva lo nuevo de una sociedad.
-     *
-     * Se niega a pasar a un almacén que ESTA máquina no puede usar: el ajuste
-     * es de todas las PC y la credencial es de cada una. Quien lo cambia
-     * tiene que poder comprobar, en el momento, que funciona.
-     *
-     * Esto NO mueve los documentos que ya están: cada uno sigue donde dice su
-     * fila. Pasar lo existente es cli/migrar_documentos_a_graph.php.
-     */
-    public function definirAlmacen($id, $almacen)
-    {
-        $almacen = strtolower(trim((string) $almacen));
-        if (!isset(self::ALMACENES[$almacen])) {
-            throw new InvalidArgumentException('Almacén desconocido: ' . $almacen);
+        $mapa = [];
+        foreach ($filas as $fila) {
+            $mapa[(int) $fila['sociedad_id']] = (int) $fila['n'];
         }
-        require_once __DIR__ . '/../helpers/AlmacenDocumentos.php';
-        if (!AlmacenDocumentos::disponible($almacen)) {
-            throw new RuntimeException('Esta computadora no tiene configurado ' . self::ALMACENES[$almacen]
-                . ': falta app/config/local.graph.php. Haz el cambio desde una que sí lo tenga.');
-        }
-        // Cada documento anota en su fila dónde quedó. Sin esa columna, lo que
-        // se archive en SharePoint se leería como de disco: perdido.
-        if ($almacen !== 'disco' && !$this->fetchColumn(
-            "SELECT 1 FROM information_schema.COLUMNS
-              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'facturas_xml' AND COLUMN_NAME = 'almacen' LIMIT 1"
-        )) {
-            throw new RuntimeException('Antes hay que correr database/migration_almacen_graph.sql en la base.');
-        }
-        $this->execute("UPDATE {$this->table} SET almacen_documentos = ? WHERE id = ?", [$almacen, (int) $id]);
-        AlmacenDocumentos::olvidarAjustes();
-        return true;
+        return $mapa;
     }
 
     /**

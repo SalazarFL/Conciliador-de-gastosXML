@@ -160,7 +160,6 @@ try {
     $almacen = almacenEnMemoria($nube);
     AlmacenDocumentos::olvidar();
     AlmacenDocumentos::registrar('sharepoint', function () use ($almacen) { return $almacen; });
-    AlmacenDocumentos::fijarFuenteAjustes(function () { return [9 => 'sharepoint']; });
 
     $archivo = (new DocumentoArchivo($raiz))->paraSociedad(9, 'Empresa Nube');
     $doc = ['tipo_documento' => 'FE', 'fecha_emision' => '2026-07-25', 'numero_factura_asistente' => '4354'];

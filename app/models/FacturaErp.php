@@ -22,6 +22,7 @@ require_once __DIR__ . '/../helpers/EstadoArchivo.php';
 require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 require_once __DIR__ . '/../helpers/FacturasErpCsvParser.php';
 require_once __DIR__ . '/../helpers/LineaRevision.php';
+require_once __DIR__ . '/NotaCredito.php';
 require_once __DIR__ . '/ProveedorCatalogo.php';
 require_once __DIR__ . '/../helpers/BusquedaImporte.php';
 
@@ -129,6 +130,32 @@ class FacturaErp extends Model
             KEY `idx_tipo` (`tipo`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
+        // Facturas que alguien sacó del listado: el ERP las trae, pero no son
+        // una factura de verdad —la misma cargada dos veces con otra fecha—.
+        // Descartar la incidencia solo callaba el aviso y la factura seguía
+        // ahí, "sin respaldo" para siempre. La fila entera queda en `fila`
+        // para poder devolverla tal cual, y la `clave` es lo que la carga
+        // siguiente mira para no volver a meterla.
+        $this->execute("CREATE TABLE IF NOT EXISTS facturas_erp_quitadas (
+            `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `sociedad_id` INT UNSIGNED NULL DEFAULT NULL,
+            `clave` VARCHAR(190) NOT NULL,
+            `proveedor_codigo` VARCHAR(30) NOT NULL DEFAULT '',
+            `proveedor_nombre` VARCHAR(255) NOT NULL DEFAULT '',
+            `tipo` VARCHAR(5) NOT NULL DEFAULT 'F',
+            `documento` VARCHAR(60) NOT NULL DEFAULT '',
+            `fecha_emision` DATE NULL DEFAULT NULL,
+            `monto` DECIMAL(18,2) NULL DEFAULT NULL,
+            `moneda` VARCHAR(10) NOT NULL DEFAULT '',
+            `fila` LONGTEXT NULL,
+            `motivo` VARCHAR(255) NULL DEFAULT NULL,
+            `veces_saltada` INT UNSIGNED NOT NULL DEFAULT 0,
+            `usuario_id` INT UNSIGNED NULL DEFAULT NULL,
+            `creado_en` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `uk_quitada_clave` (`sociedad_id`, `clave`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
         $this->execute("CREATE TABLE IF NOT EXISTS facturas_erp (
             `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
             `clave` VARCHAR(190) NOT NULL,
@@ -190,6 +217,14 @@ class FacturaErp extends Model
     private function agregarColumnasFaltantes()
     {
         $pendientes = [
+            // El tipo de cambio del comprobante. Una factura en dólares se
+            // compara con la del sistema, que está en colones, multiplicada
+            // por este número; sin él, cada factura en dólares quedaba "con
+            // diferencia" por el monto entero. Se declara acá, junto a las de
+            // facturas_erp, porque quien compara es este modelo.
+            'facturas_xml' => [
+                'tipo_cambio' => "ADD COLUMN `tipo_cambio` DECIMAL(18,5) NULL DEFAULT NULL AFTER `moneda`",
+            ],
             'facturas_erp_cargas' => [
                 'incidencias' => "ADD COLUMN `incidencias` INT UNSIGNED NOT NULL DEFAULT 0 AFTER `cuadre_ok`",
                 // Las escribe importar() desde que hay más de una empresa; sin
@@ -344,6 +379,9 @@ class FacturaErp extends Model
             $existentes[$fila['clave']] = ['id' => (int) $fila['id'], 'saldo' => (float) $fila['saldo']];
         }
 
+        $quitadas = $this->clavesQuitadas($sociedadId);
+        $saltadas = [];
+
         $nuevas = [];
         $cambios = [];
         $sinCambio = 0;
@@ -351,6 +389,11 @@ class FacturaErp extends Model
         foreach ($facturas as $f) {
             $clave = (string) ($f['clave'] ?? '');
             if ($clave === '') {
+                continue;
+            }
+            // Alguien ya dijo que esta fila del reporte no es una factura.
+            if (isset($quitadas[$clave])) {
+                $saltadas[] = $quitadas[$clave];
                 continue;
             }
             if (!isset($existentes[$clave])) {
@@ -395,6 +438,13 @@ class FacturaErp extends Model
             $this->insertarNuevas($nuevas, $cargaId, $sociedadId);
             $this->actualizarCambiadas($cambios, $cargaId);
             $this->registrarIncidencias($incidencias, $cargaId, $sociedadId);
+            if ($saltadas) {
+                $this->execute(
+                    'UPDATE facturas_erp_quitadas SET veces_saltada = veces_saltada + 1 WHERE id IN ('
+                    . implode(',', array_fill(0, count($saltadas), '?')) . ')',
+                    $saltadas
+                );
+            }
             $this->execute(
                 "UPDATE facturas_erp_cargas
                     SET insertadas = ?, actualizadas = ?, sin_cambio = ?, incidencias = ?
@@ -412,6 +462,7 @@ class FacturaErp extends Model
             'insertadas' => count($nuevas),
             'actualizadas' => count($cambios),
             'sin_cambio' => $sinCambio,
+            'quitadas' => count($saltadas),
             'cuadre_ok' => empty($descuadres),
             'descuadres' => $descuadres,
             'incidencias' => count($incidencias),
@@ -447,6 +498,9 @@ class FacturaErp extends Model
             $existentes[$fila['clave']] = (float) $fila['saldo'];
         }
 
+        $quitadas = $this->clavesQuitadas($sociedadId);
+        $saltadas = 0;
+
         $nuevas = 0;
         $sinCambio = 0;
         $cambios = [];
@@ -457,6 +511,10 @@ class FacturaErp extends Model
         foreach ($facturas as $f) {
             $clave = (string) ($f['clave'] ?? '');
             if ($clave === '') {
+                continue;
+            }
+            if (isset($quitadas[$clave])) {
+                $saltadas++;
                 continue;
             }
             if (!isset($existentes[$clave])) {
@@ -496,6 +554,7 @@ class FacturaErp extends Model
             'nuevas' => $nuevas,
             'actualizadas' => count($cambios),
             'sin_cambio' => $sinCambio,
+            'quitadas' => $saltadas,
             'saldo_nuevas' => round($saldoNuevas, 2),
             'saldo_sube' => round($saldoSube, 2),
             'saldo_baja' => round($saldoBaja, 2),
@@ -949,6 +1008,12 @@ class FacturaErp extends Model
             $where[] = 'e.factura_xml_id IS NULL';
         }
 
+        // Las que tienen notas de crédito esperando: las que hay que mirar
+        // antes de pagarlas completas.
+        if (($filtros['notas'] ?? '') === 'aplicables') {
+            $where[] = 'nv.n > 0';
+        }
+
         foreach ([['fecha_desde', '>='], ['fecha_hasta', '<=']] as $rango) {
             $valor = trim((string) ($filtros[$rango[0]] ?? ''));
             if ($valor !== '') {
@@ -983,10 +1048,13 @@ class FacturaErp extends Model
                        x.ruta_xml, x.ruta_pdf, x.estado_pdf,
                        x.sociedad_id,   -- de qué sociedad es el documento: sin eso no se sabe en qué almacén buscarlo
                        " . EstadoArchivo::columnaRecuperable('x.') . " AS recuperable,
-                       p.razon_social AS xml_proveedor
+                       p.razon_social AS xml_proveedor,
+                       COALESCE(nv.n, 0) AS notas_vivas,
+                       COALESCE(nv.saldo, 0) AS notas_vivas_saldo
                   FROM facturas_erp e
                   LEFT JOIN facturas_xml x ON x.id = e.factura_xml_id
                   LEFT JOIN proveedores p ON p.id = x.proveedor_id
+                  LEFT JOIN (" . NotaCredito::sqlAplicablesPorFactura() . ") nv ON nv.factura_erp_id = e.id
                  WHERE " . implode(' AND ', $where) . "
                  ORDER BY FIELD(e.estado_respaldo, 'con_diferencia', 'sin_respaldo', 'respaldada'),
                           e.proveedor_nombre ASC, e.id ASC";
@@ -1000,7 +1068,7 @@ class FacturaErp extends Model
         // con él, el emparejador puede preguntar si el emisor del comprobante
         // es realmente el proveedor de esta línea antes de aceptarlo.
         return $this->fetchAll(
-            "SELECT id, documento, numero_corto, proveedor_codigo, proveedor_nombre, monto, saldo,
+            "SELECT id, sociedad_id, documento, numero_corto, proveedor_codigo, proveedor_nombre, moneda, monto, saldo,
                     COALESCE(saldo_pago, saldo) AS saldo_pago,
                     factura_xml_id, estado_respaldo AS estado, diferencia, match_manual
                FROM facturas_erp
@@ -1099,8 +1167,10 @@ class FacturaErp extends Model
     public function getFacturasSinRespaldoParaMatching($desdeId = 0, $limite = 2000)
     {
         $params = [(int) $desdeId];
-        $sql = "SELECT id, documento, numero_corto, proveedor_codigo, proveedor_nombre,
-                       monto, saldo, COALESCE(saldo_pago, saldo) AS saldo_pago,
+        // sociedad_id viaja con cada fila: su código se busca en el catálogo
+        // de SU empresa (ver ProveedorCodigoErp::veredicto).
+        $sql = "SELECT id, sociedad_id, documento, numero_corto, proveedor_codigo, proveedor_nombre,
+                       moneda, monto, saldo, COALESCE(saldo_pago, saldo) AS saldo_pago,
                        factura_xml_id, estado_respaldo AS estado, diferencia,
                        match_manual, pago_id
                   FROM facturas_erp
@@ -1182,7 +1252,7 @@ class FacturaErp extends Model
         }
 
         $erp = $eleccion['erp'];
-        $diferencia = round((float) $erp['monto'] - (float) $xml['total'], 2);
+        $diferencia = round((float) $erp['monto'] - FacturaMatcher::totalComparable($xml, $erp['moneda'] ?? ''), 2);
         $estado = abs($diferencia) <= 1.0 ? 'respaldada' : 'con_diferencia';
 
         $this->execute(
@@ -1375,7 +1445,6 @@ class FacturaErp extends Model
         $consecutivoXml = preg_replace('/\D+/', '', (string) ($xml['consecutivo_completo'] ?? ''));
         $xmlTraeConsecutivo = preg_match('/^\d{20}$/', $consecutivoXml)
             && ltrim($consecutivoXml, '0') !== '';
-        $total = (float) ($xml['total'] ?? 0);
         $proveedorIdXml = (int) ($xml['proveedor_id'] ?? 0);
 
         // Regla 1: separar las que coinciden en el consecutivo de las que solo
@@ -1398,18 +1467,25 @@ class FacturaErp extends Model
         $exacto = $exactas !== [];
         $grupo = $exacto ? $exactas : $porCorto;
 
-        // Regla 2: la guarda de cédula, la misma que usa la verificación.
-        $grupo = array_values(array_filter($grupo, function ($erp) use ($proveedorIdXml) {
-            return self::veredictoCodigo($erp['proveedor_codigo'] ?? '', $proveedorIdXml) !== 'ajeno';
+        // Regla 2: la guarda de cédula, la misma que usa la verificación. Con
+        // el consecutivo exacto, un código que falta en el catálogo pasa si el
+        // nombre del proveedor se parece (ver fueraDelCatalogoConNombre).
+        $nombreXml = (string) ($xml['proveedor_nombre'] ?? '');
+        $grupo = array_values(array_filter($grupo, function ($erp) use ($proveedorIdXml, $exacto, $nombreXml) {
+            if (self::veredictoCodigo($erp, $proveedorIdXml) !== 'ajeno') {
+                return true;
+            }
+            return $exacto && self::fueraDelCatalogoConNombre($erp, $nombreXml);
         }));
 
         // Regla 3: sin consecutivo exacto hace falta algo más que el número.
         if (!$exacto) {
-            $grupo = array_values(array_filter($grupo, function ($erp) use ($total, $proveedorIdXml) {
-                if (self::veredictoCodigo($erp['proveedor_codigo'] ?? '', $proveedorIdXml) === 'propio') {
+            $grupo = array_values(array_filter($grupo, function ($erp) use ($xml, $proveedorIdXml) {
+                if (self::veredictoCodigo($erp, $proveedorIdXml) === 'propio') {
                     return true;
                 }
-                return abs((float) ($erp['monto'] ?? 0) - $total) <= FacturaMatcher::TOLERANCIA_CRC;
+                return abs((float) ($erp['monto'] ?? 0) - FacturaMatcher::totalComparable($xml, $erp['moneda'] ?? ''))
+                    <= FacturaMatcher::TOLERANCIA_CRC;
             }));
         }
 
@@ -1421,8 +1497,8 @@ class FacturaErp extends Model
         // El consecutivo es único por emisor, no globalmente: si quedan varias,
         // el monto es lo único que las separa.
         if (count($grupo) > 1) {
-            $porMonto = array_values(array_filter($grupo, function ($erp) use ($total) {
-                return abs((float) ($erp['monto'] ?? 0) - $total) <= 1.0;
+            $porMonto = array_values(array_filter($grupo, function ($erp) use ($xml) {
+                return abs((float) ($erp['monto'] ?? 0) - FacturaMatcher::totalComparable($xml, $erp['moneda'] ?? '')) <= 1.0;
             }));
             if (count($porMonto) !== 1) {
                 return ['erp' => null, 'motivo' => 'ambigua', 'candidatas' => count($grupo),
@@ -1432,7 +1508,7 @@ class FacturaErp extends Model
         }
 
         $erp = $grupo[0];
-        $confirmado = self::veredictoCodigo($erp['proveedor_codigo'] ?? '', $proveedorIdXml) === 'propio';
+        $confirmado = self::veredictoCodigo($erp, $proveedorIdXml) === 'propio';
 
         return [
             'erp'             => $erp,
@@ -1452,17 +1528,54 @@ class FacturaErp extends Model
      * Igual que en PorPagarVerificador: este modelo también se usa desde
      * utilidades y pruebas donde el mapa puede no existir todavía. Sin mapa la
      * guarda no opina, que es lo mismo que hacía antes de existir.
+     *
+     * Recibe la fila entera porque el código se busca en el catálogo de la
+     * empresa de la fila; sin sociedad_id, en el de la seleccionada.
      */
-    private static function veredictoCodigo($codigo, $proveedorIdXml)
+    private static function veredictoCodigo(array $erp, $proveedorIdXml)
+    {
+        if (!self::cargarCatalogo()) {
+            return 'desconocido';
+        }
+        return ProveedorCodigoErp::veredicto(
+            $erp['proveedor_codigo'] ?? '',
+            $proveedorIdXml,
+            (int) ($erp['sociedad_id'] ?? 0)
+        );
+    }
+
+    /**
+     * ¿Falta el código de esta fila en el catálogo, y el nombre del emisor se
+     * parece al del ERP?
+     *
+     * La misma salida que PorPagarVerificador::porNombreFueraDelCatalogo, para
+     * que un XML que llega después del pago encuentre la factura igual que la
+     * verificación. Solo se consulta con el consecutivo exacto; el monto no
+     * cuenta, y si difiere la factura queda "con diferencia".
+     */
+    private static function fueraDelCatalogoConNombre(array $erp, $nombreXml)
+    {
+        if (!self::cargarCatalogo()) {
+            return false;
+        }
+        if (!ProveedorCodigoErp::fueraDelCatalogo($erp['proveedor_codigo'] ?? '', (int) ($erp['sociedad_id'] ?? 0))) {
+            return false;
+        }
+        return FacturaMatcher::similaridadTexto((string) ($erp['proveedor_nombre'] ?? ''), (string) $nombreXml)
+            >= FacturaMatcher::UMBRAL_PROVEEDOR;
+    }
+
+    /** El modelo del catálogo, si se puede cargar; en pruebas sueltas no hay. */
+    private static function cargarCatalogo()
     {
         if (!class_exists('ProveedorCodigoErp')) {
             $ruta = __DIR__ . '/ProveedorCodigoErp.php';
             if (!class_exists('Model') || !is_file($ruta)) {
-                return 'desconocido';
+                return false;
             }
             require_once $ruta;
         }
-        return ProveedorCodigoErp::veredicto($codigo, $proveedorIdXml);
+        return true;
     }
 
     /**
@@ -1489,6 +1602,7 @@ class FacturaErp extends Model
         try {
             $fila = $this->fetchOne(
                 'SELECT x.consecutivo_completo, x.numero_factura_asistente, x.total,
+                        x.moneda, x.tipo_cambio,
                         x.proveedor_id, p.razon_social AS proveedor_nombre
                    FROM facturas_xml x
                    LEFT JOIN proveedores p ON p.id = x.proveedor_id
@@ -1507,6 +1621,8 @@ class FacturaErp extends Model
             'consecutivo_completo'     => (string) ($fila['consecutivo_completo'] ?? $consecutivo),
             'numero_factura_asistente' => (string) ($fila['numero_factura_asistente'] ?? $numeroCorto),
             'total'                    => (float) ($fila['total'] ?? $total),
+            'moneda'                   => (string) ($fila['moneda'] ?? ''),
+            'tipo_cambio'              => $fila['tipo_cambio'] ?? null,
             'proveedor_id'             => (int) ($fila['proveedor_id'] ?? 0),
             'proveedor_nombre'         => (string) ($fila['proveedor_nombre'] ?? ''),
         ];
@@ -1550,8 +1666,8 @@ class FacturaErp extends Model
             $params[] = str_pad($corto, 8, '0', STR_PAD_LEFT);
         }
 
-        $sql = "SELECT e.id, e.documento, e.numero_corto, e.proveedor_codigo, e.proveedor_nombre,
-                       e.monto, e.saldo,
+        $sql = "SELECT e.id, e.sociedad_id, e.documento, e.numero_corto, e.proveedor_codigo, e.proveedor_nombre,
+                       e.moneda, e.monto, e.saldo,
                        e.pago_id, e.pago_id, e.factura_xml_id
                   FROM facturas_erp e
                  WHERE e.tipo IN ('F','FE','FACT') AND (" . implode(' OR ', $condiciones) . ')'
@@ -2103,6 +2219,188 @@ class FacturaErp extends Model
         }
 
         return ['restauradas' => count($ids)];
+    }
+
+    // ------------------------------------------------------------------
+    // Facturas quitadas del listado
+    // ------------------------------------------------------------------
+
+    /**
+     * Saca una factura del listado y la recuerda para que no vuelva.
+     *
+     * No es lo mismo que descartar su incidencia: eso calla el aviso de
+     * "número repetido" y deja la factura donde estaba, contando como sin
+     * respaldo en Pagos y en Seguimiento. Esto es decir que la fila no es una
+     * factura: se borra del listado y su clave queda anotada, así que la
+     * próxima carga del reporte la salta en vez de volver a meterla.
+     *
+     * Se borra en vez de marcarla porque facturas_erp se lee desde decenas de
+     * consultas; una marca obligaría a acordarse de ella en cada una, y la
+     * primera que la olvidara la haría reaparecer. Lo que cuelga de la fila se
+     * resuelve con sus propias claves foráneas: el seguimiento se va con ella
+     * y las notas de crédito la sueltan.
+     *
+     * @return array La fila tal como estaba.
+     */
+    public function quitarDelListado($id, $motivo = '', $usuarioId = null)
+    {
+        $params = [(int) $id];
+        $fila = $this->fetchOne(
+            'SELECT * FROM facturas_erp WHERE id = ?' . $this->condicionSociedad('', $params),
+            $params
+        );
+        if (!$fila) {
+            throw new RuntimeException('Esa factura ya no está en el listado.');
+        }
+        // Sacarla de un pago rehace los totales del pago y reubica su XML y
+        // su PDF: eso ya lo hace Pagos y no se repite acá a medias.
+        if (!empty($fila['pago_id'])) {
+            throw new RuntimeException(
+                'está dentro de un pago. Quitala primero del pago, en Pagos, y después sacala del listado.'
+            );
+        }
+        $motivo = mb_substr(trim((string) $motivo), 0, 255, 'UTF-8');
+
+        $this->begin();
+        try {
+            $this->execute(
+                "INSERT INTO facturas_erp_quitadas
+                    (sociedad_id, clave, proveedor_codigo, proveedor_nombre, tipo, documento,
+                     fecha_emision, monto, moneda, fila, motivo, usuario_id)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                 ON DUPLICATE KEY UPDATE fila = VALUES(fila), motivo = VALUES(motivo),
+                                         usuario_id = VALUES(usuario_id), creado_en = NOW()",
+                [
+                    $fila['sociedad_id'] !== null ? (int) $fila['sociedad_id'] : null,
+                    (string) $fila['clave'],
+                    (string) $fila['proveedor_codigo'],
+                    (string) $fila['proveedor_nombre'],
+                    (string) $fila['tipo'],
+                    (string) $fila['documento'],
+                    $fila['fecha_emision'],
+                    $fila['monto'],
+                    (string) $fila['moneda'],
+                    json_encode($fila, JSON_UNESCAPED_UNICODE),
+                    $motivo !== '' ? $motivo : null,
+                    $usuarioId !== null ? (int) $usuarioId : null,
+                ]
+            );
+            $this->execute('DELETE FROM facturas_erp WHERE id = ?', [(int) $fila['id']]);
+            $this->commit();
+        } catch (Throwable $e) {
+            $this->rollback();
+            throw $e;
+        }
+
+        return $fila;
+    }
+
+    /** Las facturas quitadas de la empresa en curso, las más recientes primero. */
+    public function quitadas()
+    {
+        $params = [];
+        return $this->fetchAll(
+            'SELECT q.*, u.nombre AS usuario_nombre
+               FROM facturas_erp_quitadas q
+               LEFT JOIN usuarios u ON u.id = q.usuario_id
+              WHERE 1=1' . $this->condicionSociedad('q.', $params) . '
+              ORDER BY q.creado_en DESC, q.id DESC',
+            $params
+        );
+    }
+
+    public function contarQuitadas()
+    {
+        $params = [];
+        return (int) $this->fetchColumn(
+            'SELECT COUNT(*) FROM facturas_erp_quitadas WHERE 1=1' . $this->condicionSociedad('', $params),
+            $params
+        );
+    }
+
+    /**
+     * Devuelve al listado una factura quitada, con el mismo id y los mismos
+     * datos que tenía.
+     *
+     * Nunca estuvo en un pago (quitarDelListado() lo impide), así que lo
+     * único que apunta afuera es su XML: pudo borrarse mientras estuvo fuera,
+     * y devolverla apuntando a él la dejaría "respaldada" por nada.
+     */
+    public function devolverAlListado($quitadaId)
+    {
+        $params = [(int) $quitadaId];
+        $quitada = $this->fetchOne(
+            'SELECT * FROM facturas_erp_quitadas WHERE id = ?' . $this->condicionSociedad('', $params),
+            $params
+        );
+        if (!$quitada) {
+            throw new RuntimeException('Esa factura ya no está entre las quitadas.');
+        }
+        $fila = json_decode((string) $quitada['fila'], true);
+        if (!is_array($fila) || empty($fila['clave'])) {
+            throw new RuntimeException('No quedó guardada la factura completa: no se puede devolver.');
+        }
+
+        $params = [(string) $fila['clave']];
+        $sqlExiste = 'SELECT id FROM facturas_erp WHERE clave = ?';
+        if ($quitada['sociedad_id'] !== null) {
+            $sqlExiste .= ' AND sociedad_id = ?';
+            $params[] = (int) $quitada['sociedad_id'];
+        }
+        if ($this->fetchColumn($sqlExiste, $params)) {
+            throw new RuntimeException('Ya hay una factura con esa clave en el listado.');
+        }
+
+        if (!empty($fila['factura_xml_id'])
+            && !$this->fetchColumn('SELECT id FROM facturas_xml WHERE id = ?', [(int) $fila['factura_xml_id']])) {
+            $fila['factura_xml_id'] = null;
+            $fila['estado_respaldo'] = 'sin_respaldo';
+            $fila['diferencia'] = null;
+            $fila['score_numero'] = null;
+            $fila['score_proveedor'] = null;
+            $fila['match_manual'] = 0;
+        }
+        // El id se conserva para que la bitácora y los enlaces viejos sigan
+        // apuntando a la misma factura; el autoincremento nunca lo reusa.
+        // Solo entran las columnas que la tabla todavía tiene.
+        $columnas = array_values(array_intersect(
+            array_keys($fila),
+            array_column($this->fetchAll('SHOW COLUMNS FROM facturas_erp'), 'Field')
+        ));
+        $valores = array_map(function ($c) use ($fila) { return $fila[$c]; }, $columnas);
+
+        $this->begin();
+        try {
+            $this->execute(
+                'INSERT INTO facturas_erp (`' . implode('`,`', $columnas) . '`) VALUES ('
+                . implode(',', array_fill(0, count($columnas), '?')) . ')',
+                $valores
+            );
+            $this->execute('DELETE FROM facturas_erp_quitadas WHERE id = ?', [(int) $quitada['id']]);
+            $this->commit();
+        } catch (Throwable $e) {
+            $this->rollback();
+            throw $e;
+        }
+
+        return $fila;
+    }
+
+    /**
+     * clave => id de lo quitado en una empresa, para que la carga lo salte.
+     * Acotado como todo lo demás: la misma clave puede ser una factura
+     * legítima en otra empresa del grupo.
+     */
+    private function clavesQuitadas($sociedadId)
+    {
+        $sociedadId = (int) $sociedadId;
+        $sql = 'SELECT clave, id FROM facturas_erp_quitadas'
+             . ($sociedadId > 0 ? ' WHERE sociedad_id = ?' : ' WHERE sociedad_id IS NULL');
+        $out = [];
+        foreach ($this->fetchAll($sql, $sociedadId > 0 ? [$sociedadId] : []) as $q) {
+            $out[$q['clave']] = (int) $q['id'];
+        }
+        return $out;
     }
 
     /** Ids que cumplen un filtro, para el botón "descartar todas las del filtro". */

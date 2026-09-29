@@ -3,8 +3,9 @@
  * Que un módulo sin su configuración se vea, pero no se abra — y que se vea
  * cerrado exactamente en los mismos casos en que el enrutador lo cierra.
  *
- * Hay tres cosas sin las cuales el sistema no trabaja, solo lo aparenta: el
- * catálogo de proveedores, una empresa y un buzón de correo. Lo que se
+ * Hay cuatro cosas sin las cuales el sistema no trabaja, solo lo aparenta: el
+ * catálogo de proveedores, una empresa, un buzón de correo y —desde que los
+ * documentos viven solo ahí— SharePoint en la computadora. Lo que se
  * comprueba aquí es el mecanismo que las exige (app/core/Requisitos.php):
  *
  *   · que cada paso esté declarado entero —qué es, por qué hace falta, dónde
@@ -45,9 +46,9 @@ $declarados = Requisitos::declarados();
 assertReq(count($declarados) >= 3,
     'config/requisitos.php declara los pasos de puesta en marcha');
 
-foreach (['proveedores', 'empresa', 'correo'] as $id) {
+foreach (['proveedores', 'empresa', 'correo', 'sharepoint'] as $id) {
     assertReq(isset($declarados[$id]),
-        "falta el paso '{$id}', que es uno de los tres sin los que nada funciona");
+        "falta el paso '{$id}', que es uno de los cuatro sin los que nada funciona");
 }
 
 $permisos = Permisos::todas();
@@ -98,13 +99,13 @@ foreach (['configuracion', 'administracion'] as $salida) {
 
 // ── Con todo hecho, nada se cierra ────────────────────────────────────────
 
-Requisitos::suponer(['proveedores' => true, 'empresa' => true, 'correo' => true]);
+Requisitos::suponer(['proveedores' => true, 'empresa' => true, 'correo' => true, 'sharepoint' => true]);
 Navegacion::olvidar();
 
-assertReq(Requisitos::completa(), 'con los tres pasos hechos la instalación está completa');
-assertReq(Requisitos::faltantes() === [], 'con los tres pasos hechos no falta ninguno');
+assertReq(Requisitos::completa(), 'con los cuatro pasos hechos la instalación está completa');
+assertReq(Requisitos::faltantes() === [], 'con los cuatro pasos hechos no falta ninguno');
 assertReq(Navegacion::cuantosBloqueados() === 0,
-    'con los tres pasos hechos el menú no apaga ningún módulo');
+    'con los cuatro pasos hechos el menú no apaga ningún módulo');
 
 foreach ($porModulo as $modulo => $exige) {
     assertReq(!Requisitos::moduloCerrado($modulo),
@@ -113,7 +114,7 @@ foreach ($porModulo as $modulo => $exige) {
 
 // ── Sin nada hecho, se cierra lo que depende y solo eso ───────────────────
 
-Requisitos::suponer(['proveedores' => false, 'empresa' => false, 'correo' => false]);
+Requisitos::suponer(['proveedores' => false, 'empresa' => false, 'correo' => false, 'sharepoint' => false]);
 Navegacion::olvidar();
 
 assertReq(!Requisitos::completa(), 'sin ningún paso hecho la instalación no está completa');
@@ -219,7 +220,7 @@ foreach ((array) (Requisitos::catalogo()['abiertas'] ?? []) as $clave) {
 
 // ── Faltando uno solo, se cierra solo lo que lo necesita ──────────────────
 
-Requisitos::suponer(['proveedores' => true, 'empresa' => true, 'correo' => false]);
+Requisitos::suponer(['proveedores' => true, 'empresa' => true, 'correo' => false, 'sharepoint' => true]);
 Navegacion::olvidar();
 
 assertReq(Requisitos::moduloCerrado('correo'),
@@ -228,6 +229,25 @@ assertReq(!Requisitos::moduloCerrado('por_pagar'),
     'Pagos se cerró por falta de buzón, que no necesita');
 assertReq(array_keys(Requisitos::faltanDelModulo('correo')) === ['correo'],
     'a Correo le falta exactamente el buzón, ni más ni menos');
+
+// Sin SharePoint en esta PC se cierra lo que guarda o abre documentos, y
+// nada más: el seguimiento, las notas de crédito del ERP y el listado del
+// ERP no tocan un XML.
+Requisitos::suponer(['proveedores' => true, 'empresa' => true, 'correo' => true, 'sharepoint' => false]);
+Navegacion::olvidar();
+
+foreach (['correo', 'facturas_xml', 'notas_xml', 'devoluciones', 'por_pagar'] as $conDocumentos) {
+    assertReq(Requisitos::moduloCerrado($conDocumentos),
+        "'{$conDocumentos}' se abre sin SharePoint, y ahí viven sus documentos");
+}
+foreach (['seguimiento', 'notas_credito', 'facturas_erp', 'configuracion', 'documentos'] as $sinDocumentos) {
+    assertReq(!Requisitos::moduloCerrado($sinDocumentos),
+        "'{$sinDocumentos}' se cerró por falta de SharePoint, que no necesita para abrirse");
+}
+assertReq(array_keys(Requisitos::faltanDelModulo('facturas_xml')) === ['sharepoint'],
+    'a Facturas XML le falta exactamente SharePoint');
+assertReq((string) Requisitos::declarado('sharepoint')['ruta'] === '/configuracion?ir=archivo',
+    'y el paso lleva a la tarjeta que explica cómo configurarlo');
 
 // ── La base caída no cierra nada ──────────────────────────────────────────
 

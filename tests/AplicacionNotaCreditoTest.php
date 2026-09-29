@@ -28,8 +28,8 @@ assertApl(
     'la directa nombra la factura que corrige'
 );
 
-// El mismo formato de las notas de costo, que hoy no se usan pero traen el
-// consecutivo igual: el día que entren no hace falta código nuevo.
+// Las notas de costo traen el consecutivo en el mismo formato, y se cruzan
+// por el mismo camino.
 assertApl(
     '00700001010000546576',
     AplicacionNotaCredito::consecutivoFactura('NC- 1-1-D-00700001010000546576-307'),
@@ -113,15 +113,67 @@ assertApl(
     'no dice a qué factura va'
 );
 
-// Las clases que no apuntan a una factura no entran en este análisis. Las de
-// costo quedan fuera por decisión de negocio, no porque no se pueda.
-foreach (['cambio', 'ajuste', 'costo', 'revisar'] as $clase) {
+// Los ajustes y lo que no se pudo clasificar no se aplican contra facturas.
+foreach (['ajuste', 'revisar'] as $clase) {
     assertApl(
         AplicacionNotaCredito::NO_APLICA,
         AplicacionNotaCredito::estado($clase, $doc, 42219.63, $viva),
         "la clase {$clase} no se cruza contra una factura"
     );
 }
+
+// Las de costo se cruzan como las directas, pero solo mientras les queden
+// más de ₡10.000 por aplicar: es contra el saldo, no contra el monto.
+$docCosto = 'NC- 1-1-D-00700001010000546576-307';
+assertApl(
+    AplicacionNotaCredito::APLICABLE,
+    AplicacionNotaCredito::estado('costo', $docCosto, 10000.01, $viva),
+    'una de costo con más de ₡10.000 de saldo es aplicable'
+);
+assertApl(
+    AplicacionNotaCredito::NO_APLICA,
+    AplicacionNotaCredito::estado('costo', $docCosto, 10000.00, $viva),
+    'una de costo con ₡10.000 justos no cuenta: tiene que ser MAYOR'
+);
+assertApl(
+    AplicacionNotaCredito::NO_APLICA,
+    AplicacionNotaCredito::estado('costo', $docCosto, 3000.0, $viva),
+    'una de costo de ₡15.000 a la que le quedan ₡3.000 ya no cuenta'
+);
+assertApl(
+    AplicacionNotaCredito::APLICADA,
+    AplicacionNotaCredito::estado('costo', $docCosto, 0.0, $viva),
+    'una de costo sin saldo sigue diciendo que ya se aplicó, no "—"'
+);
+assertApl(
+    AplicacionNotaCredito::FACTURA_LIQUIDADA,
+    AplicacionNotaCredito::estado('costo', $docCosto, 25000.0, $enCero),
+    'una de costo grande cuya factura ya está en cero'
+);
+assertApl(
+    AplicacionNotaCredito::SIN_FACTURA,
+    AplicacionNotaCredito::estado('costo', $docCosto, 25000.0, null),
+    'una de costo grande cuya factura no está cargada'
+);
+
+// Las de cambio no nombran factura: valen para cualquiera del proveedor, del
+// monto que sean. Lo único que importa es si el proveedor tiene alguna con
+// saldo donde aplicarla.
+assertApl(
+    AplicacionNotaCredito::APLICABLE,
+    AplicacionNotaCredito::estado('cambio', 'NC- 17-1-132-0', 150.0, null, true),
+    'una de cambio chica es aplicable si el proveedor tiene facturas con saldo'
+);
+assertApl(
+    AplicacionNotaCredito::FACTURA_LIQUIDADA,
+    AplicacionNotaCredito::estado('cambio', 'NC- 17-1-132-0', 57239.27, null, false),
+    'una de cambio sin factura con saldo del proveedor no tiene dónde aplicarse'
+);
+assertApl(
+    AplicacionNotaCredito::APLICADA,
+    AplicacionNotaCredito::estado('cambio', 'NC- 17-1-132-0', 0.0, null, true),
+    'una de cambio sin saldo ya se aplicó'
+);
 
 // ------------------------------------------------------------------
 // 3. La clave con la que se cruza contra el ERP

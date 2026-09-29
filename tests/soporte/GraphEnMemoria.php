@@ -14,8 +14,19 @@
  * devuelve desde un enlace, por páginas, con 410 si el enlace venció. Como el
  * delta de verdad, NO trae parentReference.path: la ruta hay que pedirla.
  *
- * Lo que NO hace: permisos, sesiones de carga (eso lo prueba
- * SubidaGrandeTest con el guion), ni el ritmo.
+ * Direcciona como Graph: por ruta desde la raíz (/root:/a/b:), por id
+ * (/items/{id}) y por ruta desde un id (/items/{id}:/a/b:), que es como se le
+ * habla cuando Nexo Fiscal vive en una carpeta.
+ *
+ * Permisos, solo uno: $soloCarpeta imita una aplicación a la que el
+ * administrador le dio acceso a UNA carpeta (Files.SelectedOperations.
+ * Selected). Con eso la biblioteca, la raíz y todo lo de afuera contestan
+ * como contesta SharePoint: 403 lo que no se puede ni nombrar, 404 lo que no
+ * se ve. Y $cambiosDeCarpeta dice si da el enlace de cambios de una carpeta,
+ * que en SharePoint no siempre existe.
+ *
+ * Lo que NO hace: sesiones de carga (eso lo prueba SubidaGrandeTest con el
+ * guion), ni el ritmo.
  *
  * Cuenta las llamadas, para que una prueba pueda exigir "esto no sale a la red".
  */
@@ -49,6 +60,15 @@ class GraphEnMemoria implements TransporteGraph
 
     /** Cambios por página del delta. */
     public $porPagina = 100;
+
+    /**
+     * La ruta de la única carpeta a la que la aplicación tiene acceso, o null
+     * si lo tiene a toda la biblioteca.
+     */
+    public $soloCarpeta = null;
+
+    /** ¿Da el enlace de cambios de una carpeta (/items/{id}/delta)? */
+    public $cambiosDeCarpeta = true;
 
     private $secuencia = 0;
 
@@ -85,14 +105,40 @@ class GraphEnMemoria implements TransporteGraph
     {
         $consulta = (string) parse_url($url, PHP_URL_QUERY);
         $ruta = (string) parse_url($url, PHP_URL_PATH);
-        if (!preg_match('~^/drives/[^/]+/(?:root(?::/(.*?):)?|items/([^/]+))(/.*)?$~', $ruta, $m)) {
+        // La biblioteca misma: su nombre, su cuota.
+        if (preg_match('~^/drives/[^/]+/?$~', $ruta)) {
+            if ($this->soloCarpeta !== null) {
+                return $this->error(403, 'accessDenied', 'Access denied');
+            }
+            return $this->json(200, ['id' => 'd', 'name' => 'Documentos', 'driveType' => 'documentLibrary',
+                'quota' => ['used' => 0]]);
+        }
+        if (!preg_match('~^/drives/[^/]+/(?:root(?::/(.*?):)?|items/([^/:]+)(?::/(.*?):)?)(/.*)?$~', $ruta, $m)) {
             return $this->error(400, 'invalidRequest', 'Ruta que la biblioteca de memoria no conoce: ' . $ruta);
         }
-        $porRuta = isset($m[1]) && $m[1] !== '' ? implode('/', array_map('rawurldecode', explode('/', $m[1]))) : null;
+        $decodificar = function ($r) {
+            return implode('/', array_map('rawurldecode', explode('/', $r)));
+        };
+        $porRuta = isset($m[1]) && $m[1] !== '' ? $decodificar($m[1]) : null;
         $porId = isset($m[2]) && $m[2] !== '' ? rawurldecode($m[2]) : null;
-        $resto = $m[3] ?? '';
-        $id = $porId ?? ($porRuta === null ? 'RAIZ' : $this->buscar($porRuta));
+        $desdeId = isset($m[3]) && $m[3] !== '' ? $decodificar($m[3]) : null;
+        $resto = $m[4] ?? '';
         $datos = $cuerpo !== null ? json_decode($cuerpo, true) : null;
+
+        // De dónde se parte y qué se nombra desde ahí.
+        $base = $porId ?? 'RAIZ';
+        $relativa = $porId !== null ? $desdeId : $porRuta;
+        if (!isset($this->items[$base])) {
+            return $this->error(404, 'itemNotFound', 'The resource could not be found.');
+        }
+        // Con permiso solo sobre una carpeta, nada se nombra desde la raíz.
+        if ($this->soloCarpeta !== null && $base === 'RAIZ') {
+            return $this->error(403, 'accessDenied', 'Access denied');
+        }
+        $id = $relativa === null ? $base : $this->buscarDesde($base, $relativa);
+        if ($this->soloCarpeta !== null && $id !== null && !$this->alAlcance($id)) {
+            return $this->error(404, 'itemNotFound', 'The resource could not be found.');
+        }
 
         // Subir: la única operación que acepta un destino que no existe.
         if ($metodo === 'PUT' && $resto === '/content') {
@@ -105,9 +151,9 @@ class GraphEnMemoria implements TransporteGraph
                 $this->cambio($id);
                 return $this->json(200, $this->vista($id));
             }
-            $partes = explode('/', $porRuta);
+            $partes = explode('/', (string) $relativa);
             $nombre = array_pop($partes);
-            $padre = $this->carpetas($partes);
+            $padre = $this->carpetas($partes, $base);
             $nuevo = $this->crear($padre, $nombre, false, (string) $cuerpo);
             return $this->json(201, $this->vista($nuevo));
         }
@@ -118,7 +164,10 @@ class GraphEnMemoria implements TransporteGraph
 
         switch ($metodo . ' ' . $resto) {
             case 'GET /delta':
-                return $this->delta($consulta);
+                if ($id !== 'RAIZ' && !$this->cambiosDeCarpeta) {
+                    return $this->error(400, 'invalidRequest', 'Delta is only supported on the root folder.');
+                }
+                return $this->delta($consulta, $id);
             case 'GET ':
                 if (strpos($consulta, 'listItem') !== false && !$this->conColumnaHash) {
                     return $this->error(400, 'invalidRequest', "Field 'HashSha256' is not recognized");
@@ -231,7 +280,20 @@ class GraphEnMemoria implements TransporteGraph
 
     public function buscar($ruta)
     {
-        $actual = 'RAIZ';
+        return $this->buscarDesde('RAIZ', $ruta);
+    }
+
+    /** Crea una carpeta —y las de su camino— como la crearía alguien a mano. */
+    public function crearCarpetaAMano($ruta)
+    {
+        return $this->carpetas(explode('/', str_replace('\\', '/', (string) $ruta)));
+    }
+
+    // ── Interno ─────────────────────────────────────────────────────────
+
+    private function buscarDesde($desde, $ruta)
+    {
+        $actual = $desde;
         foreach (array_filter(explode('/', str_replace('\\', '/', (string) $ruta)), 'strlen') as $nombre) {
             $actual = $this->hijo($actual, $nombre);
             if ($actual === null) {
@@ -241,7 +303,39 @@ class GraphEnMemoria implements TransporteGraph
         return $actual;
     }
 
-    // ── Interno ─────────────────────────────────────────────────────────
+    /**
+     * ¿Está dentro de la carpeta a la que la aplicación tiene acceso?
+     *
+     * El permiso queda atado al id de la carpeta, como en SharePoint: si
+     * alguien la renombra o la mueve, la aplicación sigue teniendo acceso.
+     */
+    private function alAlcance($id)
+    {
+        if ($this->soloCarpeta === null) {
+            return true;
+        }
+        if (!isset($this->permisos[$this->soloCarpeta])) {
+            $this->permisos[$this->soloCarpeta] = $this->buscar($this->soloCarpeta);
+        }
+        $carpeta = $this->permisos[$this->soloCarpeta];
+        return $carpeta !== null && $this->dentroDe($id, $carpeta);
+    }
+
+    /** ruta con la que se dio el permiso => id de la carpeta. */
+    private $permisos = [];
+
+    /** ¿$id es $carpeta o cuelga de ella? Mira también la papelera. */
+    private function dentroDe($id, $carpeta)
+    {
+        for ($actual = $id; $actual !== null; ) {
+            if ($actual === $carpeta) {
+                return true;
+            }
+            $item = $this->items[$actual] ?? ($this->borrados[$actual] ?? null);
+            $actual = $item === null ? null : $item['padre'];
+        }
+        return false;
+    }
 
     private function hijo($padre, $nombre)
     {
@@ -254,9 +348,9 @@ class GraphEnMemoria implements TransporteGraph
         return null;
     }
 
-    private function carpetas(array $partes)
+    private function carpetas(array $partes, $desde = 'RAIZ')
     {
-        $actual = 'RAIZ';
+        $actual = $desde;
         foreach (array_filter($partes, 'strlen') as $nombre) {
             $actual = $this->hijo($actual, $nombre) ?? $this->crear($actual, $nombre, true, '');
         }
@@ -289,13 +383,15 @@ class GraphEnMemoria implements TransporteGraph
         $this->cambios[++$this->secuencia] = $id;
     }
 
-    private function enlace($token, $desde = 0)
+    private function enlace($token, $desde = 0, $carpeta = 'RAIZ')
     {
-        return 'https://graph.microsoft.com/v1.0/drives/d/root/delta?token=' . $token
-            . ($desde > 0 ? '&desde=' . $desde : '');
+        return 'https://graph.microsoft.com/v1.0/drives/d/'
+            . ($carpeta === 'RAIZ' ? 'root' : 'items/' . rawurlencode($carpeta))
+            . '/delta?token=' . $token . ($desde > 0 ? '&desde=' . $desde : '');
     }
 
-    private function delta($consulta)
+    /** Los cambios de $carpeta para abajo: la biblioteca entera si es la raíz. */
+    private function delta($consulta, $carpeta = 'RAIZ')
     {
         parse_str($consulta, $q);
         if ($this->enlaceVencido && ($q['token'] ?? '') !== 'latest') {
@@ -303,7 +399,7 @@ class GraphEnMemoria implements TransporteGraph
         }
         $token = $q['token'] ?? null;
         if ($token === 'latest') {
-            return $this->json(200, ['value' => [], '@odata.deltaLink' => $this->enlace($this->secuencia)]);
+            return $this->json(200, ['value' => [], '@odata.deltaLink' => $this->enlace($this->secuencia, 0, $carpeta)]);
         }
         if ($token === null) {
             $ids = array_keys($this->items);   // la enumeración inicial: todo
@@ -316,6 +412,11 @@ class GraphEnMemoria implements TransporteGraph
                 }
             }
             $ids = array_keys($ultimos);
+        }
+        if ($carpeta !== 'RAIZ') {
+            $ids = array_values(array_filter($ids, function ($id) use ($carpeta) {
+                return $this->dentroDe($id, $carpeta);
+            }));
         }
         $desde = (int) ($q['desde'] ?? 0);
         $valor = [];
@@ -335,9 +436,9 @@ class GraphEnMemoria implements TransporteGraph
         }
         $datos = ['value' => $valor];
         if ($desde + $this->porPagina < count($ids)) {
-            $datos['@odata.nextLink'] = $this->enlace((string) $token, $desde + $this->porPagina);
+            $datos['@odata.nextLink'] = $this->enlace((string) $token, $desde + $this->porPagina, $carpeta);
         } else {
-            $datos['@odata.deltaLink'] = $this->enlace($this->secuencia);
+            $datos['@odata.deltaLink'] = $this->enlace($this->secuencia, 0, $carpeta);
         }
         return $this->json(200, $datos);
     }

@@ -110,10 +110,9 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
           // Decir "agrega la primera cuenta" aquí llevaría a registrar dos
           // veces el mismo buzón. ?>
     <strong>Ningún buzón atiende a <?= htmlspecialchars((string) ($sociedadActiva['nombre'] ?? 'esta sociedad')) ?>:</strong>
-    los buzones registrados están asignados a otras empresas. Abre
+    en
     <a href="<?= $baseUrl ?>/configuracion?ir=correo" style="color:#7c5e00;font-weight:700;">Configuración → Cuentas de correo</a>,
-    edita el buzón que corresponda y marca esta empresa en
-    <em>Empresas que usan este buzón</em>. No hace falta registrarlo de nuevo.
+    edita el buzón y marca esta empresa. No hace falta registrarlo de nuevo.
     <?php elseif (!$configExiste): ?>
     <strong>No hay cuentas de correo:</strong> agrega la primera en
     <a href="<?= $baseUrl ?>/configuracion?ir=correo" style="color:#7c5e00;font-weight:700;">Configuración → Cuentas de correo</a>.
@@ -142,10 +141,10 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         <button type="button" id="general-cancelar" class="btn btn-outline btn-sm" style="display:none;color:#b91c1c;border-color:#fecaca;"><i class="fas fa-stop"></i> Cancelar</button>
         <button type="button" id="general-historial" class="btn btn-outline btn-sm"><i class="fas fa-clock-rotate-left"></i> Historial de incidencias</button>
     </div>
-    <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Cuenta seleccionada · todas las carpetas salvo Borradores, Enviados, Spam y Papelera · el correo indicado se busca en remitente, CC y Reply-To · organiza por fecha de emisión del XML.</div>
+    <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Todas las carpetas salvo Borradores, Enviados, Spam y Papelera · busca en remitente, CC y Reply-To · ordena por fecha de emisión del XML.</div>
     <label style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--text-muted);margin-top:5px;cursor:pointer;">
         <input type="checkbox" id="general-incluir-procesados" style="margin:0;">
-        Volver a revisar los correos ya procesados <span style="color:#94a3b8;">(normalmente se saltan: son los que ya se leyeron en corridas anteriores)</span>
+        Volver a revisar los correos ya procesados <span style="color:#94a3b8;">(normalmente se saltan)</span>
     </label>
     <div id="general-estado" style="margin-top:8px;font-size:12px;color:var(--navy);"></div>
     <div style="height:8px;background:#e2e8f0;border-radius:8px;overflow:hidden;margin-top:5px;"><div id="general-barra" style="height:100%;width:0;background:linear-gradient(90deg,var(--navy),var(--gold));transition:width .25s;"></div></div>
@@ -344,9 +343,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                  * entrada automática los comprobantes limpios ya entraron
                  * solos y acá solo cae lo que hay que resolver a mano.
                  */ ?>
-                Nada que revisar. Lo que llega limpio entra solo; acá cae lo que
-                Hacienda rechazó, lo que viene a nombre de otra cédula y lo que
-                no se pudo guardar.
+                Nada que revisar. Acá solo cae lo que hay que resolver a mano.
             </div>
             <?php else: ?>
                 <?php foreach ($bandeja as $fila): ?>
@@ -462,7 +459,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             </table>
             <?php elseif (empty($bandeja)): ?>
             <div style="font-size:11.5px;color:var(--text-muted);">
-                Aquí verás el progreso de los procesos y el historial de la bandeja.
+                Aquí sale el progreso y el historial de la bandeja.
             </div>
             <?php endif; ?>
 
@@ -495,7 +492,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                  style="display:none;margin:0;width:100%;height:100%;box-sizing:border-box;overflow:auto;padding:10px;background:#fff;color:#0f172a;font:12px/1.5 Consolas,Monaco,monospace;white-space:pre-wrap;word-break:break-word;"></pre>
         </div>
         <div style="padding:6px 12px;border-top:1px solid var(--border);font-size:10.5px;color:var(--text-muted);background:#fff;">
-            Vista temporal: no se guarda en la base de datos ni se crea una copia en el servidor.
+            Vista temporal: no se guarda ninguna copia.
         </div>
     </div>
 </div>
@@ -2727,6 +2724,13 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         iniciar.disabled=true; estado.textContent='Calculando correos candidatos…';
         post('/correo/general/estimar', {fecha_desde:desde, fecha_hasta:hasta, correo_busqueda:correo})
             .then(async function(r){
+                /* Sin el buzón leído entero no hay lote: saldría incompleto
+                 * sin que nadie se entere. El servidor dice qué falta. */
+                if (r.bloqueo) {
+                    estado.textContent = '';
+                    await AppDialog.alert(r.bloqueo, { title: 'El buzón no está leído completo', type: 'warning' });
+                    throw new Error('__cancelado__');
+                }
                 var filtro = correo ? ' que coinciden con ' + correo : '';
                 var yaVistos = Number(r.procesados || 0);
                 // Con la casilla marcada se revisa todo el rango; si no, solo
@@ -2810,9 +2814,8 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         </div>
 
         <div style="padding:7px 11px;border-bottom:1px solid var(--border);font-size:11.5px;color:var(--text-muted);line-height:1.5;">
-            Estos comprobantes ya están guardados. Lo que falta es decir con qué código los conoce el
-            sistema, para que se les pueda buscar su factura. Si un proveedor no nos factura, márcalo
-            como no procesable y deja de preguntar por él.
+            Ya están guardados; falta decir con qué código los conoce el sistema para buscarles
+            factura. Si un proveedor no nos factura, márcalo como no procesable.
         </div>
 
         <div style="display:flex;gap:6px;align-items:center;padding:7px 10px;border-bottom:1px solid var(--border);flex-wrap:wrap;">
@@ -3110,7 +3113,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             var estado = suyo
                 ? '<span class="badge badge-ok">Ya es de este proveedor</span>'
                 : (o.cedula
-                    ? '<span class="badge badge-warn" title="Si lo elegís, pasa a ser de este proveedor">'
+                    ? '<span class="badge badge-warn" title="Si lo elegís, te pregunta si lo acepta también o si pasa a este proveedor">'
                       + 'Es de ' + escapar(o.razon_social || o.cedula) + '</span>'
                     : '<span class="badge badge-green">Sin dueño</span>');
             var detalle = [];
@@ -3149,22 +3152,21 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         var codigo = opcion.getAttribute('data-sc-opcion');
         var cedulaActual = opcion.getAttribute('data-cedula-actual') || '';
 
-        // Elegir un código que ya tiene dueño se lo quita a ese dueño: es la
-        // única elección de la lista que deshace algo, así que se avisa.
+        // Un código que ya tiene dueño: o se le pasa a este proveedor (y el
+        // dueño deja de valer) o lo acepta también, sin quitarle nada a nadie.
+        var modo = 'pasar';
         if (cedulaActual && cedulaActual !== fila.cedula) {
-            var dueno = opcion.getAttribute('data-dueno') || cedulaActual;
-            var seguir = await AppDialog.confirm(
-                'El código ' + codigo + ' hoy es de ' + dueno + ' (cédula ' + cedulaActual + ').\n\n'
-                + 'Si lo pasás a ' + (fila.nombre || fila.cedula) + ', sus facturas van a aceptar los '
-                + 'comprobantes de este proveedor y dejan de aceptar los de aquel.',
-                { title: 'Ese código ya tiene dueño', type: 'warning', confirmText: 'Pasarlo a este proveedor' }
-            );
-            if (!seguir) { return; }
+            modo = await AppDialog.codigoConDueno({
+                codigo: codigo, cedula: fila.cedula, nombre: fila.nombre,
+                cedulaDueno: cedulaActual, dueno: opcion.getAttribute('data-dueno') || ''
+            });
+            if (!modo) { return; }
         }
 
         tr.querySelectorAll('[data-sc-opcion]').forEach(function (x) { x.disabled = true; });
         post('/avisos/proveedor/codigo', {
-            aviso_id: fila.id, codigo: codigo, cedula: fila.cedula, nombre: fila.nombre, existente: '1'
+            aviso_id: fila.id, codigo: codigo, cedula: fila.cedula, nombre: fila.nombre, existente: '1',
+            modo: modo
         }).then(function (r) {
             cerrarElegir();
             quitar(fila.id);

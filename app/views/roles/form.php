@@ -75,9 +75,8 @@ $tituloPagina = $esNuevo ? 'Nuevo rol' : 'Editar rol: ' . $rol['nombre'];
             <i class="fas fa-shield-halved"></i>
             <div>
                 <strong>Este rol lo puede todo.</strong>
-                No tiene permisos marcados porque los tiene todos, incluidos los que se
-                añadan en el futuro. Por eso no se le pueden desmarcar: dejarlo a medias
-                sería la forma de cerrar la instalación sin querer.
+                Los tiene todos, incluidos los que se añadan después. Por eso no se
+                pueden desmarcar.
             </div>
         </div>
         <?php endif; ?>
@@ -88,8 +87,7 @@ $tituloPagina = $esNuevo ? 'Nuevo rol' : 'Editar rol: ' . $rol['nombre'];
             <div>
                 <strong><?= $usuariosConEsteRol ?> usuario<?= $usuariosConEsteRol === 1 ? '' : 's' ?></strong>
                 tiene<?= $usuariosConEsteRol === 1 ? '' : 'n' ?> este rol. Lo que cambies aquí
-                les cambia lo que pueden hacer en su siguiente pantalla, no hace falta que
-                vuelvan a entrar.
+                surte efecto en su siguiente pantalla.
             </div>
         </div>
         <?php endif; ?>
@@ -130,8 +128,8 @@ $tituloPagina = $esNuevo ? 'Nuevo rol' : 'Editar rol: ' . $rol['nombre'];
 
                 <?php if ($esAdministracion): ?>
                 <p class="rol-nota">
-                    Con esto se reparten los accesos de los demás. Dáselo solo a quien
-                    de verdad administre el sistema.
+                    Con esto se reparten los accesos de los demás. Solo para quien
+                    administre el sistema.
                 </p>
                 <?php endif; ?>
 
@@ -161,7 +159,7 @@ $tituloPagina = $esNuevo ? 'Nuevo rol' : 'Editar rol: ' . $rol['nombre'];
 
         <?php if ($esSistema): ?>
         <div style="margin-top:9px;font-size:11.5px;color:var(--text-muted);text-align:right;">
-            <i class="fas fa-lock"></i> Este rol es parte del sistema: se puede editar, pero no eliminar.
+            <i class="fas fa-lock"></i> Rol del sistema: se edita, no se elimina.
         </div>
         <?php endif; ?>
     </form>

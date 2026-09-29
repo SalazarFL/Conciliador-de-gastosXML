@@ -21,6 +21,7 @@ require_once __DIR__ . '/../helpers/FacturaMatcher.php';
 require_once __DIR__ . '/../helpers/DocumentoArchivo.php';
 require_once __DIR__ . '/../helpers/NumeroFactura.php';
 require_once __DIR__ . '/../helpers/EstadoArchivo.php';
+require_once __DIR__ . '/../helpers/ControlCarpetaPago.php';
 require_once __DIR__ . '/../helpers/PagoResolutor.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 // La vista llama a Pago::etiqueta() para nombrar cada pago por su fecha,
@@ -38,7 +39,7 @@ class PorPagarController extends Controller
         // El checklist se recuerda como se dejó; el listado y el pago no,
         // que son el contexto y se eligen arriba.
         $this->recordarFiltros('por_pagar', [
-            'q', 'proveedor', 'sucursal', 'estado', 'vinculo',
+            'q', 'proveedor', 'sucursal', 'estado', 'vinculo', 'notas',
             'fecha_desde', 'fecha_hasta', 'monto', 'saldo',
         ]);
 
@@ -106,9 +107,16 @@ class PorPagarController extends Controller
             }
         }
 
+        // La carpeta que se manda, contra el pago: cuántas facturas están de
+        // verdad en ella y cuáles no. Ver ControlCarpetaPago.
+        $controlCarpeta = $pago
+            ? ControlCarpetaPago::revisar($pago, $erp, $this->loadModel('Factura'))
+            : null;
+
         $this->render('porpagar/index', [
             'title'           => 'Pagos - Nexo Fiscal',
             'pago'            => $pago,
+            'controlCarpeta'  => $controlCarpeta,
             'lineas'          => $lineas,
             'resumen'         => $resumen,
             'sociedadActiva'  => $sociedadActiva,
@@ -142,6 +150,11 @@ class PorPagarController extends Controller
             $vinculo = '';
         }
 
+        $notas = strtolower(trim((string) $this->get('notas', '')));
+        if ($notas !== 'aplicables') {
+            $notas = '';
+        }
+
         $desde = $this->fechaFiltro((string) $this->get('fecha_desde', ''));
         $hasta = $this->fechaFiltro((string) $this->get('fecha_hasta', ''));
         if ($desde !== '' && $hasta !== '' && $desde > $hasta) {
@@ -159,6 +172,7 @@ class PorPagarController extends Controller
             'sucursal' => $sucursal,
             'estado' => $estado,
             'vinculo' => $vinculo,
+            'notas' => $notas,
             'fecha_desde' => $desde,
             'fecha_hasta' => $hasta,
             'monto' => $monto,
@@ -412,23 +426,23 @@ class PorPagarController extends Controller
                 return $vacio;
             }
 
-            $porFactura = $this->loadModel('NotaCredito')->notasVivasDeFacturas($ids);
+            $porFactura = $this->loadModel('NotaCredito')->notasAplicablesDeFacturas($ids);
             if (!$porFactura) {
                 return $vacio;
             }
 
+            // Una nota de cambio sale en cada factura de su proveedor: el
+            // total la cuenta una vez, el detalle en cada factura.
             $detalle = [];
-            $totalNotas = 0;
-            $saldo = 0.0;
+            $unicas = [];
             foreach ($porFactura as $facturaId => $notas) {
                 $suma = 0.0;
                 $documentos = [];
                 foreach ($notas as $nota) {
                     $suma += (float) $nota['saldo'];
                     $documentos[] = (string) $nota['documento'];
+                    $unicas[(int) $nota['id']] = (float) $nota['saldo'];
                 }
-                $totalNotas += count($notas);
-                $saldo += $suma;
                 $detalle[] = [
                     'factura' => (string) ($porId[$facturaId]['documento'] ?? ''),
                     'proveedor' => (string) ($porId[$facturaId]['proveedor_nombre'] ?? ''),
@@ -446,8 +460,8 @@ class PorPagarController extends Controller
 
             return [
                 'facturas' => count($detalle),
-                'notas' => $totalNotas,
-                'saldo' => round($saldo, 2),
+                'notas' => count($unicas),
+                'saldo' => round(array_sum($unicas), 2),
                 'detalle' => array_slice($detalle, 0, 50),
             ];
         } catch (Throwable $e) {
@@ -803,41 +817,22 @@ class PorPagarController extends Controller
             throw new Exception('Seleccioná una carpeta válida para el pago.');
         }
         $pagoModel->configurarCarpetaPago((int) $pagoId, $carpetaPago);
-        // En la carpeta compartida se deja creada para que se vea enseguida.
-        // En SharePoint no: la crea la primera copia que llega, y crearla
-        // acá serían llamadas por red con alguien esperando la pantalla.
-        try {
-            if ($this->archivaEnDisco($pago['sociedad_id'] ?? 0)) {
-                (new DocumentoArchivo())->prepararCarpetaPago($carpetaPago);
-            }
-        } catch (Throwable $e) {
-            // Sin carpeta raíz configurada el pago se carga igual; los
-            // archivos se acomodan cuando alguien la configure.
-        }
+        // La carpeta no se crea acá: en SharePoint la crea la primera copia
+        // que llega, y crearla ahora serían llamadas por red con alguien
+        // esperando la pantalla.
         $pago['carpeta_pago'] = $carpetaPago;
         return $pago;
     }
 
     /**
-     * Las carpetas de pago para el selector, de donde archiva la empresa:
-     * las que hay en la carpeta compartida, o —en SharePoint— los nombres
-     * que ya usan sus pagos, que la base sabe sin salir a la red.
+     * Las carpetas de pago para el selector: los nombres que ya usan los
+     * pagos, que la base sabe sin salir a la red. Recorrer la carpeta PAGOS
+     * de SharePoint serían llamadas cada vez que alguien abre Pagos, para un
+     * selector que igual acepta cualquier nombre.
      */
     private function carpetasPagoDe($sociedad, $pagoModel)
     {
-        if (!$this->archivaEnDisco($sociedad['id'] ?? 0)) {
-            return $pagoModel->carpetasUsadas();
-        }
-        return DocumentoArchivo::raizConfigurada() !== ''
-            ? (new DocumentoArchivo())->carpetasPago()
-            : [];
-    }
-
-    /** ¿La empresa archiva en la carpeta compartida? Sin empresa, sí: es lo de siempre. */
-    private function archivaEnDisco($sociedadId)
-    {
-        return (int) $sociedadId <= 0
-            || AlmacenDocumentos::tipoDeSociedad((int) $sociedadId) === AlmacenDocumentos::DISCO;
+        return $pagoModel->carpetasUsadas();
     }
 
     // ── Comparar y actualizar ──────────────────────────────────────
@@ -1010,78 +1005,51 @@ class PorPagarController extends Controller
     }
 
     /**
-     * Devuelve cada XML/PDF a la carpeta que le toca según cómo quedó el pago.
-     * El destino lo decide el organizador leyendo la base; acá solo se le
-     * nombran las facturas que cambiaron de lado.
+     * Qué pasa con los XML/PDF de las facturas que cambiaron de lado en el
+     * pago. Acá no se acomoda nada: los documentos están en SharePoint y sus
+     * copias a la carpeta del pago las hace la tarea programada —hacerlas
+     * ahora serían varias llamadas por archivo con alguien esperando la
+     * pantalla—. Se cuentan para decirlo.
+     *
+     * Lo que quedó en la carpeta compartida de antes, sin migrar, no entra a
+     * la carpeta del pago: ahí ya no se escribe nada. También se dice, con el
+     * comando que lo resuelve.
      */
     private function reubicarArchivos(array $facturaIds)
     {
         $resultado = ['movidos' => 0, 'por_fecha' => 0, 'en_pago' => 0,
                       'copias_pago' => 0, 'sin_par' => 0, 'incompletos' => [],
                       'aviso' => ''];
-
         $facturaIds = array_values(array_unique(array_filter(array_map('intval', $facturaIds))));
         if (!$facturaIds) {
             return $resultado;
         }
-        if (DocumentoArchivo::raizConfigurada() === '') {
-            return $this->reubicarSinCarpeta($facturaIds, $resultado);
-        }
 
-        try {
-            require_once __DIR__ . '/../helpers/OrganizadorDocumentos.php';
-            $resumen = (new OrganizadorDocumentos())->organizarIds($facturaIds, false);
-            if (!empty($resumen['omitido_por_bloqueo'])) {
-                $resultado['aviso'] = 'Hay otra ordenación en curso, en esta u otra computadora: los archivos no se movieron.';
-                return $resultado;
-            }
-            $resultado['movidos'] = (int) ($resumen['movidos'] ?? 0);
-            $resultado['por_fecha'] = (int) ($resumen['por_fecha'] ?? 0);
-            $resultado['en_pago'] = (int) ($resumen['en_pago'] ?? 0);
-            $resultado['copias_pago'] = (int) ($resumen['copias_pago'] ?? 0);
-            $resultado['sin_par'] = (int) ($resumen['sin_par_completo'] ?? 0);
-            $resultado['incompletos'] = is_array($resumen['incompletos'] ?? null)
-                ? $resumen['incompletos']
-                : [];
-            if (!empty($resumen['errores'])) {
-                $resultado['aviso'] = $resumen['errores'] . ' documento(s) no se pudieron mover.';
-            }
-            // Un fallo al copiar no interrumpe el acomodo del original, así que
-            // sin decirlo acá la carpeta del pago quedaría incompleta en
-            // silencio, que es justo lo que esta carpeta no puede permitirse.
-            if (!empty($resumen['errores_copia_pago'])) {
-                $resultado['aviso'] = trim($resultado['aviso'] . ' ' . $resumen['errores_copia_pago']
-                    . ' copia(s) no llegaron a la carpeta del pago.');
-            }
-            if (!empty($resumen['copias_pago_en_espera'])) {
-                $resultado['aviso'] = trim($resultado['aviso'] . ' ' . $resumen['copias_pago_en_espera']
-                    . ' documento(s) están en SharePoint: su copia en la carpeta del pago la hace la tarea'
-                    . ' programada en los próximos minutos.');
-            }
-        } catch (Throwable $e) {
-            $resultado['aviso'] = 'No se pudieron mover los archivos: ' . $e->getMessage();
-        }
-
-        return $resultado;
-    }
-
-    /**
-     * Sin carpeta compartida en esta computadora no hay nada de disco que
-     * acomodar, y lo de SharePoint tampoco se acomoda acá: sus copias a la
-     * carpeta del pago las hace la tarea programada. Se cuentan para
-     * decirlo. Solo si algún documento del pago sigue en disco hay algo que
-     * esta PC no puede hacer, y eso también se dice.
-     */
-    private function reubicarSinCarpeta(array $facturaIds, array $resultado)
-    {
         try {
             $facturas = $this->loadModel('Factura');
             $enDisco = count($facturas->getParaOrganizarArchivos($facturaIds));
             $enEspera = 0;
             foreach ($facturas->getParaOrganizarArchivos($facturaIds, 'sharepoint', true) as $fila) {
-                if (!empty($fila['en_pago']) && trim((string) ($fila['carpeta_pago'] ?? '')) !== '') {
-                    $enEspera++;
+                if (empty($fila['en_pago']) || trim((string) ($fila['carpeta_pago'] ?? '')) === '') {
+                    continue;
                 }
+                // La tarea programada no copia un par incompleto, y ella no
+                // se lo dice a nadie: se nombra aquí, a quien carga el pago.
+                // Sin esto un pago de SharePoint salía con una factura de
+                // menos y ningún aviso.
+                $faltaXml = trim((string) ($fila['ruta_xml'] ?? '')) === '';
+                $faltaPdf = trim((string) ($fila['ruta_pdf'] ?? '')) === '';
+                if ($faltaXml || $faltaPdf) {
+                    $resultado['sin_par']++;
+                    $resultado['incompletos'][] = [
+                        'documento_id' => (int) $fila['id'],
+                        'numero' => trim((string) ($fila['numero_factura_asistente'] ?? '')),
+                        'proveedor' => trim((string) ($fila['proveedor_nombre'] ?? '')),
+                        'falta' => implode(' y ', array_keys(array_filter(['XML' => $faltaXml, 'PDF' => $faltaPdf]))),
+                    ];
+                    continue;
+                }
+                $enEspera++;
             }
         } catch (Throwable $e) {
             $resultado['aviso'] = 'No se pudo revisar dónde están los archivos: ' . $e->getMessage();
@@ -1090,8 +1058,8 @@ class PorPagarController extends Controller
 
         $avisos = [];
         if ($enDisco > 0) {
-            $avisos[] = $enDisco . ' documento(s) están en la carpeta compartida, que esta computadora no'
-                . ' tiene configurada: quedaron donde estaban.';
+            $avisos[] = $enDisco . ' documento(s) siguen en la carpeta compartida de antes y no entran a la'
+                . ' carpeta del pago hasta pasarlos a SharePoint (php cli/migrar_documentos_a_graph.php).';
         }
         if ($enEspera > 0) {
             $avisos[] = $enEspera . ' documento(s) están en SharePoint: su copia en la carpeta del pago la'
@@ -1416,7 +1384,7 @@ class PorPagarController extends Controller
                 }
             }
 
-            $diferencia = round((float) $lineaErp['monto'] - (float) $xml['total'], 2);
+            $diferencia = round((float) $lineaErp['monto'] - FacturaMatcher::totalComparable($xml, $lineaErp['moneda'] ?? ''), 2);
             $estado = abs($diferencia) <= FacturaMatcher::TOLERANCIA_CRC ? 'respaldada' : 'con_diferencia';
 
             $erp->actualizarRespaldoManual(

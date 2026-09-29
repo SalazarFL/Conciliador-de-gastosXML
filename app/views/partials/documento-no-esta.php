@@ -75,8 +75,7 @@ $noEstaCorreo = $noEstaBase . '/correo?buscar=' . urlencode($noEstaBusca)
             <?php else: ?>
             No aparece ningún XML a nombre de
             <strong><?= htmlspecialchars($noEstaBusca) ?></strong>.
-            Se busca por proveedor porque esta nota no trae número propio: el
-            del reporte es el de la factura que corrige.
+            Se busca por proveedor: esta nota no trae número propio.
             <?php endif; ?>
             <?php // Lo de abajo hay que explicarlo: son parecidos, no el que se buscaba. ?>
             <?php if ($noEstaHay): ?>

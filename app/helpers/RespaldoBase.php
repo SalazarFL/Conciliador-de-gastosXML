@@ -1,34 +1,39 @@
 <?php
 /**
- * Respaldo de la base de datos a la carpeta compartida.
+ * Respaldo de la base de datos, en la computadora que lo genera.
  *
  * Por qué existe: la base vive en una sola computadora y no siempre se puede
  * llegar a ella —Tailscale se cae, la máquina se apaga—. Cuando eso pasa nadie
  * puede trabajar y tampoco se puede sacar una copia, que es justo cuando más
- * falta hace. La salida es invertir quién empieza la conversación: en vez de
- * que las demás máquinas vayan a buscar la copia, la máquina que hospeda la
- * base la deja escrita en la carpeta de SharePoint, que se sincroniza sola.
+ * falta hace. Por eso la máquina que hospeda la base deja escrita su copia
+ * sin que nadie se la pida:
  *
- *   máquina con la base  ──> _TRABAJO/RESPALDOS/*.sql.gz ──> las demás
- *          mysqldump              (OneDrive sincroniza)      scripts/copiar-base.ps1
+ *   máquina con la base  ──> storage/backups/RESPALDOS/*.sql.gz
+ *          mysqldump
+ *
+ * Antes el destino era _TRABAJO/RESPALDOS de la carpeta compartida, que
+ * OneDrive repartía a las demás. Desde el 27/09/2026 no hay carpeta
+ * compartida, y a SharePoint van XML y PDF y nada más (AlmacenEnGraph lo
+ * rechaza): un volcado de la base no es un documento de ninguna empresa.
+ * Llevarlo a otra computadora es copiarlo a mano.
  *
  * El volcado corre SIEMPRE contra la base que tenga configurada la computadora
  * donde se ejecuta. En la que hospeda la base eso es local y tarda menos de un
  * minuto; desde otra máquina sale por la red y solo sirve si la red está bien
  * —que es el caso que este archivo existe para evitar—.
  *
- * Se comprime a .gz porque el destino es una carpeta que TODOS sincronizan:
- * 150 MB por respaldo se los baja cada persona, 20 MB no.
+ * Se comprime a .gz: 150 MB por respaldo contra 20 MB, en un disco que anda
+ * justo.
  */
 
 require_once __DIR__ . '/RutaDocumento.php';
 
 class RespaldoBase
 {
-    /** Subcarpeta dentro de _TRABAJO donde quedan los respaldos. */
+    /** Subcarpeta de storage/backups donde quedan los respaldos. */
     public const CARPETA = 'RESPALDOS';
 
-    /** Cuántos se conservan en la carpeta compartida; los viejos se borran. */
+    /** Cuántos se conservan; los viejos se borran. */
     public const CONSERVAR = 5;
 
     /** Nombre de la tarea programada de Windows. */
@@ -67,25 +72,18 @@ class RespaldoBase
     }
 
     /**
-     * Carpeta compartida donde quedan los .sql.gz. La crea si falta.
-     *
-     * Sin carpeta compartida —una PC que trabaja solo empresas en
-     * SharePoint— el respaldo se queda en esta máquina, en
-     * storage/backups/RESPALDOS. A SharePoint no va: allá van XML y PDF y
-     * nada más, y un volcado de la base no es un documento de ninguna
-     * empresa.
+     * Donde quedan los .sql.gz: storage/backups/RESPALDOS de esta
+     * computadora. La crea si falta. Ver el encabezado: ni la carpeta
+     * compartida, que ya no existe, ni SharePoint, que es solo de documentos.
      */
     public static function carpetaDestino()
     {
-        if (RutaDocumento::raiz() === '') {
-            $local = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR
-                . 'backups' . DIRECTORY_SEPARATOR . self::CARPETA;
-            if (!is_dir($local) && !@mkdir($local, 0777, true) && !is_dir($local)) {
-                throw new RuntimeException('No se pudo crear ' . $local);
-            }
-            return $local;
+        $local = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR
+            . 'backups' . DIRECTORY_SEPARATOR . self::CARPETA;
+        if (!is_dir($local) && !@mkdir($local, 0777, true) && !is_dir($local)) {
+            throw new RuntimeException('No se pudo crear ' . $local);
         }
-        return RutaDocumento::carpetaTrabajo(self::CARPETA);
+        return $local;
     }
 
     /** Cliente de volcado del servidor de base de datos. */
@@ -136,10 +134,7 @@ class RespaldoBase
     }
 
     /**
-     * Respaldos que hay hoy en la carpeta compartida, del más nuevo al más
-     * viejo. Es lo que ve la otra computadora, así que la pantalla lo muestra
-     * tal cual: si el archivo no está listado, todavía no terminó de
-     * sincronizar.
+     * Respaldos que hay hoy en esta computadora, del más nuevo al más viejo.
      */
     public static function listar()
     {
@@ -280,7 +275,7 @@ class RespaldoBase
 
             $carpeta = self::carpetaDestino();
             if (!RutaDocumento::permiteEscritura($carpeta)) {
-                throw new RuntimeException('No se puede escribir en la carpeta compartida: ' . $carpeta);
+                throw new RuntimeException('No se puede escribir en la carpeta de respaldos: ' . $carpeta);
             }
 
             $tablas = self::tablasBase($config);
@@ -309,17 +304,17 @@ class RespaldoBase
             ]);
 
             // El nombre del equipo va en el archivo a propósito: las dos
-            // máquinas pueden generar respaldos y en la carpeta compartida se
-            // ven mezclados. Sin eso no hay forma de saber cuál es del servidor.
+            // máquinas pueden generar respaldos, y una copia que se lleva a
+            // mano de una a otra tiene que seguir diciendo de dónde salió.
             $nombre = sprintf(
                 '%s_%s_%s.sql.gz',
                 $config['database'],
                 self::equipo(),
                 date('Ymd_His')
             );
-            // Se comprime a un nombre temporal y se renombra al final: si
-            // OneDrive empieza a subirlo a medio escribir, la otra máquina se
-            // baja un .gz truncado que parece bueno hasta que falla al abrir.
+            // Se comprime a un nombre temporal y se renombra al final: si el
+            // proceso se corta a la mitad, lo que queda no se confunde con un
+            // .gz bueno, que parece entero hasta que falla al abrir.
             $parcial = $carpeta . DIRECTORY_SEPARATOR . $nombre . '.parcial';
             $destino = $carpeta . DIRECTORY_SEPARATOR . $nombre;
 
@@ -328,7 +323,7 @@ class RespaldoBase
             $temporal = null;
 
             if (!@rename($parcial, $destino)) {
-                throw new RuntimeException('No se pudo renombrar el respaldo en la carpeta compartida.');
+                throw new RuntimeException('No se pudo renombrar el respaldo.');
             }
             $parcial = null;
 
@@ -440,7 +435,7 @@ class RespaldoBase
         $gz = @gzopen($destino, 'wb6');
         if ($gz === false) {
             fclose($entrada);
-            throw new RuntimeException('No se pudo crear el archivo comprimido en la carpeta compartida.');
+            throw new RuntimeException('No se pudo crear el archivo comprimido del respaldo.');
         }
         try {
             while (!feof($entrada)) {
@@ -449,7 +444,7 @@ class RespaldoBase
                     throw new RuntimeException('Se cortó la lectura del volcado temporal.');
                 }
                 if ($trozo !== '' && gzwrite($gz, $trozo) === false) {
-                    throw new RuntimeException('Se cortó la escritura en la carpeta compartida.');
+                    throw new RuntimeException('Se cortó la escritura del respaldo.');
                 }
             }
         } finally {
@@ -459,9 +454,8 @@ class RespaldoBase
     }
 
     /**
-     * Deja solo los últimos CONSERVAR. La carpeta es de SharePoint y la
-     * sincroniza todo el mundo: acumular respaldos ahí le cuesta espacio y
-     * descarga a cada persona.
+     * Deja solo los últimos CONSERVAR: el disco de esta instalación anda
+     * justo, y cinco copias alcanzan para volver atrás una semana.
      */
     private static function podar($carpeta)
     {

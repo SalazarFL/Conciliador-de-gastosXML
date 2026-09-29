@@ -177,7 +177,7 @@ Prueba::caso('[L2] rango de la descarga masiva: el 30 de febrero no existe', fun
 Prueba::caso('las acciones AJAX rechazan GET con 405', function () {
     $_SERVER['REQUEST_METHOD'] = 'GET';
     foreach (['listar', 'sincronizar', 'contenido', 'adjunto', 'procesar', 'importar', 'descartar',
-              'generalProcesar', 'cuentaGuardar', 'carpetas', 'config'] as $accion) {
+              'generalProcesar', 'cuentaGuardar'] as $accion) {
         igual(405, sonda()->responder($accion)[0], $accion);
     }
 });
@@ -239,26 +239,12 @@ Prueba::caso('cuentas: datos obligatorios y contraseña al crear', function () {
     igual(0, Soporte::$pdo->contar('INSERT INTO correo_cuentas'), 'nada escrito');
 });
 
-Prueba::caso('explorador de carpetas: nombres con separadores o reservados se rechazan; uno normal se crea', function () {
-    $raiz = Soporte::carpetaTemporal();
-    foreach (['', '..\\fuera', 'a/b', 'dos:puntos', 'com<1>', 'x|y', '¿?*'] as $nombre) {
-        Soporte::limpiarPeticion();
-        $_POST = ['ruta' => $raiz, 'accion' => 'crear', 'nombre' => $nombre];
-        igual(422, sonda()->responder('carpetas')[0], "nombre «{$nombre}»");
-    }
-    Soporte::limpiarPeticion();
-    $_POST = ['ruta' => $raiz, 'accion' => 'crear', 'nombre' => 'Facturas 2026'];
-    [$codigo, $cuerpo] = sonda()->responder('carpetas');
-    igual(200, $codigo, 'creada');
-    verificar(is_dir($raiz . DIRECTORY_SEPARATOR . 'Facturas 2026'), 'existe');
-    verificar($cuerpo['escribible'], 'y se puede escribir');
-});
-
-Prueba::caso('selector: un token que no es de 16 hexadecimales no toca el disco', function () {
-    foreach (['', '../../config', str_repeat('a', 15), str_repeat('G', 16), str_repeat('a', 17)] as $token) {
-        Soporte::limpiarPeticion();
-        $_POST['token'] = $token;
-        igual(422, sonda()->responder('selectorEstado')[0], "token «{$token}»");
+Prueba::caso('la carpeta compartida ya no se elige: el explorador y el selector no existen', function () {
+    // Aquí se probaban el explorador de carpetas del disco y el selector con
+    // la ventana de Windows. Se fueron con la carpeta compartida: los
+    // documentos van a SharePoint, que no se elige desde la pantalla.
+    foreach (['config', 'carpetas', 'selectorAbrir', 'selectorEstado', 'scriptPicker'] as $accion) {
+        verificar(!method_exists(CorreoController::class, $accion), "CorreoController::{$accion}() ya no existe");
     }
 });
 

@@ -679,6 +679,7 @@ CREATE TABLE `facturas_xml` (
   `iva` decimal(18,2) NOT NULL DEFAULT 0.00 COMMENT 'Monto de IVA',
   `total` decimal(18,2) NOT NULL DEFAULT 0.00 COMMENT 'Total de la factura',
   `moneda` varchar(3) NOT NULL DEFAULT 'CRC' COMMENT 'Código de moneda ISO 4217',
+  `tipo_cambio` decimal(18,5) DEFAULT NULL COMMENT 'TipoCambio del XML; NULL en colones o si no se leyó',
   `tipo_comprobante` varchar(20) DEFAULT NULL COMMENT 'I=Ingreso, E=Egreso, etc.',
   `archivo_xml` varchar(255) NOT NULL COMMENT 'Nombre del archivo XML',
   `ruta_xml` varchar(500) DEFAULT NULL COMMENT 'Ruta relativa a la carpeta compartida de documentos',
@@ -1118,12 +1119,13 @@ CREATE TABLE `proveedor_alias` (
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
 CREATE TABLE `proveedor_cedula_ignorada` (
+  `sociedad_id` int(10) unsigned NOT NULL,
   `cedula` varchar(20) NOT NULL,
   `nombre` varchar(255) NOT NULL DEFAULT '',
   `motivo` varchar(255) DEFAULT NULL,
   `usuario_id` int(10) unsigned DEFAULT NULL,
   `creado_en` datetime NOT NULL DEFAULT current_timestamp(),
-  PRIMARY KEY (`cedula`),
+  PRIMARY KEY (`sociedad_id`,`cedula`),
   KEY `fk_cedula_ignorada_usuario` (`usuario_id`),
   CONSTRAINT `fk_cedula_ignorada_usuario` FOREIGN KEY (`usuario_id`) REFERENCES `usuarios` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -1131,6 +1133,7 @@ CREATE TABLE `proveedor_cedula_ignorada` (
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
 CREATE TABLE `proveedor_codigo_erp` (
+  `sociedad_id` int(10) unsigned NOT NULL COMMENT 'Cada empresa tiene su propio catálogo',
   `proveedor_codigo` varchar(30) NOT NULL COMMENT 'Código del proveedor en el ERP (140001227)',
   `proveedor_id` int(10) unsigned NOT NULL,
   `cedula` varchar(20) NOT NULL DEFAULT '',
@@ -1139,7 +1142,7 @@ CREATE TABLE `proveedor_codigo_erp` (
   `confirmado_por` int(10) unsigned DEFAULT NULL,
   `creado_en` datetime NOT NULL DEFAULT current_timestamp(),
   `actualizado_en` datetime DEFAULT NULL ON UPDATE current_timestamp(),
-  PRIMARY KEY (`proveedor_codigo`),
+  PRIMARY KEY (`sociedad_id`,`proveedor_codigo`),
   KEY `idx_proveedor` (`proveedor_id`),
   KEY `idx_origen` (`origen`),
   KEY `fk_codigo_erp_usuario` (`confirmado_por`),
@@ -1243,7 +1246,7 @@ CREATE TABLE `sociedades` (
   `nombre` varchar(255) NOT NULL,
   `cedula` varchar(30) NOT NULL,
   `cedula_norm` varchar(30) GENERATED ALWAYS AS (nullif(regexp_replace(`cedula`,'[^0-9]',''),'')) STORED COMMENT 'Derivada: solo los dígitos de la cédula, para que no se repita',
-  `almacen_documentos` varchar(10) NOT NULL DEFAULT 'disco',
+  `almacen_documentos` varchar(10) NOT NULL DEFAULT 'sharepoint', -- ya no se lee: todo va a SharePoint
   `activa` tinyint(1) NOT NULL DEFAULT 0,
   `creado_en` datetime NOT NULL DEFAULT current_timestamp(),
   `actualizado_en` datetime DEFAULT NULL ON UPDATE current_timestamp(),

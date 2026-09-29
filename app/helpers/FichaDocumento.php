@@ -30,11 +30,27 @@ class FichaDocumento
     ];
 
     /**
-     * @param array  $fila    Fila de facturas_xml con el proveedor unido
-     *                        (Factura::getOneWithProvider).
-     * @param string $baseUrl Raíz de la aplicación, para las URL de archivos.
+     * Los tipos de documento que se citan en InformacionReferencia. Solo los
+     * que significan lo mismo en las versiones 4.3 y 4.4 de Hacienda; el
+     * resto se enseña con su código, que es mejor que un nombre equivocado.
      */
-    public static function de(array $fila, $baseUrl = '')
+    private const TIPOS_REFERENCIA = [
+        '01' => 'Factura electrónica',
+        '02' => 'Nota de débito',
+        '03' => 'Nota de crédito',
+        '04' => 'Tiquete electrónico',
+    ];
+
+    /**
+     * @param array      $fila        Fila de facturas_xml con el proveedor unido
+     *                                (Factura::getOneWithProvider).
+     * @param string     $baseUrl     Raíz de la aplicación, para las URL de archivos.
+     * @param array|null $referencias Las de InformacionReferencia, tal como las
+     *                                guarda FacturaXmlDetalle, con `documento_id`
+     *                                cuando la factura citada está en el sistema.
+     *                                null = todavía no se leyeron del XML.
+     */
+    public static function de(array $fila, $baseUrl = '', ?array $referencias = [])
     {
         $id = (int) ($fila['id'] ?? 0);
         $base = rtrim((string) $baseUrl, '/');
@@ -57,7 +73,10 @@ class FichaDocumento
             'total' => self::monto($fila['total'] ?? 0),
             'subtotal' => self::monto($fila['subtotal'] ?? 0),
             'iva' => self::monto($fila['iva'] ?? 0),
-            'campos' => self::campos($fila, $numero),
+            'campos' => self::campos($fila, $numero, $esNota),
+            // Solo la nota de crédito dice a qué facturas va. null = no se
+            // sabe todavía, que no es lo mismo que "no cita ninguna".
+            'referencias' => $esNota && $referencias !== null ? self::referencias($referencias) : null,
             'archivos' => self::archivos($fila, $estado, $base, $id),
             'estado' => [
                 'xml_ok' => (bool) $estado['xml_ok'],
@@ -82,11 +101,13 @@ class FichaDocumento
      * `mono` marca lo que se compara carácter a carácter contra el ERP, y
      * `copiar` lo que nadie transcribe a mano: la clave son cincuenta dígitos.
      */
-    private static function campos(array $fila, $numero)
+    private static function campos(array $fila, $numero, $esNota = false)
     {
         $campos = [
             ['etiqueta' => 'Fecha de emisión', 'valor' => self::fecha($fila['fecha_emision'] ?? '')],
-            ['etiqueta' => 'Número asistente', 'valor' => $numero, 'mono' => true],
+            // En la nota se le dice por lo que es: los ocho dígitos del final
+            // del consecutivo, igual que el número de sus facturas de abajo.
+            ['etiqueta' => $esNota ? 'Número corto' : 'Número asistente', 'valor' => $numero, 'mono' => true],
             ['etiqueta' => 'Consecutivo', 'valor' => trim((string) ($fila['consecutivo_completo'] ?? '')), 'mono' => true, 'copiar' => true],
             ['etiqueta' => 'Clave', 'valor' => trim((string) ($fila['clave'] ?? '')), 'mono' => true, 'copiar' => true],
             ['etiqueta' => 'Receptor', 'valor' => trim((string) ($fila['receptor_id'] ?? '')), 'mono' => true],
@@ -106,6 +127,37 @@ class FichaDocumento
         }
 
         return $campos;
+    }
+
+    /**
+     * Las facturas que la nota cita en su XML, en el orden en que las cita.
+     *
+     * El número corto sale del consecutivo, igual que el de la nota. Si la
+     * referencia no trae una clave de cincuenta dígitos —hay emisores que
+     * escriben otra cosa en <Numero>— se enseña lo que escribieron.
+     * `documento_id` es el comprobante del sistema con esa clave, para
+     * poder abrirlo; 0 si no ha llegado.
+     */
+    private static function referencias(array $filas)
+    {
+        $salida = [];
+        foreach ($filas as $r) {
+            $consecutivo = trim((string) ($r['consecutivo_ref'] ?? ''));
+            $numeroRef = trim((string) ($r['numero_ref'] ?? ''));
+            $tipo = trim((string) ($r['tipo_doc_ref'] ?? ''));
+            $salida[] = [
+                'numero' => $consecutivo !== ''
+                    ? NumeroFactura::xmlOchoDigitos($consecutivo)
+                    : $numeroRef,
+                'consecutivo' => $consecutivo,
+                'clave' => trim((string) ($r['clave_ref'] ?? '')),
+                'fecha' => self::fecha($r['fecha_ref'] ?? ''),
+                'tipo' => $tipo === '' ? '' : (self::TIPOS_REFERENCIA[$tipo] ?? 'Tipo ' . $tipo),
+                'razon' => trim((string) ($r['razon'] ?? '')),
+                'documento_id' => (int) ($r['documento_id'] ?? 0),
+            ];
+        }
+        return $salida;
     }
 
     /**

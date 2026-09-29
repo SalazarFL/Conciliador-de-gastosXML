@@ -3,7 +3,9 @@
 --
 -- Por qué dos niveles y no un ajuste de la instalación:
 --
---   sociedades.almacen_documentos   dónde se archivan los documentos NUEVOS
+--   sociedades.almacen_documentos   dónde se archivaban los documentos NUEVOS
+--                                   (desde el 27/09/2026 nada la lee: todo lo
+--                                   nuevo va a SharePoint)
 --                                   de esa sociedad.
 --   facturas_xml.almacen            dónde está ESE documento ahora mismo.
 --

@@ -8,7 +8,7 @@ class Importacion extends Model
 {
     protected $table = 'importaciones';
 
-    // Carpeta de la importación, dentro de la carpeta compartida.
+    // Carpeta de la importación (las de antes, en la carpeta compartida).
     protected $camposRuta = ['ruta_archivo'];
 
     public function getLatestByTipo($tipo)

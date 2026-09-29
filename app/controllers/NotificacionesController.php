@@ -216,17 +216,28 @@ class NotificacionesController extends Controller
             ], 422);
         }
 
+        /*
+         * Dos formas de resolverlo cuando el código ya tiene dueño: pasárselo
+         * a esta cédula (el dueño deja de valer) o que lo acepte TAMBIÉN (el
+         * dueño sigue, y el código acepta además los comprobantes de esta).
+         */
+        $tambien = $this->post('modo', '') === 'tambien';
+
         try {
-            $r = $this->loadModel('ProveedorCodigoErp')
-                ->guardarCodigo($codigo, $cedula, $nombre, (int) ($_SESSION['user_id'] ?? 0));
+            $modelo = $this->loadModel('ProveedorCodigoErp');
+            $usuario = (int) ($_SESSION['user_id'] ?? 0);
+            $r = $tambien
+                ? $modelo->aceptarTambien($codigo, $cedula, $nombre, $usuario)
+                : $modelo->guardarCodigo($codigo, $cedula, $nombre, $usuario);
             if (empty($r['ok'])) {
                 $this->json(['ok' => false, 'message' => $r['message']], 422);
             }
 
             if ($avisoId > 0) {
                 $this->loadModel('Notificacion')->cerrar(
-                    $avisoId, 'resuelta', (int) ($_SESSION['user_id'] ?? 0),
-                    'Se le dio el código ' . $codigo
+                    $avisoId, 'resuelta', $usuario,
+                    $tambien ? 'El código ' . $codigo . ' la acepta además de su dueño'
+                             : 'Se le dio el código ' . $codigo
                 );
             }
 
@@ -368,17 +379,18 @@ class NotificacionesController extends Controller
         }
     }
 
+    /**
+     * Antes re-verificaba solo los tres pagos con más faltantes: una factura
+     * de un cuarto pago, o fuera de todo pago, se quedaba sin respaldo con su
+     * comprobante a la vista. Ahora busca en todas, igual que Configuración.
+     */
     private function reverificarPendientes()
     {
-        try {
-            require_once __DIR__ . '/../helpers/PorPagarVerificador.php';
-            return PorPagarVerificador::verificarPendientes(
-                $this->loadModel('FacturaErp'),
-                $this->loadModel('Factura')
-            );
-        } catch (Throwable $e) {
-            return 0;
-        }
+        require_once __DIR__ . '/../helpers/PorPagarVerificador.php';
+        return PorPagarVerificador::trasCambioDeCatalogo(
+            $this->loadModel('FacturaErp'),
+            $this->loadModel('Factura')
+        );
     }
 
     private function datosDe(array $aviso)

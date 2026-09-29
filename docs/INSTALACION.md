@@ -2,15 +2,15 @@
 
 Cómo está montado: la **aplicación** se instala en la computadora de cada
 persona, la **base de datos** es una sola en el servidor, y los **documentos**
-(XML y PDF) viven en una carpeta de SharePoint sincronizada.
+(XML y PDF) viven en SharePoint, y Nexo Fiscal se los pide por Microsoft Graph.
 
 ```
    Ana                Luis               Marta          ← cada quien con su copia
     │                  │                  │                de la aplicación
     ├──────────────────┼──────────────────┤
     │                                     │
-  base de datos                    carpeta compartida
-  (una, en el servidor)            (SharePoint sincronizado)
+  base de datos                     SharePoint
+  (una, en el servidor)             (una biblioteca, o una carpeta de ella)
 ```
 
 De ahí salen las dos reglas que gobiernan todo el código:
@@ -18,9 +18,12 @@ De ahí salen las dos reglas que gobiernan todo el código:
 1. **Ningún documento se guarda dentro del proyecto ni dentro de la base.** Si
    un XML queda en `storage/` de una computadora, la fila la ven todos pero el
    archivo solo lo tiene quien lo bajó.
-2. **Las rutas se guardan relativas a la carpeta compartida.** La carpeta está
-   en un lugar distinto en cada máquina; guardar `C:\Users\ana\…` hace que el
-   documento solo se abra en la computadora de Ana.
+2. **Las rutas se guardan relativas a donde vive Nexo Fiscal en SharePoint**,
+   con el prefijo `sharepoint:`: la misma fila sirve en cualquier computadora.
+
+Hasta el 27/09/2026 los documentos vivían en una carpeta compartida
+sincronizada con OneDrive. Ya no: lo que quedó ahí se migra (ver
+[SHAREPOINT.md](SHAREPOINT.md#4-lo-que-quedó-en-la-carpeta-compartida)).
 
 ---
 
@@ -147,33 +150,24 @@ sistema; no está escrita en ningún archivo del repositorio.
 La base **ya existe y tiene los datos**: no hay que crear nada ni correr
 `schema.sql`. Eso es solo para levantar un servidor desde cero.
 
-### 6. La carpeta compartida
+### 6. SharePoint (obligatorio)
 
-Abrir la biblioteca de SharePoint en el navegador y usar **Sincronizar**. Eso
-crea una carpeta local, algo como:
-
-```
-C:\Users\<usuario>\<Empresa>\Documentos compartidos - Facturas
-```
-
-Entrar a la aplicación → **Correo** → escribir esa ruta en *Carpeta de
-documentos*. Es lo único que cambia de una computadora a otra.
-
-> **Espera a que termine de sincronizar la primera vez.** Si la aplicación
-> arranca a media sincronización, va a reportar documentos que no encuentra —
-> no están perdidos, todavía no han bajado.
-
-**Si alguna empresa archiva en SharePoint** (Configuración → Empresas del
-grupo), esta computadora necesita además sus credenciales de Microsoft Graph:
+Los XML y PDF de todas las empresas viven en SharePoint. Esta computadora
+necesita las credenciales de la aplicación de Microsoft Graph:
 
 ```
 copy app\config\graph.ejemplo.php app\config\local.graph.php
-php cli/probar_sharepoint.php
+php cli/probar_sharepoint.php --almacen
 ```
 
-Cómo se completa, y todo lo demás de esas empresas, en
-[SHAREPOINT.md](SHAREPOINT.md). Sin ese archivo, los documentos de esas
-empresas no se abren desde esta computadora; los de las demás, sí.
+Cómo se completa —incluido el caso de una carpeta de una biblioteca que ya
+existía, con permiso solo sobre ella— en [SHAREPOINT.md](SHAREPOINT.md). Sin
+ese archivo, esta computadora no puede guardar ni abrir documentos: Correo,
+Facturas XML, Notas XML, Devoluciones y Por pagar aparecen cerrados, y
+*Configuración → Archivo de documentos* dice qué falta.
+
+No hace falta sincronizar nada con OneDrive: la aplicación le habla a
+SharePoint directamente.
 
 ### 7. Comprobar
 
@@ -183,7 +177,8 @@ php cli/diagnostico.php
 
 O en la aplicación, **Administración → Diagnóstico**. Revisa versión de PHP,
 extensiones, a qué base apunta esta computadora, la conexión y su latencia,
-migraciones pendientes, la carpeta compartida y si los documentos se abren.
+migraciones pendientes, si esta computadora llega a SharePoint y cuántos
+documentos quedan todavía en la carpeta compartida de antes.
 Cada problema viene con qué hacer para resolverlo.
 
 La latencia importa más de lo que parece: la base ya no está en la misma
@@ -302,27 +297,28 @@ falta**. Si Tailscale no llega a la máquina del servidor, tampoco llega
 que hay.
 
 La salida es invertir quién empieza. En vez de que esta computadora vaya a
-buscar la copia, **la computadora que tiene la base la deja escrita en la
-carpeta compartida**, y SharePoint hace el resto:
+buscar la copia, **la computadora que tiene la base la deja escrita**, sin que
+nadie se la pida, y el archivo se lleva a esta:
 
 ```
-  máquina con la base                                      esta máquina
-  ───────────────────                                      ────────────
-  Administración → Diagnóstico                             copiar-base.ps1
-  → Generar respaldo ahora        _TRABAJO/RESPALDOS/         -Desde ultimo
-         │                          *.sql.gz                       │
-         └───── mysqldump ──────>  (OneDrive) ──────────────>  restaura aquí
+  máquina con la base                                           esta máquina
+  ───────────────────                                           ────────────
+  Administración → Diagnóstico      storage/backups/RESPALDOS/   copiar-base.ps1
+  → Generar respaldo ahora             *.sql.gz  ── se copia ──>   -Desde ultimo
+         └───── mysqldump ──────>                    a mano       restaura aquí
 ```
 
 Ninguno de los dos extremos toca la red del otro. Funciona con Tailscale caído,
 con la VPN caída y con el servidor apagado, siempre que el respaldo se haya
-generado antes.
+generado antes. Hasta el 27/09/2026 el archivo viajaba solo por la carpeta
+compartida; desde que los documentos van a SharePoint esa carpeta ya no
+existe, y a SharePoint no van volcados de la base.
 
 **En la computadora que tiene la base** (Administración → Diagnóstico, solo
 admin):
 
 - **Generar respaldo ahora** — vuelca la base y deja un `.sql.gz` en
-  `_TRABAJO/RESPALDOS`. Corre en segundo plano: se puede cerrar la página, el
+  `storage/backups/RESPALDOS`. Corre en segundo plano: se puede cerrar la página, el
   proceso sigue y al volver se ve cómo terminó.
 - **Todas las noches a las HH:MM** — registra una tarea programada de Windows
   que hace lo mismo sin que nadie se acuerde. Corre en la sesión del usuario
@@ -331,38 +327,38 @@ admin):
 
 Lo mismo desde la consola: `php cli/respaldar_base.php`.
 
-**En esta computadora**, cuando el archivo ya sincronizó:
+**En esta computadora**, con el archivo copiado a su `storage/backups/RESPALDOS`:
 
 ```powershell
-.\scripts\copiar-base.ps1 -Desde ultimo                    # el más nuevo de la carpeta
+.\scripts\copiar-base.ps1 -Desde ultimo                    # el más nuevo de esa carpeta
 .\scripts\copiar-base.ps1 -Desde C:\ruta\archivo.sql.gz    # uno concreto
 ```
 
 Dos cosas que el script vigila, porque las dos se ven igual que un respaldo
 bueno hasta que ya es tarde:
 
-- **Un `.gz` a medio sincronizar.** OneDrive muestra el archivo antes de
-  terminar de bajarlo; si se restaura, la base local ya se borró cuando falla
-  la descompresión. El script se planta si el archivo es sospechosamente chico.
+- **Un `.gz` a medio copiar.** Si se restaura, la base local ya se borró
+  cuando falla la descompresión. El script se planta si el archivo es
+  sospechosamente chico.
 - **Un respaldo generado por esta misma máquina.** El nombre lleva el equipo
   (`bd_xmlconcilia_AUXILIAR-06C_20260813_2200.sql.gz`). Si el más nuevo lo hizo
   esta computadora, es la copia de la copia y avisa: restaurarlo sería reciclar
   datos viejos creyendo que te pusiste al día.
 
-El archivo va comprimido a propósito: la carpeta la sincroniza **todo el
-mundo**, así que 150 MB por respaldo se los baja cada persona. Comprimido son
-unos 12 MB. Se conservan los últimos 5 y los viejos se borran solos.
+El archivo va comprimido: 150 MB por respaldo contra unos 12 MB, en discos
+que andan justos. Se conservan los últimos 5 y los viejos se borran solos.
 
 ### Lo que la copia no trae
 
-Los **documentos** (XML y PDF) no están en la base: viven en la carpeta de
-SharePoint sincronizada, y esa se sincroniza sola. La copia de la base y la
-carpeta compartida son dos cosas independientes; sobre la copia local los
-documentos se abren igual, porque las rutas se guardan relativas.
+Los **documentos** (XML y PDF) no están en la base: viven en SharePoint. La
+copia de la base y SharePoint son dos cosas independientes; sobre la copia
+local los documentos se abren igual, porque las rutas se guardan relativas a
+la biblioteca —y cualquier cambio que se haga sobre la copia local toca los
+documentos de verdad: ojo con borrar—.
 
-Tampoco trae la configuración de la máquina —carpeta de documentos, cuentas de
-correo, tarea programada—, que vive en `storage/correo/` y es de cada
-computadora.
+Tampoco trae la configuración de la máquina —credenciales de SharePoint,
+cuentas de correo, tarea programada—, que vive en `app/config/local.graph.php`
+y `storage/correo/` y es de cada computadora.
 
 ---
 
@@ -400,10 +396,10 @@ modelo, en orden de frecuencia:
 
 | Síntoma | Casi siempre es |
 |---|---|
-| "No abre ningún documento" | La carpeta compartida apunta al lugar equivocado, o SharePoint aún no termina de bajar los archivos |
-| "No abre *este* documento" | Alguien lo movió fuera de la carpeta compartida — devolvelo adentro y corré `php cli/organizar_documentos.php` |
-| "Me da error al guardar" | Falta una migración en la base, o permiso de solo lectura en SharePoint |
-| "No abre ningún documento de *esta* empresa" | La empresa archiva en SharePoint y esta computadora no tiene `app/config/local.graph.php` — ver [SHAREPOINT.md](SHAREPOINT.md) |
+| "No abre ningún documento" / los módulos de documentos aparecen cerrados | Esta computadora no tiene `app/config/local.graph.php`, o SharePoint no contesta — Diagnóstico lo dice, y [SHAREPOINT.md](SHAREPOINT.md) cómo arreglarlo |
+| "No abre *este* documento" | Alguien lo borró en SharePoint, o lo sacó de la carpeta de Nexo Fiscal: papelera del sitio, devolverlo, o volver a bajarlo del correo con su botón |
+| "No abre los documentos viejos" | Son de antes de SharePoint y siguen en la carpeta compartida: se abren solo en las PC que la tienen, hasta migrarlos |
+| "Me da error al guardar" | Falta una migración en la base, o la aplicación tiene permiso de solo lectura en SharePoint |
 | "No conecta" | Tailscale apagado en esa computadora, o el servidor caído. `tailscale status` lo dice en un segundo. Si va para largo, se puede seguir trabajando sobre la copia local — ver "Refrescar la copia — sin acceso al servidor" |
 | "Falta app/config/local.php" | Instalación a medias: hacer el paso 5 |
 | "No veo lo que capturó mi compañero" | Su `local.php` apunta a `localhost` en vez del servidor |
@@ -421,32 +417,30 @@ modelo, en orden de frecuencia:
 | `.\scripts\cambiar-base.ps1 oficina\|propia` | Cambiar entre la base compartida y la copia local |
 | `.\scripts\copiar-base.ps1` | **Borra la copia local**: la respalda del servidor y la vuelve a bajar |
 | `.\scripts\copiar-base.ps1 -SoloRespaldo` | Respaldar el servidor a `storage/backups` sin tocar nada más |
-| `.\scripts\copiar-base.ps1 -Desde ultimo` | **Borra la copia local**: la rehace con el respaldo que dejó la otra máquina en SharePoint |
-| `php cli/respaldar_base.php` | Dejar un respaldo en la carpeta compartida (lo mismo que el botón de Diagnóstico) |
-| `php cli/migrar_rutas_relativas.php` | Ver qué rutas siguen siendo absolutas (no cambia nada) |
-| `php cli/migrar_rutas_relativas.php --aplicar` | Convertirlas y sacar del proyecto los documentos que queden adentro |
-| `php cli/organizar_documentos.php` | Volver a ubicar documentos movidos a mano (no mueve nada) |
-| `php cli/organizar_documentos.php --forzar-orden` | **Mueve archivos**: ordena lo registrado por fecha, tipo y estado |
-| `php cli/organizar_documentos.php --pago=N` | **Mueve archivos**: solo los de ese pago, y copia su par a la carpeta del pago |
+| `.\scripts\copiar-base.ps1 -Desde ultimo` | **Borra la copia local**: la rehace con el último respaldo de `storage/backups/RESPALDOS` |
+| `php cli/respaldar_base.php` | Dejar un respaldo en `storage/backups/RESPALDOS` (lo mismo que el botón de Diagnóstico) |
+| `php cli/migrar_rutas_relativas.php --raiz=RUTA` | Ver qué rutas de la carpeta compartida de antes siguen siendo absolutas (no cambia nada) |
+| `php cli/organizar_documentos.php` | Poner la base al día con lo que se movió o borró en SharePoint (lo hace sola la tarea) |
+| `php cli/organizar_documentos.php --carpeta=RUTA` | La carpeta compartida de antes: volver a ubicar documentos movidos a mano (no mueve nada) |
 | `php cli/limpiar_rutas_perdidas.php` | Ver qué rutas apuntan a un archivo que ya no existe (no cambia nada) |
 | `php cli/recuperar_documentos.php` | Ver qué documentos sin archivo se pueden volver a bajar del correo |
 | `php cli/recuperar_documentos.php --aplicar` | **Escribe archivos**: los baja del correo y los deja en su misma ruta |
 | `php cli/probar_sharepoint.php` | Probar de punta a punta la conexión con SharePoint (sube y borra un archivo de prueba) |
+| `php cli/probar_sharepoint.php --carpeta=RUTA` | Lo mismo, contra una carpeta de la biblioteca |
 | `php cli/probar_sharepoint.php --bibliotecas=URL` | Listar las bibliotecas de un sitio con su `drive_id` |
-| `php cli/organizar_documentos.php --sharepoint` | Poner la base al día con lo que se movió o borró en SharePoint (lo hace sola la tarea) |
-| `php cli/migrar_documentos_a_graph.php --sociedad=N` | Pasar una empresa a SharePoint, ver cómo va o volver atrás — ver [SHAREPOINT.md](SHAREPOINT.md) |
+| `php cli/migrar_documentos_a_graph.php --sociedad=N` | Pasar a SharePoint lo que una empresa tiene todavía en la carpeta compartida — ver [SHAREPOINT.md](SHAREPOINT.md) |
 | `php cli/procesar_lotes.php` | Avanzar los lotes de correo sin el navegador abierto |
 | `php cli/sync_correo.php` | Sincronizar el buzón y capturar correo nuevo si está habilitado |
 | `php cli/adelgazar_correo_indice.php` | Medir cuánto ocupa el índice del correo (no cambia nada) |
 | `php cli/adelgazar_correo_indice.php --aplicar --retencion-dias=N` | **Borra filas**: deja solo los últimos N días de índice y compacta |
 
-Los dos de rutas se pueden correr las veces que haga falta: no duplican nada
-ni deshacen lo ya hecho.
+Los de rutas y el de migrar se pueden correr las veces que haga falta: no
+duplican nada ni deshacen lo ya hecho.
 
 ### Qué archiva solo, y qué no
 
-Los XML y PDF viven en una carpeta que la gente también abre en el Explorador,
-así que conviene saber exactamente qué toca la aplicación sola.
+Los XML y PDF viven en una biblioteca que la gente también abre en el
+navegador, así que conviene saber exactamente qué toca la aplicación sola.
 
 La captura automática baja los XML/PDF nuevos a `_TRABAJO/BANDEJA`, que es una
 zona de paso. Con la **entrada automática** encendida —lo normal— siguen de
@@ -465,17 +459,18 @@ Lo que **nunca** se toca solo son los archivos que alguien haya dejado en la
 carpeta por su cuenta: el acomodo alcanza únicamente a los documentos
 registrados.
 
-El acomodo lo hace la tarea programada, como mucho **cada quince minutos**, y
-son dos cosas distintas:
+Lo hace la tarea programada, en cada vuelta, y son dos cosas distintas:
 
-- **Seguir**: busca los archivos que alguien movió a mano y corrige la base de
-  datos para seguirlos, sin tocarlos.
-- **Acomodar**: lleva cada documento registrado a la carpeta de su mes y deja
-  una **copia** en la del pago si le toca.
+- **Seguir**: pregunta a SharePoint qué cambió y corrige la base de datos
+  para seguir los documentos que alguien movió, borró o restauró, sin
+  tocarlos. Cada documento tiene un id que no cambia aunque lo muevan.
+- **Copiar al pago**: deja una **copia** del par en la carpeta del pago si le
+  toca.
 
-Acomodar **nunca borra**: solo mueve el par a su carpeta y copia a la del pago.
-Y alcanza únicamente a los documentos que la aplicación registró; lo que
-alguien haya dejado dentro de la carpeta por su cuenta se queda donde está.
+**Nunca borra** y alcanza únicamente a los documentos que la aplicación
+registró; lo que alguien haya dejado en la biblioteca por su cuenta se queda
+donde está. (La carpeta compartida de antes ya no se acomoda: lo que quedó
+ahí se migra.)
 
 Antes esto se pedía a mano desde una pantalla, con una previsualización de por
 medio. Salió porque no había nada que decidir —la carpeta de un documento la
@@ -483,9 +478,8 @@ deciden su fecha de emisión, su tipo y el pago en el que entró, y ninguno de l
 admite dos respuestas—, y mientras nadie visitara esa pantalla, la carpeta del
 pago no se armaba.
 
-Para forzarlo a mano sigue estando `--forzar-orden` o `--pago=N` por línea de
-comandos. Agregá `--dry-run` a cualquier comando para ver el resultado sin
-aplicarlo.
+Para forzarlo a mano está `php cli/organizar_documentos.php`. Agregá
+`--dry-run` para ver el resultado sin aplicarlo.
 
 ### La carpeta del pago es una copia
 
@@ -493,16 +487,12 @@ Un documento vive siempre en la carpeta de su mes: `2026/08 AGOSTO/Facturas`.
 Cuando entra a un pago, su par XML/PDF **se copia** a `PAGOS/<nombre del
 pago>`, y esa copia es lo que se entrega.
 
-> Esa carpeta se llamaba `PAGOS SEMANALES`. El sistema la renombra solo la
-> primera vez que la necesita, con todo lo que tenga dentro; si ya existe una
-> `PAGOS` al lado, no toca ninguna de las dos y hay que juntarlas a mano.
 
 La diferencia importa: esa carpeta se manda y quien la recibe la borra cuando
 termina. Mientras el par se mudaba ahí dentro, borrarla se llevaba el respaldo
 de todos sus documentos —el sistema seguía diciendo "respaldada" y el XML ya no
 existía en ninguna parte—. Ahora borrarla no cuesta nada: el documento sigue en
-su mes y la tarea programada repone la copia en el siguiente acomodo, como
-mucho un cuarto de hora después.
+su mes, y la tarea programada repone la copia cuando el pago cambia.
 
 ### Cuando un archivo se pierde de todos modos
 
@@ -528,6 +518,6 @@ misma ruta. Lo que no se pueda probar idéntico se informa sin escribir nada.
 Para lo que no tenga correo de origen quedan la papelera de SharePoint —93 días—
 y pedírselo otra vez al proveedor. Si no aparece,
 `php cli/limpiar_rutas_perdidas.php --aplicar` deja la fila diciendo "sin
-archivo" en vez de mandar a una carpeta vacía; el `hash_xml` se conserva, así
-que si algún día el archivo vuelve a la carpeta compartida,
-`php cli/organizar_documentos.php --completo` lo reconoce y lo reengancha solo.
+archivo" en vez de mandar a una carpeta vacía. Si es de SharePoint y alguien
+lo restaura de la papelera, la tarea programada lo reconoce por su id y le
+quita la marca sola.

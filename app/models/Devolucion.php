@@ -16,7 +16,8 @@ class Devolucion extends Model
 
     protected $table = 'devoluciones';
 
-    // El PDF del reporte se archiva en la carpeta compartida.
+    // El PDF del reporte se archiva en SharePoint (o quedó en la carpeta
+    // compartida de antes, si es de entonces).
     protected $camposRuta = ['ruta_pdf'];
 
     public function __construct()

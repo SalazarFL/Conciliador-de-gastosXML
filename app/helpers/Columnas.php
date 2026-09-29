@@ -58,9 +58,29 @@ class Columnas
                 'valor'   => $col['valor'] ?? $id,
                 'ancho'   => (int) ($col['ancho'] ?? 18),
                 'estilo'  => $col['estilo'] ?? null,
+                'desde'   => isset($col['desde']) ? (string) $col['desde'] : '',
             ];
         }
         return $normalizadas;
+    }
+
+    /**
+     * Las que pasaron a venir encendidas de fábrica después de estrenado el
+     * listado, con la fecha en que pasó: id => 'AAAA-MM-DD'.
+     *
+     * Quien ya había guardado su elección de columnas no la tiene en su lista,
+     * y sin esto no la vería nunca: la pantalla le enseñaría lo que eligió
+     * antes de que la columna existiera. Con la fecha, el navegador sabe que
+     * es posterior a esa elección y la enciende; si después la apaga, esa
+     * elección ya es más nueva que la columna y se respeta.
+     */
+    public static function nuevas($listado)
+    {
+        $ids = [];
+        foreach (self::catalogo($listado) as $id => $col) {
+            if ($col['defecto'] && $col['desde'] !== '') { $ids[$id] = $col['desde']; }
+        }
+        return $ids;
     }
 
     /** Las que vienen encendidas de fábrica. */

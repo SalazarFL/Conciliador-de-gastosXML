@@ -25,20 +25,34 @@
  * fueran facturas y no aparecerían nunca, o peor, engancharían con la factura
  * equivocada que casualmente terminara en los mismos ocho dígitos.
  *
- * Las de cambio no traen consecutivo de ninguna clase —545 de 545 en el
- * listado real— y eso no es un defecto de lectura: una nota de cambio de
- * mercadería se puede aplicar a cualquier factura del proveedor, así que el
- * documento no tiene a quién nombrar. Para esas, la unidad de análisis es el
- * proveedor y no la factura.
+ * Las de costo traen el mismo consecutivo que las directas (447 de 451) y se
+ * cruzan igual, con una condición más: solo cuentan mientras les quede más
+ * de MINIMO_COSTO por aplicar. Por debajo no se persiguen contra la factura.
  *
- * Las de costo se dejan fuera por ahora por decisión de negocio. Traen el
- * mismo consecutivo que las directas (447 de 451), así que el día que entren
- * lo hacen por este mismo camino sin código nuevo.
+ * Las de cambio no traen consecutivo de ninguna clase —545 de 545 en el
+ * listado real, "Sin Boleta" en la entrada— y eso no es un defecto de
+ * lectura: una nota de cambio de mercadería se puede aplicar a cualquier
+ * factura del proveedor, así que el documento no tiene a quién nombrar. Para
+ * esas, la unidad de análisis es el proveedor y no la factura: se ofrecen en
+ * todas las facturas con saldo del mismo proveedor, del monto que sean.
  */
 class AplicacionNotaCredito
 {
     /** Las clases que apuntan a una factura concreta y se pueden cruzar. */
-    const CLASES_CON_FACTURA = ['directa'];
+    const CLASES_CON_FACTURA = ['directa', 'costo'];
+
+    /** Las clases que valen para cualquier factura de su proveedor. */
+    const CLASES_POR_PROVEEDOR = ['cambio'];
+
+    /**
+     * Lo que le tiene que quedar sin aplicar a una nota de costo para que
+     * cuente, en colones. Es contra el saldo y no contra el monto: una nota
+     * de ₡15.000 a la que le quedan ₡3.000 ya no se ofrece.
+     */
+    const MINIMO_COSTO = 10000;
+
+    /** Los tipos del ERP que son facturas (y no notas u otros movimientos). */
+    const TIPOS_FACTURA = ['F', 'FE', 'FACT'];
 
     /** Tipo de documento dentro del consecutivo: factura electrónica. */
     const TIPO_FACTURA = '01';
@@ -53,7 +67,10 @@ class AplicacionNotaCredito
     /** Nota con saldo y factura con saldo: se puede aplicar hoy. */
     const APLICABLE = 'aplicable';
 
-    /** Nota con saldo, pero la factura que nombra ya está en cero. */
+    /**
+     * Nota con saldo, pero la factura que nombra ya está en cero. En una de
+     * cambio, que no nombra ninguna: su proveedor no tiene factura con saldo.
+     */
     const FACTURA_LIQUIDADA = 'factura_liquidada';
 
     /** La nota ya no tiene saldo: el ERP la aplicó. */
@@ -65,7 +82,10 @@ class AplicacionNotaCredito
     /** Trae su propio número, no el de una factura: hay que mirarla. */
     const SIN_REFERENCIA = 'sin_referencia';
 
-    /** No es de una clase que apunte a una factura (cambio, ajuste, costo). */
+    /**
+     * No se aplica contra facturas: un ajuste, o una de costo a la que ya no
+     * le queda más de MINIMO_COSTO.
+     */
     const NO_APLICA = 'no_aplica';
 
     /**
@@ -74,7 +94,7 @@ class AplicacionNotaCredito
      */
     const ESTADOS = [
         self::APLICABLE         => ['Lista para aplicar', 'ok', true],
-        self::FACTURA_LIQUIDADA => ['Su factura ya está en cero', 'aviso', false],
+        self::FACTURA_LIQUIDADA => ['Sin factura con saldo', 'aviso', false],
         self::APLICADA          => ['Ya aplicada', 'neutro', false],
         self::SIN_FACTURA       => ['Su factura no está en el listado', 'aviso', false],
         self::SIN_REFERENCIA    => ['No dice a qué factura va', 'aviso', false],
@@ -112,11 +132,27 @@ class AplicacionNotaCredito
 
     /**
      * En qué situación está una nota. $factura es la fila del ERP a la que
-     * apunta, o null si no se encontró.
+     * apunta, o null si no se encontró. Para una de cambio, que no apunta a
+     * ninguna, $proveedorConSaldo dice si su proveedor tiene alguna factura
+     * con saldo donde aplicarla.
      */
-    public static function estado($clase, $documento, $saldoNota, ?array $factura = null)
+    public static function estado($clase, $documento, $saldoNota, ?array $factura = null, $proveedorConSaldo = false)
     {
-        if (!in_array((string) $clase, self::CLASES_CON_FACTURA, true)) {
+        $clase = (string) $clase;
+        if (in_array($clase, self::CLASES_POR_PROVEEDOR, true)) {
+            if ((float) $saldoNota <= self::EPSILON) {
+                return self::APLICADA;
+            }
+            return $proveedorConSaldo ? self::APLICABLE : self::FACTURA_LIQUIDADA;
+        }
+        if (!in_array($clase, self::CLASES_CON_FACTURA, true)) {
+            return self::NO_APLICA;
+        }
+        // Una de costo chica no se persigue contra la factura: no hay nada
+        // que decidir sobre ella, igual que con un ajuste. La que ya no tiene
+        // saldo sigue su camino y sale como aplicada, que es lo que es.
+        $saldo = (float) $saldoNota;
+        if ($clase === 'costo' && $saldo > self::EPSILON && $saldo <= self::MINIMO_COSTO) {
             return self::NO_APLICA;
         }
         if (self::consecutivoFactura($documento) === null) {

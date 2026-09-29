@@ -101,10 +101,6 @@ class NotasXmlController extends Controller
             'importes' => $importes,
             'proveedoresFiltro' => ProveedorCatalogo::opciones($modelo->proveedoresParaFiltro('NC')),
             'pagina' => $page, 'paginas' => $paginas, 'total' => $total,
-            // Solo falta si la empresa archiva en la carpeta compartida: en
-            // SharePoint los XML van a la biblioteca.
-            'faltaCarpeta' => DocumentoArchivo::raizConfigurada() === ''
-                && DocumentoArchivo::necesitaCarpetaCompartida($modelo->sociedadId()),
             'navDoc' => $navDoc,
             'docBuscadoCargado' => $docBuscadoCargado,
         ]);
@@ -159,7 +155,8 @@ class NotasXmlController extends Controller
             $importacionId = (int) $importaciones->crear([
                 'tipo' => 'xml',
                 'archivo_origen' => 'Notas XML ' . date('d/m/Y H:i'),
-                'ruta_archivo' => DocumentoArchivo::raizConfigurada(),
+                // Los XML van a SharePoint: no hay carpeta de esta computadora que anotar.
+                'ruta_archivo' => null,
                 'metadata' => json_encode(['tipo_documento' => 'NC', 'modo' => 'notas_xml'], JSON_UNESCAPED_UNICODE),
             ]);
             $sociedad = $this->loadModel('Sociedad')->getActiva();

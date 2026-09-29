@@ -93,7 +93,7 @@ class PorPagarVerificador
             }
 
             $usadas[(int) $xml['id']] = true;
-            $diferencia = round((float) $linea['monto'] - (float) $xml['total'], 2);
+            $diferencia = round((float) $linea['monto'] - FacturaMatcher::totalComparable($xml, $linea['moneda'] ?? ''), 2);
             $estado = abs($diferencia) <= FacturaMatcher::TOLERANCIA_CRC ? 'respaldada' : 'con_diferencia';
 
             $pendientes[] = self::fila(
@@ -162,17 +162,25 @@ class PorPagarVerificador
     private static function buscarXml(array $linea, array $indice, array $usadas)
     {
         $codigo = trim((string) ($linea['proveedor_codigo'] ?? ''));
+        // El código es de la empresa de la línea: se busca en SU catálogo.
+        $empresa = (int) ($linea['sociedad_id'] ?? 0);
         $documento = trim((string) ($linea['documento'] ?? ''));
         if (preg_match('/^\d{20}$/', $documento)) {
             foreach ($indice['consecutivo'][$documento] ?? [] as $xml) {
                 if (isset($usadas[(int) $xml['id']])) {
                     continue;
                 }
-                if (!self::puedeEngancharSolo($codigo, $xml)) {
+                if (!self::puedeEngancharSolo($codigo, $xml, $empresa)
+                    && !self::esDeUnHermano($codigo, $linea, $xml, $empresa)) {
                     continue;
                 }
                 $xml['_score_numero'] = 100.0;
-                $xml['_score_proveedor'] = self::scoreProveedor($codigo, $linea, $xml);
+                $xml['_score_proveedor'] = self::scoreProveedor($codigo, $linea, $xml, $empresa);
+                return $xml;
+            }
+
+            $xml = self::porNombreFueraDelCatalogo($codigo, $linea, $indice['consecutivo'][$documento] ?? [], $usadas, $empresa);
+            if ($xml !== null) {
                 return $xml;
             }
         }
@@ -195,7 +203,7 @@ class PorPagarVerificador
             if (isset($usadas[(int) $xml['id']])) {
                 continue;
             }
-            if (!self::puedeEngancharSolo($codigo, $xml)) {
+            if (!self::puedeEngancharSolo($codigo, $xml, $empresa)) {
                 continue;
             }
 
@@ -204,7 +212,7 @@ class PorPagarVerificador
             // solo código. El parecido de los nombres no agrega nada y no se
             // vuelve a mirar. Sin listado —este archivo usado suelto— sigue
             // siendo lo único que hay.
-            $score = self::hayCatalogo()
+            $score = self::hayCatalogo($empresa)
                 ? 100.0
                 : FacturaMatcher::similaridadTexto($proveedor, (string) ($xml['proveedor_nombre'] ?? ''));
             if ($score < FacturaMatcher::UMBRAL_PROVEEDOR) {
@@ -240,23 +248,23 @@ class PorPagarVerificador
      * los alias de proveedor: pedir el modelo desde arriba del archivo haría
      * fallar a quien solo quiere comparar números.
      */
-    private static function veredicto($codigo, $proveedorIdXml)
+    private static function veredicto($codigo, $proveedorIdXml, $empresa = 0)
     {
-        if (!self::hayCatalogo()) {
+        if (!self::hayCatalogo($empresa)) {
             return 'desconocido';
         }
-        return ProveedorCodigoErp::veredicto($codigo, $proveedorIdXml);
+        return ProveedorCodigoErp::veredicto($codigo, $proveedorIdXml, $empresa);
     }
 
     /**
-     * ¿Se puede consultar el listado de proveedores?
+     * ¿Se puede consultar el listado de proveedores de esta empresa?
      *
      * Falso solo cuando no hay con qué preguntarle: sin la capa de modelos
      * cargada, o con la lista vacía. En la aplicación eso no pasa —sin listado
      * no se importa nada— así que la vía permisiva de abajo es para quien use
      * este archivo suelto, en pruebas o desde la línea de comandos.
      */
-    private static function hayCatalogo()
+    private static function hayCatalogo($empresa = 0)
     {
         if (!class_exists('ProveedorCodigoErp')) {
             $ruta = __DIR__ . '/../models/ProveedorCodigoErp.php';
@@ -265,7 +273,7 @@ class PorPagarVerificador
             }
             require_once $ruta;
         }
-        return ProveedorCodigoErp::hayListado();
+        return ProveedorCodigoErp::hayListado($empresa);
     }
 
     /**
@@ -275,21 +283,111 @@ class PorPagarVerificador
      * que esa cédula sea de un solo código. Todo lo demás —la cédula de otro,
      * un código que no está en la lista, una cédula compartida entre varios
      * puntos de la misma empresa— se deja para que lo decida una persona.
+     * Con el consecutivo exacto hay dos salidas propias: la cédula compartida
+     * (`esDeUnHermano`) y el código que falta en el catálogo
+     * (`porNombreFueraDelCatalogo`).
      *
      * Antes bastaba con que la guarda no se opusiera, y el parecido de los
      * nombres hacía el resto. Así se armaron los 29 enganches en los que una
      * factura terminó con el comprobante de otro proveedor.
      */
-    private static function puedeEngancharSolo($codigo, array $xml)
+    private static function puedeEngancharSolo($codigo, array $xml, $empresa = 0)
     {
-        $veredicto = self::veredicto($codigo, $xml['proveedor_id'] ?? 0);
+        $veredicto = self::veredicto($codigo, $xml['proveedor_id'] ?? 0, $empresa);
         if ($veredicto === 'propio') {
             return true;
         }
         // Sin listado que consultar, este archivo se comporta como antes de
         // que la guarda existiera: es la única forma de que siga sirviendo
         // suelto. La aplicación nunca llega acá.
-        return $veredicto === 'desconocido' && !self::hayCatalogo();
+        return $veredicto === 'desconocido' && !self::hayCatalogo($empresa);
+    }
+
+    /**
+     * El comprobante de una factura cuyo código no está en el catálogo.
+     *
+     * Con el consecutivo exacto y el nombre del proveedor parecido se engancha
+     * igual. Son los códigos que el ERP crea entre un listado y otro —viáticos,
+     * autoconsumo, proveedores recién dados de alta— y que sin esto quedaban
+     * sin respaldo con su XML a la vista hasta que alguien exportara el
+     * listado de nuevo. Lo pidió el usuario el 28/09.
+     *
+     * El nombre es lo que reemplaza a la cédula, y hace falta: el consecutivo
+     * se repite entre emisores. En los datos reales de ese día, 22 códigos
+     * daban entre 67 y 100 de parecido, y los tres pares que compartían el
+     * consecutivo con otro emisor ("UREÑA SAENZ ANTHONY" contra "SOLUC DE
+     * RETAIL EN TECNOLOGIA") daban 0.
+     *
+     * El monto NO se exige: puede diferir, y entonces la factura queda
+     * enganchada "con diferencia", que es donde alguien la mira.
+     *
+     * Si dos comprobantes empatan en el mejor parecido, no se elige ninguno.
+     * Solo para códigos que faltan: uno que el catálogo tiene y es de otra
+     * cédula sigue rechazado, por más que el nombre calce.
+     */
+    private static function porNombreFueraDelCatalogo($codigo, array $linea, array $candidatos, array $usadas, $empresa = 0)
+    {
+        if (!self::hayCatalogo($empresa) || !ProveedorCodigoErp::fueraDelCatalogo($codigo, $empresa)) {
+            return null;
+        }
+
+        $proveedor = (string) ($linea['proveedor_nombre'] ?? '');
+        $mejor = null;
+        $mejorScore = 0.0;
+        $empates = 0;
+        foreach ($candidatos as $xml) {
+            if (isset($usadas[(int) $xml['id']])) {
+                continue;
+            }
+            $score = (float) FacturaMatcher::similaridadTexto($proveedor, (string) ($xml['proveedor_nombre'] ?? ''));
+            if ($score < FacturaMatcher::UMBRAL_PROVEEDOR) {
+                continue;
+            }
+            if ($score > $mejorScore) {
+                $mejor = $xml;
+                $mejorScore = $score;
+                $empates = 1;
+            } elseif ($score === $mejorScore) {
+                $empates++;
+            }
+        }
+        if ($mejor === null || $empates !== 1) {
+            return null;
+        }
+
+        $mejor['_score_numero'] = 100.0;
+        $mejor['_score_proveedor'] = round($mejorScore, 1);
+        return $mejor;
+    }
+
+    /**
+     * ¿Es el comprobante de uno de los códigos que comparten la cédula?
+     *
+     * La excepción a "la cédula compartida la decide una persona", y solo con
+     * el consecutivo exacto —quien llama ya lo comparó—. La cédula dice que el
+     * comprobante salió de esa empresa; el consecutivo, que dentro de esa
+     * empresa es ESE documento, porque el correlativo lo lleva cada emisor y
+     * no se repite. Entre los dos ya no queda qué adivinar: no hace falta saber
+     * de cuál de sus puntos salió para saber que es esta factura.
+     *
+     * El monto tiene que cuadrar al colón. Sin él, un consecutivo igual con
+     * otro monto es algo que alguien tiene que mirar, no algo que se da por
+     * respaldado.
+     *
+     * Es la misma regla que ya aplica el enganche al importar un XML
+     * (`FacturaErp::elegirCandidata`), que acepta la cédula compartida cuando
+     * el consecutivo es exacto. Sin esto, la factura que el correo no alcanzó
+     * a enganchar —el pago se cargó después— no la enganchaba nadie: el 28/09,
+     * 44 líneas del pago con su XML en la base, mismo consecutivo y mismo
+     * monto.
+     */
+    private static function esDeUnHermano($codigo, array $linea, array $xml, $empresa = 0)
+    {
+        if (self::veredicto($codigo, $xml['proveedor_id'] ?? 0, $empresa) !== 'compartido') {
+            return false;
+        }
+        return abs((float) ($linea['monto'] ?? 0) - FacturaMatcher::totalComparable($xml, $linea['moneda'] ?? ''))
+            <= FacturaMatcher::TOLERANCIA_CRC;
     }
 
     /**
@@ -302,9 +400,9 @@ class PorPagarVerificador
      * del emisor confirma el código. Sin mapa, el número que se guarda es el
      * parecido de los nombres, que es lo único que realmente se sabe.
      */
-    private static function scoreProveedor($codigo, array $linea, array $xml)
+    private static function scoreProveedor($codigo, array $linea, array $xml, $empresa = 0)
     {
-        if (self::veredicto($codigo, $xml['proveedor_id'] ?? 0) === 'propio') {
+        if (self::veredicto($codigo, $xml['proveedor_id'] ?? 0, $empresa) === 'propio') {
             return 100.0;
         }
         return round(FacturaMatcher::similaridadTexto(
@@ -437,7 +535,7 @@ class PorPagarVerificador
                 }
 
                 $usadas[(int) $xml['id']] = true;
-                $diferencia = round((float) $linea['monto'] - (float) $xml['total'], 2);
+                $diferencia = round((float) $linea['monto'] - FacturaMatcher::totalComparable($xml, $linea['moneda'] ?? ''), 2);
                 $estado = abs($diferencia) <= FacturaMatcher::TOLERANCIA_CRC
                     ? 'respaldada'
                     : 'con_diferencia';
@@ -475,5 +573,33 @@ class PorPagarVerificador
         }
 
         return ['enganchadas' => $enganchadas, 'revisadas' => $revisadas];
+    }
+
+    /**
+     * Lo que hay que hacer cada vez que cambia el catálogo de proveedores:
+     * darle a un código su cédula, que acepte otra, importar el listado.
+     *
+     * Una factura del ERP no se engancha a un XML mientras el catálogo no diga
+     * que la cédula del emisor es la de su código. Cuando por fin lo dice, el
+     * XML ya estaba en el sistema y nadie lo vuelve a buscar: la factura se
+     * quedaba "sin respaldo" con su comprobante a la vista, hasta que otra
+     * cosa disparara la verificación. Por eso se busca en el momento, en
+     * todas las facturas sin respaldo —estén en un pago o no—.
+     *
+     * Nunca lanza: el código ya quedó guardado, y si esto falla lo repite la
+     * próxima carga o la próxima vuelta de la tarea.
+     *
+     * @return int Cuántas facturas encontraron su comprobante.
+     */
+    public static function trasCambioDeCatalogo($erp, $facturas)
+    {
+        try {
+            if (class_exists('ProveedorCodigoErp')) {
+                ProveedorCodigoErp::olvidarMapa();
+            }
+            return (int) (self::engancharSinRespaldo($erp, $facturas)['enganchadas'] ?? 0);
+        } catch (Throwable $e) {
+            return 0;
+        }
     }
 }

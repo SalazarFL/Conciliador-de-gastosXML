@@ -82,7 +82,7 @@ foreach ($informe['revisiones'] as $r) {
 </div>
 
 <p style="margin:10px 0 0;color:var(--text-muted);font-size:12.5px;">
-    Lo mismo desde la consola, por si hay que enviarlo por escrito:
+    Desde la consola:
     <code>php cli/diagnostico.php</code>
 </p>
 
@@ -92,7 +92,7 @@ foreach ($informe['revisiones'] as $r) {
       // cuando algo no anda. Acá queda el puente para quien llegó buscándolo. ?>
 <p style="margin:10px 0 0;color:var(--text-muted);font-size:12.5px;">
     <i class="fas fa-database" style="margin-right:5px;"></i>
-    El respaldo de la base a la carpeta compartida se administra en
+    El respaldo de la base se administra en
     <a href="<?= $baseUrl ?>/configuracion?ir=respaldo" style="color:var(--navy-light);font-weight:700;">Configuración → Respaldo</a>.
 </p>
 <?php endif; ?>

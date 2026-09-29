@@ -55,6 +55,22 @@ class AlmacenCopiaPago extends Model
         return $mapa;
     }
 
+    /**
+     * Da por no hechas estas copias: la próxima vuelta del reconciliador las
+     * vuelve a subir. Es cómo se repone una copia que alguien borró de la
+     * carpeta del pago (ver ControlCarpetaPago).
+     */
+    public function olvidar(array $facturaIds)
+    {
+        $facturaIds = array_values(array_unique(array_filter(array_map('intval', $facturaIds))));
+        foreach (array_chunk($facturaIds, 500) as $grupo) {
+            $this->execute(
+                "DELETE FROM {$this->table} WHERE factura_id IN (" . implode(',', array_fill(0, count($grupo), '?')) . ')',
+                $grupo
+            );
+        }
+    }
+
     public function anotar($facturaId, $firma, $rutaXml, $rutaPdf)
     {
         return $this->execute(

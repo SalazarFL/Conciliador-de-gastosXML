@@ -743,6 +743,28 @@ class NotasCreditoController extends Controller
         }
     }
 
+    /**
+     * Las notas de crédito que se le pueden aplicar a una factura.
+     *
+     * Es lo que abre el botón "Notas aplicables" de Seguimiento y de Pagos,
+     * dentro de una ventana. No es el listado de notas filtrado: ese pide
+     * elegir proveedor, y una nota de cambio no nombra ninguna factura, así
+     * que ningún filtro por factura la encontraría.
+     */
+    public function aplicables($id)
+    {
+        $sociedad = $this->loadModel('Sociedad')->getActiva();
+        $datos = $sociedad
+            ? $this->loadModel('NotaCredito')->notasAplicablesDeFactura((int) $id, (int) $sociedad['id'])
+            : ['factura' => null, 'notas' => []];
+
+        $this->render('notascredito/aplicables', [
+            'title' => 'Notas aplicables - Nexo Fiscal',
+            'factura' => $datos['factura'],
+            'notas' => EstadoArchivo::decorar($datos['notas']),
+        ]);
+    }
+
     public function historial($id)
     {
         try {

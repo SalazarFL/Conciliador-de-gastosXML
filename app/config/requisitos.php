@@ -2,7 +2,7 @@
 /**
  * Lo que tiene que estar puesto ANTES de que el sistema sirva para algo.
  *
- * Hay tres cosas sin las cuales ningún módulo hace su trabajo, solo lo
+ * Hay cuatro cosas sin las cuales ningún módulo hace su trabajo, solo lo
  * aparenta:
  *
  *   · el catálogo de proveedores — sin él no se sabe de quién es cada código
@@ -14,7 +14,11 @@
  *     una, así que sin ninguna los listados salen vacíos y las cargas no
  *     tienen dónde caer;
  *   · al menos una cuenta de correo — es de donde entran las facturas; sin
- *     buzón, la bandeja es una pantalla que nunca se llena.
+ *     buzón, la bandeja es una pantalla que nunca se llena;
+ *   · SharePoint en esta computadora — los XML y PDF de todas las empresas
+ *     viven ahí desde que dejó de usarse la carpeta compartida (27/09/2026).
+ *     Es el único de los cuatro que es de cada PC y no de la base: una puede
+ *     tenerlo y la de al lado no.
  *
  * ── Por qué se cierra el módulo y no se avisa y ya ────────────────────────
  * Un aviso arriba de una pantalla vacía se lee como "hoy no hay trabajo", no
@@ -108,6 +112,25 @@ return [
                 return (new CorreoCuenta())->contarTotal() > 0;
             },
         ],
+
+        'sharepoint' => [
+            'titulo'  => 'SharePoint en esta computadora',
+            'falta'   => 'Esta computadora no tiene las credenciales de SharePoint '
+                       . '(app/config/local.graph.php).',
+            'porque'  => 'Los XML y PDF de todas las empresas se guardan y se abren desde '
+                       . 'SharePoint: sin credenciales no se puede ni capturar ni ver un '
+                       . 'comprobante.',
+            'donde'   => 'Configuración → Archivo de documentos',
+            'ruta'    => '/configuracion?ir=archivo',
+            'permiso' => 'configuracion.archivo',
+            // Solo mira si está el archivo: no sale a la red, porque esto se
+            // pregunta en cada petición. Si SharePoint no contesta, lo dice
+            // Diagnóstico.
+            'comprobar' => static function (): bool {
+                require_once __DIR__ . '/../helpers/AlmacenDocumentos.php';
+                return AlmacenDocumentos::hayPrincipal();
+            },
+        ],
     ],
 
     /*
@@ -127,24 +150,29 @@ return [
      */
     'modulos' => [
         'seguimiento'   => ['proveedores', 'empresa'],
-        'por_pagar'     => ['proveedores', 'empresa'],
         'notas_credito' => ['proveedores', 'empresa'],
         'facturas_erp'  => ['proveedores', 'empresa'],
-        'facturas_xml'  => ['proveedores', 'empresa'],
-        'notas_xml'     => ['proveedores', 'empresa'],
-        'devoluciones'  => ['proveedores', 'empresa'],
+
+        // Los que guardan o abren XML y PDF: sin SharePoint no tienen de
+        // dónde sacarlos ni dónde dejarlos. Por pagar arma la carpeta de cada
+        // pago con las copias de sus comprobantes.
+        'por_pagar'     => ['proveedores', 'empresa', 'sharepoint'],
+        'facturas_xml'  => ['proveedores', 'empresa', 'sharepoint'],
+        'notas_xml'     => ['proveedores', 'empresa', 'sharepoint'],
+        'devoluciones'  => ['proveedores', 'empresa', 'sharepoint'],
 
         // El único que además necesita el buzón: es su materia prima.
-        'correo'        => ['proveedores', 'empresa', 'correo'],
+        'correo'        => ['proveedores', 'empresa', 'correo', 'sharepoint'],
     ],
 
     /*
      * ── Las que nunca se cierran, aunque su módulo sí ─────────────────────
-     * Cuatro rutas viven en CorreoController por historia, pero a quien
-     * sirven es a la pantalla de Configuración: el explorador de carpetas del
-     * disco y el estado de la captura automática. Cerrarlas por lo mismo que
-     * cierra el módulo Correo dejaría medio Configuración contestando errores
-     * justo mientras se la está usando para arreglarlo.
+     * Una ruta vive en CorreoController por historia, pero a quien sirve es a
+     * la pantalla de Configuración: el estado de la captura automática.
+     * Cerrarla por lo mismo que cierra el módulo Correo dejaría medio
+     * Configuración contestando errores justo mientras se la está usando para
+     * arreglarlo. (Aquí estaban también el explorador y el selector de la
+     * carpeta compartida, que ya no existen.)
      *
      * Lo que se hace con el permiso que ARREGLA un paso —dar de alta el
      * primer buzón, registrar la primera empresa, importar el catálogo— no
@@ -152,9 +180,6 @@ return [
      * declara cada requisito. Ver Requisitos::esArreglo().
      */
     'abiertas' => [
-        'POST /correo/carpetas',        // el explorador de carpetas del disco
-        'POST /correo/selector/abrir',  // el mismo, con la ventana de Windows
-        'POST /correo/selector/estado',
         'POST /correo/auto/estado',     // qué dice hoy la sección Automatización
     ],
 ];

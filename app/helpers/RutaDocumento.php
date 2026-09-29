@@ -12,6 +12,11 @@
  *   en la base   SISTEMA/2026/07 JULIO/Facturas/FE_PROVEEDOR_010726_00000123.xml
  *   en el disco  <raíz de esa máquina>\SISTEMA\2026\07 JULIO\Facturas\FE_...xml
  *
+ * Desde el 27/09/2026 lo nuevo se archiva solo en SharePoint, donde la ruta
+ * relativa se guarda con el prefijo `sharepoint:` y no hay raíz de máquina
+ * que ponerle delante. Lo de acá sigue haciendo falta para lo que se archivó
+ * antes en la carpeta compartida y todavía no se migró.
+ *
  * Las dos conversiones son idempotentes y toleran la forma contraria: pedir
  * absoluta() sobre algo ya absoluto lo devuelve igual, y relativa() sobre algo
  * ya relativo también. Así una fila que se quedó sin convertir sigue abriendo
@@ -27,8 +32,10 @@ class RutaDocumento
     private static $raiz = null;
 
     /**
-     * Carpeta compartida donde viven todos los XML y PDF de la empresa.
-     * Cadena vacía cuando todavía no se ha configurado.
+     * La carpeta compartida de antes, donde vivían los XML y PDF hasta que
+     * pasaron a SharePoint. Solo sirve para abrir lo que quedó ahí sin migrar;
+     * ya no se configura desde la aplicación. Cadena vacía si esta
+     * computadora nunca la tuvo.
      */
     public static function raiz()
     {
@@ -240,14 +247,16 @@ class RutaDocumento
      * Una subcarpeta de _TRABAJO: lo que todavía no es un documento archivado
      * —la bandeja del correo, la cola de importación—.
      *
-     * Con $sociedadId, la del almacén de esa empresa. El material en tránsito
-     * tiene que estar donde lo alcancen todas las PC —una captura el correo y
-     * otra lo importa—, así que para una empresa en SharePoint la bandeja
-     * también está en SharePoint. Sin empresa, o con la empresa en disco, es
-     * la carpeta compartida de siempre.
+     * Está en SharePoint, como todo lo demás: el material en tránsito tiene
+     * que estar donde lo alcancen todas las PC —una captura el correo y otra
+     * lo importa—. También lo que todavía no se sabe de qué empresa es.
+     * $sociedadId se sigue recibiendo porque quien llama la sabe, pero ya no
+     * cambia la respuesta.
      *
-     * En SharePoint no se crea de antemano: la biblioteca crea las carpetas
-     * del camino al subir, y preguntar por ella costaría una llamada.
+     * No se crea de antemano: la biblioteca crea las carpetas del camino al
+     * subir, y preguntar por ella costaría una llamada.
+     *
+     * @throws RuntimeException Si esta computadora no tiene SharePoint.
      */
     public static function carpetaTrabajo($sub = '', $sociedadId = null)
     {
@@ -255,22 +264,7 @@ class RutaDocumento
         $sub = trim(str_replace('\\', '/', (string) $sub), '/');
         $relativa = self::TRABAJO . ($sub !== '' ? '/' . $sub : '');
 
-        if ($sociedadId !== null && (int) $sociedadId > 0) {
-            require_once __DIR__ . '/AlmacenEnDisco.php';
-            $almacen = AlmacenDocumentos::para((int) $sociedadId);
-            if (!$almacen instanceof AlmacenEnDisco) {
-                return $almacen->direccion($relativa);
-            }
-        }
-
-        $raiz = self::raiz();
-        if ($raiz === '') {
-            throw new RuntimeException('Configura la carpeta compartida de documentos en Correo.');
-        }
-        $ruta = $raiz . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relativa);
-        AlmacenDocumentos::de($ruta)->asegurarCarpeta($ruta);
-
-        return $ruta;
+        return AlmacenDocumentos::para($sociedadId)->direccion($relativa);
     }
 
     /**

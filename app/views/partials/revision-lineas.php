@@ -46,8 +46,8 @@ $fechaCorta = function ($valor) {
     </div>
 
     <div style="padding:0 4px 4px;font-size:12px;color:var(--text-muted);margin-bottom:12px;line-height:1.6;">
-        El reporte trae filas repetidas: son iguales en todo, y no hay manera de distinguir una de
-        otra. Por eso no entraron, y el listado queda cerrado hasta que decidas qué hacer con ellas.
+        El reporte trae filas idénticas entre sí. No entraron, y el listado queda cerrado
+        hasta que decidas qué hacer con ellas.
     </div>
 
     <?php foreach ($enredos as $grupo => $lineas): ?>
@@ -132,11 +132,9 @@ $fechaCorta = function ($valor) {
 
         <div style="padding:0 12px 11px;font-size:11px;color:var(--text-muted);line-height:1.6;">
             <b>¿Cuál de las dos es?</b>
-            Si el reporte imprimió dos veces la misma factura, marcá una y usá el primer botón: las
-            otras se descartan.
-            Si de verdad son facturas distintas que salieron sin número, escribile a cada una el suyo
-            en la columna de arriba y usá el segundo: entran todas.
-            Descartarlas cuando eran distintas deja esa plata fuera del listado.
+            Si es la misma factura impresa dos veces, marcá una y usá el primer botón.
+            Si son distintas y salieron sin número, escribile el suyo a cada una y usá
+            el segundo. Descartar facturas distintas deja esa plata fuera del listado.
         </div>
 
         <!-- Las celdas tal como vinieron: es lo único que permite comprobar
@@ -187,7 +185,7 @@ $fechaCorta = function ($valor) {
     <?php if (!$pendientes): ?>
         <div style="padding:22px;text-align:center;color:var(--text-muted);font-size:12.5px;">
             <i class="fas fa-circle-check" style="font-size:20px;color:var(--ok,#16a34a);display:block;margin-bottom:8px;"></i>
-            No hay nada esperando. Todo lo que traía el archivo se leyó o ya fue resuelto.
+            No hay nada esperando.
         </div>
     <?php endif; ?>
 

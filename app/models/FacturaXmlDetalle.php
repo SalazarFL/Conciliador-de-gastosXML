@@ -183,6 +183,43 @@ class FacturaXmlDetalle extends Model
         );
     }
 
+    /**
+     * Las referencias de un documento, cada una con el comprobante del
+     * sistema que cita (`documento_id`, 0 si no ha llegado).
+     *
+     * Se busca en la misma empresa que la nota: es a ella a quien le
+     * facturaron. Por el consecutivo, que tiene índice, y además por la clave
+     * entera, para no tomar un documento de otro emisor con el mismo número.
+     *
+     * Devuelve null si el XML todavía no se leyó: ahí "no cita ninguna" sería
+     * afirmar algo que nadie comprobó.
+     */
+    public function referenciasConDocumento($facturaXmlId)
+    {
+        $facturaXmlId = (int) $facturaXmlId;
+        $leido = $this->fetchColumn(
+            'SELECT detalle_extraido_en FROM facturas_xml WHERE id = ?',
+            [$facturaXmlId]
+        );
+        if (empty($leido)) {
+            return null;
+        }
+
+        return $this->fetchAll(
+            'SELECT r.*, COALESCE(MIN(d.id), 0) AS documento_id
+               FROM facturas_xml_referencias r
+               JOIN facturas_xml n ON n.id = r.factura_xml_id
+               LEFT JOIN facturas_xml d
+                      ON d.consecutivo_completo = r.consecutivo_ref
+                     AND d.clave = r.clave_ref
+                     AND d.sociedad_id = n.sociedad_id
+              WHERE r.factura_xml_id = ?
+              GROUP BY r.id
+              ORDER BY r.id',
+            [$facturaXmlId]
+        ) ?: [];
+    }
+
     public function lineasDe($facturaXmlId)
     {
         return $this->fetchAll(
