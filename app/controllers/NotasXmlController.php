@@ -74,9 +74,9 @@ class NotasXmlController extends Controller
             $page = min($page, $paginas);
             // Decoradas con lo que la columna no dice: si el archivo que su
             // ruta promete sigue estando en la carpeta compartida.
-            $notas = EstadoArchivo::decorar(
+            $notas = $this->conReferencias(EstadoArchivo::decorar(
                 $modelo->getNotasXml($desde, $hasta, $buscar, $proveedor, $page, $perPage, $importes)
-            );
+            ));
         }
 
         // Igual que el listado de comprobantes: si se llegó buscando una nota
@@ -118,7 +118,7 @@ class NotasXmlController extends Controller
                 'monto' => BusquedaImporte::numero($this->get('monto', '')),
                 'saldo' => BusquedaImporte::numero($this->get('saldo', '')),
             ];
-            $notas = EstadoArchivo::decorar($this->loadModel('Factura')->getNotasXml(
+            $notas = $this->conReferencias(EstadoArchivo::decorar($this->loadModel('Factura')->getNotasXml(
                 $this->fechaValida((string) $this->get('desde', '')),
                 $this->fechaValida((string) $this->get('hasta', '')),
                 mb_substr(trim((string) $this->get('buscar', '')), 0, 100, 'UTF-8'),
@@ -126,7 +126,7 @@ class NotasXmlController extends Controller
                 1,
                 self::TOPE_EXPORTACION,
                 $importes
-            ));
+            )));
 
             Columnas::descargar('notasxml', $notas, $this->get('cols', ''));
         } catch (Throwable $e) {
@@ -202,6 +202,35 @@ class NotasXmlController extends Controller
             'nota' => $nota,
             'retorno' => Retorno::anterior($_SERVER, $this->url(''), '/notas-xml'),
         ]);
+    }
+
+    /**
+     * Las facturas que cita el XML de cada nota, para la columna
+     * "Referencias": las mismas, y dichas igual, que en la ficha.
+     *
+     * `referencias` queda en null cuando el XML todavía no se leyó —ahí "no
+     * cita ninguna" sería afirmar algo que nadie comprobó— y sin poner si la
+     * consulta falla: la columna dice "—" y el listado sigue sirviendo.
+     */
+    private function conReferencias(array $notas)
+    {
+        if (!$notas) {
+            return $notas;
+        }
+        try {
+            require_once __DIR__ . '/../helpers/FichaDocumento.php';
+            $porNota = $this->loadModel('FacturaXmlDetalle')
+                ->referenciasConDocumentoDe(array_column($notas, 'id'));
+        } catch (Throwable $e) {
+            $this->registrarFallo('Referencias de las notas XML', $e);
+            return $notas;
+        }
+        foreach ($notas as &$nota) {
+            $filas = $porNota[(int) $nota['id']] ?? null;
+            $nota['referencias'] = $filas === null ? null : FichaDocumento::referencias($filas);
+        }
+        unset($nota);
+        return $notas;
     }
 
     private function fechaValida($fecha)

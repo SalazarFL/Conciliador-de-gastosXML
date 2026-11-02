@@ -155,22 +155,18 @@ return [
              * secciones de varios dueños —usuarios, roles, bitácora, respaldo,
              * empresas—. Por eso la lista de llaves: exigir solo
              * 'configuracion.ver' dejaría a quien administra usuarios sin
-             * poder llegar a la lista de usuarios. Es la misma lista que la
-             * ruta declara en config/permisos.php.
+             * poder llegar a la lista de usuarios. Se lee de la ruta en
+             * config/permisos.php, que es la que manda: una copia aquí se
+             * desactualizaría el día que Configuración estrene sección.
              */
             'configuracion' => [
                 'ruta'     => '/configuracion',
                 'segmento' => 'configuracion',
                 'titulo'   => 'Configuración',
                 'icono'    => 'fa-gear',
-                'ayuda'    => 'Carpeta de XML y PDF, cuentas de correo, empresas, usuarios, roles y respaldo',
-                'resumen'  => 'Empresas, usuarios, correo, archivo y respaldo',
-                'permiso'  => [
-                    'configuracion.ver', 'usuarios.ver', 'usuarios.administrar',
-                    'roles.administrar', 'bitacora.ver', 'respaldo.administrar',
-                    'empresas.administrar', 'correo.configurar', 'configuracion.archivo',
-                    'configuracion.proveedores',
-                ],
+                'ayuda'    => 'SharePoint, cuentas de correo, empresas, proveedores, usuarios, roles y respaldo',
+                'resumen'  => 'Empresas, proveedores, correo, usuarios y respaldo',
+                'permiso'  => Permisos::llavesDeRuta('GET', '/configuracion'),
                 'tono'     => 'gris',
             ],
 

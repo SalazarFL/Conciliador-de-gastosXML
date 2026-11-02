@@ -80,12 +80,33 @@ class PorPagarVerificador
             }
         }
 
+        // Los automáticos que una línea ya tiene —del enganche al importar el
+        // XML, de la carga del ERP o de otra verificación— quedan reservados
+        // para ella: otra línea no se los lleva por venir antes.
+        $reservadas = [];
+        foreach ($lineas as $linea) {
+            if (empty($linea['match_manual']) && !empty($linea['factura_xml_id'])) {
+                $reservadas[(int) $linea['factura_xml_id']] = (int) $linea['id'];
+                $usadas[(int) $linea['factura_xml_id']] = true;
+            }
+        }
+
         foreach ($lineas as $linea) {
             if (!empty($linea['match_manual']) && !empty($linea['factura_xml_id'])) {
                 continue;
             }
 
+            $propio = (int) ($linea['factura_xml_id'] ?? 0);
+            if ($propio > 0 && ($reservadas[$propio] ?? 0) === (int) $linea['id']) {
+                unset($usadas[$propio]);
+            } else {
+                $propio = 0;
+            }
+
             $xml = self::buscarXml($linea, $indice, $usadas);
+            if ($xml === null && $propio > 0) {
+                $xml = self::conservar($linea, $propio, $indice);
+            }
             if ($xml === null) {
                 $pendientes[] = self::fila((int) $linea['id'], null, 'sin_respaldo', null, null, null);
                 $stats['sin_respaldo']++;
@@ -129,8 +150,9 @@ class PorPagarVerificador
      */
     private static function indexar(array $candidatas)
     {
-        $indice = ['consecutivo' => [], 'corto' => []];
+        $indice = ['consecutivo' => [], 'corto' => [], 'id' => []];
         foreach ($candidatas as $xml) {
+            $indice['id'][(int) $xml['id']] = $xml;
             $consecutivo = preg_replace('/\D+/', '', (string) ($xml['consecutivo_completo'] ?? ''));
             if (preg_match('/^\d{20}$/', $consecutivo)) {
                 $indice['consecutivo'][$consecutivo][] = $xml;
@@ -236,6 +258,37 @@ class PorPagarVerificador
         $mejor['_score_numero'] = 60.0;
         $mejor['_score_proveedor'] = round($mejorScore, 1);
         return $mejor;
+    }
+
+    /**
+     * El XML que la línea ya tenía, cuando la búsqueda no da con ninguno.
+     *
+     * Verificar escribía "sin respaldo" en toda línea que no encontraba, y con
+     * eso borraba el enlace que había hecho el enganche al importar el XML: un
+     * vínculo bueno se perdía porque esta vía no llegaba a la misma
+     * conclusión por su cuenta. No encontrar no es lo mismo que desmentir.
+     *
+     * Lo único que lo suelta es el catálogo diciendo que el emisor es otro
+     * (`ajeno`), que es lo mismo que hace desatarEmparejamientosContradichos al
+     * importar la Lista de Proveedores. Un comprobante que ya no está entre
+     * las candidatas —anulado, pasado a otra empresa— tampoco se conserva.
+     */
+    private static function conservar(array $linea, $xmlId, array $indice)
+    {
+        $xml = $indice['id'][(int) $xmlId] ?? null;
+        if ($xml === null) {
+            return null;
+        }
+        $codigo = trim((string) ($linea['proveedor_codigo'] ?? ''));
+        $empresa = (int) ($linea['sociedad_id'] ?? 0);
+        if (self::veredicto($codigo, $xml['proveedor_id'] ?? 0, $empresa) === 'ajeno') {
+            return null;
+        }
+        $documento = preg_replace('/\D+/', '', (string) ($linea['documento'] ?? ''));
+        $consecutivo = preg_replace('/\D+/', '', (string) ($xml['consecutivo_completo'] ?? ''));
+        $xml['_score_numero'] = $documento !== '' && $documento === $consecutivo ? 100.0 : 60.0;
+        $xml['_score_proveedor'] = self::scoreProveedor($codigo, $linea, $xml, $empresa);
+        return $xml;
     }
 
     /**
@@ -370,24 +423,22 @@ class PorPagarVerificador
      * no se repite. Entre los dos ya no queda qué adivinar: no hace falta saber
      * de cuál de sus puntos salió para saber que es esta factura.
      *
-     * El monto tiene que cuadrar al colón. Sin él, un consecutivo igual con
-     * otro monto es algo que alguien tiene que mirar, no algo que se da por
-     * respaldado.
+     * El monto NO se exige. Hasta el 30/09 sí, y un monto distinto no dejaba
+     * la factura "con diferencia", que es donde alguien la mira, sino "sin
+     * respaldo" y ofreciendo buscarla en el correo, con el XML ya cargado. Así
+     * quedó la 00100001011000016737 de TOTAL SEAFOOD (₡1.130 de diferencia) en
+     * cuanto su cédula pasó a tener dos códigos. El monto clasifica, igual que
+     * con un código propio o uno que falta en el catálogo.
      *
      * Es la misma regla que ya aplica el enganche al importar un XML
      * (`FacturaErp::elegirCandidata`), que acepta la cédula compartida cuando
-     * el consecutivo es exacto. Sin esto, la factura que el correo no alcanzó
-     * a enganchar —el pago se cargó después— no la enganchaba nadie: el 28/09,
-     * 44 líneas del pago con su XML en la base, mismo consecutivo y mismo
-     * monto.
+     * el consecutivo es exacto sin mirar el monto. Mientras las dos vías
+     * diferían, verificar el pago soltaba lo que la importación había
+     * enganchado.
      */
     private static function esDeUnHermano($codigo, array $linea, array $xml, $empresa = 0)
     {
-        if (self::veredicto($codigo, $xml['proveedor_id'] ?? 0, $empresa) !== 'compartido') {
-            return false;
-        }
-        return abs((float) ($linea['monto'] ?? 0) - FacturaMatcher::totalComparable($xml, $linea['moneda'] ?? ''))
-            <= FacturaMatcher::TOLERANCIA_CRC;
+        return self::veredicto($codigo, $xml['proveedor_id'] ?? 0, $empresa) === 'compartido';
     }
 
     /**

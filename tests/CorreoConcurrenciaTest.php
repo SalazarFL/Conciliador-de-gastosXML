@@ -29,9 +29,14 @@ Prueba::caso('captura automática: la toma de la cola es atómica (FOR UPDATE de
 
 Prueba::caso('una tanda de lote rescata los correos que quedaron "procesando" más de 10 minutos', function () {
     Soporte::loteEnCurso(1);
+    Soporte::$pdo->respuestas["estado = 'procesando' AND iniciado_en <"] = [['id' => '705']];
     (new CorreoLote())->tomarPendientes(50, 3);
-    $rescate = Soporte::$pdo->de("SET estado = 'pendiente', iniciado_en = NULL")[0]['sql'] ?? '';
-    verificar(strpos($rescate, 'INTERVAL 10 MINUTE') !== false, 'rescate a los 10 minutos');
+    $rescate = Soporte::$pdo->de("SET estado = 'pendiente', iniciado_en = NULL")[0] ?? ['sql' => '', 'params' => []];
+    verificar(strpos($rescate['sql'], 'INTERVAL 10 MINUTE') !== false, 'rescate a los 10 minutos');
+    // Por clave primaria: sobre el lote entero bloqueaba sus miles de filas y,
+    // con varios motores, terminaba en deadlock.
+    verificar(strpos($rescate['sql'], 'lote_id') === false && $rescate['params'] === [705],
+        'el rescate toca solo los colgados, por id: ' . $rescate['sql']);
 });
 
 Prueba::caso('[C1] lotes: dos máquinas que piden tanda a la vez no reciben los mismos correos', function () {

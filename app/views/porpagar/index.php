@@ -793,6 +793,10 @@ document.addEventListener('keydown', function (e) {
     // otro pago. Se pinta distinto porque la fila entra igual, pero mueve
     // algo fuera de esta pantalla.
     var estiloMovida = ['cambia de pago', '#fef3c7', '#92400e'];
+    // Tampoco es un estado: el sistema la tiene sin número y se reconoció por
+    // proveedor, fecha y monto. Entra igual, pero es la única que no sale del
+    // número, así que se deja a la vista para poder mirarla antes de cargar.
+    var estiloPorSenas = ['por fecha y monto', '#dbeafe', '#1e40af'];
 
     function pintar(r) {
         var x = r.resumen || {};
@@ -807,11 +811,13 @@ document.addEventListener('keydown', function (e) {
             '<span style="color:#16a34a;font-weight:800;">' + (x.resuelta || 0) + ' encontradas en el sistema</span>' +
             '<span style="color:var(--text-muted);">₡' + fmtMonto(r.monto_resuelto || 0) + '</span>' +
             ((x.reasignada || 0) ? '<span style="color:#92400e;font-weight:700;">' + x.reasignada + ' cambian de pago</span>' : '') +
+            ((x.por_senas || 0) ? '<span style="color:#1e40af;font-weight:700;">' + x.por_senas + ' sin número en el sistema: por fecha y monto</span>' : '') +
             ((x.sin_monto || 0) ? '<span style="color:#475569;font-weight:700;">' + x.sin_monto + ' sin monto: no se pagan</span>' : '') +
             (problemas ? '<span style="color:#b91c1c;font-weight:700;">' + problemas + ' sin resolver</span>' : '');
 
         document.getElementById('ppv-tbody').innerHTML = (r.lineas || []).map(function (l) {
-            var estilo = l.movida_desde ? estiloMovida : (estilosPrev[l.estado] || estilosPrev.error);
+            var estilo = l.movida_desde ? estiloMovida
+                : (l.por_senas ? estiloPorSenas : (estilosPrev[l.estado] || estilosPrev.error));
             var badge = '<span style="background:' + estilo[1] + ';color:' + estilo[2]
                 + ';border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700;white-space:nowrap;" title="'
                 + esc(l.motivo || '') + '">' + estilo[0] + '</span>';
@@ -819,7 +825,7 @@ document.addEventListener('keydown', function (e) {
             var fecha = erp && erp.fecha ? String(erp.fecha).split('-').reverse().join('/') : '—';
             return '<tr' + (l.estado !== 'resuelta' ? ' style="opacity:.6;"' : '') + '>'
                 + '<td>' + badge + '</td>'
-                + '<td style="white-space:nowrap;font-weight:600;">' + esc(erp ? erp.documento : l.numero) + '</td>'
+                + '<td style="white-space:nowrap;font-weight:600;">' + esc(erp && erp.documento ? erp.documento : l.numero) + '</td>'
                 + '<td style="max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'
                 + esc(erp ? erp.proveedor : l.proveedor) + '">' + esc(erp ? erp.proveedor : l.proveedor) + '</td>'
                 + '<td style="white-space:nowrap;">' + fecha + '</td>'
@@ -1234,32 +1240,67 @@ document.addEventListener('keydown', function (e) {
                 <strong>No está lista para mandar.</strong>
                 <?php endif; ?>
             </div>
-            <?php if ($ccFaltan): ?>
-            <div style="margin-top:6px;font-weight:600;">
-                Falta<?= count($ccFaltan) === 1 ? '' : 'n' ?> <?= count($ccFaltan) ?>:
+            <?php
+            /*
+             * Lo que falta, agrupado por motivo y el motivo dicho una vez.
+             * Listadas una por una, 83 facturas sin XML tapaban la pantalla
+             * repitiendo la misma frase, y las pocas que sí se arreglan desde
+             * acá (subir un PDF) quedaban perdidas entre ellas. Las que no
+             * tienen comprobante ya las filtra "sin respaldo": se enlazan, no
+             * se listan. Los demás grupos se despliegan; abiertos solo si son
+             * pocos.
+             */
+            if ($ccFaltan):
+                $ccGrupos = [];
+                foreach ($ccFaltan as $ccF) {
+                    $ccGrupos[$ccF['motivo']][] = $ccF;
+                }
+                uksort($ccGrupos, function ($a, $b) {
+                    $orden = array_flip(array_keys(ControlCarpetaPago::MOTIVOS));
+                    return ($orden[$a] ?? 99) <=> ($orden[$b] ?? 99);
+                }); ?>
+            <div style="margin-top:6px;display:flex;flex-direction:column;gap:4px;">
+                <?php foreach ($ccGrupos as $ccMotivo => $ccLista):
+                    $ccCuantas = count($ccLista);
+                    $ccTexto = ControlCarpetaPago::explicar($ccMotivo);
+                    if ($ccMotivo === 'sin_comprobante'):
+                        $ccUrl = $baseUrl . '/por-pagar?' . http_build_query([
+                            'pago_id' => (int) $pagoFiltro, 'estado' => 'sin_respaldo',
+                        ]); ?>
+                <div>
+                    <strong><?= number_format($ccCuantas) ?></strong> sin comprobante: falta el XML.
+                    <a href="<?= htmlspecialchars($ccUrl) ?>" style="color:inherit;font-weight:600;">Verlas en el listado</a>
+                </div>
+                    <?php else: ?>
+                <details<?= $ccCuantas <= 5 ? ' open' : '' ?>>
+                    <summary style="cursor:pointer;">
+                        <strong><?= number_format($ccCuantas) ?></strong> — <?= htmlspecialchars($ccTexto) ?>
+                    </summary>
+                    <ul style="margin:2px 0 0 18px;padding:0;">
+                        <?php foreach (array_slice($ccLista, 0, 50) as $ccF):
+                            $ccUrl = $baseUrl . '/por-pagar?' . http_build_query([
+                                'pago_id' => (int) $pagoFiltro, 'q' => $ccF['numero'],
+                            ]); ?>
+                        <li>
+                            <a href="<?= htmlspecialchars($ccUrl) ?>" style="color:inherit;font-weight:600;">
+                                <?= htmlspecialchars($ccF['numero']) ?></a>
+                            · <?= htmlspecialchars($ccF['proveedor']) ?>
+                            <?php if ($ccMotivo === 'sin_pdf' && $ccF['factura_xml_id'] > 0 && Permisos::puede('documentos.recuperar')): ?>
+                            <button type="button" class="btn-recuperar" data-subir-pdf="<?= (int) $ccF['factura_xml_id'] ?>"
+                                    title="Subir el PDF a mano">
+                                <i class="fas fa-upload"></i> Subir PDF
+                            </button>
+                            <?php endif; ?>
+                        </li>
+                        <?php endforeach; ?>
+                        <?php if ($ccCuantas > 50): ?>
+                        <li>… y <?= $ccCuantas - 50 ?> más.</li>
+                        <?php endif; ?>
+                    </ul>
+                </details>
+                    <?php endif;
+                endforeach; ?>
             </div>
-            <ul style="margin:2px 0 0 18px;padding:0;">
-                <?php foreach (array_slice($ccFaltan, 0, 50) as $ccF):
-                    $ccUrl = $baseUrl . '/por-pagar?' . http_build_query([
-                        'pago_id' => (int) $pagoFiltro, 'q' => $ccF['numero'],
-                    ]); ?>
-                <li>
-                    <a href="<?= htmlspecialchars($ccUrl) ?>" style="color:inherit;font-weight:600;">
-                        <?= htmlspecialchars($ccF['numero']) ?></a>
-                    · <?= htmlspecialchars($ccF['proveedor']) ?>
-                    — <?= htmlspecialchars(ControlCarpetaPago::explicar($ccF['motivo'])) ?>
-                    <?php if ($ccF['motivo'] === 'sin_pdf' && $ccF['factura_xml_id'] > 0 && Permisos::puede('documentos.recuperar')): ?>
-                    <button type="button" class="btn-recuperar" data-subir-pdf="<?= (int) $ccF['factura_xml_id'] ?>"
-                            title="Subir el PDF a mano">
-                        <i class="fas fa-upload"></i> Subir PDF
-                    </button>
-                    <?php endif; ?>
-                </li>
-                <?php endforeach; ?>
-                <?php if (count($ccFaltan) > 50): ?>
-                <li>… y <?= count($ccFaltan) - 50 ?> más.</li>
-                <?php endif; ?>
-            </ul>
             <?php endif; ?>
             <?php if ($ccSobran): ?>
             <details style="margin-top:6px;">
@@ -1538,7 +1579,28 @@ document.addEventListener('keydown', function (e) {
                     </td>
                     <?= Columnas::celdasExtra('porpagar', $linea) ?>
                     <td class="center" style="white-space:nowrap;">
-                        <?php if ($linea['estado'] === 'sin_respaldo'): ?>
+                        <?php if ($linea['estado'] === 'sin_respaldo' && !empty($linea['xml_mismo_numero'])
+                                  && Permisos::puede('por_pagar.editar')): ?>
+                        <?php
+                        /*
+                         * El XML ya está cargado, con este mismo número: buscarlo
+                         * en el correo era mandar a buscar lo que ya se tiene.
+                         * Ver PorPagarController::marcarXmlConElMismoNumero.
+                         */
+                        $pvXml = $linea['xml_mismo_numero'];
+                        $pvDif = round((float) $linea['monto'] - (float) $pvXml['total'], 2);
+                        ?>
+                        <button type="button" class="btn btn-outline btn-sm"
+                                style="color:#92400e;border-color:#fde68a;"
+                                title="Hay un XML cargado con este número<?= htmlspecialchars(' (' . (string) ($pvXml['proveedor_nombre'] ?? '') . ', ₡' . number_format((float) $pvXml['total'], 2) . ')') ?>"
+                                onclick="ppVincularMismoNumero(<?= (int) $linea['id'] ?>, <?= (int) $pvXml['id'] ?>, <?= htmlspecialchars(json_encode([
+                                    'proveedor' => (string) ($pvXml['proveedor_nombre'] ?? ''),
+                                    'total' => number_format((float) $pvXml['total'], 2),
+                                    'diferencia' => abs($pvDif) <= 1.0 ? '' : (($pvDif > 0 ? '+' : '') . number_format($pvDif, 2)),
+                                ], JSON_UNESCAPED_UNICODE)) ?>)">
+                            <i class="fas fa-link"></i> Vincular XML
+                        </button>
+                        <?php elseif ($linea['estado'] === 'sin_respaldo'): ?>
                         <?php /*
                          * El correo se abre en un marco sobre esta pantalla:
                          * el checklist del pago se revisa de arriba abajo y
@@ -1598,6 +1660,40 @@ document.addEventListener('keydown', function (e) {
         </table>
     </div>
 </div>
+
+<script>
+// "Vincular XML": la línea no tiene respaldo y hay un XML cargado con su mismo
+// número. Se pide confirmación porque, si el emparejador no lo tomó solo, algo
+// no cuadró (el monto, un código que falta en el catálogo) y eso tiene que
+// quedar a la vista antes de dar el clic.
+async function ppVincularMismoNumero(lineaId, xmlId, datos) {
+    var texto = 'Hay un XML cargado con este mismo número'
+        + (datos.proveedor ? ', de ' + datos.proveedor : '')
+        + ', por ₡' + datos.total + '.'
+        + (datos.diferencia
+            ? '\n\nEl monto no cuadra (' + datos.diferencia + '): la factura quedará "con diferencia".'
+            : '')
+        + '\n\nSe vincula a mano: la verificación automática no lo cambia.';
+    if (!(await AppDialog.confirm(texto, { title: 'Vincular el XML', type: 'info', confirmText: 'Vincular' }))) {
+        return;
+    }
+    var fd = new FormData();
+    fd.append('linea_id', lineaId);
+    fd.append('factura_id', xmlId);
+    fetch('<?= $baseUrl ?>/por-pagar/vincular-mismo-numero', { method: 'POST', body: fd, credentials: 'same-origin' })
+        .then(function (r) { return r.json(); })
+        .then(async function (r) {
+            if (!r.ok) throw new Error(r.message || 'No se pudo vincular.');
+            if (r.aviso_archivos) {
+                await AppDialog.alert(r.aviso_archivos, { title: 'Vinculado', type: 'warning' });
+            }
+            window.location.reload();
+        })
+        .catch(function (err) {
+            AppDialog.alert(err.message, { title: 'No se pudo vincular', type: 'danger' });
+        });
+}
+</script>
 
 <?php if (!empty($pago['pago_id']) && !empty($sinCoincidencia) && $sinRespaldo > 0): ?>
 <!-- ── Facturas sin coincidencia (del pago, fuera del listado) ── -->

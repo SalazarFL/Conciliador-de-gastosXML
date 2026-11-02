@@ -41,8 +41,11 @@ require_once $ROOT . '/app/controllers/CorreoController.php';
 require_once $ROOT . '/app/models/CorreoLote.php';
 require_once $ROOT . '/app/models/CorreoCuenta.php';
 
-$topeSegundos = isset($argv[1]) ? max(30, min(3600, (int) $argv[1])) : 240;
-$loteUnico    = isset($argv[2]) ? (int) $argv[2] : 0;
+// --ayudante: lo lanzó otro motor para repartirse el lote; no lanza más.
+$posicionales = array_values(array_filter(array_slice($argv, 1), function ($a) { return $a !== '--ayudante'; }));
+$esAyudante   = in_array('--ayudante', $argv, true);
+$topeSegundos = isset($posicionales[0]) ? max(30, min(3600, (int) $posicionales[0])) : 240;
+$loteUnico    = isset($posicionales[1]) ? (int) $posicionales[1] : 0;
 
 // Tanda amplia: sin el timeout de Apache encima no hay razón para viajes
 // cortos, y cada tanda amortiza mejor la conexión ya abierta.
@@ -50,19 +53,21 @@ $porTanda        = 10;
 $presupuestoTanda = 60;
 
 $dirCorreo  = MailFetcher::storagePath();
-$rutaLock   = CorreoLote::rutaLock(); // el mismo que toma el latido del navegador
 $rutaLog    = $dirCorreo . DIRECTORY_SEPARATOR . 'lotes_worker.log';
 $rutaEstado = $dirCorreo . DIRECTORY_SEPARATOR . 'lotes_estado.json';
 
 $inicioCorrida = microtime(true);
 
 // Lock propio (no el de la sincronización del índice: son trabajos distintos
-// y pueden convivir). Si otra corrida sigue viva, esta se retira en silencio.
-$fpLock = @fopen($rutaLock, 'c');
-if ($fpLock === false || !flock($fpLock, LOCK_EX | LOCK_NB)) {
-    fwrite(STDERR, "Otra corrida de lotes sigue en curso; se omite esta.\n");
+// y pueden convivir). Hay varios lugares (CorreoLote::motores()): se toma el
+// primero libre, y si están todos ocupados ya hay bastantes motores
+// trabajando y esta corrida se retira en silencio.
+$fpLock = CorreoLote::adquirirLock();
+if ($fpLock === null) {
+    fwrite(STDERR, "Todos los motores de lotes están trabajando; se omite esta corrida.\n");
     exit(0);
 }
+$quien = $esAyudante ? 'ayudante ' . getmypid() : 'motor ' . getmypid();
 
 /** Escribe una línea con marca de tiempo al log (recortándolo si crece). */
 function registrar($rutaLog, $texto)
@@ -90,11 +95,32 @@ try {
     $pendientes = $lotes->pendientes($loteUnico);
 
     if (!$pendientes) {
-        registrar($rutaLog, $loteUnico > 0
-            ? "El lote #{$loteUnico} no está pendiente ni ejecutando; no hay nada que hacer."
-            : 'No hay lotes pendientes.');
+        // Un ayudante que llega tarde no tiene nada que contar.
+        if (!$esAyudante) {
+            registrar($rutaLog, $loteUnico > 0
+                ? "El lote #{$loteUnico} no está pendiente ni ejecutando; no hay nada que hacer."
+                : 'No hay lotes pendientes.');
+        }
     } else {
-        registrar($rutaLog, 'Inicio: ' . count($pendientes) . ' lote(s), tope ' . $topeSegundos . 's.');
+        registrar($rutaLog, 'Inicio (' . $quien . '): ' . count($pendientes) . ' lote(s), tope ' . $topeSegundos . 's.');
+
+        // El motor que arranca llama a los demás, uno por cada 20 correos que
+        // falten y hasta llenar los lugares. Los ayudantes no llaman a nadie:
+        // así nunca hay más procesos que lugares.
+        if (!$esAyudante) {
+            require_once $ROOT . '/app/helpers/ProcesoDeFondo.php';
+            $porHacer = $lotes->correosPorHacer($loteUnico);
+            $ayudantes = min(CorreoLote::motores() - 1, (int) ceil($porHacer / 20) - 1);
+            $lanzados = 0;
+            for ($i = 0; $i < $ayudantes; $i++) {
+                if (ProcesoDeFondo::lanzar('procesar_lotes.php', [$topeSegundos, $loteUnico, '--ayudante'])) {
+                    $lanzados++;
+                }
+            }
+            if ($lanzados > 0) {
+                registrar($rutaLog, "{$porHacer} correo(s) por hacer: +{$lanzados} ayudante(s).");
+            }
+        }
     }
 
     foreach ($pendientes as $fila) {
@@ -119,9 +145,24 @@ try {
         }
 
         $fetcher = new MailFetcher($config);
+        $erroresSeguidos = 0;
         try {
             while ((microtime(true) - $inicioCorrida) < $topeSegundos) {
-                $r = $correo->procesarTandaLote($loteId, $porTanda, $presupuestoTanda, $fetcher);
+                // Un error en una tanda (la base cortó una escritura, el buzón
+                // se atragantó) no retira al motor: se anota y se sigue. Antes
+                // el motor entero se iba, y con varios trabajando el lote se
+                // quedaba con menos de los que debía.
+                try {
+                    $r = $correo->procesarTandaLote($loteId, $porTanda, $presupuestoTanda, $fetcher);
+                    $erroresSeguidos = 0;
+                } catch (Throwable $e) {
+                    registrar($rutaLog, "Lote #{$loteId} ({$quien}): error en una tanda, se sigue: " . $e->getMessage());
+                    if (++$erroresSeguidos >= 3) {
+                        throw $e;
+                    }
+                    usleep(mt_rand(500000, 1500000));
+                    continue;
+                }
                 $stats['tandas']++;
 
                 if (empty($r['ok'])) {
@@ -152,8 +193,9 @@ try {
 
         $actual = $lotes->get($loteId);
         registrar($rutaLog, sprintf(
-            'Lote #%d: +%d correos en %d tanda(s); %d/%d; estado=%s%s',
+            'Lote #%d (%s): +%d correos en %d tanda(s); %d/%d; estado=%s%s',
             $loteId,
+            $quien,
             $stats['procesados_ahora'],
             $stats['tandas'],
             (int) ($actual['procesados'] ?? 0),
@@ -171,7 +213,9 @@ try {
 }
 
 $duracion = round(microtime(true) - $inicioCorrida, 1);
-registrar($rutaLog, 'Fin en ' . $duracion . 's.');
+if (!$esAyudante || $resumen) {
+    registrar($rutaLog, 'Fin (' . $quien . ') en ' . $duracion . 's.');
+}
 
 // Estado de la última corrida (mismo formato que sync_estado.json)
 @file_put_contents($rutaEstado, json_encode([
@@ -186,7 +230,6 @@ registrar($rutaLog, 'Fin en ' . $duracion . 's.');
     }),
 ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), LOCK_EX);
 
-flock($fpLock, LOCK_UN);
-fclose($fpLock);
+CorreoLote::liberarLock($fpLock);
 
 exit($errorGlobal === null ? 0 : 1);

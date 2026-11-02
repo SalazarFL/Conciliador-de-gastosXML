@@ -59,6 +59,11 @@ $casos = [
     // de 551 líneas estando la factura cargada. Recortar por la izquierda
     // daba «10000401000090388» y no cruzaba con nada.
     'FACT-0010000401000090388'       => ['', '00090388'],
+    // Número corto del proveedor + correlativo del ERP: el documento es el
+    // primero. Con las mismas cifras ganaba el último (pago del 07/10).
+    'FACT-7887-2242'                 => ['', '00007887'],
+    'FACT-242-640'                   => ['', '00000242'],
+    'FACT-243-1650'                  => ['', '00000243'],
 ];
 foreach ($casos as $numero => $esperado) {
     $llaves = FacturaErp::llavesDeNumero($numero);

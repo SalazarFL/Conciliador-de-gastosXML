@@ -28,23 +28,124 @@ class CorreoLote extends Model
      * máquina —no uno en toda la oficina—: es el mismo número de conexiones
      * que cuando cada quien tenía abierto el modo Descargas.
      */
-    public static function rutaLock()
+    public static function rutaLock($lugar = 0)
     {
-        return MailFetcher::storagePath() . DIRECTORY_SEPARATOR . 'lotes.lock';
+        return self::carpetaMotores() . DIRECTORY_SEPARATOR . 'lotes.lock'
+            . ((int) $lugar > 0 ? '.' . (int) $lugar : '');
     }
 
-    /** Toma el lock sin bloquear; null si otro motor ya está trabajando. */
-    public static function adquirirLock()
+    /** Dónde viven los locks de los motores y su configuración (storage/correo). */
+    private static $carpetaMotores = null;
+
+    private static function carpetaMotores()
     {
-        $fp = @fopen(self::rutaLock(), 'c');
-        if ($fp === false) {
-            return null;
-        }
-        if (!flock($fp, LOCK_EX | LOCK_NB)) {
+        return self::$carpetaMotores ?? MailFetcher::storagePath();
+    }
+
+    /** Para las pruebas: que no tomen los locks de los motores de verdad. */
+    public static function fijarCarpetaMotores($carpeta)
+    {
+        self::$carpetaMotores = $carpeta === null ? null : rtrim((string) $carpeta, '\\/');
+    }
+
+    /*
+     * Ya no es UN motor por máquina sino hasta motores(): cada uno toma un
+     * lugar (un archivo de lock) y su propia conexión al buzón.
+     *
+     * Un motor solo pasaba casi todo el tiempo esperando al servidor de
+     * correo: el lote #31, 5.103 correos, tardó tres horas de a un correo por
+     * vez. Varios a la vez no se pisan —tomarPendientes() reparte los correos
+     * con una firma por toma— y el que choca con un comprobante que otro acaba
+     * de guardar lo toma como duplicado (XmlDocumentImporter::esClaveRepetida).
+     *
+     * El tope es de conexiones al buzón: el servidor limita cuántas abre una
+     * misma cuenta desde una misma dirección (Dovecot trae 10 de fábrica), y
+     * la sincronización del índice tiene las suyas.
+     */
+
+    /** Hasta cuántos lugares se miran, pida lo que pida la configuración. */
+    public const MOTORES_MAX = 8;
+
+    /** Cuántos motores trabajan un lote a la vez. */
+    public const MOTORES_POR_DEFECTO = 4;
+
+    /**
+     * Los que dice storage/correo/config.json (auto_sync.lotes_motores), o
+     * MOTORES_POR_DEFECTO. Se baja ahí si el servidor de correo empieza a
+     * rechazar conexiones.
+     */
+    public static function motores()
+    {
+        $archivo = self::carpetaMotores() . DIRECTORY_SEPARATOR . 'config.json';
+        $config = is_file($archivo) ? json_decode((string) @file_get_contents($archivo), true) : null;
+        $pedidos = (int) ($config['auto_sync']['lotes_motores'] ?? self::MOTORES_POR_DEFECTO);
+        return max(1, min(self::MOTORES_MAX, $pedidos));
+    }
+
+    /**
+     * Toma un lugar libre sin bloquear; null si todos están ocupados.
+     *
+     * @param int|null $lugar Uno en particular, o null para el primero libre.
+     */
+    public static function adquirirLock($lugar = null)
+    {
+        $lugares = $lugar === null ? range(0, self::motores() - 1) : [(int) $lugar];
+        foreach ($lugares as $l) {
+            $fp = @fopen(self::rutaLock($l), 'c');
+            if ($fp === false) {
+                continue;
+            }
+            if (flock($fp, LOCK_EX | LOCK_NB)) {
+                return $fp;
+            }
             fclose($fp);
-            return null;
         }
-        return $fp;
+        return null;
+    }
+
+    /** ¿Hay algún motor trabajando en esta máquina? */
+    public static function hayMotorEnMarcha()
+    {
+        return self::motoresEnMarcha() > 0;
+    }
+
+    /** Cuántos motores trabajan en esta máquina. Mira todos los lugares, no solo los que pide la configuración de ahora. */
+    public static function motoresEnMarcha()
+    {
+        $ocupados = 0;
+        for ($l = 0; $l < self::MOTORES_MAX; $l++) {
+            if (!is_file(self::rutaLock($l))) {
+                continue;
+            }
+            $fp = self::adquirirLock($l);
+            if ($fp === null) {
+                $ocupados++;
+                continue;
+            }
+            self::liberarLock($fp);
+        }
+        return $ocupados;
+    }
+
+    /**
+     * Pone a trabajar los motores en segundo plano (cli/procesar_lotes.php),
+     * sin esperar a la tarea programada ni depender de una pantalla abierta.
+     *
+     * No relanza si ya lo hizo hace menos de un minuto: el latido pregunta
+     * cada segundo, y un motor que tarda en arrancar no es uno que falte.
+     *
+     * @return bool Si quedó lanzado (ahora o hace un momento).
+     */
+    public static function lanzarMotores($forzar = false)
+    {
+        require_once __DIR__ . '/../helpers/ProcesoDeFondo.php';
+        $marca = MailFetcher::storagePath() . DIRECTORY_SEPARATOR . 'lotes_lanzados.txt';
+        $hace = time() - (int) @filemtime($marca);
+        if (!$forzar && is_file($marca) && $hace < 60) {
+            return false;
+        }
+        @touch($marca);
+        return ProcesoDeFondo::lanzar('procesar_lotes.php', [3600]);
     }
 
     public static function liberarLock($fp)
@@ -394,6 +495,20 @@ class CorreoLote extends Model
         return $this->fetchAll($sql . ' ORDER BY id ASC', $params) ?: [];
     }
 
+    /** Correos que todavía nadie tomó, en los lotes que tienen trabajo (o en uno). */
+    public function correosPorHacer($loteId = 0)
+    {
+        $sql = "SELECT COUNT(*) FROM correo_lote_items i
+                  JOIN {$this->table} l ON l.id = i.lote_id
+                 WHERE i.estado = 'pendiente' AND l.estado IN ('pendiente','ejecutando')";
+        $params = [];
+        if ((int) $loteId > 0) {
+            $sql .= ' AND l.id = ?';
+            $params[] = (int) $loteId;
+        }
+        return (int) $this->fetchColumn($sql, $params);
+    }
+
     public function iniciar($id)
     {
         $this->execute("UPDATE {$this->table}
@@ -425,18 +540,47 @@ class CorreoLote extends Model
         if (!$lote || $lote['estado'] !== 'ejecutando') {
             return [];
         }
-        $this->execute("UPDATE correo_lote_items SET estado = 'pendiente', iniciado_en = NULL
-                        WHERE lote_id = ? AND estado = 'procesando'
-                          AND iniciado_en < DATE_SUB(NOW(), INTERVAL 10 MINUTE)", [(int) $loteId]);
+        $this->rescatarColgados($loteId);
         $limit = max(1, min(10, (int) $limit));
-        $items = $this->fetchAll("SELECT * FROM correo_lote_items
-                                 WHERE lote_id = ? AND estado = 'pendiente'
-                                 ORDER BY id ASC LIMIT {$limit}", [(int) $loteId]);
-        if (!$items) {
-            $this->completarSiTermino($loteId);
-            return [];
+
+        /*
+         * Con varios motores, todos pedían los MISMOS primeros $limit
+         * pendientes: uno ganaba el UPDATE y los demás se quedaban sin nada,
+         * creían que el lote había terminado y se retiraban. Ahora cada uno
+         * elige al azar dentro de una ventana más amplia, y si igual pierde,
+         * vuelve a probar antes de darse por vencido.
+         */
+        $ventana = $limit * self::MOTORES_MAX;
+        for ($intento = 0; $intento < 5; $intento++) {
+            $candidatos = $this->fetchAll(
+                "SELECT id FROM correo_lote_items WHERE lote_id = ? AND estado = 'pendiente' ORDER BY id ASC LIMIT {$ventana}",
+                [(int) $loteId]
+            );
+            if (!$candidatos) {
+                $this->completarSiTermino($loteId);
+                return [];
+            }
+            $ids = array_map('intval', array_column($candidatos, 'id'));
+            shuffle($ids);
+            $ids = array_slice($ids, 0, $limit);
+            sort($ids);
+            $tomados = $this->tomar($ids);
+            if ($tomados) {
+                return $tomados;
+            }
         }
-        $ids = array_map('intval', array_column($items, 'id'));
+        return [];
+    }
+
+    /**
+     * Se lleva estos correos si siguen pendientes, y devuelve los que se llevó.
+     *
+     * Por clave primaria y nada más: con `lote_id = ?` en el WHERE, MariaDB
+     * podía recorrer el lote entero por ese índice y bloquear sus miles de
+     * filas, y con varios motores eso terminaba en deadlock.
+     */
+    private function tomar(array $ids)
+    {
         $marks = implode(',', array_fill(0, count($ids), '?'));
 
         // Firma de ESTA toma. El candado de archivo (lotes.lock) ordena a los
@@ -454,13 +598,15 @@ class CorreoLote extends Model
             );
         }
         $firma = bin2hex(random_bytes(8));
-        $params = array_merge([$firma, (int) $loteId], $ids);
-        $tomados = (int) $this->execute(
-            "UPDATE correo_lote_items SET estado = 'procesando', intentos = intentos + 1,
-                    iniciado_en = NOW(), tomado_por = ?
-              WHERE lote_id = ? AND id IN ({$marks}) AND estado = 'pendiente'",
-            $params
-        );
+        $params = array_merge([$firma], $ids);
+        $tomados = (int) $this->reintentando(function () use ($marks, $params) {
+            return $this->execute(
+                "UPDATE correo_lote_items SET estado = 'procesando', intentos = intentos + 1,
+                        iniciado_en = NOW(), tomado_por = ?
+                  WHERE id IN ({$marks}) AND estado = 'pendiente'",
+                $params
+            );
+        });
         if ($tomados === 0) {
             return [];
         }
@@ -468,6 +614,53 @@ class CorreoLote extends Model
             "SELECT * FROM correo_lote_items WHERE id IN ({$marks}) AND tomado_por = ? ORDER BY id",
             array_merge($ids, [$firma])
         ) ?: [];
+    }
+
+    /**
+     * Devuelve a la cola los correos que un motor tomó hace más de 10 minutos
+     * y nunca cerró (se cayó a la mitad).
+     *
+     * Primero se miran sin bloquear nada y después se tocan por clave
+     * primaria. Antes era un UPDATE sobre el lote entero en cada tanda de cada
+     * motor: bloqueaba todas sus filas mientras los demás cerraban las suyas.
+     */
+    private function rescatarColgados($loteId)
+    {
+        $colgados = array_map('intval', array_column($this->fetchAll(
+            "SELECT id FROM correo_lote_items WHERE lote_id = ? AND estado = 'procesando' AND iniciado_en < DATE_SUB(NOW(), INTERVAL 10 MINUTE)",
+            [(int) $loteId]
+        ) ?: [], 'id'));
+        if (!$colgados) {
+            return;
+        }
+        $marks = implode(',', array_fill(0, count($colgados), '?'));
+        $this->reintentando(function () use ($marks, $colgados) {
+            return $this->execute("UPDATE correo_lote_items SET estado = 'pendiente', iniciado_en = NULL
+                                    WHERE id IN ({$marks}) AND estado = 'procesando'
+                                      AND iniciado_en < DATE_SUB(NOW(), INTERVAL 10 MINUTE)", $colgados);
+        });
+    }
+
+    /**
+     * Repite una escritura que MariaDB cortó por deadlock (1213) o por esperar
+     * un bloqueo demasiado (1205). Con varios motores escribiendo en las mismas
+     * tablas es algo que pasa, y lo correcto es volver a intentar: la base ya
+     * deshizo esa sentencia. Antes el motor entero se caía, y los correos que
+     * tenía tomados quedaban diez minutos colgados.
+     */
+    private function reintentando(callable $escribir)
+    {
+        for ($intento = 1; ; $intento++) {
+            try {
+                return $escribir();
+            } catch (PDOException $e) {
+                $codigo = (int) ($e->errorInfo[1] ?? 0);
+                if (!in_array($codigo, [1213, 1205], true) || $intento >= 5) {
+                    throw $e;
+                }
+                usleep(mt_rand(50000, 250000) * $intento);
+            }
+        }
     }
 
     /**
@@ -482,8 +675,10 @@ class CorreoLote extends Model
             return;
         }
         $marks = implode(',', array_fill(0, count($ids), '?'));
-        $this->execute("UPDATE correo_lote_items SET estado = 'pendiente', iniciado_en = NULL
-                        WHERE id IN ({$marks}) AND estado = 'procesando'", $ids);
+        $this->reintentando(function () use ($marks, $ids) {
+            return $this->execute("UPDATE correo_lote_items SET estado = 'pendiente', iniciado_en = NULL
+                                    WHERE id IN ({$marks}) AND estado = 'procesando'", $ids);
+        });
     }
 
     /**
@@ -500,29 +695,37 @@ class CorreoLote extends Model
     {
         $estado = in_array($resumen['estado'] ?? '', ['completado', 'omitido', 'error'], true)
             ? $resumen['estado'] : 'completado';
-        $this->execute("UPDATE correo_lote_items SET estado = ?, documentos_importados = ?, duplicados = ?,
-                            pdf_pendientes = ?, detalle = ?, procesado_en = NOW() WHERE id = ?", [
+        $params = [
             $estado,
             (int) ($resumen['importados'] ?? 0),
             (int) ($resumen['duplicados'] ?? 0),
             (int) ($resumen['pdf_pendientes'] ?? 0),
             mb_substr((string) ($resumen['detalle'] ?? ''), 0, 65000, 'UTF-8'),
             (int) $itemId,
-        ]);
+        ];
+        $this->reintentando(function () use ($params) {
+            return $this->execute("UPDATE correo_lote_items SET estado = ?, documentos_importados = ?, duplicados = ?,
+                                pdf_pendientes = ?, detalle = ?, procesado_en = NOW() WHERE id = ?", $params);
+        });
     }
 
     /**
      * Pone al día los contadores del lote y lo completa si ya no queda nada.
      * Se llama UNA vez al terminar la tanda, no por correo.
+     *
+     * @return bool Si fue ESTA llamada la que lo dio por completado. Con varios
+     *              motores, los dos últimos en terminar pueden ver el lote
+     *              completo; solo uno lo completó, y solo ese hace lo de
+     *              después (el cruce contra los pagos, que es caro).
      */
     public function cerrarTanda($loteId)
     {
         $loteId = (int) $loteId;
         if ($loteId <= 0) {
-            return;
+            return false;
         }
         $this->recalcular($loteId);
-        $this->completarSiTermino($loteId);
+        return $this->completarSiTermino($loteId);
     }
 
     public function incidencia($loteId, $itemId, $tipo, $mensaje, array $metadata = [])
@@ -562,10 +765,7 @@ class CorreoLote extends Model
         // revisó y la lista no baja nunca.
         $descarte = $this->descarteDe($firma);
 
-        $this->insert("INSERT INTO correo_incidencias
-                          (lote_id, lote_item_id, tipo, mensaje, asunto, metadata,
-                           firma, descartada, descartada_en, motivo)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+        $params = [
             (int) $loteId,
             $itemId > 0 ? (int) $itemId : null,
             $tipo,
@@ -576,7 +776,13 @@ class CorreoLote extends Model
             $descarte !== null ? 1 : 0,
             $descarte !== null ? date('Y-m-d H:i:s') : null,
             $descarte !== null ? ($descarte['motivo'] ?? null) : null,
-        ]);
+        ];
+        $this->reintentando(function () use ($params) {
+            return $this->insert("INSERT INTO correo_incidencias
+                              (lote_id, lote_item_id, tipo, mensaje, asunto, metadata,
+                               firma, descartada, descartada_en, motivo)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", $params);
+        });
         // El contador de incidencias del lote sube con el recálculo del cierre
         // de la tanda (cerrarTanda): una incidencia no tiene por qué pagar un
         // UPDATE de cinco subconsultas en el acto.
@@ -915,13 +1121,26 @@ class CorreoLote extends Model
     private function recalcular($loteId)
     {
         if ($loteId <= 0) { return; }
-        $this->execute("UPDATE {$this->table} l SET
-                procesados = (SELECT COUNT(*) FROM correo_lote_items i WHERE i.lote_id=l.id AND i.estado IN ('completado','omitido','error','cancelado')),
-                documentos_importados = (SELECT COALESCE(SUM(i.documentos_importados),0) FROM correo_lote_items i WHERE i.lote_id=l.id),
-                duplicados = (SELECT COALESCE(SUM(i.duplicados),0) FROM correo_lote_items i WHERE i.lote_id=l.id),
-                pdf_pendientes = (SELECT COALESCE(SUM(i.pdf_pendientes),0) FROM correo_lote_items i WHERE i.lote_id=l.id),
-                incidencias = (SELECT COUNT(*) FROM correo_incidencias x WHERE x.lote_id=l.id)
-                WHERE l.id = ?", [(int) $loteId]);
+        // Primero se cuenta con una lectura que no bloquea nada, y después se
+        // escribe solo la fila del lote. Era un solo UPDATE con subconsultas,
+        // y dentro de un UPDATE MariaDB bloquea cada fila que lee: todas las
+        // del lote, mientras los otros motores cerraban las suyas. Con varios
+        // motores eso terminaba en deadlock.
+        $c = $this->fetchOne("SELECT
+                SUM(estado IN ('completado','omitido','error','cancelado')) AS procesados,
+                COALESCE(SUM(documentos_importados),0) AS importados,
+                COALESCE(SUM(duplicados),0) AS duplicados,
+                COALESCE(SUM(pdf_pendientes),0) AS pdf_pendientes
+              FROM correo_lote_items WHERE lote_id = ?", [(int) $loteId]) ?: [];
+        $incidencias = (int) $this->fetchColumn(
+            'SELECT COUNT(*) FROM correo_incidencias WHERE lote_id = ?', [(int) $loteId]);
+        $params = [
+            (int) ($c['procesados'] ?? 0), (int) ($c['importados'] ?? 0), (int) ($c['duplicados'] ?? 0),
+            (int) ($c['pdf_pendientes'] ?? 0), $incidencias, (int) $loteId,
+        ];
+        $this->reintentando(function () use ($params) {
+            return $this->execute("UPDATE {$this->table} SET procesados = ?, documentos_importados = ?, duplicados = ?, pdf_pendientes = ?, incidencias = ? WHERE id = ?", $params);
+        });
     }
 
     private function completarSiTermino($loteId)
@@ -930,8 +1149,11 @@ class CorreoLote extends Model
                                                WHERE lote_id = ? AND estado IN ('pendiente','procesando')", [(int) $loteId]);
         if ($pendientes === 0) {
             $this->recalcular($loteId);
-            $this->execute("UPDATE {$this->table} SET estado = 'completado', terminado_en = NOW()
-                            WHERE id = ? AND estado = 'ejecutando'", [(int) $loteId]);
+            return (int) $this->reintentando(function () use ($loteId) {
+                return $this->execute("UPDATE {$this->table} SET estado = 'completado', terminado_en = NOW()
+                                WHERE id = ? AND estado = 'ejecutando'", [(int) $loteId]);
+            }) > 0;
         }
+        return false;
     }
 }

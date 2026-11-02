@@ -103,6 +103,82 @@ foreach ((Permisos::catalogo()['rutas'] ?? []) as $ruta => $regla) {
     }
 }
 
+// ── La base de cada módulo y sus sueltos ──────────────────────────────────
+
+foreach ($modulos as $id => $modulo) {
+    $suyos = array_keys($modulo['permisos'] ?? []);
+    if (isset($modulo['base'])) {
+        assertPermisos(in_array($modulo['base'], $suyos, true),
+            "la base de '{$id}' ({$modulo['base']}) es uno de sus propios permisos");
+    }
+    foreach ((array) ($modulo['sueltos'] ?? []) as $suelto) {
+        assertPermisos(isset($modulo['base']),
+            "'{$id}' declara sueltos sin tener base: no tienen de qué estar sueltos");
+        assertPermisos(in_array($suelto, $suyos, true) && $suelto !== ($modulo['base'] ?? null),
+            "el suelto {$suelto} es de '{$id}' y no es su base");
+    }
+}
+
+// ── Lo que concede un rol, visto por la pantalla de roles ─────────────────
+
+$a = Permisos::analizarRol(['por_pagar.editar', 'por_pagar.exportar']);
+assertPermisos(($a['sin_base']['por_pagar'] ?? []) === ['por_pagar.editar', 'por_pagar.exportar'],
+    'verificar un pago sin poder ver los pagos se reconoce como permiso que no llega a ninguna pantalla');
+assertPermisos(in_array('por_pagar.ver', Permisos::conBases(['por_pagar.editar']), true),
+    'al guardar, lo marcado sin su base se completa con ella');
+
+$a = Permisos::analizarRol(['correo.configurar']);
+assertPermisos(!isset($a['sin_base']['correo']),
+    'dar de alta buzones no necesita la bandeja del correo: se hace en Configuración');
+
+$a = Permisos::analizarRol(['seguimiento.ver', 'configuracion.carpeta', 'bitacora.depurar']);
+assertPermisos($a['desconocidos'] === ['configuracion.carpeta'],
+    'una clave que el catálogo ya no tiene se señala en vez de contarse');
+assertPermisos($a['total'] === 2, 'el total cuenta solo permisos del catálogo');
+assertPermisos($a['delicados'] === ['bitacora.depurar'],
+    'un permiso de Administración en un rol cualquiera se señala como delicado');
+
+$a = Permisos::analizarRol([], true);
+assertPermisos($a['total'] === count($todas) && $a['delicados'] === [] && $a['sin_base'] === [],
+    'el rol que lo puede todo cuenta todos los permisos y no tiene nada que avisar');
+
+// ── Operación: el trabajo del día, nunca la administración ────────────────
+
+require_once __DIR__ . '/../app/models/Rol.php';
+$operacion = Rol::permisosDeOperacion();
+foreach (array_keys($modulos['administracion']['permisos'] ?? []) as $clave) {
+    assertPermisos(!in_array($clave, $operacion, true),
+        "Operación no nace con '{$clave}': Administración entera queda fuera, también lo que se añada después");
+}
+assertPermisos(!in_array('correo.configurar', $operacion, true), 'Operación no da de alta buzones');
+assertPermisos(in_array('seguimiento.ver', $operacion, true) && in_array('correo.importar', $operacion, true),
+    'Operación hace el trabajo del día');
+assertPermisos(Permisos::analizarRol($operacion)['sin_base'] === [],
+    'Operación no nace con permisos que no llegan a ninguna pantalla');
+
+// ── Configuración: una sola lista de llaves ───────────────────────────────
+
+$llavesConfig = Permisos::llavesDeRuta('GET', '/configuracion');
+assertPermisos(in_array('configuracion.proveedores', $llavesConfig, true),
+    'quien solo administra el listado de proveedores puede entrar a Configuración');
+assertPermisos(Permisos::llavesDeRuta('GET', '/login') === [], 'una ruta pública no pide llaves');
+
+// ── Lo que el menú no ofrece, la pantalla de roles lo dice ────────────────
+
+require_once __DIR__ . '/../app/helpers/Navegacion.php';
+$enMenu = [];
+foreach (Navegacion::catalogo() as $seccion) {
+    $enMenu += $seccion['entradas'] ?? [];
+}
+foreach ($modulos as $id => $modulo) {
+    if (!empty($modulo['oculto'])) {
+        assertPermisos(!isset($enMenu[$id]),
+            "'{$id}' está marcado 'oculto' en permisos.php pero config/menu.php lo ofrece");
+    }
+}
+assertPermisos(($enMenu['configuracion']['permiso'] ?? null) === $llavesConfig,
+    'la entrada de Configuración del menú usa las mismas llaves que su ruta');
+
 // ── Que el login siga siendo alcanzable sin sesión ────────────────────────
 
 $rutas = Permisos::catalogo()['rutas'] ?? [];

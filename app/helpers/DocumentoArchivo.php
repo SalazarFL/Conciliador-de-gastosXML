@@ -593,6 +593,99 @@ class DocumentoArchivo
         return $salida;
     }
 
+    /**
+     * copiarAPago() de muchas facturas a la vez.
+     *
+     * De a una, cada archivo eran cuatro llamadas seguidas —mirar el
+     * original, preguntar si ya estaba en la carpeta, bajarlo, subirlo— y un
+     * pago de 308 facturas tardaba veinticinco minutos. Acá cada carpeta se
+     * lista una sola vez, y lo que falta en ella se baja y se sube de a varios
+     * a la vez (AlmacenDocumentos::copiarVarios).
+     *
+     * Las reglas no cambian: todo lo que no sea el caso simple —la copia ya
+     * está y hay que comparar tamaños, un nombre ocupado por otro contenido,
+     * un original que no contesta— termina en copiarAPago() de esa factura,
+     * que es idempotente y no repite lo que ya quedó hecho.
+     *
+     * @param array $trabajos clave => [xmlOrigen, pdfOrigen, documento, carpetaPago, proveedor]
+     * @return array clave => lo que da copiarAPago(), o el Throwable que la impidió
+     */
+    public function copiarVariosAPago(array $trabajos)
+    {
+        $almacen = $this->almacen;
+        $salidas = [];
+
+        $carpetas = [];
+        foreach ($trabajos as $clave => $t) {
+            try {
+                $carpetas[$this->carpetaPago($t[3])] = true;
+            } catch (Throwable $e) {
+                $salidas[$clave] = $e;
+            }
+        }
+        foreach (array_keys($carpetas) as $carpeta) {
+            try {
+                $this->asegurarDirectorio($carpeta);
+                $almacen->conocerCarpeta($carpeta);
+            } catch (Throwable $e) {
+                // Sin el listado se pregunta archivo por archivo, como antes.
+            }
+        }
+
+        // Lo que no está en la carpeta se copia en tanda. Lo que sí está
+        // queda para copiarAPago(), que compara tamaños.
+        $pares = [];
+        foreach ($trabajos as $clave => $t) {
+            if (isset($salidas[$clave])) {
+                continue;
+            }
+            $salidas[$clave] = ['ruta_xml' => '', 'ruta_pdf' => '', 'copiados' => 0];
+            $carpeta = $this->carpetaPago($t[3]);
+            $base = self::nombreBase($t[2], $t[4]);
+            foreach (['xml' => $t[0], 'pdf' => $t[1]] as $extension => $origen) {
+                $origen = trim((string) $origen);
+                $destino = $carpeta . DIRECTORY_SEPARATOR . $base . '.' . $extension;
+                if ($origen !== '' && $almacen->identidad($destino) === null) {
+                    $pares[] = ['clave' => $clave, 'extension' => $extension, 'par' => [$origen, $destino]];
+                }
+            }
+        }
+        $copiadas = $pares ? $almacen->copiarVarios(array_column($pares, 'par')) : [];
+
+        $terminar = [];
+        foreach ($pares as $i => $p) {
+            $copia = $copiadas[$i] ?? null;
+            if (!is_array($copia)) {
+                $terminar[$p['clave']] = true;
+                continue;
+            }
+            $salidas[$p['clave']]['ruta_' . $p['extension']] = $copia['ruta'];
+            if (!empty($copia['creado'])) {
+                $salidas[$p['clave']]['copiados']++;
+            }
+        }
+
+        // Cada factura que no quedó entera en la tanda —porque algo falló o
+        // porque su copia ya estaba— se termina por el camino de siempre.
+        foreach ($trabajos as $clave => $t) {
+            $salida = $salidas[$clave];
+            if ($salida instanceof Throwable) {
+                continue;
+            }
+            if (!isset($terminar[$clave]) && $salida['ruta_xml'] !== '' && $salida['ruta_pdf'] !== '') {
+                continue;
+            }
+            try {
+                $copia = $this->copiarAPago($t[0], $t[1], $t[2], $t[3], $t[4]);
+                $copia['copiados'] += $salida['copiados'];
+                $salidas[$clave] = $copia;
+            } catch (Throwable $e) {
+                $salidas[$clave] = $e;
+            }
+        }
+        return $salidas;
+    }
+
     /** Solo admite un nombre de carpeta, nunca rutas absolutas ni recorridos "..". */
     public static function normalizarCarpetaPago($nombre)
     {

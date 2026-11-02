@@ -930,11 +930,36 @@ class FacturaErp extends Model
     }
 
     /**
+     * Lo que pierde una factura al salir de un pago, por quitarla o por
+     * borrar el pago entero.
+     *
+     * Suelta el pago y la foto del saldo. El enlace con su XML, solo si lo
+     * hizo una persona dentro del pago (match_manual): ese sí era una decisión
+     * del pago. El automático es de la factura —lo hizo el enganche al
+     * importar el XML, la carga del ERP o la verificación, todos con la misma
+     * regla de consecutivo y cédula— y sigue siendo cierto fuera del pago.
+     * Hasta el 30/09 se soltaba también, y nada lo volvía a enganchar: borrar
+     * cinco pagos de prueba dejó 199 facturas "sin respaldo" con su XML
+     * cargado.
+     *
+     * El orden de las asignaciones importa: MySQL las evalúa de izquierda a
+     * derecha, así que lo que mira `match_manual` y `factura_xml_id` va antes
+     * de cambiarlos.
+     */
+    public const SOLTAR_DEL_PAGO = "estado = 'pendiente', pago_id = NULL,
+                        asignada_pago_en = NULL, saldo_pago = NULL,
+                        estado_respaldo = IF(match_manual = 1 OR factura_xml_id IS NULL, 'sin_respaldo', estado_respaldo),
+                        diferencia = IF(match_manual = 1, NULL, diferencia),
+                        score_numero = IF(match_manual = 1, NULL, score_numero),
+                        score_proveedor = IF(match_manual = 1, NULL, score_proveedor),
+                        factura_xml_id = IF(match_manual = 1, NULL, factura_xml_id),
+                        match_manual = 0";
+
+    /**
      * Saca facturas de un pago y las devuelve a "pendiente".
      *
-     * El vínculo con el XML se borra a la vez: ese emparejamiento se hizo
-     * dentro del pago y fuera de él no significa nada. El XML no se toca —
-     * sigue existiendo y vuelve a estar disponible—.
+     * Ver SOLTAR_DEL_PAGO: el enlace automático con el XML se queda. El XML no
+     * se toca —sigue existiendo—.
      */
     public function quitarDePago(array $ids, $pagoId)
     {
@@ -946,10 +971,7 @@ class FacturaErp extends Model
         foreach (array_chunk($ids, self::LOTE_INSERT) as $tanda) {
             $quitadas += (int) $this->execute(
                 "UPDATE facturas_erp
-                    SET estado = 'pendiente', pago_id = NULL,
-                        asignada_pago_en = NULL, saldo_pago = NULL, factura_xml_id = NULL,
-                        estado_respaldo = 'sin_respaldo', diferencia = NULL,
-                        score_numero = NULL, score_proveedor = NULL, match_manual = 0
+                    SET " . self::SOLTAR_DEL_PAGO . "
                   WHERE pago_id = ?
                     AND id IN (" . implode(',', array_fill(0, count($tanda), '?')) . ')',
                 array_merge([(int) $pagoId], $tanda)
@@ -1059,6 +1081,51 @@ class FacturaErp extends Model
                  ORDER BY FIELD(e.estado_respaldo, 'con_diferencia', 'sin_respaldo', 'respaldada'),
                           e.proveedor_nombre ASC, e.id ASC";
         return $this->fetchAll($sql, $params) ?: [];
+    }
+
+    /**
+     * Los XML libres que llevan el consecutivo de cada factura sin comprobante.
+     *
+     * Para el checklist del pago: una línea "sin respaldo" ofrecía buscarla en
+     * el correo aunque su XML estuviera cargado, y nada en la pantalla lo
+     * decía. Libre quiere decir que no respalda ninguna otra factura; de
+     * quién es el emisor lo decide quien llama, con el catálogo.
+     *
+     * @return array id de la factura => lista de XML (id, total, moneda,
+     *               tipo_cambio, fecha_emision, proveedor_id, proveedor_nombre)
+     */
+    public function xmlConElMismoNumero(array $lineas)
+    {
+        $porDocumento = [];
+        foreach ($lineas as $linea) {
+            $documento = trim((string) ($linea['documento'] ?? ''));
+            if (empty($linea['factura_xml_id']) && preg_match('/^\d{20}$/', $documento)) {
+                $porDocumento[$documento][] = (int) $linea['id'];
+            }
+        }
+        if (!$porDocumento) {
+            return [];
+        }
+
+        $salida = [];
+        foreach (array_chunk(array_map('strval', array_keys($porDocumento)), 500) as $tanda) {
+            $params = $tanda;
+            $sql = "SELECT x.id, x.consecutivo_completo, x.total, x.moneda, x.tipo_cambio, x.fecha_emision,
+                           x.proveedor_id, p.razon_social AS proveedor_nombre
+                      FROM facturas_xml x
+                      LEFT JOIN proveedores p ON p.id = x.proveedor_id
+                     WHERE x.consecutivo_completo IN (" . implode(',', array_fill(0, count($tanda), '?')) . ")
+                       AND (x.tipo_documento IS NULL OR x.tipo_documento = 'FE')
+                       AND NOT EXISTS (SELECT 1 FROM facturas_erp o WHERE o.factura_xml_id = x.id)"
+                 . $this->condicionSociedad('x.', $params) . '
+                     ORDER BY x.id ASC';
+            foreach ($this->fetchAll($sql, $params) ?: [] as $xml) {
+                foreach ($porDocumento[(string) $xml['consecutivo_completo']] ?? [] as $erpId) {
+                    $salida[$erpId][] = $xml;
+                }
+            }
+        }
+        return $salida;
     }
 
     /** Lo mínimo para emparejar: sin las columnas pesadas ni los JOIN. */
@@ -1684,6 +1751,7 @@ class FacturaErp extends Model
      * dónde lo exportaron:
      *
      *   FACT-00200001010000045587-1377   consecutivo electrónico + correlativo
+     *   FACT-7887-2242                   número del proveedor + correlativo
      *   FACT-12339                       número interno del ERP, sin consecutivo
      *   FACT-000…0000039547              el mismo interno, rellenado con ceros
      *
@@ -1711,6 +1779,18 @@ class FacturaErp extends Model
                 $llaves['corto'] = NumeroFactura::xmlOchoDigitos($trozo);
                 return $llaves;
             }
+        }
+
+        // Documento corto con su correlativo: "FACT-7887-2242" es el documento
+        // 7887 y el 2242 se lo pone el ERP, igual que el -1377 de arriba. El
+        // documento es el PRIMER grupo, mida lo que mida. Tomar el más largo
+        // acertaba solo mientras el documento tuviera más cifras que su
+        // correlativo: con las mismas ganaba el último, y 7887-2242 y 242-640
+        // se buscaban por 2242 y 640 —el pago del 07/10 las dio por ausentes
+        // estando cargadas como 7887 y 242—.
+        if (preg_match('/^\D*(\d+)-\d+$/', trim((string) $numero), $par)) {
+            $llaves['corto'] = NumeroFactura::xmlOchoDigitos($par[1]);
+            return $llaves;
         }
 
         // Sin grupo de veinte: se toma el más largo y se reduce a la misma

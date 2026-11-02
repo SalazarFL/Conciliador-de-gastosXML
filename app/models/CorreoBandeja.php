@@ -127,6 +127,21 @@ class CorreoBandeja extends Model
         return $this->fetchAll($sql, $params);
     }
 
+    /**
+     * Una fila de las que se ven en la bandeja, o null.
+     *
+     * Acotada a la empresa en curso, a diferencia de getByIds: el número llega
+     * del navegador y con esta fila se abre un correo del buzón.
+     */
+    public function getActivaPorId($id)
+    {
+        $params = [(int) $id];
+        $sql = "SELECT * FROM {$this->table}
+                WHERE id = ? AND estado IN ('pendiente', 'rechazada', 'otra_cedula')"
+             . $this->condicionSociedad('', $params) . ' LIMIT 1';
+        return $this->fetchOne($sql, $params) ?: null;
+    }
+
     public function getByIds(array $ids, $estado = null)
     {
         $ids = array_values(array_filter(array_map('intval', $ids), function ($id) {

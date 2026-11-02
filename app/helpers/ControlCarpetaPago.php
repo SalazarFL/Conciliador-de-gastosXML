@@ -40,7 +40,7 @@ class ControlCarpetaPago
         'sin_xml_ni_pdf'  => 'Nunca llegaron ni el XML ni el PDF.',
         'perdido'         => 'El archivo se borró de SharePoint. Se puede recuperar desde el correo.',
         'en_disco'        => 'Sigue en la carpeta compartida de antes: pasarlo a SharePoint (php cli/migrar_documentos_a_graph.php).',
-        'sin_copiar'      => 'Está completa pero no está en la carpeta. La tarea programada la copia en los próximos minutos.',
+        'sin_copiar'      => 'Está completa y se está copiando a la carpeta ahora. Recarga en un minuto.',
     ];
 
     /**

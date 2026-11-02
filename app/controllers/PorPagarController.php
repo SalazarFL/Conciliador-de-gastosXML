@@ -23,6 +23,7 @@ require_once __DIR__ . '/../helpers/NumeroFactura.php';
 require_once __DIR__ . '/../helpers/EstadoArchivo.php';
 require_once __DIR__ . '/../helpers/ControlCarpetaPago.php';
 require_once __DIR__ . '/../helpers/PagoResolutor.php';
+require_once __DIR__ . '/../helpers/ProcesoDeFondo.php';
 require_once __DIR__ . '/../models/ProveedorCatalogo.php';
 // La vista llama a Pago::etiqueta() para nombrar cada pago por su fecha,
 // así que la clase tiene que estar cargada aunque la lista venga vacía.
@@ -87,6 +88,15 @@ class PorPagarController extends Controller
         }
         unset($linea);
 
+        // Y, antes que buscar en el correo, si el XML ya está cargado.
+        if ($pago) {
+            try {
+                $lineas = $this->marcarXmlConElMismoNumero($lineas, $erp, (int) ($pago['sociedad_id'] ?? 0));
+            } catch (Throwable $e) {
+                // Sin la marca la pantalla sigue sirviendo: queda "Buscar en correo".
+            }
+        }
+
         $sociedadActiva = null;
         try {
             $sociedadActiva = $this->loadModel('Sociedad')->getActiva();
@@ -112,6 +122,13 @@ class PorPagarController extends Controller
         $controlCarpeta = $pago
             ? ControlCarpetaPago::revisar($pago, $erp, $this->loadModel('Factura'))
             : null;
+        // Las que están completas y no están en la carpeta se copian ya, sin
+        // esperar a la tarea. Si ya hay un proceso copiando, el nuevo ve su
+        // candado y termina sin hacer nada.
+        if (!empty($controlCarpeta['faltan'])
+            && in_array('sin_copiar', array_column($controlCarpeta['faltan'], 'motivo'), true)) {
+            ProcesoDeFondo::lanzar('copiar_pagos.php');
+        }
 
         $this->render('porpagar/index', [
             'title'           => 'Pagos - Nexo Fiscal',
@@ -331,6 +348,9 @@ class PorPagarController extends Controller
                     'proveedor' => $proveedor,
                     'codigo' => $codigo,
                     'saldo' => $saldo,
+                    // Sigue sin guardarse: solo reconoce a las facturas que el
+                    // sistema tiene sin número (PagoResolutor::elegirSinNumero).
+                    'fecha' => trim((string) ($row['fecha'] ?? '')),
                 ];
             } catch (Throwable $e) {
                 $filas[] = [
@@ -1062,8 +1082,14 @@ class PorPagarController extends Controller
                 . ' carpeta del pago hasta pasarlos a SharePoint (php cli/migrar_documentos_a_graph.php).';
         }
         if ($enEspera > 0) {
-            $avisos[] = $enEspera . ' documento(s) están en SharePoint: su copia en la carpeta del pago la'
-                . ' hace la tarea programada en los próximos minutos.';
+            // Se copian ya, en segundo plano: esperar a la tarea programada
+            // eran hasta cinco minutos antes de empezar. Si no se puede
+            // lanzar, la tarea lo hace igual en su próxima vuelta.
+            $avisos[] = ProcesoDeFondo::lanzar('copiar_pagos.php')
+                ? $enEspera . ' documento(s) se están copiando a la carpeta del pago; en un par de minutos'
+                    . ' la pantalla del pago dice si quedó completa.'
+                : $enEspera . ' documento(s) están en SharePoint: su copia en la carpeta del pago la'
+                    . ' hace la tarea programada en los próximos minutos.';
         }
         $resultado['aviso'] = implode(' ', $avisos);
         return $resultado;
@@ -1218,6 +1244,7 @@ class PorPagarController extends Controller
             $total = $erp->contarPago((int) $id);
             $this->loadModel('Pago')->eliminar((int) $id);
             $erp->soltarPagoXml($xmlIds);
+            $this->engancharSueltas($erp);
             $archivos = $this->reubicarArchivos($xmlIds);
 
             $msg = sprintf(
@@ -1452,6 +1479,108 @@ class PorPagarController extends Controller
     {
         require_once __DIR__ . '/../helpers/PorPagarVerificador.php';
         return PorPagarVerificador::verificarListado($pagoId, $erp, $this->loadModel('Factura'));
+    }
+
+    /**
+     * Anota en cada línea sin XML el que está cargado con su mismo número.
+     *
+     * Solo cuando hay uno y el catálogo no dice que el emisor sea otro: con
+     * dos candidatos, o con el de otra cédula, elegir es trabajo del correo o
+     * del botón "Sin coincidencia", no de un clic.
+     */
+    private function marcarXmlConElMismoNumero(array $lineas, $erp, $sociedadId)
+    {
+        $candidatos = $erp->xmlConElMismoNumero($lineas);
+        if (!$candidatos) {
+            return $lineas;
+        }
+        require_once __DIR__ . '/../models/ProveedorCodigoErp.php';
+        foreach ($lineas as &$linea) {
+            $posibles = array_values(array_filter($candidatos[(int) $linea['id']] ?? [], function ($xml) use ($linea, $sociedadId) {
+                return ProveedorCodigoErp::veredicto(
+                    (string) $linea['proveedor_codigo'], (int) $xml['proveedor_id'], $sociedadId
+                ) !== 'ajeno';
+            }));
+            if (count($posibles) === 1) {
+                $linea['xml_mismo_numero'] = $posibles[0];
+            }
+        }
+        unset($linea);
+        return $lineas;
+    }
+
+    /**
+     * Vincula una línea sin respaldo con el XML cargado de su mismo número.
+     *
+     * El botón que reemplaza a "Buscar en correo" cuando el comprobante ya
+     * está en la base. A diferencia de forzar() no aprende alias de nombres
+     * —el número es el mismo, no hay nada que aprender— y exige lo que la
+     * pantalla prometió: el mismo consecutivo, libre, y un emisor que el
+     * catálogo no desmiente. Queda como vínculo manual: lo decidió una persona.
+     */
+    public function vincularMismoNumero()
+    {
+        if (!$this->isPost()) {
+            $this->json(['ok' => false, 'message' => 'Método no permitido.'], 405);
+        }
+
+        try {
+            $erp = $this->loadModel('FacturaErp');
+            $linea = $erp->getFacturaPago((int) $this->post('linea_id', 0));
+            $xml = $this->loadModel('Factura')->findById((int) $this->post('factura_id', 0));
+            if ($linea === null || !$xml || empty($linea['pago_id'])) {
+                $this->json(['ok' => false, 'message' => 'La factura del pago o el XML no existen.'], 404);
+            }
+            if (!empty($linea['factura_xml_id'])) {
+                $this->json(['ok' => false, 'message' => 'Esa factura ya tiene un XML.'], 409);
+            }
+            $ofrecido = $this->marcarXmlConElMismoNumero([$linea], $erp, (int) ($linea['sociedad_id'] ?? 0));
+            if ((int) ($ofrecido[0]['xml_mismo_numero']['id'] ?? 0) !== (int) $xml['id']) {
+                $this->json(['ok' => false,
+                    'message' => 'Ese XML ya no es el de esta factura: o respalda otra, o su emisor no es el proveedor. Recargá la página.'], 409);
+            }
+
+            $diferencia = round((float) $linea['monto'] - FacturaMatcher::totalComparable($xml, $linea['moneda'] ?? ''), 2);
+            $estado = abs($diferencia) <= FacturaMatcher::TOLERANCIA_CRC ? 'respaldada' : 'con_diferencia';
+            $erp->actualizarRespaldoManual(
+                (int) $linea['id'],
+                (int) $xml['id'],
+                $estado,
+                $estado === 'con_diferencia' ? $diferencia : null
+            );
+
+            $this->ejecutarMatching((int) $linea['pago_id'], $erp);
+            $archivos = $this->reubicarArchivos([(int) $xml['id']]);
+
+            $this->json([
+                'ok' => true,
+                'estado' => $estado,
+                'diferencia' => $diferencia,
+                'aviso_archivos' => $archivos['aviso'],
+            ]);
+        } catch (Throwable $e) {
+            $this->json(['ok' => false, 'message' => 'No se pudo vincular: ' . $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Le busca comprobante a las facturas que quedaron sin ninguno.
+     *
+     * Al borrar un pago, los vínculos que había hecho una persona se sueltan
+     * (FacturaErp::SOLTAR_DEL_PAGO) y esas facturas vuelven a la oferta. La
+     * tarea programada también lo hace, cada seis horas; esto es para no
+     * esperarla.
+     *
+     * Nunca lanza: el pago ya se borró.
+     */
+    private function engancharSueltas($erp)
+    {
+        try {
+            require_once __DIR__ . '/../helpers/PorPagarVerificador.php';
+            PorPagarVerificador::engancharSinRespaldo($erp, $this->loadModel('Factura'));
+        } catch (Throwable $e) {
+            // La tarea programada lo repite.
+        }
     }
 
     /**

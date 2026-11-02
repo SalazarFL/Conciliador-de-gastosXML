@@ -220,6 +220,50 @@ class FacturaXmlDetalle extends Model
         ) ?: [];
     }
 
+    /**
+     * Lo mismo que referenciasConDocumento, para una página entera de notas
+     * en una sola consulta: la columna "Referencias" del listado.
+     *
+     * @return array id de la nota => lista de referencias en el orden en que
+     *               el XML las cita, [] si no cita ninguna, o null si el XML
+     *               todavía no se leyó.
+     */
+    public function referenciasConDocumentoDe(array $ids)
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+        if (!$ids) {
+            return [];
+        }
+        $huecos = implode(',', array_fill(0, count($ids), '?'));
+
+        $salida = [];
+        foreach ($this->fetchAll(
+            "SELECT id, detalle_extraido_en FROM facturas_xml WHERE id IN ({$huecos})", $ids
+        ) ?: [] as $nota) {
+            $salida[(int) $nota['id']] = empty($nota['detalle_extraido_en']) ? null : [];
+        }
+
+        foreach ($this->fetchAll(
+            "SELECT r.*, COALESCE(MIN(d.id), 0) AS documento_id
+               FROM facturas_xml_referencias r
+               JOIN facturas_xml n ON n.id = r.factura_xml_id
+               LEFT JOIN facturas_xml d
+                      ON d.consecutivo_completo = r.consecutivo_ref
+                     AND d.clave = r.clave_ref
+                     AND d.sociedad_id = n.sociedad_id
+              WHERE r.factura_xml_id IN ({$huecos})
+              GROUP BY r.id
+              ORDER BY r.factura_xml_id, r.id",
+            $ids
+        ) ?: [] as $ref) {
+            $notaId = (int) $ref['factura_xml_id'];
+            if (array_key_exists($notaId, $salida) && $salida[$notaId] !== null) {
+                $salida[$notaId][] = $ref;
+            }
+        }
+        return $salida;
+    }
+
     public function lineasDe($facturaXmlId)
     {
         return $this->fetchAll(

@@ -55,7 +55,8 @@ Prueba::caso('[P1] lote: los contadores del lote se recalculan una vez por tanda
     igual($correos, $r['procesados_ahora'], 'la tanda procesó todo');
     $total = count(Soporte::$pdo->sentencias);
     $recalculos = count(array_filter(Soporte::$pdo->sentencias,
-        fn($s) => preg_match('/UPDATE correo_lotes l SET\s+procesados = \(SELECT COUNT/', $s['sql'])));
+        fn($s) => preg_match('/UPDATE correo_lotes SET procesados = \?/', $s['sql'])));
+    verificar($recalculos >= 1, 'y sí se recalculan al cerrar la tanda');
     verificar($recalculos <= 2, sprintf(
         'antes %d recálculos (5 subconsultas cada uno) y %d sentencias para %d correos SIN adjuntos: %.1f por correo, '
         . '≈%.1f s de espera a la base por correo antes de bajar un solo XML',

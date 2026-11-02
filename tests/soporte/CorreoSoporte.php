@@ -333,6 +333,8 @@ final class Soporte
             [self::filaLote($cambiosLote + ['carpeta_raiz' => $raiz])];
         $pdo->respuestas['FROM correo_lote_items WHERE id IN'] = $items;
         $pdo->respuestas['SELECT * FROM correo_lote_items'] = $items;
+        // Los candidatos que tomarPendientes() elige antes de llevárselos.
+        $pdo->respuestas["AND estado = 'pendiente' ORDER BY id"] = $items;
         $pdo->respuestas['SELECT lote_id FROM correo_lote_items'] = [['lote_id' => '50']];
         $pdo->respuestas["estado IN ('pendiente','procesando')"] = [['c' => $cantidad]];
         $pdo->respuestas['FROM correo_cuentas WHERE id = ?'] = [[

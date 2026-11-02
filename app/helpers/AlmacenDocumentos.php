@@ -337,6 +337,35 @@ abstract class AlmacenDocumentos
     abstract public function identidad($ruta);
 
     /**
+     * Averigua de una vez lo que hay en una carpeta, para que identidad() de
+     * lo que tenga dentro no tenga que preguntar uno por uno. En disco
+     * preguntar no cuesta nada: no hace falta.
+     */
+    public function conocerCarpeta($ruta)
+    {
+    }
+
+    /**
+     * Varias copias. Donde cada una es una espera de red se hacen a la vez;
+     * acá, de a una.
+     *
+     * @param array $pares clave => [rutaOrigen, rutaDestino]
+     * @return array clave => lo que da copiar(), o el Throwable que la impidió
+     */
+    public function copiarVarios(array $pares)
+    {
+        $salida = [];
+        foreach ($pares as $clave => $par) {
+            try {
+                $salida[$clave] = $this->copiar($par[0], $par[1]);
+            } catch (Throwable $e) {
+                $salida[$clave] = $e;
+            }
+        }
+        return $salida;
+    }
+
+    /**
      * ¿Se puede escribir de verdad?
      *
      * Con la carpeta compartida hay que comprobarlo escribiendo, porque

@@ -606,6 +606,84 @@ class ClienteGraph
         return $resultados;
     }
 
+    /**
+     * Varias peticiones independientes a la vez, UN intento cada una.
+     *
+     * Sin reintentos a propósito: esperar lo que pide un 429, renovar un token
+     * vencido o insistir ante un 503 ya lo sabe hacer pedir(), y repetir esa
+     * lógica para peticiones simultáneas sería tenerla dos veces. Quien llama
+     * hace de a varias lo que sale bien a la primera —casi todo— y lo que no,
+     * lo repite de a una con pedir(), que sí insiste como corresponde.
+     *
+     * Con un transporte que no sabe mandar varias a la vez (las pruebas), van
+     * de a una y el resultado es el mismo.
+     *
+     * @param array $peticiones id => ['metodo', 'ruta'] y, si hacen falta,
+     *                          cuerpo, cabeceras, seguir, guardar_en
+     * @return array id => codigo, cabeceras, cuerpo, json, error
+     * @throws ErrorGraph Solo si no se puede ni empezar: circuito abierto o
+     *         sin token.
+     */
+    public function enParalelo(array $peticiones)
+    {
+        if (!$peticiones) {
+            return [];
+        }
+        $this->exigirCircuitoCerrado();
+        $limite = $this->ahora() + $this->presupuesto;
+        $token = $this->token($limite);
+
+        $armadas = [];
+        foreach ($peticiones as $id => $p) {
+            $ruta = (string) $p['ruta'];
+            $armadas[$id] = [
+                'metodo' => strtoupper((string) ($p['metodo'] ?? 'GET')),
+                'url' => preg_match('~^https?://~i', $ruta) ? $ruta : self::BASE . $ruta,
+                'cabeceras' => ($p['cabeceras'] ?? []) + ['Authorization' => 'Bearer ' . $token],
+                'cuerpo' => $p['cuerpo'] ?? null,
+                'timeout' => min($this->presupuesto, 120.0),
+                'seguir' => !empty($p['seguir']),
+                'guardar_en' => $p['guardar_en'] ?? null,
+            ];
+        }
+
+        $inicio = $this->ahora();
+        if ($this->transporte instanceof TransporteGraphParalelo) {
+            $respuestas = $this->transporte->enviarVarios($armadas);
+        } else {
+            $respuestas = [];
+            foreach ($armadas as $id => $armada) {
+                $respuestas[$id] = $this->transporte->enviar($armada);
+            }
+        }
+        $segundos = $this->ahora() - $inicio;
+
+        $salida = [];
+        $algunaBien = false;
+        foreach ($armadas as $id => $armada) {
+            $r = (array) ($respuestas[$id] ?? []) + ['codigo' => 0, 'cabeceras' => [], 'cuerpo' => '', 'error' => ''];
+            $codigo = (int) $r['codigo'];
+            // Todas comparten el reloj: lo que tardó la tanda entera.
+            $this->registrar($armada['metodo'], $armada['url'], $codigo, $segundos, 1);
+            $algunaBien = $algunaBien || ($codigo >= 200 && $codigo < 300);
+            $json = json_decode((string) $r['cuerpo'], true);
+            $r['json'] = is_array($json) ? $json : null;
+            $salida[$id] = $r;
+        }
+        // Un token que Graph rechaza no se vuelve a usar: el pedir() que
+        // repita esa petición pide otro.
+        foreach ($salida as $r) {
+            if ((int) $r['codigo'] === 401) {
+                $this->olvidarToken();
+                break;
+            }
+        }
+        if ($algunaBien) {
+            $this->anotarExito();
+        }
+        return $salida;
+    }
+
     // ── Subir y bajar ─────────────────────────────────────────────────────
 
     /**

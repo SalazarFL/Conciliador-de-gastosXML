@@ -10,6 +10,11 @@
  * Cada módulo tiene un "Todo" que marca su bloque entero, que es como se
  * reparte de verdad: casi siempre se da o se quita un módulo completo, y las
  * excepciones son dos o tres casillas.
+ *
+ * Y cada módulo con 'base' (config/permisos.php) la marca solo al marcar
+ * cualquier otra de sus casillas, y al quitarla quita las que dependen de
+ * ella: "verificar un pago" sin "ver los pagos" es un permiso que no llega a
+ * ninguna pantalla. RolesController hace lo mismo al guardar, por si no hay JS.
  */
 $baseUrl  = defined('APP_URL') ? APP_URL : '/xmlconcilia/public';
 $rol      = $rol ?? null;
@@ -18,6 +23,7 @@ $old      = $old ?? [];
 $modulos  = $modulos ?? [];
 $marcados = array_flip($permisosActuales ?? []);
 $usuariosConEsteRol = (int) ($usuariosConEsteRol ?? 0);
+$quienes  = is_array($quienes ?? null) ? $quienes : [];
 
 $esNuevo    = $rol === null;
 $esAdmin    = !$esNuevo && !empty($rol['es_admin']);
@@ -86,8 +92,10 @@ $tituloPagina = $esNuevo ? 'Nuevo rol' : 'Editar rol: ' . $rol['nombre'];
             <i class="fas fa-users"></i>
             <div>
                 <strong><?= $usuariosConEsteRol ?> usuario<?= $usuariosConEsteRol === 1 ? '' : 's' ?></strong>
-                tiene<?= $usuariosConEsteRol === 1 ? '' : 'n' ?> este rol. Lo que cambies aquí
-                surte efecto en su siguiente pantalla.
+                tiene<?= $usuariosConEsteRol === 1 ? '' : 'n' ?> este rol<?php if ($quienes): ?>
+                (<?= htmlspecialchars(implode(', ', array_map(
+                    fn($u) => $u['nombre'] . ($u['activo'] ? '' : ' —inactivo—'), $quienes
+                ))) ?>)<?php endif; ?>. Lo que cambies aquí surte efecto en su siguiente pantalla.
             </div>
         </div>
         <?php endif; ?>
@@ -111,12 +119,20 @@ $tituloPagina = $esNuevo ? 'Nuevo rol' : 'Editar rol: ' . $rol['nombre'];
                 $delModulo = array_keys($permisos);
                 $marcadosAqui = count(array_intersect($delModulo, array_keys($marcados)));
                 $esAdministracion = $idModulo === 'administracion';
+                $base    = (string) ($modulo['base'] ?? '');
+                $sueltos = array_flip((array) ($modulo['sueltos'] ?? []));
             ?>
-            <section class="rol-modulo<?= $esAdministracion ? ' delicado' : '' ?>" data-rol-modulo="<?= htmlspecialchars($idModulo) ?>">
+            <section class="rol-modulo<?= $esAdministracion ? ' delicado' : '' ?>" data-rol-modulo="<?= htmlspecialchars($idModulo) ?>"
+                     <?= $base !== '' ? 'data-rol-base="' . htmlspecialchars($base) . '"' : '' ?>>
                 <header>
                     <span class="rol-modulo-icono"><i class="fas <?= htmlspecialchars($modulo['icono'] ?? 'fa-cube') ?>"></i></span>
                     <div style="flex:1;min-width:0;">
-                        <div class="rol-modulo-titulo"><?= htmlspecialchars($modulo['titulo'] ?? $idModulo) ?></div>
+                        <div class="rol-modulo-titulo">
+                            <?= htmlspecialchars($modulo['titulo'] ?? $idModulo) ?>
+                            <?php if (!empty($modulo['oculto'])): ?>
+                            <span class="rol-etiqueta" title="La pantalla existe, pero el menú no la ofrece por ahora. Lo que marques aquí vale el día que vuelva.">fuera del menú</span>
+                            <?php endif; ?>
+                        </div>
                         <div class="rol-modulo-resumen"><?= htmlspecialchars($modulo['resumen'] ?? '') ?></div>
                     </div>
                     <label class="rol-todo" title="Marcar o quitar todo este módulo">
@@ -137,9 +153,13 @@ $tituloPagina = $esNuevo ? 'Nuevo rol' : 'Editar rol: ' . $rol['nombre'];
                     <?php foreach ($permisos as $clave => $texto): ?>
                     <label class="rol-permiso">
                         <input type="checkbox" name="permisos[]" value="<?= htmlspecialchars($clave) ?>"
+                               <?= isset($sueltos[$clave]) ? 'data-rol-suelto' : '' ?>
                                <?= isset($marcados[$clave]) ? 'checked' : '' ?>>
                         <span>
                             <?= htmlspecialchars($texto) ?>
+                            <?php if ($clave === $base): ?>
+                            <span class="rol-etiqueta" title="Sin este, lo demás del módulo no llega a ninguna pantalla">necesario para lo demás</span>
+                            <?php endif; ?>
                             <code><?= htmlspecialchars($clave) ?></code>
                         </span>
                     </label>
@@ -229,6 +249,10 @@ $tituloPagina = $esNuevo ? 'Nuevo rol' : 'Editar rol: ' . $rol['nombre'];
 }
 .rol-permiso:hover { background: #F7FAFF; }
 .rol-permiso input { width: 15px; height: 15px; accent-color: var(--gold); cursor: pointer; margin-top: 1px; flex: none; }
+.rol-etiqueta {
+    display: inline-block; margin-left: 4px; padding: 0 6px; border-radius: 9px;
+    font-size: 10px; font-weight: 600; background: #e5e7eb; color: #4b5563; vertical-align: 1px;
+}
 .rol-permiso code {
     display: block; font-size: 10.5px; color: #94A3B8; font-family: ui-monospace, Menlo, monospace;
 }
@@ -267,13 +291,35 @@ $tituloPagina = $esNuevo ? 'Nuevo rol' : 'Editar rol: ' . $rol['nombre'];
     }
 
     form.addEventListener('change', function (e) {
+        var modulo = e.target.closest('[data-rol-modulo]');
         var todo = e.target.closest('[data-rol-modulo-todo]');
         if (todo) {
-            var modulo = e.target.closest('[data-rol-modulo]');
             casillas(modulo).forEach(function (c) { c.checked = e.target.checked; });
+        } else if (modulo && e.target.name === 'permisos[]') {
+            conSuBase(modulo, e.target);
         }
         refrescar();
     });
+
+    // La base de un módulo y lo que depende de ella van juntos: marcar
+    // cualquier otra casilla marca la base, y quitar la base quita las que
+    // sin ella no llegan a ninguna pantalla. Las 'sueltas' se usan desde otra
+    // pantalla y no dependen de nada.
+    function conSuBase(modulo, casilla) {
+        var clave = modulo.getAttribute('data-rol-base');
+        if (!clave) return;
+        var base = modulo.querySelector('input[name="permisos[]"][value="' + clave + '"]');
+        if (!base) return;
+        if (casilla === base) {
+            if (!base.checked) {
+                casillas(modulo).forEach(function (c) {
+                    if (c !== base && !c.hasAttribute('data-rol-suelto')) c.checked = false;
+                });
+            }
+        } else if (casilla.checked && !casilla.hasAttribute('data-rol-suelto')) {
+            base.checked = true;
+        }
+    }
 
     form.querySelectorAll('[data-rol-todo]').forEach(function (boton) {
         boton.addEventListener('click', function () {

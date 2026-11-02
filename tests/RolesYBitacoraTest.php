@@ -85,7 +85,7 @@ try {
     assertRoles(in_array('correo.importar', $permisosOper, true),
         'Operación importa comprobantes del correo');
 
-    foreach (['usuarios.administrar', 'roles.administrar', 'bitacora.ver',
+    foreach (['usuarios.administrar', 'roles.administrar', 'bitacora.ver', 'bitacora.depurar',
               'empresas.administrar', 'respaldo.administrar', 'correo.configurar'] as $vedado) {
         assertRoles(!in_array($vedado, $permisosOper, true),
             "Operación NO tiene '{$vedado}': la administración no se reparte sola");

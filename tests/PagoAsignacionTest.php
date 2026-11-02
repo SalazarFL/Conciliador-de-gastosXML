@@ -69,9 +69,16 @@ assertAsignacion(strpos($sql, 'pago_id = NULL') !== false
     && strpos($sql, 'saldo_pago = NULL') !== false,
     'suelta el pago, el pago y la foto del saldo');
 
-// El vínculo con el XML se borra porque se hizo dentro del pago; el XML no.
-assertAsignacion(strpos($sql, 'factura_xml_id = NULL') !== false, 'suelta el XML que la respaldaba');
-assertAsignacion(strpos($sql, "estado_respaldo = 'sin_respaldo'") !== false, 'y su semáforo vuelve a cero');
+// El vínculo con el XML se suelta solo si lo hizo una persona dentro del pago.
+// El automático es de la factura: hasta el 30/09 se soltaba también, y borrar
+// cinco pagos dejó 199 facturas "sin respaldo" con su XML cargado.
+assertAsignacion(strpos($sql, 'factura_xml_id = IF(match_manual = 1, NULL, factura_xml_id)') !== false,
+    'suelta el XML solo si el vínculo era manual');
+assertAsignacion(strpos($sql, "estado_respaldo = IF(match_manual = 1 OR factura_xml_id IS NULL, 'sin_respaldo', estado_respaldo)") !== false,
+    'y el semáforo vuelve a cero solo si se queda sin XML');
+assertAsignacion(strpos($sql, 'estado_respaldo = IF') < strpos($sql, 'factura_xml_id = IF')
+    && strpos($sql, 'factura_xml_id = IF') < strpos($sql, 'match_manual = 0'),
+    'MySQL asigna de izquierda a derecha: se mira match_manual y el XML antes de cambiarlos');
 assertAsignacion(strpos($sql, 'facturas_xml') === false, 'el comprobante electrónico no se toca');
 
 // El pago va en el WHERE aunque los id ya sean únicos: una lista de ids de

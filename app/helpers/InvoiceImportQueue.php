@@ -61,6 +61,13 @@ class InvoiceImportQueue
             $metadata['pago_id'] = (int) $data['pago_id'];
         }
         $metadata['tipo_documento'] = strtoupper((string) ($data['tipo_documento'] ?? 'FE'));
+        // Una importación con varios tipos (la Bandeja del correo: facturas y
+        // notas de crédito en la misma selección). Sin esto vale el de arriba.
+        if (!empty($data['tipos_permitidos']) && is_array($data['tipos_permitidos'])) {
+            $metadata['tipos_permitidos'] = array_values(array_unique(
+                array_map('strtoupper', array_map('strval', $data['tipos_permitidos']))
+            ));
+        }
         // La cola se procesa en varias peticiones: la sociedad se guarda con
         // la importación para que el sello no dependa de cuál esté
         // seleccionada cuando le toque el turno a cada archivo.
@@ -409,6 +416,29 @@ class InvoiceImportQueue
         return $this->pagoPorImportacion[$importacionId];
     }
 
+    /**
+     * Los tipos de documento que admite una importación, por su metadata.
+     *
+     * Casi todas llevan uno solo ('tipo_documento'). La que sale de la Bandeja
+     * del correo puede llevar facturas y notas de crédito a la vez, y lo dice
+     * en 'tipos_permitidos'. Las notas de débito no entran aunque alguien las
+     * escriba ahí: eso lo decide XmlDocumentImporter, por encima de esta lista.
+     */
+    public static function tiposDe(array $metadata)
+    {
+        $tipos = [];
+        foreach ((array) ($metadata['tipos_permitidos'] ?? []) as $tipo) {
+            $tipo = strtoupper(trim((string) $tipo));
+            if ($tipo !== '') {
+                $tipos[$tipo] = true;
+            }
+        }
+        if (!$tipos) {
+            $tipos[strtoupper((string) ($metadata['tipo_documento'] ?? 'FE')) ?: 'FE'] = true;
+        }
+        return array_keys($tipos);
+    }
+
     private function procesarItem(array $item)
     {
         $itemId = (int) ($item['id'] ?? 0);
@@ -421,14 +451,14 @@ class InvoiceImportQueue
             $importacion = $this->importacionModel->findById($importacionId);
             $metaImportacion = $this->decodeMetadata($importacion['metadata'] ?? null);
             $metaItem = $this->decodeMetadata($item['metadata'] ?? null);
-            $tipoPermitido = strtoupper((string) ($metaImportacion['tipo_documento'] ?? 'FE'));
+            $tiposPermitidos = self::tiposDe($metaImportacion);
 
             $pdfPath = RutaDocumento::absoluta($metaItem['ruta_pdf'] ?? '');
             $resultado = (new XmlDocumentImporter())->importar($filePath, $pdfPath !== '' ? $pdfPath : null, [
                 'origen' => 'cola_xml',
                 'importacion_id' => $importacionId,
                 'pago_id' => $this->pagoDeImportacion($importacionId),
-                'tipos_permitidos' => [$tipoPermitido],
+                'tipos_permitidos' => $tiposPermitidos,
                 'validar_receptor' => !empty($metaImportacion['cedula_receptor']),
                 'cedula_receptor' => (string) ($metaImportacion['cedula_receptor'] ?? ''),
                 'sociedad_id' => (int) ($metaImportacion['sociedad_id'] ?? 0),

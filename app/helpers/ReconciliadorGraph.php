@@ -82,14 +82,24 @@ class ReconciliadorGraph
     public const MAX_HIJOS = 5000;
 
     /**
-     * Copias de pago por vuelta. Al pasar una empresa a SharePoint, todos sus
-     * documentos que ya estaban en un pago necesitan su copia allá: pueden
-     * ser miles, y hacerlos de una vez tendría a la tarea colgada horas. Se
-     * hacen de a tantos; el resto, en las vueltas siguientes.
+     * Cuánto se dedica a las copias de pago en cada vuelta. Al pasar una
+     * empresa a SharePoint, todos sus documentos que ya estaban en un pago
+     * necesitan su copia allá: pueden ser miles, y hacerlos de una vez tendría
+     * a la tarea colgada horas. Se copia mientras dure esto; el resto, en las
+     * vueltas siguientes. Un pago de 300 facturas entra entero.
      */
-    public const MAX_COPIAS_POR_VUELTA = 100;
+    public const SEGUNDOS_COPIAS_POR_VUELTA = 120;
+
+    /** Lo mismo para el proceso que se lanza al cargar un pago, que no hace nada más. */
+    public const SEGUNDOS_COPIAS_APARTE = 900;
+
+    /** Facturas por tanda: entre tanda y tanda se mira el reloj. */
+    public const COPIAS_POR_TANDA = 40;
 
     private const BLOQUEO = 'reconciliador_sharepoint';
+
+    /** Que la vuelta y el proceso de un pago recién cargado no copien lo mismo a la vez. */
+    private const BLOQUEO_COPIAS = 'copias_pago_sharepoint';
 
     private const CAMPOS = '?$select=id,name,cTag,eTag,size,parentReference,file,folder';
 
@@ -535,7 +545,52 @@ class ReconciliadorGraph
 
     // ── 5. Las copias de pago ────────────────────────────────────────────
 
-    private function copiasDePago($dryRun, array &$r)
+    /**
+     * Solo las copias de pago, sin el resto de la vuelta. Es lo que corre en
+     * segundo plano apenas alguien carga un pago (cli/copiar_pagos.php): así
+     * la carpeta se llena en uno o dos minutos y no a la próxima vuelta de la
+     * tarea programada.
+     *
+     * No toma el candado del reconciliador —ese es del enlace de cambios, y
+     * esperar a que termine una vuelta sería volver a esperar—, sino el de las
+     * copias, que también toma la vuelta al llegar a este paso. Nunca copian
+     * los dos a la vez.
+     *
+     * @param int $segundos Hasta cuándo seguir empezando tandas.
+     */
+    public function copiarPagos($segundos = self::SEGUNDOS_COPIAS_APARTE)
+    {
+        $r = [
+            'copias_pago' => 0,
+            'copias_pago_vigentes' => 0,
+            'copias_pago_planificadas' => 0,
+            'sin_par_completo' => 0,
+            'copias_pago_para_despues' => 0,
+            'errores_copia_pago' => 0,
+            'operaciones' => [],
+        ];
+        $this->copiasDePago(false, $r, $segundos);
+        return $r;
+    }
+
+    private function copiasDePago($dryRun, array &$r, $segundos = self::SEGUNDOS_COPIAS_POR_VUELTA)
+    {
+        $candado = $dryRun ? null : BloqueoEnBase::tomar(self::BLOQUEO_COPIAS);
+        if ($candado === false) {
+            // Las está haciendo el proceso que se lanzó al cargar un pago.
+            $r['copias_en_otro_proceso'] = true;
+            return;
+        }
+        try {
+            $this->hacerCopiasDePago($dryRun, $r, $segundos);
+        } finally {
+            if ($candado === true) {
+                BloqueoEnBase::soltar(self::BLOQUEO_COPIAS);
+            }
+        }
+    }
+
+    private function hacerCopiasDePago($dryRun, array &$r, $segundos)
     {
         $filas = array_filter(
             $this->facturas->getParaOrganizarArchivos([], AlmacenEnGraph::TIPO, true),
@@ -545,8 +600,14 @@ class ReconciliadorGraph
             return;
         }
         $hechas = $this->copias->firmas(array_column($filas, 'id'));
-        $archivo = null;
 
+        // Primero el pago más nuevo: es el que alguien está esperando. Lo
+        // atrasado de una empresa recién pasada a SharePoint puede esperar.
+        usort($filas, function ($a, $b) {
+            return ((int) ($b['pago_id'] ?? 0) <=> (int) ($a['pago_id'] ?? 0)) ?: ((int) $a['id'] <=> (int) $b['id']);
+        });
+
+        $pendientes = [];
         foreach ($filas as $fila) {
             $id = (int) $fila['id'];
             $xml = trim((string) ($fila['ruta_xml'] ?? ''));
@@ -571,29 +632,56 @@ class ReconciliadorGraph
                 $r['copias_pago_planificadas']++;
                 continue;
             }
-            if ($r['copias_pago'] + $r['errores_copia_pago'] >= self::MAX_COPIAS_POR_VUELTA) {
-                $r['copias_pago_para_despues']++;
+            $pendientes[$id] = ['fila' => $fila, 'firma' => $firma, 'xml' => $xml, 'pdf' => $pdf];
+        }
+        if (!$pendientes) {
+            return;
+        }
+
+        // De a tandas, y mientras quede tiempo. Antes era un tope de cien
+        // facturas por vuelta, que un pago de 308 convertía en cuatro vueltas
+        // de la tarea: veinticinco minutos. El tope sigue haciendo falta —una
+        // empresa recién pasada a SharePoint puede tener miles atrasadas—,
+        // pero ahora es de tiempo, que es lo que de verdad se quiere acotar.
+        $limite = microtime(true) + (float) $segundos;
+        $archivo = DocumentoArchivo::sobreAlmacen($this->almacen);
+        foreach (array_chunk($pendientes, self::COPIAS_POR_TANDA, true) as $tanda) {
+            if (microtime(true) >= $limite) {
+                $r['copias_pago_para_despues'] += count($tanda);
                 continue;
             }
-            try {
-                $archivo = $archivo ?: DocumentoArchivo::sobreAlmacen($this->almacen);
-                $copia = $archivo->copiarAPago($xml, $pdf, $fila, (string) $fila['carpeta_pago'],
-                    (string) ($fila['proveedor_nombre'] ?? 'PROVEEDOR'));
+            $trabajos = [];
+            foreach ($tanda as $id => $p) {
+                $trabajos[$id] = [$p['xml'], $p['pdf'], $p['fila'], (string) $p['fila']['carpeta_pago'],
+                    (string) ($p['fila']['proveedor_nombre'] ?? 'PROVEEDOR')];
+            }
+            $copias = $archivo->copiarVariosAPago($trabajos);
+
+            foreach ($tanda as $id => $p) {
+                $copia = $copias[$id] ?? new RuntimeException('La copia no devolvió resultado.');
+                if ($copia instanceof Throwable) {
+                    $r['errores_copia_pago']++;
+                    $this->operacion($r, ['documento_id' => $id, 'accion' => 'copia_pago', 'error' => $copia->getMessage()]);
+                    continue;
+                }
                 if ($copia['ruta_xml'] === '' || $copia['ruta_pdf'] === '') {
                     // El original no contestó: sin anotar, se reintenta.
                     $r['sin_par_completo']++;
                     continue;
                 }
-                $this->copias->anotar($id, $firma, $copia['ruta_xml'], $copia['ruta_pdf']);
+                try {
+                    $this->copias->anotar($id, $p['firma'], $copia['ruta_xml'], $copia['ruta_pdf']);
+                } catch (Throwable $e) {
+                    $r['errores_copia_pago']++;
+                    $this->operacion($r, ['documento_id' => $id, 'accion' => 'copia_pago', 'error' => $e->getMessage()]);
+                    continue;
+                }
                 if ($copia['copiados'] > 0) {
                     $r['copias_pago']++;
                     $this->operacion($r, ['documento_id' => $id, 'accion' => 'copia_pago', 'xml' => $copia['ruta_xml']]);
                 } else {
                     $r['copias_pago_vigentes']++;
                 }
-            } catch (Throwable $e) {
-                $r['errores_copia_pago']++;
-                $this->operacion($r, ['documento_id' => $id, 'accion' => 'copia_pago', 'error' => $e->getMessage()]);
             }
         }
     }

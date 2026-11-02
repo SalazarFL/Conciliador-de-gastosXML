@@ -500,6 +500,45 @@ class CorreoIndice extends Model
 
     // ── Sincronización ─────────────────────────────────────────────
 
+    /**
+     * En qué carpeta está un mensaje del que solo se conoce su numeración.
+     *
+     * La bandeja guarda la clave del correo ("c{cuenta}:{uidvalidity}:{uid}")
+     * pero no la carpeta, y sin carpeta el UID no dice nada. El índice sí la
+     * tiene. Si el mensaje ya se podó del índice queda un segundo camino: la
+     * carpeta que lleva esa numeración, siempre que sea una sola.
+     *
+     * Hay servidores que dan la misma numeración a varias carpetas; entonces
+     * el mismo par puede salir dos veces y se prefiere el que coincide en el
+     * asunto. Devuelve null cuando no hay forma de saberlo: abrir otro correo
+     * sería peor que no abrir ninguno.
+     */
+    public function ubicarMensaje($uidvalidity, $uid, $asunto = '')
+    {
+        $filas = $this->fetchAll(
+            "SELECT carpeta, asunto FROM {$this->table}
+              WHERE cuenta_id = ? AND uidvalidity = ? AND uid = ?
+              LIMIT 5",
+            [$this->cuentaId, (int) $uidvalidity, (int) $uid]
+        );
+        if (count($filas) === 1) {
+            return (string) $filas[0]['carpeta'];
+        }
+        if (count($filas) > 1) {
+            $asunto = trim((string) $asunto);
+            $iguales = array_values(array_filter($filas, function ($fila) use ($asunto) {
+                return $asunto !== '' && trim((string) ($fila['asunto'] ?? '')) === $asunto;
+            }));
+            return count($iguales) === 1 ? (string) $iguales[0]['carpeta'] : null;
+        }
+
+        $carpetas = $this->fetchAll(
+            "SELECT carpeta FROM correo_carpetas WHERE cuenta_id = ? AND uidvalidity = ? LIMIT 2",
+            [$this->cuentaId, (int) $uidvalidity]
+        );
+        return count($carpetas) === 1 ? (string) $carpetas[0]['carpeta'] : null;
+    }
+
     public function getEstadoCarpeta($carpeta)
     {
         return $this->fetchOne(

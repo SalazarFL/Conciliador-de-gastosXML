@@ -159,6 +159,7 @@ else: ?>
             <th data-col="proveedor">Proveedor</th>
             <th data-col="consecutivo">Consecutivo</th>
             <th data-col="numero">Número</th>
+            <th data-col="referencias" title="Los documentos que cita el XML de la nota (InformacionReferencia)">Referencias</th>
             <th data-col="moneda">Moneda</th>
             <th class="right" data-col="subtotal">Subtotal</th>
             <th class="right" data-col="iva">IVA</th>
@@ -175,6 +176,46 @@ else: ?>
         <tr>
             <td data-col="fecha"><?= htmlspecialchars($n['fecha_emision']) ?></td><td data-col="proveedor"><?= htmlspecialchars($n['proveedor_nombre'] ?? '—') ?></td>
             <td style="font-family:monospace;white-space:nowrap;" data-col="consecutivo"><?= htmlspecialchars($n['consecutivo_completo']) ?></td><td data-col="numero"><strong><?= htmlspecialchars($n['numero_factura_asistente']) ?></strong></td>
+            <td data-col="referencias" style="white-space:nowrap;">
+                <?php
+                /*
+                 * Contra qué documentos va la nota, según su propio XML: una
+                 * por renglón y en el orden en que las cita. El número es el
+                 * corto, como en la columna de al lado; si la factura citada
+                 * está en el sistema, abre su ficha. Lo demás —el consecutivo
+                 * entero, el tipo, la razón— va en el globo.
+                 */
+                $ncRefs = array_key_exists('referencias', $n) ? $n['referencias'] : false;
+                ?>
+                <?php if (!is_array($ncRefs) || $ncRefs === []): ?>
+                <span style="color:#cbd5e1;" title="<?= $ncRefs === null
+                    ? 'El XML de esta nota todavía no se leyó'
+                    : ($ncRefs === [] ? 'El XML no cita ningún documento' : 'No se pudieron leer las referencias') ?>">—</span>
+                <?php else: foreach ($ncRefs as $ncRef):
+                    $ncTitulo = implode("\n", array_filter([
+                        $ncRef['tipo'],
+                        $ncRef['consecutivo'] !== '' ? 'Consecutivo ' . $ncRef['consecutivo'] : 'Número: ' . $ncRef['numero'],
+                        $ncRef['fecha'] !== '' ? 'Fecha ' . $ncRef['fecha'] : '',
+                        $ncRef['razon'] !== '' ? 'Razón: ' . $ncRef['razon'] : '',
+                        $ncRef['documento_id'] > 0 ? 'Está en el sistema: clic para abrirla' : 'No está cargada en el sistema',
+                    ], 'strlen'));
+                ?>
+                <div style="display:flex;gap:5px;align-items:baseline;line-height:1.55;" title="<?= htmlspecialchars($ncTitulo) ?>">
+                    <?php if ($ncRef['sigla'] !== ''): ?>
+                    <span class="badge badge-navy" style="font-size:9.5px;padding:1px 5px;"><?= htmlspecialchars($ncRef['sigla']) ?></span>
+                    <?php endif; ?>
+                    <?php if ($ncRef['documento_id'] > 0): ?>
+                    <a href="<?= $baseUrl ?>/facturas/ver/<?= (int) $ncRef['documento_id'] ?>" data-ficha="<?= (int) $ncRef['documento_id'] ?>"
+                       style="font-weight:700;"><?= htmlspecialchars($ncRef['numero']) ?></a>
+                    <?php else: ?>
+                    <span style="font-weight:700;max-width:190px;overflow:hidden;text-overflow:ellipsis;display:inline-block;vertical-align:bottom;"><?= htmlspecialchars($ncRef['numero']) ?></span>
+                    <?php endif; ?>
+                    <?php if ($ncRef['fecha'] !== ''): ?>
+                    <span style="font-size:11px;color:var(--text-muted);"><?= htmlspecialchars($ncRef['fecha']) ?></span>
+                    <?php endif; ?>
+                </div>
+                <?php endforeach; endif; ?>
+            </td>
             <td data-col="moneda"><?= htmlspecialchars($n['moneda']) ?></td><td class="right" data-col="subtotal"><?= number_format((float)$n['subtotal'],2) ?></td><td class="right" data-col="iva"><?= number_format((float)$n['iva'],2) ?></td><td class="right" data-col="total"><strong><?= number_format((float)$n['total'],2) ?></strong></td>
                     <?php /*
                      * El saldo no es del comprobante: un XML dice cuánto se

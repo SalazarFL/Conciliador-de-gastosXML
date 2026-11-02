@@ -7,10 +7,19 @@
  * módulo deshabilitado cuando la extensión no está disponible.
  */
 
+require_once __DIR__ . '/SeccionMime.php';
+
 class MailFetcher
 {
     private const EXTENSIONES_FACTURA = ['xml', 'pdf', 'zip'];
     private const MAX_VISTA_PREVIA_BYTES = 15728640; // 15 MB en memoria
+
+    /**
+     * Cuánto de lo que NO es factura se acepta bajar de más para traer el
+     * mensaje entero en un viaje (ver mensajeEntero). Un correo de factura
+     * trae su texto y algún logo; uno con un video adjunto, no se baja entero.
+     */
+    private const MAX_BYTES_AJENOS_ENTERO = 2097152; // 2 MB
 
     // Topes de un ZIP adjunto (ver extraerDeZip): archivos que se abren,
     // tamaño sin comprimir de cada uno y de todos juntos.
@@ -27,6 +36,8 @@ class MailFetcher
     private $carpetaActual = '';
     /** Lo que se descartó del último mensaje leído, para contarlo como incidencia. */
     private $avisos = [];
+    /** El mensaje entero que se está leyendo, si se bajó de una vez (ver mensajeEntero). */
+    private $crudo = null;
 
     public function __construct(array $config)
     {
@@ -727,7 +738,12 @@ class MailFetcher
 
         $this->avisos = [];
         $estructura = @imap_fetchstructure($this->stream, $uid, FT_UID);
-        $adjuntos = $estructura ? $this->extraerAdjuntos($uid, $estructura) : [];
+        try {
+            $this->crudo = $estructura ? $this->mensajeEntero($uid, $estructura) : null;
+            $adjuntos = $estructura ? $this->extraerAdjuntos($uid, $estructura) : [];
+        } finally {
+            $this->crudo = null;
+        }
 
         $xmls = [];
         $pdfs = [];
@@ -1293,6 +1309,69 @@ class MailFetcher
         return $adjuntos;
     }
 
+    /**
+     * El mensaje entero en un viaje, cuando conviene; null si no.
+     *
+     * Cada adjunto pedido aparte es un viaje al servidor: contra mail.bm.cr,
+     * unos 110 ms cada uno, y un correo de factura trae dos XML y un PDF. El
+     * mensaje entero llega en uno solo de unos 160 ms, y los adjuntos se
+     * recortan de ahí (SeccionMime). Medido el 28/09/2026: de ~500 a ~350 ms
+     * por correo.
+     *
+     * No conviene cuando hay una sola factura adjunta —un viaje igual, y más
+     * grande— ni cuando lo que no es factura pesa mucho: un correo con fotos o
+     * un video adjunto se sigue pidiendo parte por parte.
+     */
+    private function mensajeEntero($uid, $estructura)
+    {
+        $facturas = 0;
+        $bytesFacturas = 0;
+        $bytesTotales = 0;
+        foreach ($this->hojas($estructura) as $parte) {
+            $bytes = max(0, (int) ($parte->bytes ?? 0));
+            $bytesTotales += $bytes;
+            $extension = strtolower(pathinfo($this->nombreDeParte($parte), PATHINFO_EXTENSION));
+            if (in_array($extension, self::EXTENSIONES_FACTURA, true)) {
+                $facturas++;
+                $bytesFacturas += $bytes;
+            }
+        }
+        if ($facturas < 2 || $bytesTotales - $bytesFacturas > self::MAX_BYTES_AJENOS_ENTERO) {
+            return null;
+        }
+        $crudo = @imap_fetchbody($this->stream, (int) $uid, '', FT_UID | FT_PEEK);
+        imap_errors();
+        return is_string($crudo) && $crudo !== '' ? $crudo : null;
+    }
+
+    /** Las partes sin partes debajo, en el orden en que las recorre extraerAdjuntos. */
+    private function hojas($estructura)
+    {
+        if (empty($estructura->parts)) {
+            return [$estructura];
+        }
+        $hojas = [];
+        foreach ($estructura->parts as $parte) {
+            $hojas = array_merge($hojas, $this->hojas($parte));
+        }
+        return $hojas;
+    }
+
+    /**
+     * Una parte del mensaje tal como la da el servidor: recortada del mensaje
+     * entero si se bajó, o pedida sola si no, o si el recorte no está seguro.
+     */
+    private function cuerpoDeSeccion($uid, $seccion)
+    {
+        if ($this->crudo !== null) {
+            $recorte = SeccionMime::recortar($this->crudo, $seccion);
+            if ($recorte !== null && $recorte !== '') {
+                return $recorte;
+            }
+        }
+        return @imap_fetchbody($this->stream, $uid, $seccion, FT_UID | FT_PEEK);
+    }
+
     private function procesarParte($uid, $parte, $seccion)
     {
         $nombre = $this->nombreDeParte($parte);
@@ -1305,7 +1384,7 @@ class MailFetcher
             return [];
         }
 
-        $cuerpo = @imap_fetchbody($this->stream, $uid, $seccion, FT_UID | FT_PEEK);
+        $cuerpo = $this->cuerpoDeSeccion($uid, $seccion);
         if ($cuerpo === false || $cuerpo === '') {
             return [];
         }

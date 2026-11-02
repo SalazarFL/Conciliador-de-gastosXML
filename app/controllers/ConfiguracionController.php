@@ -136,11 +136,20 @@ class ConfiguracionController extends Controller
             }
         }
 
+        // Los roles con lo que concede cada uno y quién lo tiene: la sección
+        // dibuja "quién puede qué" de un vistazo, sin entrar rol por rol.
         $roles = [];
+        $rolesPermisos = [];
+        $rolesUsuarios = [];
+        $usuariosSinRol = [];
         if ($puede['roles']) {
             try {
                 require_once __DIR__ . '/../models/Rol.php';
-                $roles = (new Rol())->getAll();
+                $rolModel = new Rol();
+                $roles = $rolModel->getAll();
+                $rolesPermisos = $rolModel->permisosPorRol();
+                $rolesUsuarios = $rolModel->usuariosPorRol();
+                $usuariosSinRol = $rolModel->usuariosSinRol();
             } catch (Throwable $e) {
                 $this->registrarFallo('listar roles en configuración', $e);
             }
@@ -181,6 +190,9 @@ class ConfiguracionController extends Controller
             'pagoActivo'    => $this->pagoActivo(),
             'usuarios'        => $usuarios,
             'roles'           => $roles,
+            'rolesPermisos'   => $rolesPermisos,
+            'rolesUsuarios'   => $rolesUsuarios,
+            'usuariosSinRol'  => $usuariosSinRol,
             'actividad'       => $actividad,
             'actividadEstado' => $actividadEstado,
             'modulosPermisos' => Permisos::modulos(),

@@ -163,25 +163,30 @@ class Rol extends Model
 
     /**
      * Lo que puede Operación. Se calcula del catálogo en vez de escribirlo a
-     * mano: todo salvo administración, configuración del correo y los ajustes
-     * que valen para toda la instalación.
+     * mano: todo salvo los módulos Administración y Configuración, y salvo
+     * dar de alta buzones.
+     *
+     * Antes era "todo menos esta lista", y la lista se escribió una vez: los
+     * permisos que llegaron después entraban solos a Operación. Así se le
+     * coló 'bitacora.depurar' —borrar la bitácora, que es justo lo que no
+     * puede hacer quien está siendo registrado en ella—. Ahora se excluye el
+     * módulo entero, y lo que se añada a Administración mañana nace fuera.
+     *
+     * La única excepción es a propósito: corregir el código de un proveedor
+     * ya lo hace Operación desde la campana (avisos.resolver), así que el
+     * listado de proveedores es trabajo del día, no un ajuste.
      */
     public static function permisosDeOperacion(): array
     {
-        $fuera = [
-            'correo.configurar',
-            'configuracion.ver',
-            'configuracion.archivo',
-            'diagnostico.ver',
-            'usuarios.ver',
-            'usuarios.administrar',
-            'roles.administrar',
-            'empresas.administrar',
-            'bitacora.ver',
-            'respaldo.administrar',
-        ];
+        $modulos = Permisos::modulos();
 
-        return array_values(array_diff(Permisos::todas(), $fuera));
+        $fuera = ['correo.configurar'];
+        foreach (['administracion', 'configuracion'] as $id) {
+            $fuera = array_merge($fuera, array_keys($modulos[$id]['permisos'] ?? []));
+        }
+        $dentro = ['configuracion.proveedores'];
+
+        return array_values(array_diff(Permisos::todas(), array_diff($fuera, $dentro)));
     }
 
     // ── Lo que pregunta Permisos en cada petición ─────────────────────────
@@ -267,6 +272,51 @@ class Rol extends Model
                FROM roles r
            ORDER BY r.es_admin DESC, r.es_sistema DESC, r.nombre ASC"
         ) ?: [];
+    }
+
+    /**
+     * Las claves de todos los roles de una vez: [rol_id => [claves]]. La
+     * lista de roles las necesita todas para dibujar quién puede qué, y una
+     * consulta por rol sería lo mismo con más viajes.
+     */
+    public function permisosPorRol(): array
+    {
+        $mapa = [];
+        foreach ($this->fetchAll("SELECT rol_id, permiso FROM rol_permisos ORDER BY permiso") ?: [] as $f) {
+            $mapa[(int) $f['rol_id']][] = (string) $f['permiso'];
+        }
+        return $mapa;
+    }
+
+    /**
+     * Quiénes tienen cada rol: [rol_id => [['nombre' => …, 'activo' => bool]]].
+     * Un número ("3 usuarios") no dice a quién le afecta un cambio; los
+     * nombres sí.
+     */
+    public function usuariosPorRol(): array
+    {
+        $mapa = [];
+        $filas = $this->fetchAll(
+            "SELECT rol_id, nombre, activo FROM usuarios WHERE rol_id IS NOT NULL ORDER BY activo DESC, nombre ASC"
+        ) ?: [];
+        foreach ($filas as $f) {
+            $mapa[(int) $f['rol_id']][] = ['nombre' => (string) $f['nombre'], 'activo' => (bool) $f['activo']];
+        }
+        return $mapa;
+    }
+
+    /**
+     * Los usuarios activos que no tienen rol y no son administradores de los
+     * de antes: entran al sistema y no pueden abrir nada. Pasa cuando se borra
+     * un rol con gente, o con usuarios creados antes de que hubiera roles.
+     */
+    public function usuariosSinRol(): array
+    {
+        return array_column($this->fetchAll(
+            "SELECT nombre FROM usuarios
+              WHERE rol_id IS NULL AND activo = 1 AND (is_admin = 0 OR is_admin IS NULL)
+           ORDER BY nombre"
+        ) ?: [], 'nombre');
     }
 
     /** Solo lo necesario para llenar un desplegable. */

@@ -155,6 +155,7 @@ $router->post('/por-pagar/factura/quitar/{id}', 'PorPagarController@quitarFactur
 $router->get('/por-pagar/exportar', 'PorPagarController@exportar');
 $router->get('/por-pagar/sin-coincidencia', 'PorPagarController@sinCoincidencia');
 $router->post('/por-pagar/forzar', 'PorPagarController@forzar');
+$router->post('/por-pagar/vincular-mismo-numero', 'PorPagarController@vincularMismoNumero');
 
 // --- RUTAS DE FACTURAS ERP (reporte "Facturas por Proveedor", saldos) ---
 $router->get('/facturas-erp', 'FacturasErpController@index');

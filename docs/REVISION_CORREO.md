@@ -153,6 +153,13 @@ el latido del navegador desde cualquier pantalla. Los candados de archivo
 (`sync_cuenta_*.lock`, `lotes.lock`) ordenan a los procesos de **una** máquina.
 Entre máquinas, solo la base ordena — y ahí están las grietas.
 
+> **Desde el 28/09/2026** ya no es un motor de lotes por máquina: trabajan hasta
+> `CorreoLote::motores()` a la vez (4 por defecto; `auto_sync.lotes_motores` en
+> `storage/correo/config.json`), cada uno con su lugar (`lotes.lock`,
+> `lotes.lock.1`, …) y su conexión al buzón. Es seguro porque C1 ya está
+> arreglado: la toma de correos lleva la firma de quien los toma. Ver
+> `tests/CorreoLoteMotoresTest.php`.
+
 ### C1 — Dos máquinas pueden bajar el mismo lote *(prueba: `…ConcurrenciaTest`)*
 
 `lotes.lock` es local (lo dice su propio comentario: "un motor por máquina, no

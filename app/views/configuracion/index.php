@@ -33,6 +33,9 @@ $pagos        = is_array($pagos ?? null) ? $pagos : [];
 $pagoActivo   = (int) ($pagoActivo ?? 0);
 $usuarios       = is_array($usuarios ?? null) ? $usuarios : [];
 $roles          = is_array($roles ?? null) ? $roles : [];
+$rolesPermisos  = is_array($rolesPermisos ?? null) ? $rolesPermisos : [];
+$rolesUsuarios  = is_array($rolesUsuarios ?? null) ? $rolesUsuarios : [];
+$usuariosSinRol = is_array($usuariosSinRol ?? null) ? $usuariosSinRol : [];
 $actividad      = is_array($actividad ?? null) ? $actividad : [];
 $actividadEstado = is_array($actividadEstado ?? null) ? $actividadEstado : null;
 $modulosPermisos = is_array($modulosPermisos ?? null) ? $modulosPermisos : [];
@@ -899,15 +902,40 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
         <?php
         /*
          * Un rol es un nombre y una lista de permisos; cada usuario tiene uno.
-         * Aquí solo se listan y se entra a editarlos: la matriz de casillas es
-         * pantalla propia porque no cabe en una tarjeta.
+         *
+         * Arriba va quién puede qué: una fila por módulo y una columna por rol.
+         * Es la pregunta que trae a alguien aquí —"¿quién puede borrar
+         * pagos?"— y antes había que abrir los roles uno por uno para
+         * contestarla, porque la lista solo decía "38 permisos · 2 usuarios".
+         * Abajo, cada rol con los nombres de quien lo tiene y lo que tiene
+         * raro. Cambiarlo sigue siendo pantalla propia: la matriz de casillas
+         * no cabe en una tarjeta.
+         *
+         * Lo que se cuenta sale del catálogo (Permisos::analizarRol), no de
+         * contar filas en rol_permisos: una clave que el catálogo ya no tiene
+         * no abre nada y no debe sumar.
          */
-        $totalPermisos = 0;
-        foreach ($modulosPermisos as $m) { $totalPermisos += count($m['permisos'] ?? []); }
+        $totalPermisos = count(Permisos::todas());
+        $analisisRol = [];
+        $totalUsuariosConRol = 0;
+        foreach ($roles as $r) {
+            $analisisRol[(int) $r['id']] = Permisos::analizarRol(
+                $rolesPermisos[(int) $r['id']] ?? [],
+                !empty($r['es_admin'])
+            );
+            $totalUsuariosConRol += (int) ($r['usuarios'] ?? 0);
+        }
+        // Una lista de nombres que no se desborda: los primeros, y "y N más".
+        $nombresCortos = function (array $nombres, int $max = 4): string {
+            $mostrar = array_map('htmlspecialchars', array_slice($nombres, 0, $max));
+            $resto = count($nombres) - count($mostrar);
+            return implode(', ', $mostrar) . ($resto > 0 ? ' y ' . $resto . ' más' : '');
+        };
+        $etiquetas = fn(array $claves): array => array_map([Permisos::class, 'etiqueta'], $claves);
         ?>
         <section class="cfg-section<?= $seccionAbierta === 'roles' ? ' is-activa' : '' ?>"
                  id="roles" data-cfg-seccion="roles" role="tabpanel"
-                 data-cfg-buscar="roles permisos accesos administrador operacion modulos privilegios">
+                 data-cfg-buscar="roles permisos accesos administrador operacion operación modulos módulos privilegios quien puede">
             <div class="cfg-card">
                 <div class="cfg-card-head">
                     <div class="cfg-card-icono"><i class="fas fa-shield-halved"></i></div>
@@ -915,8 +943,8 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                         <h2>Roles y permisos</h2>
                         <p>
                             <?= count($roles) ?> rol<?= count($roles) !== 1 ? 'es' : '' ?>
-                            repartiendo <?= $totalPermisos ?> permisos sobre
-                            <?= count($modulosPermisos) ?> módulos.
+                            para <?= $totalUsuariosConRol ?> usuario<?= $totalUsuariosConRol !== 1 ? 's' : '' ?>.
+                            Cada persona tiene uno: lo que su rol no marca, no lo ve ni lo puede hacer.
                         </p>
                     </div>
                     <a href="<?= $baseUrl ?>/roles/crear" class="btn btn-outline btn-sm">
@@ -924,18 +952,109 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                     </a>
                 </div>
 
+                <?php if ($usuariosSinRol): ?>
+                <?php $unoSinRol = count($usuariosSinRol) === 1; ?>
+                <div class="cfg-row apilada">
+                    <div class="cfg-msg warn">
+                        <i class="fas fa-triangle-exclamation"></i>
+                        <span>
+                            <strong><?= count($usuariosSinRol) ?> usuario<?= $unoSinRol ? '' : 's' ?>
+                            activo<?= $unoSinRol ? '' : 's' ?> sin rol</strong>
+                            (<?= $nombresCortos($usuariosSinRol) ?>): entra<?= $unoSinRol ? '' : 'n' ?>
+                            al sistema pero no puede<?= $unoSinRol ? '' : 'n' ?> abrir ningún módulo.
+                            <?php if ($puedeVer('usuarios')): ?>
+                            Asígnale<?= $unoSinRol ? '' : 's' ?> uno en <a href="#usuarios">Usuarios</a>.
+                            <?php else: ?>
+                            Pídele a quien administra los usuarios que le<?= $unoSinRol ? '' : 's' ?> asigne uno.
+                            <?php endif; ?>
+                        </span>
+                    </div>
+                </div>
+                <?php endif; ?>
+
                 <?php if (empty($roles)): ?>
                 <div class="cfg-vacio">
                     <i class="fas fa-shield-halved"></i>
                     Todavía no hay roles. Se crean solos la primera vez que alguien entra.
                 </div>
                 <?php else: ?>
+
+                <!-- Quién puede qué -->
+                <div class="cfg-row apilada">
+                    <div style="min-width:0;">
+                        <div class="cfg-row-label">
+                            <i class="fas fa-table-cells" style="color:var(--gold);"></i>Quién puede qué
+                        </div>
+                        <div class="rol-tabla-marco">
+                            <table class="rol-tabla">
+                                <thead>
+                                    <tr>
+                                        <th scope="col">Módulo</th>
+                                        <?php foreach ($roles as $r): ?>
+                                        <th scope="col">
+                                            <a href="<?= $baseUrl ?>/roles/editar/<?= (int) $r['id'] ?>"
+                                               title="Ver y cambiar sus permisos"><?= htmlspecialchars((string) $r['nombre']) ?></a>
+                                        </th>
+                                        <?php endforeach; ?>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($modulosPermisos as $idModulo => $modulo): ?>
+                                    <?php $esDelicado = ($idModulo === 'administracion'); ?>
+                                    <tr class="<?= $esDelicado ? 'delicado' : '' ?>">
+                                        <th scope="row">
+                                            <i class="fas <?= htmlspecialchars($modulo['icono'] ?? 'fa-cube') ?>"></i>
+                                            <?= htmlspecialchars($modulo['titulo'] ?? $idModulo) ?>
+                                            <?php if (!empty($modulo['oculto'])): ?>
+                                            <span class="rol-tabla-nota" title="La pantalla existe, pero el menú no la ofrece por ahora">fuera del menú</span>
+                                            <?php endif; ?>
+                                        </th>
+                                        <?php foreach ($roles as $r): ?>
+                                        <?php
+                                            $delRol  = $analisisRol[(int) $r['id']]['modulos'][$idModulo] ?? ['marcados' => [], 'total' => 0];
+                                            $cuantos = count($delRol['marcados']);
+                                            $total   = (int) $delRol['total'];
+                                            $faltan  = array_diff(array_keys($modulo['permisos'] ?? []), $delRol['marcados']);
+                                            $globo = $cuantos === 0
+                                                ? 'Nada de este módulo'
+                                                : "Puede:\n· " . implode("\n· ", $etiquetas($delRol['marcados']))
+                                                  . ($faltan ? "\n\nNo puede:\n· " . implode("\n· ", $etiquetas($faltan)) : '');
+                                            $alerta = $esDelicado && $cuantos > 0 && empty($r['es_admin']);
+                                        ?>
+                                        <td title="<?= htmlspecialchars($globo) ?>"<?= $alerta ? ' class="alerta"' : '' ?>>
+                                            <?php if ($total > 0 && $cuantos === $total): ?>
+                                            <span class="rol-celda todo"><i class="fas fa-circle-check"></i> Todo</span>
+                                            <?php elseif ($cuantos > 0): ?>
+                                            <span class="rol-celda parte"><i class="fas fa-circle-half-stroke"></i> <?= $cuantos ?> de <?= $total ?></span>
+                                            <?php else: ?>
+                                            <span class="rol-celda nada">—</span>
+                                            <?php endif; ?>
+                                        </td>
+                                        <?php endforeach; ?>
+                                    </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="cfg-row-ayuda" style="margin-top:5px;">
+                            Pasa el cursor por una casilla para ver qué permisos son.
+                            En amarillo, un rol que no es el de administrador pero reparte accesos
+                            o toca la bitácora.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Los roles, uno por uno -->
                 <?php foreach ($roles as $r): ?>
                 <?php
-                    $usuariosDelRol = (int) ($r['usuarios'] ?? 0);
-                    $permisosDelRol = (int) ($r['permisos'] ?? 0);
-                    $esRolAdmin     = !empty($r['es_admin']);
-                    $esRolSistema   = !empty($r['es_sistema']);
+                    $idRol        = (int) $r['id'];
+                    $analisis     = $analisisRol[$idRol];
+                    $quienes      = $rolesUsuarios[$idRol] ?? [];
+                    $activos      = array_column(array_filter($quienes, fn($u) => $u['activo']), 'nombre');
+                    $inactivos    = count($quienes) - count($activos);
+                    $esRolAdmin   = !empty($r['es_admin']);
+                    $esRolSistema = !empty($r['es_sistema']);
+                    $sobran       = $esRolAdmin ? [] : $analisis['desconocidos'];
                 ?>
                 <div class="cfg-item">
                     <i class="fas <?= $esRolAdmin ? 'fa-shield-halved' : 'fa-id-badge' ?>"
@@ -957,27 +1076,67 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                         <div class="cfg-item-sub"><?= htmlspecialchars((string) $r['descripcion']) ?></div>
                         <?php endif; ?>
                         <div class="cfg-item-sub">
-                            <?= $esRolAdmin ? 'todos los permisos' : $permisosDelRol . ' permiso' . ($permisosDelRol === 1 ? '' : 's') ?>
+                            <?= $esRolAdmin
+                                ? 'Todos los permisos, también los que se añadan después'
+                                : $analisis['total'] . ' de ' . $totalPermisos . ' permisos' ?>
                             ·
-                            <?= $usuariosDelRol ?> usuario<?= $usuariosDelRol === 1 ? '' : 's' ?>
-                            <?php if ($usuariosDelRol === 0 && !$esRolSistema): ?>
-                            <span style="color:var(--warn);"> · nadie lo usa</span>
+                            <?php if ($quienes): ?>
+                            <i class="fas fa-user" style="opacity:.6;"></i>
+                            <?= $activos ? $nombresCortos($activos) : 'nadie activo' ?>
+                            <?php if ($inactivos > 0): ?>
+                            <span style="color:var(--text-light);">(y <?= $inactivos ?> inactivo<?= $inactivos === 1 ? '' : 's' ?>)</span>
+                            <?php endif; ?>
+                            <?php else: ?>
+                            <span<?= $esRolSistema ? '' : ' style="color:var(--warn);"' ?>>nadie lo tiene</span>
                             <?php endif; ?>
                         </div>
+
+                        <?php if ($analisis['delicados']): ?>
+                        <div class="cfg-item-sub rol-aviso-linea">
+                            <i class="fas fa-shield-halved"></i>
+                            <span><strong>Toca administración:</strong>
+                            <?= htmlspecialchars(implode('; ', $etiquetas($analisis['delicados']))) ?>.</span>
+                        </div>
+                        <?php endif; ?>
+
+                        <?php foreach ($analisis['sin_base'] as $idModulo => $claves): ?>
+                        <div class="cfg-item-sub rol-aviso-linea">
+                            <i class="fas fa-door-closed"></i>
+                            <span><strong>No puede entrar a <?= htmlspecialchars($modulosPermisos[$idModulo]['titulo'] ?? $idModulo) ?>:</strong>
+                            tiene «<?= htmlspecialchars(implode('», «', $etiquetas($claves))) ?>»
+                            pero no «<?= htmlspecialchars(Permisos::etiqueta((string) $modulosPermisos[$idModulo]['base'])) ?>».
+                            Se completa al guardar el rol.</span>
+                        </div>
+                        <?php endforeach; ?>
+
+                        <?php if ($sobran): ?>
+                        <?php $unoSobra = count($sobran) === 1; ?>
+                        <div class="cfg-item-sub" style="color:var(--text-light);">
+                            <i class="fas fa-broom"></i>
+                            <?= count($sobran) ?> permiso<?= $unoSobra ? '' : 's' ?>
+                            que ya no existe<?= $unoSobra ? '' : 'n' ?>
+                            (<code><?= htmlspecialchars(implode(', ', $sobran)) ?></code>):
+                            no abre<?= $unoSobra ? '' : 'n' ?> nada y se quita<?= $unoSobra ? '' : 'n' ?> al guardar el rol.
+                        </div>
+                        <?php endif; ?>
                     </div>
                     <div class="cfg-item-acciones">
-                        <a href="<?= $baseUrl ?>/roles/editar/<?= (int) $r['id'] ?>"
+                        <a href="<?= $baseUrl ?>/roles/editar/<?= $idRol ?>"
                            class="btn btn-outline btn-sm" title="Ver y cambiar sus permisos">
                             <i class="fas fa-pen"></i>
                         </a>
                         <?php if (!$esRolSistema): ?>
-                        <form method="POST" action="<?= $baseUrl ?>/roles/eliminar/<?= (int) $r['id'] ?>"
-                              data-confirm="¿Eliminar el rol &quot;<?= htmlspecialchars((string) $r['nombre'], ENT_QUOTES) ?>&quot;? Solo se puede si no lo tiene nadie."
+                        <?php /* Con gente dentro el borrado se rechaza igual (RolesController);
+                                 el botón apagado lo dice antes de pulsarlo. */ ?>
+                        <form method="POST" action="<?= $baseUrl ?>/roles/eliminar/<?= $idRol ?>"
+                              data-confirm="¿Eliminar el rol &quot;<?= htmlspecialchars((string) $r['nombre'], ENT_QUOTES) ?>&quot;?"
                               data-confirm-title="Eliminar rol"
                               data-confirm-type="danger"
                               data-confirm-accept="Eliminar">
-                            <button type="submit" class="btn btn-outline btn-sm" title="Eliminar"
-                                    style="color:#b91c1c;border-color:#F5B5B5;">
+                            <button type="submit" class="btn btn-outline btn-sm"
+                                    title="<?= $quienes ? 'Primero cámbiales el rol a quienes lo tienen' : 'Eliminar' ?>"
+                                    style="color:#b91c1c;border-color:#F5B5B5;"
+                                    <?= $quienes ? 'disabled' : '' ?>>
                                 <i class="fas fa-trash-can"></i>
                             </button>
                         </form>
@@ -990,6 +1149,7 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                 <div class="cfg-foot">
                     <div class="cfg-foot-nota">
                         Un cambio en un rol surte efecto en la siguiente pantalla de quien lo tenga.
+                        A qué empresas llega cada persona no depende del rol: se elige en su ficha de usuario.
                     </div>
                 </div>
             </div>
@@ -1322,6 +1482,18 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                 ev.preventDefault();
                 abrir(a.dataset.cfgNav, true);
             });
+        });
+
+        // Lo mismo para los enlaces de una sección a otra ("Asígnales uno en
+        // Usuarios", "Regístralas en Empresas"): sin esto cambiaban el # de
+        // la dirección y la sección seguía cerrada.
+        document.addEventListener('click', function (ev) {
+            var a = ev.target.closest && ev.target.closest('.cfg-main a[href^="#"]');
+            if (!a) return;
+            var id = a.getAttribute('href').slice(1);
+            if (!existe(id)) return;
+            ev.preventDefault();
+            abrir(id, true);
         });
 
         // Las flechas recorren el menú, como en cualquier lista de pestañas.

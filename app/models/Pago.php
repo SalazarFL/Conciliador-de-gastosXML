@@ -417,16 +417,15 @@ class Pago extends Model
      *
      * Soltarlas es lo que antes era borrar líneas: las facturas del ERP no se
      * eliminan nunca —son el registro del sistema de la empresa—, vuelven a
-     * quedar disponibles para otro pago.
+     * quedar disponibles para otro pago. Con su XML, si el enlace era
+     * automático (ver FacturaErp::SOLTAR_DEL_PAGO).
      */
     public function eliminar($id)
     {
+        require_once __DIR__ . '/FacturaErp.php';
         $this->execute(
             "UPDATE facturas_erp
-                SET estado = 'pendiente', pago_id = NULL,
-                    asignada_pago_en = NULL, saldo_pago = NULL, factura_xml_id = NULL,
-                    estado_respaldo = 'sin_respaldo', diferencia = NULL,
-                    score_numero = NULL, score_proveedor = NULL, match_manual = 0
+                SET " . FacturaErp::SOLTAR_DEL_PAGO . "
               WHERE pago_id = ?",
             [(int) $id]
         );

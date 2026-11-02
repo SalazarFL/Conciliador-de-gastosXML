@@ -199,12 +199,29 @@ try {
         registrar($rutaLog, 'Inicio: ' . count($cola) . ' cuenta(s) reservada(s), tope ' . $topeSegundos . 's.');
     }
 
+    // Con correos esperando captura, el índice no se lleva la corrida entera.
+    // La captura va después y solo corre si sobra tiempo: el 05/10/2026, tras
+    // cuatro días con la computadora apagada, un buzón con 2.000 adjuntos por
+    // indexar gastó el tope completo corrida tras corrida, y en casi una hora
+    // no entró ni un comprobante de ninguno de los otros buzones, que ya
+    // estaban al día. Sin nada en cola el índice sigue usando todo el tiempo.
+    $topeIndice = $topeSegundos;
+    if ($capturaActiva) {
+        try {
+            if ((new CorreoCapturaAutomatica())->resumen()['pendiente'] > 0) {
+                $topeIndice = $topeSegundos * 0.6;
+            }
+        } catch (Throwable $e) {
+            // Sin poder contar la cola, el reparto queda como estaba.
+        }
+    }
+
     // Round-robin: una tanda por cuenta, ciclando hasta que todas queden al
     // día o se agote el tope de la corrida. Reparte el tiempo con justicia
     // aunque una cuenta tenga un rezago enorme de adjuntos.
-    while (!empty($cola) && (microtime(true) - $inicioCorrida) < $topeSegundos) {
+    while (!empty($cola) && (microtime(true) - $inicioCorrida) < $topeIndice) {
         foreach ($cola as $id => &$acc) {
-            if ((microtime(true) - $inicioCorrida) >= $topeSegundos) {
+            if ((microtime(true) - $inicioCorrida) >= $topeIndice) {
                 break;
             }
 
@@ -560,6 +577,37 @@ try {
 // vez de seguir ordenándolo. Para hacerlo a mano sobre lo viejo sigue
 // estando cli/organizar_documentos.php --carpeta=RUTA.
 
+// Las facturas del ERP que tienen su XML cargado y ningún enlace. Cada camino
+// que engancha —importar el XML, cargar el ERP, cambiar el catálogo, verificar
+// un pago— mira en su momento; lo que se suelta después (un pago borrado, un
+// vínculo manual quitado) no lo volvía a mirar nadie. El 30/09 eran 205. Es
+// una vuelta sobre toda la tabla, así que va cada seis horas y no en cada
+// corrida.
+try {
+    $marcaEnganche = $ROOT . '/storage/cache/reenganche_facturas.marca';
+    clearstatcache(true, $marcaEnganche);
+    if (!is_file($marcaEnganche) || time() - (int) filemtime($marcaEnganche) >= 6 * 3600) {
+        // Antes de correr, como los recordatorios: si falla, repetirlo en la
+        // corrida siguiente no lo arregla.
+        @touch($marcaEnganche);
+        require_once $ROOT . '/app/helpers/PorPagarVerificador.php';
+        require_once $ROOT . '/app/models/FacturaErp.php';
+        require_once $ROOT . '/app/models/Factura.php';
+        $reenganchadas = 0;
+        foreach ((new Sociedad())->getAll() as $sociedad) {
+            $sid = (int) $sociedad['id'];
+            $r = PorPagarVerificador::engancharSinRespaldo(
+                (new FacturaErp())->setSociedad($sid),
+                (new Factura())->setSociedad($sid)
+            );
+            $reenganchadas += (int) $r['enganchadas'];
+        }
+        registrar($rutaLog, 'Facturas del ERP con su XML ya cargado: ' . $reenganchadas . ' enganchadas.');
+    }
+} catch (Throwable $e) {
+    registrar($rutaLog, 'Enganche de facturas sueltas: ERROR ' . $e->getMessage());
+}
+
 // Los documentos que viven en SharePoint no los ve el organizador: de esos se
 // ocupa su reconciliador, que lee los cambios de la biblioteca en vez de
 // recorrerla. Sin empresas ni documentos allá, no sale a la red.
@@ -571,7 +619,7 @@ try {
             registrar($rutaLog, 'SharePoint: omitido, otra PC está revisando la biblioteca.');
         } else {
             registrar($rutaLog, sprintf(
-                'SharePoint: %d cambios leídos%s; %d documentos revisados; %d rutas corregidas; %d sin archivo; %d volvieron; %d con otro contenido; %d copias al pago (%d ya estaban, %d para la próxima vuelta); %d errores.',
+                'SharePoint: %d cambios leídos%s; %d documentos revisados; %d rutas corregidas; %d sin archivo; %d volvieron; %d con otro contenido; %d copias al pago (%d ya estaban, %d para la próxima vuelta%s); %d errores.',
                 (int) $nube['cambios_leidos'],
                 $nube['delta_reiniciado'] ? ' (el enlace de cambios venció: se reinició)'
                     : (!empty($nube['sin_enlace_de_cambios']) ? ' (SharePoint no da el enlace de cambios de la carpeta: solo revisión por id)' : ''),
@@ -583,6 +631,7 @@ try {
                 (int) $nube['copias_pago'],
                 (int) $nube['copias_pago_vigentes'],
                 (int) $nube['copias_pago_para_despues'],
+                !empty($nube['copias_en_otro_proceso']) ? '; las estaba haciendo cli/copiar_pagos.php' : '',
                 (int) $nube['errores'] + (int) $nube['errores_copia_pago']
             ));
         }

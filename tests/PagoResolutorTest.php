@@ -78,6 +78,66 @@ $r = PagoResolutor::resolver(
 );
 assertResolutor($r['resumen']['resuelta'] === 1, 'sin numero_corto la llave sale del documento');
 
+// ── Número corto del proveedor con su correlativo ────────────────
+// "7887-2242" es el documento 7887 y el 2242 lo pone el ERP. Con las mismas
+// cifras de cada lado ganaba el correlativo y la factura se buscaba por 2242:
+// caso real del pago del 07/10 (EXPORTADORA MAYS, y SOHO SPA con 242-640), que
+// las dio por ausentes estando cargadas.
+$r = PagoResolutor::resolver(
+    [
+        filaArchivo('FACT-7887-2242', 'EXPORTADORA MAYS ZONA LIBRE S.A', 24494561.20, '140001624'),
+        filaArchivo('FACT-242-640', 'SOHO SPA', 23352270.00, '140001636'),
+        // El correlativo puede tener más cifras que el documento.
+        filaArchivo('FACT-243-1650', 'SOHO SPA', 500.00, '140001636'),
+    ],
+    [
+        erpFila(20, '7887', 'EXPORTADORA MAYS ZONA LIBRE S.A', 24494561.20, null, null, null, '140001624'),
+        erpFila(21, '242', 'SOHO SPA', 23352270.00, null, null, null, '140001636'),
+        erpFila(22, '243', 'SOHO SPA', 500.00, null, null, null, '140001636'),
+    ]
+);
+assertResolutor($r['ids'] === [20, 21, 22],
+    'el documento es lo que va antes del correlativo, tenga las cifras que tenga');
+
+// ── El sistema la tiene sin número ───────────────────────────────
+// El ERP guarda estos números rellenos hasta cincuenta cifras y el reporte de
+// facturas imprime veintinueve: salen todo ceros y la factura entra sin
+// documento. Por el número no se va a encontrar nunca; se reconoce por lo que
+// la identifica en el sistema: proveedor, fecha de emisión y monto.
+$RELLENO = 'FACT-' . str_pad('1801', 50, '0', STR_PAD_LEFT);
+$sinNumero = erpFila(30, '', 'GRUPO BM SP SA PROMOCIONES', 8118.03, null, null, null, '140000755');
+$sinNumero['fecha_emision'] = '2026-05-23';
+$otraFecha = erpFila(31, '', 'GRUPO BM SP SA PROMOCIONES', 8118.03, null, null, null, '140000755');
+$otraFecha['fecha_emision'] = '2026-05-29';
+$filaRelleno = filaArchivo($RELLENO, 'GRUPO BM SP SA PROMOCIONES', 8118.03, '140000755') + ['fecha' => '23/05/2026'];
+
+$r = PagoResolutor::resolver([$filaRelleno], [$sinNumero, $otraFecha]);
+assertResolutor($r['ids'] === [30], 'la factura sin número se reconoce por código, fecha y monto');
+assertResolutor($r['resumen']['por_senas'] === 1 && $r['filas'][0]['por_senas'] === true,
+    'y se cuenta aparte: es la única resolución que no sale del número');
+assertResolutor(strpos($r['filas'][0]['motivo'], 'sin número') !== false, 'el motivo dice cómo se reconoció');
+
+// Dos que coinciden en todo no se distinguen: ambigua, como cualquier otra.
+$gemela = $sinNumero;
+$gemela['id'] = 32;
+$r = PagoResolutor::resolver([$filaRelleno], [$sinNumero, $gemela]);
+assertResolutor($r['resumen']['ambigua'] === 1 && $r['ids'] === [],
+    'dos facturas sin número con las mismas señas no se asignan al azar');
+
+// Lo que NO alcanza: otro monto, otro código, o una fila sin fecha.
+foreach ([
+    'otro monto' => filaArchivo($RELLENO, 'X', 8118.04, '140000755') + ['fecha' => '23/05/2026'],
+    'otro código' => filaArchivo($RELLENO, 'X', 8118.03, '140000999') + ['fecha' => '23/05/2026'],
+    'sin fecha' => filaArchivo($RELLENO, 'X', 8118.03, '140000755'),
+    // Un número que el reporte SÍ imprime y no está: falta de verdad. Que haya
+    // una factura sin número con sus mismas señas es una coincidencia.
+    'número imprimible' => filaArchivo('FACT-5555', 'X', 8118.03, '140000755') + ['fecha' => '23/05/2026'],
+] as $caso => $fila) {
+    $r = PagoResolutor::resolver([$fila], [$sinNumero]);
+    assertResolutor($r['resumen']['ausente'] === 1 && $r['ids'] === [],
+        "una factura sin número no se asigna con {$caso}");
+}
+
 // ── No está en el ERP ────────────────────────────────────────────
 $r = PagoResolutor::resolver(
     [filaArchivo('FACT-99999999999999999999-1', 'QUIEN SEA', 10.00)],

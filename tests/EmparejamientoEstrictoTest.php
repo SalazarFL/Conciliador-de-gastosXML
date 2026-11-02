@@ -168,10 +168,13 @@ $r = verificar('140000755', 9, ['monto' => 999.99]);
 comprueba(($r['factura_xml_id'] ?? null) === 77,
     'un centavo de diferencia entra en la tolerancia');
 
-// Con otro monto, el mismo consecutivo es algo que alguien tiene que mirar.
+// Con otro monto se engancha igual, "con diferencia", que es donde alguien lo
+// mira. Antes quedaba "sin respaldo" ofreciendo buscarla en el correo, con el
+// XML ya cargado: la 00100001011000016737 de TOTAL SEAFOOD, el 30/09.
 $r = verificar('140000585', 9, ['monto' => 1500.00]);
-comprueba(array_key_exists('factura_xml_id', $r) && $r['factura_xml_id'] === null,
-    'cédula repartida y otro monto: no se engancha solo');
+comprueba(($r['factura_xml_id'] ?? null) === 77,
+    'cédula repartida y otro monto: se engancha igual');
+comprueba(($r['estado_respaldo'] ?? '') === 'con_diferencia', 'y queda con diferencia');
 
 // Sin consecutivo en el ERP solo queda el número corto, que se repite entre
 // emisores y entre los puntos de la misma empresa: eso sigue sin engancharse.
@@ -185,7 +188,48 @@ $r = verificar('140001752', 9, ['proveedor_nombre' => 'OTRA EMPRESA DISTINTA']);
 comprueba(array_key_exists('factura_xml_id', $r) && $r['factura_xml_id'] === null,
     'un código que no está en el listado y con otro nombre no se engancha');
 
-// ── 5. Sin listado, este archivo sigue sirviendo suelto ────────────────────
+// ── 5. Lo que la línea ya tenía no se borra por no volver a encontrarlo ────
+//
+// El enganche al importar el XML ya la había respaldado. Que la verificación
+// no llegue sola a lo mismo —acá el ERP perdió el consecutivo— no desmiente
+// nada: el enlace se queda.
+ProveedorCodigoErp::$filas = ['140000500' => ['proveedor_id' => 9, 'hermanos' => 0]];
+$r = verificar('140000500', 9, [
+    'documento' => 'FACT-999', 'numero_corto' => '00000999',
+    'factura_xml_id' => 77, 'estado' => 'respaldada',
+]);
+comprueba(($r['factura_xml_id'] ?? null) === 77,
+    'el enlace automático que la línea ya tenía se conserva');
+comprueba(($r['estado_respaldo'] ?? '') === 'respaldada', 'con su estado, recalculado por el monto');
+comprueba(($r['score_numero'] ?? 0) == 60.0, 'sin el consecutivo, el número no vale 100');
+
+// Pero si el catálogo dice que el emisor es otro, se suelta.
+$r = verificar('140000500', 12, [
+    'documento' => 'FACT-999', 'numero_corto' => '00000999',
+    'factura_xml_id' => 77, 'estado' => 'respaldada',
+]);
+comprueba(array_key_exists('factura_xml_id', $r) && $r['factura_xml_id'] === null,
+    'el enlace que el catálogo desmiente no se conserva');
+
+// Y otra línea no se lo lleva por venir antes en el recorrido.
+$erp = new ErpDeMentira([
+    ['id' => 1, 'documento' => '00100001010000000123', 'numero_corto' => '00000123',
+     'proveedor_codigo' => '140000500', 'proveedor_nombre' => 'DISTRIBUIDORA LA ESPERANZA S.A.',
+     'monto' => 1000.00, 'estado' => 'sin_respaldo', 'factura_xml_id' => null, 'match_manual' => 0],
+    ['id' => 2, 'documento' => 'FACT-999', 'numero_corto' => '00000999',
+     'proveedor_codigo' => '140000500', 'proveedor_nombre' => 'DISTRIBUIDORA LA ESPERANZA S.A.',
+     'monto' => 1000.00, 'estado' => 'respaldada', 'factura_xml_id' => 77, 'match_manual' => 0],
+]);
+PorPagarVerificador::verificarListado(1, $erp, new FacturasDeMentira([[
+    'id' => 77, 'consecutivo_completo' => '00100001010000000123', 'numero_factura_asistente' => '00000123',
+    'proveedor_id' => 9, 'proveedor_nombre' => 'DISTRIBUIDORA LA ESPERANZA S.A.', 'total' => 1000.00,
+]]));
+comprueba(($erp->escrito[2]['factura_xml_id'] ?? null) === 77,
+    'el XML reservado sigue con la línea que ya lo tenía');
+comprueba(array_key_exists('factura_xml_id', $erp->escrito[1] ?? []) && $erp->escrito[1]['factura_xml_id'] === null,
+    'y la otra línea no se lo lleva, aunque venga antes');
+
+// ── 6. Sin listado, este archivo sigue sirviendo suelto ────────────────────
 //
 // No es la aplicación: ahí el portón impide llegar acá sin listado. Es para
 // que el verificador se pueda usar en pruebas y utilidades de línea de

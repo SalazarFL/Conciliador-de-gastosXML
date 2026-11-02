@@ -382,6 +382,43 @@ Prueba::caso('getByIds: solo enteros positivos; lista vacía no consulta', funct
     igual([1, 2, 1, 'pendiente'], Soporte::$pdo->sentencias[0]['params'], 'enteros y el estado al final');
 });
 
+Prueba::caso('fila activa por id: acotada a la empresa en curso y solo lo que se ve en la bandeja', function () {
+    igual(null, (new CorreoBandeja())->getActivaPorId('7; DROP'), 'sin fila es null, no false');
+    $s = Soporte::$pdo->de('FROM correo_bandeja')[0];
+    igual([7, 4], $s['params'], 'el id como entero y la empresa 4');
+    verificar(strpos($s['sql'], "estado IN ('pendiente', 'rechazada', 'otra_cedula')") !== false,
+        'una importada o descartada no abre ningún correo');
+});
+
+// ── CorreoIndice::ubicarMensaje (el correo de una fila de la bandeja) ──────
+
+Prueba::caso('ubicar mensaje: una sola fila del índice dice la carpeta, acotada a la cuenta', function () {
+    Soporte::$pdo->respuestas['FROM correo_indice'] = [['carpeta' => 'INBOX.Facturas', 'asunto' => 'FE 1']];
+    igual('INBOX.Facturas', indice()->ubicarMensaje('77', '5'), 'la carpeta');
+    igual([3, 77, 5], Soporte::$pdo->de('FROM correo_indice')[0]['params'], 'cuenta, numeración y UID');
+});
+
+Prueba::caso('ubicar mensaje: misma numeración en dos carpetas se decide por el asunto, o no se decide', function () {
+    Soporte::$pdo->respuestas['FROM correo_indice'] = [
+        ['carpeta' => 'INBOX', 'asunto' => 'Boletín'],
+        ['carpeta' => 'INBOX.Facturas', 'asunto' => 'Factura 123'],
+    ];
+    igual('INBOX.Facturas', indice()->ubicarMensaje(77, 5, ' Factura 123 '), 'el del mismo asunto');
+    igual(null, indice()->ubicarMensaje(77, 5, 'Otro asunto'), 'ninguno coincide');
+    igual(null, indice()->ubicarMensaje(77, 5), 'sin asunto no se adivina: abrir otro correo es peor');
+});
+
+Prueba::caso('ubicar mensaje: fuera del índice vale la carpeta de esa numeración solo si es una', function () {
+    Soporte::$pdo->respuestas['FROM correo_carpetas'] = [['carpeta' => 'INBOX']];
+    igual('INBOX', indice()->ubicarMensaje(77, 5), 'la única carpeta con esa numeración');
+    igual([3, 77], Soporte::$pdo->de('FROM correo_carpetas')[0]['params'], 'cuenta y numeración');
+
+    Soporte::$pdo->respuestas['FROM correo_carpetas'] = [['carpeta' => 'INBOX'], ['carpeta' => 'INBOX.Viejo']];
+    igual(null, indice()->ubicarMensaje(77, 5), 'dos carpetas: no se sabe');
+    Soporte::$pdo->respuestas = [];
+    igual(null, indice()->ubicarMensaje(77, 5), 'ninguna: no se sabe');
+});
+
 Prueba::caso('crear en bandeja: origen desconocido es manual; sin empresa usa la de la sesión', function () {
     (new CorreoBandeja())->crear(['uid_correo' => 'c3:77:5', 'origen' => "automatica' OR 1=1", 'total' => 'no numérico']);
     $p = Soporte::$pdo->de('INSERT INTO correo_bandeja')[0]['params'];

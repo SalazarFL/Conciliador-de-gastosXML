@@ -160,6 +160,7 @@ class RolesController extends Controller
             'modulos'          => Permisos::modulos(),
             'permisosActuales' => $permisosActuales,
             'usuariosConEsteRol' => $rol ? $this->model->usuariosDe((int) $rol['id']) : 0,
+            'quienes'          => $rol ? ($this->model->usuariosPorRol()[(int) $rol['id']] ?? []) : [],
         ]);
     }
 
@@ -167,7 +168,7 @@ class RolesController extends Controller
     {
         $nombre      = trim((string) $this->post('nombre', ''));
         $descripcion = trim((string) $this->post('descripcion', ''));
-        $permisos    = (array) $this->post('permisos', []);
+        $permisos    = Permisos::conBases((array) $this->post('permisos', []));
 
         if ($error = $this->validar($nombre, $permisos, 0)) {
             return $error;
@@ -195,7 +196,10 @@ class RolesController extends Controller
     {
         $nombre      = trim((string) $this->post('nombre', ''));
         $descripcion = trim((string) $this->post('descripcion', ''));
-        $permisos    = (array) $this->post('permisos', []);
+        // Lo marcado sin la base de su módulo ("verificar un pago" sin "ver
+        // los pagos") no llega a ninguna pantalla: se completa, como hace la
+        // pantalla al marcar la casilla. Ver 'base' en config/permisos.php.
+        $permisos    = Permisos::conBases((array) $this->post('permisos', []));
 
         // El rol de administrador conserva su nombre: es el que busca
         // `sembrarRolesBase` para saber que ya existe, y renombrarlo haría que

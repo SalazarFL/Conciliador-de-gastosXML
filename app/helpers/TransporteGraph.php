@@ -33,6 +33,24 @@ interface TransporteGraph
 }
 
 /**
+ * Un transporte que además sabe mandar varias peticiones a la vez.
+ *
+ * Copiar la carpeta de un pago son cientos de bajadas y subidas que no
+ * dependen unas de otras, y cada una pasa casi todo su tiempo esperando a la
+ * red: de a una, 308 facturas eran veinticinco minutos. ClienteGraph::
+ * enParalelo() lo usa si el transporte lo tiene; si no —las pruebas—, manda
+ * de a una con enviar() y el resultado es el mismo.
+ */
+interface TransporteGraphParalelo extends TransporteGraph
+{
+    /**
+     * @param array $peticiones id => petición, como en enviar()
+     * @return array id => respuesta, como en enviar()
+     */
+    public function enviarVarios(array $peticiones);
+}
+
+/**
  * El de verdad.
  *
  * Con UNA conexión para todo el proceso, que se reusa de una llamada a la
@@ -42,12 +60,91 @@ interface TransporteGraph
  * curl_reset() limpia las opciones de la anterior pero conserva la conexión
  * abierta (y el certificado raíz de php.ini, que PHP vuelve a poner).
  */
-class TransporteCurl implements TransporteGraph
+class TransporteCurl implements TransporteGraphParalelo
 {
     /** @var resource|CurlHandle|null */
     private static $conexion = null;
 
+    /**
+     * Para las de a varias. Las conexiones abiertas son del multi, no de cada
+     * petición: guardándolo, la segunda tanda ya no paga el saludo TLS.
+     *
+     * @var resource|CurlMultiHandle|null
+     */
+    private static $multi = null;
+
     public function enviar(array $peticion)
+    {
+        if (self::$conexion === null) {
+            self::$conexion = curl_init();
+        } else {
+            curl_reset(self::$conexion);
+        }
+        $ch = self::$conexion;
+        $estado = $this->preparar($ch, $peticion);
+
+        $ok = curl_exec($ch);
+        $error = $ok === false ? curl_error($ch) : '';
+        $codigo = $ok === false ? 0 : (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+
+        return ['codigo' => $codigo, 'cabeceras' => $estado->recibidas, 'cuerpo' => $estado->cuerpo, 'error' => $error];
+    }
+
+    public function enviarVarios(array $peticiones)
+    {
+        if (!$peticiones) {
+            return [];
+        }
+        if (self::$multi === null) {
+            self::$multi = curl_multi_init();
+        }
+        $multi = self::$multi;
+
+        $enCurso = [];
+        foreach ($peticiones as $id => $peticion) {
+            $ch = curl_init();
+            $enCurso[$id] = ['ch' => $ch, 'estado' => $this->preparar($ch, $peticion)];
+            curl_multi_add_handle($multi, $ch);
+        }
+
+        do {
+            $estadoMulti = curl_multi_exec($multi, $activas);
+            if ($activas && curl_multi_select($multi, 1.0) === -1) {
+                usleep(10000);
+            }
+        } while ($activas && $estadoMulti === CURLM_OK);
+
+        // El resultado de cada una: curl_multi_info_read es la única forma de
+        // saber si una falló sin respuesta (codigo 0) y por qué.
+        $errores = [];
+        while ($info = curl_multi_info_read($multi)) {
+            foreach ($enCurso as $id => $c) {
+                if ($c['ch'] === $info['handle'] && $info['result'] !== CURLE_OK) {
+                    $errores[$id] = curl_strerror($info['result']);
+                }
+            }
+        }
+
+        $respuestas = [];
+        foreach ($enCurso as $id => $c) {
+            $error = $errores[$id] ?? '';
+            $respuestas[$id] = [
+                'codigo' => $error !== '' ? 0 : (int) curl_getinfo($c['ch'], CURLINFO_RESPONSE_CODE),
+                'cabeceras' => $c['estado']->recibidas,
+                'cuerpo' => $c['estado']->cuerpo,
+                'error' => $error,
+            ];
+            curl_multi_remove_handle($multi, $c['ch']);
+            curl_close($c['ch']);
+        }
+        return $respuestas;
+    }
+
+    /**
+     * Deja lista una petición en $ch y devuelve dónde van a caer su código,
+     * sus cabeceras y su cuerpo a medida que lleguen.
+     */
+    private function preparar($ch, array $peticion)
     {
         $cabeceras = [];
         foreach (($peticion['cabeceras'] ?? []) as $nombre => $valor) {
@@ -57,18 +154,13 @@ class TransporteCurl implements TransporteGraph
         // espera un segundo una respuesta que Graph no manda.
         $cabeceras[] = 'Expect:';
 
-        $recibidas = [];
-        $codigoActual = 0;
-        $cuerpo = '';
+        $estado = new stdClass();
+        $estado->recibidas = [];
+        $estado->codigo = 0;
+        $estado->cuerpo = '';
         $guardarEn = $peticion['guardar_en'] ?? null;
         $timeout = max(1.0, (float) ($peticion['timeout'] ?? 60));
 
-        if (self::$conexion === null) {
-            self::$conexion = curl_init();
-        } else {
-            curl_reset(self::$conexion);
-        }
-        $ch = self::$conexion;
         curl_setopt_array($ch, [
             CURLOPT_URL            => (string) $peticion['url'],
             CURLOPT_CUSTOMREQUEST  => (string) $peticion['metodo'],
@@ -79,35 +171,30 @@ class TransporteCurl implements TransporteGraph
             CURLOPT_CONNECTTIMEOUT_MS => (int) (min($timeout, 10.0) * 1000),
             // Cada respuesta de una cadena de redirecciones trae sus propias
             // cabeceras: se guardan las de la última, que es la que importa.
-            CURLOPT_HEADERFUNCTION => function ($ch, $linea) use (&$recibidas, &$codigoActual) {
+            CURLOPT_HEADERFUNCTION => function ($ch, $linea) use ($estado) {
                 if (preg_match('~^HTTP/\S+\s+(\d{3})~', $linea, $m)) {
-                    $codigoActual = (int) $m[1];
-                    $recibidas = [];
+                    $estado->codigo = (int) $m[1];
+                    $estado->recibidas = [];
                 } elseif (strpos($linea, ':') !== false) {
                     [$nombre, $valor] = explode(':', $linea, 2);
-                    $recibidas[strtolower(trim($nombre))] = trim($valor);
+                    $estado->recibidas[strtolower(trim($nombre))] = trim($valor);
                 }
                 return strlen($linea);
             },
             // Lo que no es 2xx (el JSON de un error, el cuerpo de una
             // redirección) nunca va al archivo: ensuciaría el documento.
-            CURLOPT_WRITEFUNCTION  => function ($ch, $datos) use (&$cuerpo, &$codigoActual, $guardarEn) {
-                if (is_resource($guardarEn) && $codigoActual >= 200 && $codigoActual < 300) {
+            CURLOPT_WRITEFUNCTION  => function ($ch, $datos) use ($estado, $guardarEn) {
+                if (is_resource($guardarEn) && $estado->codigo >= 200 && $estado->codigo < 300) {
                     return (int) fwrite($guardarEn, $datos);
                 }
-                $cuerpo .= $datos;
+                $estado->cuerpo .= $datos;
                 return strlen($datos);
             },
         ]);
         if (isset($peticion['cuerpo']) && $peticion['cuerpo'] !== null) {
             curl_setopt($ch, CURLOPT_POSTFIELDS, (string) $peticion['cuerpo']);
         }
-
-        $ok = curl_exec($ch);
-        $error = $ok === false ? curl_error($ch) : '';
-        $codigo = $ok === false ? 0 : (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-
-        return ['codigo' => $codigo, 'cabeceras' => $recibidas, 'cuerpo' => $cuerpo, 'error' => $error];
+        return $estado;
     }
 }
 

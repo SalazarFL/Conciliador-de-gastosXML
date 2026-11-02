@@ -429,7 +429,8 @@ modelo, en orden de frecuencia:
 | `php cli/probar_sharepoint.php --carpeta=RUTA` | Lo mismo, contra una carpeta de la biblioteca |
 | `php cli/probar_sharepoint.php --bibliotecas=URL` | Listar las bibliotecas de un sitio con su `drive_id` |
 | `php cli/migrar_documentos_a_graph.php --sociedad=N` | Pasar a SharePoint lo que una empresa tiene todavía en la carpeta compartida — ver [SHAREPOINT.md](SHAREPOINT.md) |
-| `php cli/procesar_lotes.php` | Avanzar los lotes de correo sin el navegador abierto |
+| `php cli/procesar_lotes.php` | Avanzar los lotes de correo sin el navegador abierto. Lanza sus propios ayudantes: hasta 4 motores a la vez, o lo que diga `auto_sync.lotes_motores` en `storage/correo/config.json` (bajarlo si el servidor de correo rechaza conexiones) |
+| `php cli/copiar_pagos.php` | Llenar ya las carpetas de pago en SharePoint (lo lanza sola la pantalla de Pagos) |
 | `php cli/sync_correo.php` | Sincronizar el buzón y capturar correo nuevo si está habilitado |
 | `php cli/adelgazar_correo_indice.php` | Medir cuánto ocupa el índice del correo (no cambia nada) |
 | `php cli/adelgazar_correo_indice.php --aplicar --retencion-dias=N` | **Borra filas**: deja solo los últimos N días de índice y compacta |

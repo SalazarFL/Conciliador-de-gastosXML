@@ -66,6 +66,21 @@ class AlmacenEnGraph extends AlmacenDocumentos
     /** clave => driveItem, o false si se sabe que no está. Por proceso. */
     private $conocidos = [];
 
+    /**
+     * Carpetas listadas enteras en este proceso (conocerCarpeta): clave de la
+     * carpeta en minúsculas => [nombre en minúsculas => clave del documento].
+     * Lo que no está ahí, no está: no hace falta preguntarlo.
+     */
+    private $listadas = [];
+
+    /**
+     * Cuántas bajadas o subidas van a la vez en copiarVarios(). Medido contra
+     * la biblioteca el 28/09/2026: bajar 8, 16 o 32 archivos a la vez tarda lo
+     * mismo, unos 0,7 s. Más de 16 no se probó subiendo, y un 429 que llegue
+     * igual se reintenta de a uno.
+     */
+    public const EN_PARALELO = 16;
+
     /** clave de carpeta => id. */
     private $carpetas = [];
 
@@ -192,6 +207,14 @@ class AlmacenEnGraph extends AlmacenDocumentos
         if (array_key_exists($clave, $this->conocidos)) {
             return $this->conocidos[$clave] ?: null;
         }
+        // En una carpeta ya listada, la respuesta está en el listado.
+        // SharePoint no distingue mayúsculas en los nombres; el listado
+        // tampoco.
+        $listado = $this->listadas[mb_strtolower($this->padreDe($clave), 'UTF-8')] ?? null;
+        if ($listado !== null) {
+            $enListado = $listado[mb_strtolower(basename($clave), 'UTF-8')] ?? null;
+            return $enListado !== null ? ($this->conocidos[$enListado] ?: null) : null;
+        }
 
         $item = $this->pedirItem($this->graph->rutaItem($clave));
         $this->conocidos[$clave] = $item === null ? false : $item;
@@ -220,7 +243,7 @@ class AlmacenEnGraph extends AlmacenDocumentos
         } catch (AlmacenConflicto $e) {
             // Ya hay algo con ese nombre. Si es lo mismo, archivar dos veces
             // no es un error; si es otra cosa, que decida quien llama.
-            unset($this->conocidos[$clave]);
+            $this->olvidarRuta($clave);
             $existente = $this->identidad($clave);
             if ($existente === null) {
                 throw $e;   // lo borraron entre medio: que se reintente entero
@@ -235,7 +258,7 @@ class AlmacenEnGraph extends AlmacenDocumentos
         $item = $this->deItem($subido);
         $this->declararHash($item['item_id'], $hash);
         $item['hash'] = $this->hayColumnaHash ? $hash : '';
-        $this->conocidos[$clave] = $item;
+        $this->conocer($clave, $item);
 
         return $this->resultado($clave, $hash, true, $item);
     }
@@ -261,7 +284,8 @@ class AlmacenEnGraph extends AlmacenDocumentos
             'json' => ['parentReference' => ['id' => $padre], 'name' => basename($destino)],
             'ruta' => self::PREFIJO . $destino,
         ]);
-        unset($this->conocidos[$origen], $this->conocidos[$destino]);
+        $this->olvidarRuta($origen);
+        $this->olvidarRuta($destino);
 
         return self::PREFIJO . $destino;
     }
@@ -323,7 +347,7 @@ class AlmacenEnGraph extends AlmacenDocumentos
     public function listarCarpeta($ruta)
     {
         $url = $this->graph->rutaItem($this->clave($ruta))
-            . '/children?$select=id,name,size,folder,file,lastModifiedDateTime&$top=999';
+            . '/children?$select=id,name,size,folder,file,lastModifiedDateTime,cTag,eTag&$top=999';
         $lista = [];
         while ($url !== '') {
             $r = $this->graph->pedir('GET', $url, ['aceptar' => [404]]);
@@ -337,11 +361,181 @@ class AlmacenEnGraph extends AlmacenDocumentos
                     'tamano' => (int) ($hijo['size'] ?? 0),
                     'item_id' => (string) $hijo['id'],
                     'modificado_en' => (string) ($hijo['lastModifiedDateTime'] ?? ''),
+                    'etag' => (string) ($hijo['cTag'] ?? ($hijo['eTag'] ?? '')),
                 ];
             }
             $url = (string) ($r['json']['@odata.nextLink'] ?? '');
         }
         return $lista;
+    }
+
+    /**
+     * Lista la carpeta una vez y, desde ahí, identidad() de lo que tenga
+     * dentro contesta sin salir a la red.
+     *
+     * Copiar la carpeta de un pago preguntaba por cada archivo si ya estaba
+     * —616 preguntas de un cuarto de segundo, casi todas para oír que no—.
+     * Un listado trae hasta 999 de una vez. El hash declarado no viene en el
+     * listado: queda "no se sabe", que es lo que ya significa '' (ver hashDe).
+     *
+     * Una carpeta que no existe se lista vacía: todo lo de dentro "no está",
+     * que es cierto.
+     *
+     * Una carpeta ya listada en este proceso no se vuelve a listar: lo que se
+     * escribe en ella se va anotando (conocer), y lo que se deja de saber la
+     * saca de la lista (olvidarRuta). Con 616 archivos, cada listado de más
+     * era más de un segundo.
+     */
+    public function conocerCarpeta($ruta)
+    {
+        $carpeta = $this->clave($ruta);
+        if (isset($this->listadas[mb_strtolower($carpeta, 'UTF-8')])) {
+            return;
+        }
+        $nombres = [];
+        foreach ($this->listarCarpeta($carpeta) as $hijo) {
+            if ($hijo['es_carpeta']) {
+                continue;
+            }
+            $clave = ($carpeta === '' ? '' : $carpeta . '/') . $hijo['nombre'];
+            $this->conocidos[$clave] = [
+                'item_id' => $hijo['item_id'],
+                'etag' => $hijo['etag'],
+                'tamano' => $hijo['tamano'],
+                'modificado_en' => $hijo['modificado_en'],
+                'hash' => '',
+            ];
+            $nombres[mb_strtolower($hijo['nombre'], 'UTF-8')] = $clave;
+        }
+        $this->listadas[mb_strtolower($carpeta, 'UTF-8')] = $nombres;
+    }
+
+    /**
+     * copiar() de muchos a la vez: de a EN_PARALELO bajadas, y después de a
+     * EN_PARALELO subidas.
+     *
+     * Solo el camino feliz, a propósito: una subida que choca con un nombre
+     * ocupado, un original que no está, un 429, un archivo de más de 4 MiB…
+     * vuelven como el error que son y quien llama los repite de a uno por
+     * copiar()/escribir(), que saben reintentar, esperar y comparar. Así esta
+     * función no tiene reglas propias que puedan contradecir a esas.
+     *
+     * @param array $pares clave => [rutaOrigen, rutaDestino]
+     * @return array clave => lo que da escribir(), o el Throwable que la impidió
+     */
+    public function copiarVarios(array $pares)
+    {
+        $salida = [];
+        foreach (array_chunk($pares, self::EN_PARALELO, true) as $tanda) {
+            $salida += $this->copiarTanda($tanda);
+        }
+        return $salida;
+    }
+
+    private function copiarTanda(array $tanda)
+    {
+        $salida = [];
+        $locales = [];
+        try {
+            // 1. Bajar los originales, cada uno a su temporal.
+            $bajadas = [];
+            foreach ($tanda as $k => $par) {
+                try {
+                    $origen = $this->clave($par[0]);
+                    $destino = $this->clave($par[1]);
+                    if (!self::esComprobante($destino)) {
+                        throw new InvalidArgumentException('A SharePoint solo van XML y PDF: "' . basename($destino) . '".');
+                    }
+                    $locales[$k] = $this->temporalNuevo($destino);
+                } catch (Throwable $e) {
+                    $salida[$k] = $e;
+                    continue;
+                }
+                $bajadas[$k] = [
+                    'metodo' => 'GET',
+                    'ruta' => $this->graph->rutaItem($origen) . '/content',
+                    'seguir' => true,
+                    'guardar_en' => $locales[$k]['fp'],
+                ];
+            }
+            $bajado = $this->graph->enParalelo($bajadas);
+
+            // 2. Subir lo que bajó entero.
+            $subidas = [];
+            foreach (array_keys($bajadas) as $k) {
+                fclose($locales[$k]['fp']);
+                $locales[$k]['fp'] = null;
+                $codigo = (int) $bajado[$k]['codigo'];
+                if ($codigo < 200 || $codigo >= 300) {
+                    $salida[$k] = $codigo === 404
+                        ? new RuntimeException('No está el documento que se quiere copiar: ' . $this->clave($tanda[$k][0]))
+                        : ErrorGraph::deRespuesta($bajado[$k]);
+                    continue;
+                }
+                $local = $locales[$k]['ruta'];
+                if ((int) @filesize($local) > ClienteGraph::LIMITE_SUBIDA_SIMPLE) {
+                    $salida[$k] = new RuntimeException('Más de 4 MiB: se sube por partes, de a uno.');
+                    continue;
+                }
+                $subidas[$k] = [
+                    'metodo' => 'PUT',
+                    'ruta' => $this->graph->rutaItem($this->clave($tanda[$k][1])) . '/content?@microsoft.graph.conflictBehavior=fail',
+                    'cuerpo' => (string) file_get_contents($local),
+                    'cabeceras' => ['Content-Type' => 'application/octet-stream'],
+                ];
+            }
+            $subido = $this->graph->enParalelo($subidas);
+
+            // 3. Lo que quedó, anotado como lo anota escribir().
+            foreach (array_keys($subidas) as $k) {
+                $destino = $this->clave($tanda[$k][1]);
+                $codigo = (int) $subido[$k]['codigo'];
+                if ($codigo < 200 || $codigo >= 300) {
+                    $this->olvidarRuta($destino);
+                    $salida[$k] = $codigo === 409
+                        ? new AlmacenConflicto(self::PREFIJO . $destino, '')
+                        : ErrorGraph::deRespuesta($subido[$k]);
+                    continue;
+                }
+                $hash = (string) hash_file('sha256', $locales[$k]['ruta']);
+                $item = $this->deItem((array) $subido[$k]['json']);
+                $this->declararHash($item['item_id'], $hash);
+                $item['hash'] = $this->hayColumnaHash ? $hash : '';
+                $this->conocer($destino, $item);
+                $salida[$k] = $this->resultado($destino, $hash, true, $item);
+            }
+        } catch (Throwable $e) {
+            // Sin token o con el circuito abierto: nada de la tanda se hizo.
+            foreach (array_keys($tanda) as $k) {
+                if (!isset($salida[$k])) {
+                    $salida[$k] = $e;
+                }
+            }
+        } finally {
+            foreach ($locales as $local) {
+                if (is_resource($local['fp'])) {
+                    fclose($local['fp']);
+                }
+                @unlink($local['ruta']);
+            }
+        }
+        return $salida;
+    }
+
+    /** Un temporal para bajar un documento, donde barrerTemporales() lo encuentra si el proceso muere. */
+    private function temporalNuevo($nombre)
+    {
+        $carpeta = self::carpetaTemporales();
+        if (!is_dir($carpeta) && !@mkdir($carpeta, 0777, true) && !is_dir($carpeta)) {
+            throw new RuntimeException('No se pudo crear la carpeta de temporales ' . $carpeta . '.');
+        }
+        $ruta = $carpeta . DIRECTORY_SEPARATOR . uniqid('doc_', true) . '_'
+            . preg_replace('/[^A-Za-z0-9._-]+/', '_', basename($nombre));
+        $fp = @fopen($ruta, 'w+b');
+        if ($fp === false) {
+            throw new RuntimeException('No se pudo escribir el temporal ' . $ruta . '.');
+        }
+        return ['ruta' => $ruta, 'fp' => $fp];
     }
 
     /**
@@ -469,6 +663,26 @@ class AlmacenEnGraph extends AlmacenDocumentos
         return $padre === '.' ? '' : $padre;
     }
 
+    /** Lo que se acaba de escribir: queda sabido, también en el listado de su carpeta. */
+    private function conocer($clave, array $item)
+    {
+        $this->conocidos[$clave] = $item;
+        $padre = mb_strtolower($this->padreDe($clave), 'UTF-8');
+        if (isset($this->listadas[$padre])) {
+            $this->listadas[$padre][mb_strtolower(basename($clave), 'UTF-8')] = $clave;
+        }
+    }
+
+    /**
+     * Deja de dar por sabido lo que había en esa ruta. También el listado de
+     * su carpeta: si no, identidad() seguiría contestando con él lo que ya no
+     * se sabe, y quien acaba de chocar con un nombre ocupado oiría "no está".
+     */
+    private function olvidarRuta($clave)
+    {
+        unset($this->conocidos[$clave], $this->listadas[mb_strtolower($this->padreDe($clave), 'UTF-8')]);
+    }
+
     /** El id de una carpeta, creándola —y las de su camino— si hace falta. */
     private function idCarpeta($clave)
     {
@@ -487,7 +701,7 @@ class AlmacenEnGraph extends AlmacenDocumentos
 
         $padre = $this->idCarpeta($this->padreDe($clave));
         // Lo que se sabía de esa ruta —que no estaba— deja de ser cierto.
-        unset($this->conocidos[$clave]);
+        $this->olvidarRuta($clave);
         try {
             $r = $this->graph->pedir('POST', $this->graph->unidad() . '/items/' . rawurlencode($padre) . '/children', [
                 'json' => ['name' => basename($clave), 'folder' => new stdClass(),

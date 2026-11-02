@@ -103,8 +103,9 @@ $cuando = static function ($v) { return $v ? substr((string) $v, 0, 16) : ''; };
 // ═══════════════════════════════════════════════════════════════════════════
 // COMPROBANTES XML  y  NOTAS XML
 // Son la misma tabla mirada por tipo de documento —FE y NC—, así que enseñan
-// exactamente lo mismo. Se declaran una vez: el día que a una le entre una
-// columna, a la otra también, que es lo que se quería cuando se igualaron.
+// lo mismo. Se declaran una vez: el día que a una le entre una columna, a la
+// otra también, que es lo que se quería cuando se igualaron. La excepción son
+// las referencias, que solo tienen sentido en la nota (ver $notasXml).
 // ═══════════════════════════════════════════════════════════════════════════
 
 $comprobantes = [
@@ -141,6 +142,41 @@ $comprobantes = [
         'registrado'   => ['titulo' => 'Registrado en',       'valor' => static fn($f) => $cuando($f['creado_en'] ?? null), 'ancho' => 17, 'defecto' => false],
 ];
 
+/*
+ * Las notas llevan además lo que su XML cita en InformacionReferencia: contra
+ * qué factura van. Se veía solo abriendo la ficha, nota por nota. Va al lado
+ * del número porque es lo que se lee junto con él, y solo en las notas: una
+ * factura casi nunca cita nada.
+ *
+ * NotasXmlController::conReferencias las pega a cada fila, ya dichas como en
+ * la ficha (FichaDocumento::referencias). null = el XML no se ha leído.
+ */
+$notasXml = [];
+foreach ($comprobantes as $id => $col) {
+    $notasXml[$id] = $col;
+    if ($id === 'numero') {
+        $notasXml['referencias'] = [
+            'titulo' => 'Referencias',
+            'ancho'  => 48,
+            'desde'  => '2026-09-30 06:45',
+            'valor'  => static function ($f) {
+                if (!array_key_exists('referencias', $f) || $f['referencias'] === null) { return ''; }
+                // En el orden en que el XML las cita. En pantalla van una bajo
+                // la otra; en el Excel, separadas, que una celda no parte renglones.
+                return implode('; ', array_map(static function ($r) {
+                    $partes = array_filter([
+                        $r['sigla'] ?? '',
+                        $r['consecutivo'] !== '' ? $r['consecutivo'] : $r['numero'],
+                        $r['fecha'] !== '' ? 'del ' . $r['fecha'] : '',
+                        $r['razon'] !== '' ? '(' . $r['razon'] . ')' : '',
+                    ], 'strlen');
+                    return implode(' ', $partes);
+                }, $f['referencias']));
+            },
+        ];
+    }
+}
+
 return [
 
 'facturas' => [
@@ -152,7 +188,7 @@ return [
 'notasxml' => [
     'nombre'   => 'Notas de crédito XML',
     'archivo'  => 'notas_xml',
-    'columnas' => $comprobantes,
+    'columnas' => $notasXml,
 ],
 
 // ═══════════════════════════════════════════════════════════════════════════

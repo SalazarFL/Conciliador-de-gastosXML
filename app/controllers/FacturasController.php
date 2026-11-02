@@ -696,10 +696,10 @@ class FacturasController extends Controller
 				// Una cola de facturas FE no cambia ninguna nota de crédito. Evita
 				// revalidar todos los listados de NC (miles de líneas) al terminar
 				// cada importación de facturas. Las colas NC conservan la revisión.
-				$tipoDocumento = strtoupper((string) (
-					$result['estado']['metadata']['tipo_documento'] ?? 'FE'
-				));
-				if ($tipoDocumento === 'NC') {
+				// Una cola de la Bandeja del correo puede traer de las dos: basta
+				// que admita notas para que haya que revisar sus listados.
+				$tipos = InvoiceImportQueue::tiposDe((array) ($result['estado']['metadata'] ?? []));
+				if (in_array('NC', $tipos, true)) {
 					$this->verificarListadosNotasCredito();
 				}
 			}

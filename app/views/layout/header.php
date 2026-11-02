@@ -104,14 +104,10 @@ $seccionesMenu = Navegacion::secciones();
 $puedeVerMenu = fn(string $permiso): bool => Permisos::puede($permiso);
 
 // El engranaje de la barra superior lleva a la misma pantalla que la entrada
-// del menú, y se ofrece con la misma regla: Configuración hospeda secciones
-// de varios dueños —usuarios, roles, bitácora, respaldo—, así que basta con
-// poder entrar a CUALQUIERA de ellas.
-$puedeConfiguracion = Permisos::puedeAlguno([
-    'configuracion.ver', 'usuarios.ver', 'usuarios.administrar',
-    'roles.administrar', 'bitacora.ver', 'respaldo.administrar',
-    'empresas.administrar', 'correo.configurar', 'configuracion.archivo',
-]);
+// del menú, y se ofrece con la misma regla: la de la ruta. Antes era una
+// copia de la lista, y cuando llegó 'configuracion.proveedores' se quedó sin
+// ella.
+$puedeConfiguracion = Permisos::puedeRuta('GET', '/configuracion');
 
 // Sociedad activa: algunos controladores ya la cargan para su propia vista
 // (Home, Correo, Por-pagar); en las demás páginas se busca aquí para que

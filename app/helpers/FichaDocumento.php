@@ -41,6 +41,14 @@ class FichaDocumento
         '04' => 'Tiquete electrónico',
     ];
 
+    /** Los mismos, en sigla. */
+    private const SIGLAS_REFERENCIA = [
+        '01' => 'FE',
+        '02' => 'ND',
+        '03' => 'NC',
+        '04' => 'TE',
+    ];
+
     /**
      * @param array      $fila        Fila de facturas_xml con el proveedor unido
      *                                (Factura::getOneWithProvider).
@@ -137,8 +145,11 @@ class FichaDocumento
      * escriben otra cosa en <Numero>— se enseña lo que escribieron.
      * `documento_id` es el comprobante del sistema con esa clave, para
      * poder abrirlo; 0 si no ha llegado.
+     *
+     * Pública porque la columna "Referencias" de Notas de crédito XML dice lo
+     * mismo que la ficha, con las mismas palabras.
      */
-    private static function referencias(array $filas)
+    public static function referencias(array $filas)
     {
         $salida = [];
         foreach ($filas as $r) {
@@ -153,6 +164,8 @@ class FichaDocumento
                 'clave' => trim((string) ($r['clave_ref'] ?? '')),
                 'fecha' => self::fecha($r['fecha_ref'] ?? ''),
                 'tipo' => $tipo === '' ? '' : (self::TIPOS_REFERENCIA[$tipo] ?? 'Tipo ' . $tipo),
+                // La sigla, para la columna, donde el nombre entero no cabe.
+                'sigla' => self::SIGLAS_REFERENCIA[$tipo] ?? ($tipo === '' ? '' : $tipo),
                 'razon' => trim((string) ($r['razon'] ?? '')),
                 'documento_id' => (int) ($r['documento_id'] ?? 0),
             ];

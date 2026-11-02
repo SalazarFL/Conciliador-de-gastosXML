@@ -92,13 +92,9 @@ class PagoResolutor
             $codigo = trim((string) ($fila['codigo'] ?? ''));
 
             $candidatas = self::candidatas($numero, $indice);
-            if (!$candidatas) {
-                $salida[] = self::conEstado($fila, 'ausente',
-                    'No está en el listado de facturas del sistema. Cargá el reporte que la incluya.');
-                continue;
-            }
-
-            $eleccion = self::elegir($candidatas, $codigo, $proveedor);
+            $eleccion = $candidatas
+                ? self::elegir($candidatas, $codigo, $proveedor)
+                : self::elegirSinNumero($fila, $numero, $codigo, $indice);
             if ($eleccion['factura'] === null) {
                 $salida[] = self::conEstado($fila, $eleccion['estado'], $eleccion['motivo']);
                 continue;
@@ -129,8 +125,9 @@ class PagoResolutor
 
             $resueltas[] = $erpId;
             $salida[] = self::conEstado($fila, 'resuelta',
-                $movidaDesde > 0 ? 'Viene del pago #' . $movidaDesde . ': se mueve a este.' : '',
-                $elegida, $movidaDesde);
+                trim($eleccion['motivo'] . ' '
+                    . ($movidaDesde > 0 ? 'Viene del pago #' . $movidaDesde . ': se mueve a este.' : '')),
+                $elegida, $movidaDesde, !empty($eleccion['por_senas']));
         }
 
         $resumen = array_fill_keys(
@@ -141,6 +138,10 @@ class PagoResolutor
         // quitándoselas a otro pago. No decide si la carga puede hacerse
         // —esas entran igual—, se cuenta para poder avisarlo.
         $resumen['reasignada'] = 0;
+        // Tampoco es un estado: cuántas de las resueltas no tienen número en el
+        // sistema y se reconocieron por proveedor, fecha y monto. Entran igual;
+        // se cuentan porque es la única resolución que no sale del número.
+        $resumen['por_senas'] = 0;
         foreach ($salida as $linea) {
             $estado = (string) $linea['estado'];
             if (isset($resumen[$estado])) {
@@ -148,6 +149,9 @@ class PagoResolutor
             }
             if (!empty($linea['movida_desde'])) {
                 $resumen['reasignada']++;
+            }
+            if (!empty($linea['por_senas'])) {
+                $resumen['por_senas']++;
             }
         }
 
@@ -167,7 +171,7 @@ class PagoResolutor
      */
     private static function indexar(array $erp)
     {
-        $indice = ['consecutivo' => [], 'corto' => []];
+        $indice = ['consecutivo' => [], 'corto' => [], 'sin_numero' => []];
         foreach ($erp as $factura) {
             $documento = trim((string) ($factura['documento'] ?? ''));
             if (preg_match('/^\d{20}$/', $documento) && ltrim($documento, '0') !== '') {
@@ -177,6 +181,11 @@ class PagoResolutor
             $corto = trim((string) ($factura['numero_corto'] ?? ''));
             if ($corto === '') {
                 $corto = $documento;
+            }
+            // Las que el reporte trae sin número: no entran a ninguna de las
+            // dos llaves, y se buscan por código. Ver elegirSinNumero().
+            if ($corto === '') {
+                $indice['sin_numero'][trim((string) ($factura['proveedor_codigo'] ?? ''))][] = $factura;
             }
             if ($corto !== '' && ltrim($corto, '0') !== '') {
                 $indice['corto'][(string) NumeroFactura::xmlOchoDigitos($corto)][] = $factura;
@@ -261,6 +270,99 @@ class PagoResolutor
             . 'el código del proveedor para distinguirlas.');
     }
 
+    /**
+     * La factura que el sistema tiene SIN número, si es esta.
+     *
+     * El ERP guarda algunos números rellenos con ceros hasta cincuenta cifras
+     * (…0000001801), y la columna de documento del reporte "Facturas por
+     * Proveedor" mide veintinueve: lo que imprime de esos son veintinueve
+     * ceros, y el número se queda afuera. La factura entra al sistema sin
+     * documento, y su identidad —la misma `clave` con que se importa— pasa a
+     * ser proveedor, fecha de emisión y monto. El archivo de pago sí trae el
+     * número completo, pero no hay contra qué cruzarlo: por el número, estas
+     * facturas no se van a encontrar nunca, se cargue el reporte que se cargue.
+     *
+     * Así que se buscan por lo único que las identifica, y solo ellas: la fila
+     * tiene que traer un número de los que el reporte no puede imprimir, y la
+     * candidata tiene que estar sin número, ser del mismo código, de la misma
+     * fecha y por el mismo importe. No contradice que el monto no desempate
+     * entre facturas con número: acá no desempata nada, es parte de la
+     * identidad de una factura que no tiene otra. Y si dos coinciden en todo
+     * queda ambigua, como cualquier otra.
+     *
+     * @return array ['factura' => ?array, 'estado' => string, 'motivo' => string]
+     */
+    private static function elegirSinNumero(array $fila, $numero, $codigo, array $indice)
+    {
+        $ausente = self::sinElegir('ausente',
+            'No está en el listado de facturas del sistema. Cargá el reporte que la incluya.');
+
+        $fecha = self::fechaSql((string) ($fila['fecha'] ?? ''));
+        if ($codigo === '' || $fecha === '' || !self::elReporteNoLoImprime($numero)) {
+            return $ausente;
+        }
+
+        $importe = round((float) ($fila['saldo'] ?? 0), 2);
+        $iguales = array_values(array_filter(
+            $indice['sin_numero'][$codigo] ?? [],
+            function ($factura) use ($fecha, $importe) {
+                return (string) ($factura['fecha_emision'] ?? '') === $fecha
+                    && (abs(round((float) $factura['saldo'], 2) - $importe) < 0.005
+                        || abs(round((float) $factura['monto'], 2) - $importe) < 0.005);
+            }
+        ));
+
+        if (!$iguales) {
+            return $ausente;
+        }
+        if (count($iguales) > 1) {
+            return self::sinElegir('ambigua',
+                'El sistema tiene ' . count($iguales) . ' facturas sin número del código ' . $codigo
+                . ' con esa fecha y ese monto; nada más las distingue.');
+        }
+        return [
+            'factura' => $iguales[0],
+            'estado' => 'resuelta',
+            'motivo' => 'El reporte del sistema la trae sin número: se reconoció por proveedor, fecha y monto.',
+            'por_senas' => true,
+        ];
+    }
+
+    /** Ancho de la columna de documento del reporte "Facturas por Proveedor". */
+    private const ANCHO_DOCUMENTO_REPORTE = 29;
+
+    /** ¿Es un número relleno con ceros del que el reporte solo imprime ceros? */
+    private static function elReporteNoLoImprime($numero)
+    {
+        if (!preg_match_all('/\d+/', (string) $numero, $m)) {
+            return false;
+        }
+        foreach ($m[0] as $trozo) {
+            if (strlen($trozo) > self::ANCHO_DOCUMENTO_REPORTE
+                && strspn($trozo, '0') >= self::ANCHO_DOCUMENTO_REPORTE
+                && ltrim($trozo, '0') !== '') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** La fecha del archivo (dd/mm/aaaa, o ya aaaa-mm-dd) como la guarda el ERP. */
+    private static function fechaSql($fecha)
+    {
+        $fecha = trim($fecha);
+        if (preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $fecha)) {
+            return $fecha;
+        }
+        if (!preg_match('#^(\d{1,2})/(\d{1,2})/(\d{2}|\d{4})$#', $fecha, $m)) {
+            return '';
+        }
+        $anio = strlen($m[3]) === 2 ? 2000 + (int) $m[3] : (int) $m[3];
+        return checkdate((int) $m[2], (int) $m[1], $anio)
+            ? sprintf('%04d-%02d-%02d', $anio, (int) $m[2], (int) $m[1])
+            : '';
+    }
+
     private static function sinElegir($estado, $motivo)
     {
         return ['factura' => null, 'estado' => $estado, 'motivo' => $motivo];
@@ -291,13 +393,15 @@ class PagoResolutor
         return implode(' / ', array_slice($nombres, 0, 3)) . (count($nombres) > 3 ? ' …' : '');
     }
 
-    private static function conEstado(array $fila, $estado, $motivo, ?array $erp = null, $movidaDesde = 0)
+    private static function conEstado(array $fila, $estado, $motivo, ?array $erp = null, $movidaDesde = 0, $porSenas = false)
     {
         return [
             'estado' => $estado,
             'motivo' => $motivo,
             // El pago del que se la quita esta carga, si se la quita a alguno.
             'movida_desde' => (int) $movidaDesde > 0 ? (int) $movidaDesde : null,
+            // Sin número en el sistema: reconocida por proveedor, fecha y monto.
+            'por_senas' => (bool) $porSenas,
             'numero' => trim((string) ($fila['numero'] ?? '')),
             'proveedor' => trim((string) ($fila['proveedor'] ?? '')),
             'saldo' => round((float) ($fila['saldo'] ?? ($fila['total'] ?? 0)), 2),

@@ -40,6 +40,20 @@ return [
      * 'modulo.accion' y el texto es lo que lee el administrador al marcarlo,
      * escrito como se lo explicaría a alguien: qué podrá hacer, no cómo se
      * llama la ruta.
+     *
+     * Dos marcas opcionales por módulo:
+     *   'base'    El permiso sin el cual los demás del módulo no sirven: quien
+     *             puede "verificar un pago" pero no "ver los pagos" nunca llega
+     *             al botón. La pantalla de roles lo marca sola al marcar otro
+     *             del módulo, RolesController lo completa al guardar, y la
+     *             lista de roles avisa de los que se quedaron sin él.
+     *   'sueltos' Los del módulo que NO dependen de la base, porque se usan
+     *             desde otra pantalla (dar de alta un buzón se hace en
+     *             Configuración, no en la bandeja del correo).
+     *   'oculto'  El módulo existe y su ruta responde, pero config/menu.php no
+     *             lo ofrece. Se sigue pudiendo repartir —el día que vuelva al
+     *             menú, los roles ya estarán listos—, y la pantalla de roles
+     *             lo dice para que nadie se pregunte dónde está.
      */
     'modulos' => [
 
@@ -47,6 +61,7 @@ return [
             'titulo'  => 'Seguimiento',
             'icono'   => 'fa-list-check',
             'resumen' => 'La cola única de trabajo: lo que falta y lo que no cuadra.',
+            'base'    => 'seguimiento.ver',
             'permisos' => [
                 'seguimiento.ver'      => 'Ver la cola de trabajo',
                 'seguimiento.editar'   => 'Cambiar estados, responsables y anotaciones',
@@ -58,6 +73,7 @@ return [
             'titulo'  => 'Pagos',
             'icono'   => 'fa-file-invoice-dollar',
             'resumen' => 'El listado del pago y su verificación contra los XML.',
+            'base'    => 'por_pagar.ver',
             'permisos' => [
                 'por_pagar.ver'      => 'Ver los pagos y sus facturas',
                 'por_pagar.cargar'   => 'Subir el listado del pago',
@@ -71,6 +87,7 @@ return [
             'titulo'  => 'Notas de crédito',
             'icono'   => 'fa-file-circle-minus',
             'resumen' => 'Los listados por período y su respaldo electrónico.',
+            'base'    => 'notas_credito.ver',
             'permisos' => [
                 'notas_credito.ver'      => 'Ver los listados de notas de crédito',
                 'notas_credito.cargar'   => 'Subir un listado nuevo',
@@ -83,6 +100,8 @@ return [
             'titulo'  => 'Correo',
             'icono'   => 'fa-envelope-open-text',
             'resumen' => 'La captura de facturas desde los buzones.',
+            'base'    => 'correo.ver',
+            'sueltos' => ['correo.configurar'],
             'permisos' => [
                 'correo.ver'         => 'Ver la bandeja y abrir los mensajes',
                 'correo.sincronizar' => 'Bajar correo de los buzones',
@@ -96,6 +115,7 @@ return [
             'titulo'  => 'Facturas',
             'icono'   => 'fa-file-invoice',
             'resumen' => 'El reporte de saldos del sistema.',
+            'base'    => 'facturas_erp.ver',
             'permisos' => [
                 'facturas_erp.ver'      => 'Ver las facturas de la empresa',
                 'facturas_erp.cargar'   => 'Subir el reporte del ERP',
@@ -108,6 +128,7 @@ return [
             'titulo'  => 'Facturas XML',
             'icono'   => 'fa-file-code',
             'resumen' => 'Carga y consulta de los comprobantes de facturas.',
+            'base'    => 'facturas_xml.ver',
             'permisos' => [
                 'facturas_xml.ver'      => 'Ver y consultar los comprobantes',
                 'facturas_xml.cargar'   => 'Subir XML de facturas',
@@ -119,6 +140,7 @@ return [
             'titulo'  => 'Notas XML',
             'icono'   => 'fa-file-import',
             'resumen' => 'Carga y consulta de los comprobantes de notas de crédito.',
+            'base'    => 'notas_xml.ver',
             'permisos' => [
                 'notas_xml.ver'      => 'Ver y consultar los comprobantes',
                 'notas_xml.cargar'   => 'Subir XML de notas de crédito',
@@ -130,6 +152,8 @@ return [
             'titulo'  => 'Devoluciones',
             'icono'   => 'fa-rotate-left',
             'resumen' => 'Los reportes del sistema contra las notas electrónicas.',
+            'base'    => 'devoluciones.ver',
+            'oculto'  => true,
             'permisos' => [
                 'devoluciones.ver'      => 'Ver las devoluciones',
                 'devoluciones.cargar'   => 'Subir reportes de devolución',
@@ -154,6 +178,7 @@ return [
             'titulo'  => 'Avisos',
             'icono'   => 'fa-bell',
             'resumen' => 'La campana: decisiones pendientes del equipo.',
+            'base'    => 'avisos.ver',
             'permisos' => [
                 'avisos.ver'      => 'Ver los avisos pendientes',
                 'avisos.resolver' => 'Resolver, cerrar y decidir sobre un aviso',
@@ -164,10 +189,20 @@ return [
             'titulo'  => 'Configuración',
             'icono'   => 'fa-gear',
             'resumen' => 'Los ajustes que valen para todo el sistema.',
+            // Sin 'base': cada uno abre Configuración por su cuenta (ver
+            // 'GET /configuracion' más abajo), y ninguno necesita al otro.
+            //
+            // 'configuracion.archivo' decía "Cambiar la carpeta donde se
+            // guardan XML y PDF". Desde el 27/09/2026 todo va a SharePoint y
+            // no hay carpeta que elegir: las credenciales son un archivo de
+            // cada PC (local.graph.php). Lo que concede hoy es entrar a ver esa
+            // sección y que el paso "SharePoint" de config/requisitos.php le
+            // ofrezca el botón en vez de "pídeselo a…". La clave se conserva
+            // porque ya está guardada en los roles.
             'permisos' => [
-                'configuracion.ver'      => 'Entrar a la pantalla de configuración',
-                'configuracion.archivo'  => 'Cambiar la carpeta donde se guardan XML y PDF',
-                'configuracion.proveedores' => 'Importar y editar los proveedores del sistema',
+                'configuracion.ver'      => 'Entrar a Configuración y ver cómo está puesto el sistema',
+                'configuracion.archivo'  => 'Revisar la conexión con SharePoint, donde se guardan XML y PDF',
+                'configuracion.proveedores' => 'Importar el listado de proveedores del ERP y corregir sus códigos',
                 'diagnostico.ver'        => 'Ver el diagnóstico de la instalación',
             ],
         ],
@@ -213,6 +248,12 @@ return [
         // bitácora, respaldo—, así que exigir solo 'configuracion.ver' dejaría
         // a quien administra usuarios sin poder llegar a la lista de usuarios.
         // Cada sección se sigue dibujando según su propio permiso.
+        //
+        // Esta lista es la única: el engranaje de la barra y la entrada del
+        // menú la leen de aquí (Permisos::puedeRuta). Antes cada uno tenía su
+        // copia, y al llegar 'configuracion.proveedores' el engranaje se
+        // quedó sin ella: quien solo tenía ese permiso veía la entrada del
+        // menú pero no el engranaje.
         'GET /configuracion' => ['permiso' => [
             'configuracion.ver', 'usuarios.ver', 'usuarios.administrar',
             'roles.administrar', 'bitacora.ver', 'respaldo.administrar',
@@ -336,6 +377,7 @@ return [
         'GET /por-pagar/exportar'             => ['permiso' => 'por_pagar.exportar', 'registrar' => 'Exportó el pago'],
         'GET /por-pagar/sin-coincidencia'     => ['permiso' => 'por_pagar.ver'],
         'POST /por-pagar/forzar'              => ['permiso' => 'por_pagar.editar',   'registrar' => 'Forzó un emparejamiento'],
+        'POST /por-pagar/vincular-mismo-numero' => ['permiso' => 'por_pagar.editar', 'registrar' => 'Vinculó el XML de su mismo número'],
 
         // ── Facturas del ERP ──────────────────────────────────────────────
         'GET /facturas-erp'                        => ['permiso' => 'facturas_erp.ver'],

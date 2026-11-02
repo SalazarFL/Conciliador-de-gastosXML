@@ -107,6 +107,96 @@ class Permisos
         return isset($rutas[$clave]) && is_array($rutas[$clave]) ? $rutas[$clave] : null;
     }
 
+    /**
+     * Las llaves que abre una ruta, siempre como lista: lo que el menú
+     * necesita para decidir si la ofrece. Vacía si es 'publica', 'libre' o
+     * nadie la declaró.
+     */
+    public static function llavesDeRuta(string $metodo, string $uri): array
+    {
+        $permiso = self::reglaDeRuta($metodo, $uri)['permiso'] ?? null;
+        if ($permiso === null || $permiso === 'publica' || $permiso === 'libre') {
+            return [];
+        }
+        return array_values((array) $permiso);
+    }
+
+    /**
+     * Si el usuario pasaría la guardia de una ruta, sin cortar nada. Es la
+     * pregunta que hace un enlace antes de dibujarse: contestarla con la
+     * misma regla que el enrutador es lo que evita una lista copiada a mano
+     * que se desactualiza sola.
+     */
+    public static function puedeRuta(string $metodo, string $uri): bool
+    {
+        $llaves = self::llavesDeRuta($metodo, $uri);
+        return $llaves === [] || self::puedeAlguno($llaves);
+    }
+
+    /**
+     * Qué le da de verdad a alguien una lista de permisos, módulo por módulo.
+     * No mira la base ni la sesión: lo usan la lista de roles, el formulario
+     * y las pruebas, sobre la lista que tengan delante.
+     *
+     * Devuelve:
+     *   'modulos'      [id => ['marcados' => [claves], 'total' => n]]
+     *   'total'        cuántos permisos del catálogo concede
+     *   'desconocidos' claves guardadas que el catálogo ya no tiene: no abren
+     *                  nada y se caen solas la próxima vez que se guarde el rol
+     *   'sin_base'     [id => [claves]] lo marcado en un módulo cuya base no
+     *                  está: permisos que existen en el papel y en ninguna
+     *                  pantalla
+     *   'delicados'    los de Administración, que reparten los accesos de los
+     *                  demás
+     *
+     * @param bool $esAdmin El rol que lo puede todo: se le cuentan todos.
+     */
+    public static function analizarRol(array $claves, bool $esAdmin = false): array
+    {
+        $modulos = self::modulos();
+        $todas   = self::todas();
+        $claves  = $esAdmin ? $todas : array_values(array_unique(array_map('strval', $claves)));
+        $tiene   = array_flip($claves);
+
+        $porModulo = [];
+        $sinBase   = [];
+        foreach ($modulos as $id => $modulo) {
+            $delModulo = array_keys($modulo['permisos'] ?? []);
+            $marcados  = array_values(array_filter($delModulo, fn($c) => isset($tiene[$c])));
+            $porModulo[$id] = ['marcados' => $marcados, 'total' => count($delModulo)];
+
+            $base = $modulo['base'] ?? null;
+            if ($base !== null && !isset($tiene[$base])) {
+                $dependen = array_diff($marcados, (array) ($modulo['sueltos'] ?? []));
+                if ($dependen) {
+                    $sinBase[$id] = array_values($dependen);
+                }
+            }
+        }
+
+        return [
+            'modulos'      => $porModulo,
+            'total'        => count(array_intersect($claves, $todas)),
+            'desconocidos' => array_values(array_diff($claves, $todas)),
+            'sin_base'     => $sinBase,
+            'delicados'    => $esAdmin ? [] : ($porModulo['administracion']['marcados'] ?? []),
+        ];
+    }
+
+    /**
+     * Completa una lista de permisos con la base de cada módulo que la
+     * necesita. Es lo que hace la pantalla de roles al marcar una casilla; se
+     * repite al guardar porque la pantalla puede no tener JS.
+     */
+    public static function conBases(array $claves): array
+    {
+        $claves = array_values(array_unique(array_map('strval', $claves)));
+        foreach (self::analizarRol($claves)['sin_base'] as $id => $_) {
+            $claves[] = (string) self::modulos()[$id]['base'];
+        }
+        return $claves;
+    }
+
     // ── Lo que puede el usuario de esta petición ──────────────────────────
 
     /**

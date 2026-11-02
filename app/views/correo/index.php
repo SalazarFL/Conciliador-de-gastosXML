@@ -22,7 +22,6 @@ $loteGeneral     = is_array($loteGeneral ?? null) ? $loteGeneral : null;
 
 $listo = $imapDisponible && $configurado;
 $pendientes = (int) ($conteo['pendiente'] ?? 0);
-$diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 14;
 ?>
 
 <style>
@@ -84,6 +83,15 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     height: 100%;
     width: 0%;
     transition: width .3s;
+}
+.correo-trabajando-barra.sin-medida > div {
+    width: 35% !important;
+    transition: none;
+    animation: correo-barra-va-y-viene 1.3s ease-in-out infinite alternate;
+}
+@keyframes correo-barra-va-y-viene {
+    from { transform: translateX(0); }
+    to   { transform: translateX(186%); }
 }
 #cor-counts { font-size: 11.5px; color: var(--text-muted); margin-top: 6px; }
 #cor-detail { font-size: 11.5px; color: var(--text-muted); }
@@ -247,9 +255,9 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                 </select>
                 <select id="sel-dias" class="form-control" <?= $listo ? '' : 'disabled' ?>>
                     <?php foreach ([7, 14, 30, 60, 90, 180, 365] as $d): ?>
-                    <option value="<?= $d ?>" <?= $d === $diasDefault ? 'selected' : '' ?>><?= $d ?> días</option>
+                    <option value="<?= $d ?>"><?= $d ?> días</option>
                     <?php endforeach; ?>
-                    <option value="0">Todas las fechas</option>
+                    <option value="0" selected>Todas las fechas</option>
                 </select>
                 <button type="button" class="btn btn-primary btn-sm" id="btn-cargar" title="Buscar en el buzón" <?= $listo ? '' : 'disabled' ?>>
                     <i class="fas fa-magnifying-glass"></i>
@@ -347,12 +355,26 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             </div>
             <?php else: ?>
                 <?php foreach ($bandeja as $fila): ?>
-                <div class="bandeja-item">
+                <div class="bandeja-item"
+                     data-id="<?= (int) $fila['id'] ?>"
+                     data-clave="<?= htmlspecialchars((string) ($fila['uid_correo'] ?? '')) ?>"
+                     data-asunto="<?= htmlspecialchars((string) ($fila['asunto'] ?? '')) ?>"
+                     data-remitente="<?= htmlspecialchars((string) ($fila['remitente'] ?? '')) ?>"
+                     data-fecha="<?= htmlspecialchars((string) ($fila['fecha_correo'] ?? '')) ?>">
                     <input type="checkbox" class="cb-row" value="<?= (int) $fila['id'] ?>"
                            data-estado="<?= htmlspecialchars($fila['estado']) ?>">
+                    <button type="button" class="bandeja-ver" title="Ver el correo de este documento"
+                            aria-label="Ver el correo de este documento">
+                        <i class="fas fa-envelope-open-text"></i>
+                    </button>
                     <div class="bandeja-item-main"
                          title="<?= htmlspecialchars(($fila['remitente'] ?? '') . ' — ' . ($fila['asunto'] ?? '')) ?>">
-                        <div class="bandeja-num"><?= htmlspecialchars($fila['numero_corto'] ?? '—') ?></div>
+                        <div class="bandeja-num">
+                            <?php if (strtoupper((string) ($fila['tipo_doc'] ?? 'FE')) === 'NC'): ?>
+                            <span class="bandeja-tipo" title="Nota de crédito">NC</span>
+                            <?php endif; ?>
+                            <?= htmlspecialchars($fila['numero_corto'] ?? '—') ?>
+                        </div>
                         <div class="bandeja-prov">
                             <?= htmlspecialchars($fila['proveedor'] ?? '—') ?> · <?= htmlspecialchars($fila['fecha_emision'] ?? '') ?>
                         </div>
@@ -444,7 +466,15 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                             <?php endif; ?>
                         </td>
                         <td class="center">
-                            <?php if ($fila['estado'] === 'importada' && !empty($fila['importacion_id'])): ?>
+                            <?php if ($fila['estado'] === 'importada' && !empty($fila['importacion_id'])
+                                      && strtoupper((string) ($fila['tipo_doc'] ?? 'FE')) === 'NC'): ?>
+                            <?php // Una nota no sale en el listado de facturas: va al suyo. ?>
+                            <a href="<?= $baseUrl ?>/notas-xml" data-ventana="Notas XML"
+                               data-ventana-titulo="<?= htmlspecialchars((string) ($fila['numero_corto'] ?? '')) ?>"
+                               class="btn btn-outline btn-sm" title="Ver en Notas XML">
+                                <i class="fas fa-eye"></i>
+                            </a>
+                            <?php elseif ($fila['estado'] === 'importada' && !empty($fila['importacion_id'])): ?>
                             <a href="<?= $baseUrl ?>/facturas?importacion_id=<?= (int) $fila['importacion_id'] ?>"
                                data-ventana="Comprobantes XML"
                                data-ventana-titulo="<?= htmlspecialchars((string) ($fila['numero_corto'] ?? '')) ?>"
@@ -651,8 +681,21 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     var visorSolicitud = 0;
 
     function setStatus(t) { elStatus.textContent = t; }
-    function setBar(p) { elBar.style.width = Math.max(0, Math.min(100, p)) + '%'; }
+    function setBar(p) {
+        elBar.parentNode.classList.remove('sin-medida');
+        elBar.style.width = Math.max(0, Math.min(100, p)) + '%';
+    }
+    // Cuando no hay de dónde sacar un porcentaje —el servidor arma un paquete
+    // y no avisa por dónde va—, la barra se mueve igual: quieta parece colgada.
+    function barraSinMedida() { elBar.parentNode.classList.add('sin-medida'); }
     function sleep(ms) { return new Promise(function (ok) { setTimeout(ok, ms); }); }
+
+    /** "Falta cerca de 2 min", o nada si es tan poco que no vale decirlo. */
+    function tiempoRestante(ms) {
+        var s = Math.round(ms / 1000);
+        if (!isFinite(s) || s < 5) return '';
+        return 'Falta cerca de ' + (s < 90 ? s + ' s' : Math.round(s / 60) + ' min') + '.';
+    }
 
     // ── El cartel de "estoy trabajando" ──
     // Tapa la pantalla mientras dura. Solo se puede cerrar cuando algo falla:
@@ -703,7 +746,9 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         elRepetidas.innerHTML = lista.map(function (r) {
             var div = document.createElement('div');
             div.className = 'rep' + (r.misma_empresa ? '' : ' otra');
-            var numero = r.numero ? 'Factura ' + r.numero : 'Un comprobante';
+            var numero = r.numero
+                ? (r.tipo === 'NC' ? 'Nota de crédito ' : 'Factura ') + r.numero
+                : 'Un comprobante';
             var proveedor = r.proveedor ? ' de ' + r.proveedor : '';
             var cuando = r.cargada_en ? ' el ' + String(r.cargada_en).substring(0, 16).replace('T', ' ') : '';
             div.textContent = r.misma_empresa
@@ -1091,7 +1136,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             setTimeout(function () {
                 var tarjeta = document.querySelector('[data-navdoc]');
                 if (tarjeta && tarjeta.style.display !== 'none') return;
-                if (btnCargar && !btnCargar.disabled) cargarCorreos();
+                if (btnCargar && !btnCargar.disabled) cargarCorreos({ yaConfirmada: true });
             }, 150);
         }
     } catch (e) { /* sessionStorage bloqueado */ }
@@ -1245,7 +1290,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         anterior.innerHTML = '<i class="fas fa-chevron-left"></i> Anterior';
         anterior.addEventListener('click', function () {
             if (paginaActual > 1) cargarCorreos(Object.assign(
-                {}, contextoBusquedaActivo, { pagina: paginaActual - 1 }
+                {}, contextoBusquedaActivo, { pagina: paginaActual - 1, yaConfirmada: true }
             ));
         });
 
@@ -1260,7 +1305,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         siguiente.innerHTML = 'Siguiente <i class="fas fa-chevron-right"></i>';
         siguiente.addEventListener('click', function () {
             if (paginaActual < paginasTotal) cargarCorreos(Object.assign(
-                {}, contextoBusquedaActivo, { pagina: paginaActual + 1 }
+                {}, contextoBusquedaActivo, { pagina: paginaActual + 1, yaConfirmada: true }
             ));
         });
 
@@ -1431,7 +1476,10 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
         var items = listaEl.querySelectorAll('.correo-item');
         for (var i = 0; i < items.length; i++) items[i].classList.remove('sel');
-        renderCorreos(); // re-render marca .sel
+        // re-render marca .sel. Sin correos listados no hay nada que marcar, y
+        // repintar cambiaría "busca en el buzón" por "sin resultados".
+        if (correos.length) renderCorreos();
+        marcarFilaBandeja(c.bandeja_id || 0);
 
         ctVacio.style.display = 'none';
         ctMetaBox.style.display = 'block';
@@ -1441,7 +1489,9 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         ctMeta.textContent = (c.remitente || '—') + (c.cc ? ' · CC: ' + c.cc : '')
             + (c.reply_to ? ' · Responder a: ' + c.reply_to : '') + ' · ' + fechaCorta(c.fecha);
         ctBadge.textContent = '';
-        btnProcUno.style.display = 'inline-flex';
+        // El abierto desde la bandeja no sabe su carpeta ni su UID hasta que
+        // responde el servidor, y sin eso no hay qué procesar.
+        btnProcUno.style.display = c.uid ? 'inline-flex' : 'none';
         ctAdjuntos.innerHTML = '';
 
         if (c._cuerpo !== undefined) {
@@ -1450,14 +1500,23 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             return;
         }
 
-        ctCuerpo.textContent = 'Cargando contenido…';
-        postJson(BASE + '/correo/contenido', { uid: c.uid, carpeta: c.carpeta || '' })
+        ctCuerpo.innerHTML = '<i class="fas fa-spinner fa-spin"></i> '
+            + (c.uid ? 'Cargando contenido…' : 'Buscando el correo en el buzón…');
+        postJson(BASE + '/correo/contenido', c.uid
+                ? { uid: c.uid, carpeta: c.carpeta || '', cuenta_id: c.cuenta_id || CUENTA_ID }
+                : { bandeja_id: c.bandeja_id })
             .then(function (r) {
                 c._cuerpo = r.cuerpo || '(vacío)';
                 c._adjuntos = r.adjuntos || [];
                 c.cc = r.cc || c.cc || '';
                 c.reply_to = r.reply_to || c.reply_to || '';
+                if (!c.uid) {
+                    c.uid = r.uid;
+                    c.carpeta = r.carpeta || '';
+                    c.cuenta_id = r.cuenta_id || CUENTA_ID;
+                }
                 if (!correoActual || correoActual.clave !== c.clave) return; // ya seleccionó otro
+                btnProcUno.style.display = 'inline-flex';
                 ctCuerpo.textContent = c._cuerpo;
                 ctMeta.textContent = (c.remitente || '—') + (c.cc ? ' · CC: ' + c.cc : '')
                     + (c.reply_to ? ' · Responder a: ' + c.reply_to : '') + ' · ' + fechaCorta(c.fecha);
@@ -1468,6 +1527,42 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                 ctCuerpo.textContent = 'No se pudo cargar el contenido: ' + err.message;
             });
     }
+
+    // ── El correo de una fila de la bandeja ──
+    // Se abre en el mismo panel que los de la lista y queda igual que ellos:
+    // con sus adjuntos para verlos y el botón de procesarlo otra vez.
+    var correosDeBandeja = {}; // id de la fila -> correo ya abierto
+
+    function marcarFilaBandeja(id) {
+        Array.prototype.forEach.call(document.querySelectorAll('.bandeja-item'), function (fila) {
+            fila.classList.toggle('sel', id > 0 && Number(fila.dataset.id) === id);
+        });
+    }
+
+    function verCorreoDeBandeja(fila) {
+        var id = Number(fila.dataset.id);
+        if (!id) return;
+        if (!correosDeBandeja[id]) {
+            correosDeBandeja[id] = {
+                bandeja_id: id,
+                // La misma clave que usa la lista: si ese correo está listado
+                // a la izquierda, queda marcado ahí también.
+                clave: fila.dataset.clave || ('bandeja:' + id),
+                asunto: fila.dataset.asunto || '',
+                remitente: fila.dataset.remitente || '',
+                fecha: fila.dataset.fecha || '',
+                uid: 0,
+                carpeta: ''
+            };
+        }
+        seleccionarCorreo(correosDeBandeja[id]);
+    }
+
+    Array.prototype.forEach.call(document.querySelectorAll('.bandeja-ver'), function (boton) {
+        boton.addEventListener('click', function () {
+            verCorreoDeBandeja(boton.closest('.bandeja-item'));
+        });
+    });
 
     function cerrarVisorAdjunto() {
         visorSolicitud++;
@@ -1502,7 +1597,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         visorEstado.style.display = 'flex';
 
         var fd = new FormData();
-        fd.append('cuenta_id', CUENTA_ID);
+        fd.append('cuenta_id', correo.cuenta_id || CUENTA_ID);
         fd.append('uid', correo.uid);
         fd.append('carpeta', correo.carpeta || '');
         fd.append('seccion', adjunto.seccion);
@@ -1610,8 +1705,9 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
     if (btnProcUno) {
         btnProcUno.addEventListener('click', function () {
-            if (correoActual) {
-                procesarItems([{ uid: correoActual.uid, carpeta: correoActual.carpeta || '' }], btnProcUno);
+            if (correoActual && correoActual.uid) {
+                procesarItems([{ uid: correoActual.uid, carpeta: correoActual.carpeta || '' }], btnProcUno,
+                    correoActual.cuenta_id);
             }
         });
     }
@@ -1632,7 +1728,11 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             numeroContexto: opts.numeroContexto || ''
         } : {};
 
-        if (selDias.value === '0' && texto === '' && !buscarEnCarpeta) {
+        // Se pregunta una vez, cuando alguien lanza esa búsqueda. Repetirla
+        // —la relista que sigue a procesar, importar o descartar, o pasar de
+        // página— es la misma búsqueda que ya se aceptó: preguntar de nuevo
+        // era un cartel en cada recarga de la pantalla.
+        if (!opts.yaConfirmada && selDias.value === '0' && texto === '' && !buscarEnCarpeta) {
             if (!(await AppDialog.confirm(
                 'La búsqueda recorrerá todo el buzón sin un término específico. Puede tardar y mostrará como máximo los 500 correos más recientes.',
                 { title: 'Buscar en todo el buzón', type: 'warning', confirmText: 'Buscar de todos modos' }
@@ -1969,7 +2069,22 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
         return '';
     });
 
-    function procesarItems(items, boton) {
+    // cuentaId: el buzón de esos correos cuando no es el que está abierto (el
+    // correo de una fila de la bandeja puede venir de otro de la empresa).
+    /** "2 facturas y 1 nota de crédito nuevas en bandeja", con lo que haya. */
+    function nuevasEnBandeja(facturas, notas) {
+        var trozos = [];
+        if (facturas + notas === 0) return '<strong>0</strong> documentos nuevos en bandeja';
+        if (facturas > 0) {
+            trozos.push('<strong>' + facturas + '</strong> factura' + (facturas !== 1 ? 's' : ''));
+        }
+        if (notas > 0) {
+            trozos.push('<strong>' + notas + '</strong> nota' + (notas !== 1 ? 's' : '') + ' de crédito');
+        }
+        return trozos.join(' y ') + ' nueva' + (facturas + notas !== 1 ? 's' : '') + ' en bandeja';
+    }
+
+    function procesarItems(items, boton, cuentaId) {
         // Una tanda a la vez. Cada correo cuesta segundos —con los documentos
         // en SharePoint, varios viajes por red—, y sin esto cada clic de más
         // mientras tanto lanzaba otra carga completa del mismo correo.
@@ -1990,7 +2105,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             ? 'Bajando el correo…'
             : 'Procesando ' + items.length + ' correos…');
 
-        var totales = { procesados: 0, nuevas: 0, ya_existentes: 0, aceptadas: 0, rechazadas: 0, otra_cedula: 0, pdfs_guardados: 0, pdfs_sin_identificar: 0, sin_adjuntos: 0 };
+        var totales = { procesados: 0, nuevas: 0, notas_nuevas: 0, ya_existentes: 0, aceptadas: 0, rechazadas: 0, otra_cedula: 0, pdfs_guardados: 0, pdfs_sin_identificar: 0, sin_adjuntos: 0 };
         var errores = [];
         var repetidas = [];
         var hechos = 0;
@@ -2002,10 +2117,14 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                     setStatus(items.length === 1
                         ? 'Leyendo los adjuntos y guardándolos…'
                         : 'Procesando correos… (' + Math.min(hechos + lote.length, items.length) + '/' + items.length + ')');
-                    return postJson(BASE + '/correo/procesar', { items: JSON.stringify(lote) }).then(function (r) {
+                    return postJson(BASE + '/correo/procesar', {
+                        items: JSON.stringify(lote),
+                        cuenta_id: cuentaId || CUENTA_ID
+                    }).then(function (r) {
                         hechos += lote.length;
                         totales.procesados += r.procesados || 0;
                         totales.nuevas += r.nuevas || 0;
+                        totales.notas_nuevas += r.notas_nuevas || 0;
                         totales.ya_existentes += r.ya_existentes || 0;
                         totales.aceptadas += r.aceptadas || 0;
                         totales.rechazadas += r.rechazadas || 0;
@@ -2032,7 +2151,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                 setBar(100);
                 var partes = [
                     '<i class="fas fa-check-circle" style="margin-right:5px;"></i>',
-                    '<strong>' + totales.nuevas + '</strong> factura' + (totales.nuevas !== 1 ? 's' : '') + ' nueva' + (totales.nuevas !== 1 ? 's' : '') + ' en bandeja'
+                    nuevasEnBandeja(totales.nuevas - totales.notas_nuevas, totales.notas_nuevas)
                 ];
                 partes.push('· ' + totales.pdfs_guardados + ' PDF' + (totales.pdfs_guardados !== 1 ? 's' : ''));
                 if (totales.aceptadas > 0) partes.push('· ' + totales.aceptadas + ' verificada' + (totales.aceptadas !== 1 ? 's' : '') + ' por Hacienda');
@@ -2100,12 +2219,34 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             .map(function (cb) { return cb.value; });
     }
 
+    // La Bandeja importa facturas y notas de crédito. El resumen nombra lo que
+    // de verdad se mandó, y enlaza a cada listado: una nota no aparece en el
+    // de facturas.
+    function queSeImporto(importadas, encoladas, notas) {
+        var s = importadas !== 1 ? 's' : '';
+        if (notas > 0 && notas >= encoladas) return 'nota' + s + ' de crédito importada' + s;
+        if (notas > 0) return 'documento' + s + ' importado' + s + ' (facturas y notas de crédito)';
+        return 'factura' + s + ' importada' + s;
+    }
+
+    function enlacesImportacion(importacionId, encoladas, notas) {
+        var estilo = ' style="color:#166534;font-weight:700;"';
+        var enlaces = [];
+        if (encoladas > notas || notas === 0) {
+            enlaces.push('<a href="' + BASE + '/facturas?importacion_id=' + importacionId + '"' + estilo + '>Ver en Facturas</a>');
+        }
+        if (notas > 0) {
+            enlaces.push('<a href="' + BASE + '/notas-xml"' + estilo + '>Ver en Notas XML</a>');
+        }
+        return ' — ' + enlaces.join(' · ');
+    }
+
     if (btnImportar) {
         btnImportar.addEventListener('click', function () {
             var ids = idsSeleccionados('pendiente');
             if (!ids.length) {
-                AppDialog.alert('Selecciona al menos una factura pendiente para importarla.', {
-                    title: 'No hay facturas seleccionadas', type: 'warning'
+                AppDialog.alert('Selecciona al menos una fila pendiente para importarla.', {
+                    title: 'No hay filas seleccionadas', type: 'warning'
                 });
                 return;
             }
@@ -2115,13 +2256,15 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
 
             var soltarImportar = botonOcupado(btnImportar, 'Importando…');
             if (btnDescartar) btnDescartar.disabled = true;
-            abrirTrabajando('Preparando ' + ids.length + ' factura' + (ids.length !== 1 ? 's' : '') + '…');
+            abrirTrabajando('Preparando ' + ids.length + ' documento' + (ids.length !== 1 ? 's' : '') + '…');
 
             var importacionId = 0;
             var archivosGuardados = 0;
             var avisoCarpeta = '';
             var avisosArchivos = [];
             var repetidas = [];
+            var encoladas = 0;
+            var notasEncoladas = 0;
 
             postJson(BASE + '/correo/importar', { ids: ids.join(',') })
                 .then(function (r) {
@@ -2130,6 +2273,8 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                     avisoCarpeta = r.aviso_carpeta || '';
                     avisosArchivos = r.avisos || [];
                     repetidas = r.repetidas || [];
+                    encoladas = r.encoladas || 0;
+                    notasEncoladas = r.notas || 0;
                     pintarRepetidas(repetidas);
 
                     // Todas estaban ya cargadas: no hay cola que seguir.
@@ -2178,7 +2323,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                     var erroresImportacion = s.error || 0;
 
                     var html = '<i class="fas fa-check-circle" style="margin-right:5px;"></i>'
-                        + '<strong>' + importadas + '</strong> factura' + (importadas !== 1 ? 's' : '') + ' importada' + (importadas !== 1 ? 's' : '')
+                        + '<strong>' + importadas + '</strong> ' + queSeImporto(importadas, encoladas, notasEncoladas)
                         // "Duplicado" es que el comprobante ya estaba cargado,
                         // esté o no en un pago: se guardó la primera vez que
                         // llegó, y ahí siguen sus archivos.
@@ -2187,7 +2332,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                         + (erroresImportacion > 0 ? ' · ' + erroresImportacion + ' con error' : '')
                         + (archivosGuardados > 0 ? ' · ' + archivosGuardados + ' archivo' + (archivosGuardados !== 1 ? 's' : '') + ' renombrado' + (archivosGuardados !== 1 ? 's' : '') + ' en la carpeta' : '')
                         + (importacionId
-                            ? ' — <a href="' + BASE + '/facturas?importacion_id=' + importacionId + '" style="color:#166534;font-weight:700;">Ver en Facturas</a>'
+                            ? enlacesImportacion(importacionId, encoladas, notasEncoladas)
                             : '');
                     if (avisoCarpeta) {
                         html += '<div style="margin-top:6px;color:#b45309;">⚠ ' + avisoCarpeta + '</div>';
@@ -2244,19 +2389,82 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                 return;
             }
 
+            // Por tandas y con el cartel puesto. Cada fila se lleva su XML y su
+            // PDF, y con los documentos en SharePoint cada archivo es un viaje
+            // por red: toda la bandeja en una sola petición eran minutos sin
+            // que en la pantalla se moviera nada.
+            var total = ids.length;
+            var hechas = 0;
+            var descartadas = 0;
+            var noBorrados = 0;
+            var inicio = Date.now();
+            // La tanda se ajusta sola para que la barra avance cada pocos
+            // segundos: grande cuando borrar es instantáneo (disco), chica
+            // cuando cada archivo cuesta (SharePoint).
+            var tanda = 5;
+
+            procesandoBandeja = true;
             btnDescartar.disabled = true;
-            postJson(BASE + '/correo/descartar', { ids: ids.join(',') })
-                .then(function (r) {
-                    mostrarYRecargar('<i class="fas fa-check-circle" style="margin-right:5px;"></i>'
-                        + r.descartadas + ' fila' + (r.descartadas !== 1 ? 's' : '') + ' descartada' + (r.descartadas !== 1 ? 's' : '') + '.'
-                        + (r.no_borrados
-                            ? ' ' + r.no_borrados + ' archivo' + (r.no_borrados !== 1 ? 's' : '')
-                              + ' no se pudo borrar (puede estar abierto o sin permiso).'
-                            : ''), true);
+            var importarApagado = btnImportar ? btnImportar.disabled : true;
+            if (btnImportar) btnImportar.disabled = true;
+            abrirTrabajando('Descartando ' + total + ' fila' + (total !== 1 ? 's' : '') + '…');
+
+            function resumenDescarte() {
+                return '<i class="fas fa-check-circle" style="margin-right:5px;"></i>'
+                    + descartadas + ' fila' + (descartadas !== 1 ? 's' : '') + ' descartada' + (descartadas !== 1 ? 's' : '') + '.'
+                    + (noBorrados
+                        ? ' ' + noBorrados + ' archivo' + (noBorrados !== 1 ? 's' : '')
+                          + ' no se pudo borrar (puede estar abierto o sin permiso).'
+                        : '');
+            }
+
+            function pasoDescarte() {
+                if (hechas >= total) return Promise.resolve();
+                var lote = ids.slice(hechas, hechas + tanda);
+                var t0 = Date.now();
+                return postJson(BASE + '/correo/descartar', { ids: lote.join(',') }).then(function (r) {
+                    hechas += lote.length;
+                    descartadas += r.descartadas || 0;
+                    noBorrados += r.no_borrados || 0;
+
+                    setBar((hechas / total) * 100);
+                    setStatus('Descartando… (' + hechas + '/' + total + ')');
+                    elCounts.textContent = 'Descartadas: ' + descartadas
+                        + (noBorrados ? ' · Archivos sin borrar: ' + noBorrados : '');
+                    elDetail.textContent = hechas < total
+                        ? tiempoRestante((Date.now() - inicio) / hechas * (total - hechas))
+                        : '';
+
+                    var segundos = (Date.now() - t0) / 1000;
+                    if (segundos < 1.5) tanda = Math.min(50, tanda * 2);
+                    else if (segundos > 5) tanda = Math.max(2, Math.ceil(tanda / 2));
+
+                    return pasoDescarte();
+                });
+            }
+
+            pasoDescarte()
+                .then(function () {
+                    procesandoBandeja = false;
+                    setStatus('¡Listo! Actualizando…');
+                    mostrarYRecargar(resumenDescarte(), true);
                 })
                 .catch(function (err) {
-                    AppDialog.alert(err.message, { title: 'No fue posible descartar', type: 'danger' });
+                    procesandoBandeja = false;
+                    if (hechas > 0) {
+                        // Lo ya descartado no vuelve: se recarga para que la
+                        // bandeja muestre lo que de verdad quedó.
+                        elDetail.textContent = err.message;
+                        trabajandoEspera(
+                            'Se descartaron ' + descartadas + ' de ' + total + ' y después falló',
+                            'Actualizar',
+                            function () { mostrarYRecargar(resumenDescarte(), true); }
+                        );
+                        return;
+                    }
+                    trabajandoFallo('Error: ' + err.message, 'No se descartó nada. Puedes volver a intentarlo.');
                     btnDescartar.disabled = false;
+                    if (btnImportar) btnImportar.disabled = importarApagado;
                 });
         });
     }
@@ -2291,6 +2499,13 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
             }
 
             btnGuardarZip.disabled = true;
+            // El servidor reúne todos los archivos antes de contestar y no
+            // dice por dónde va: mientras tanto la barra se mueve sin medida,
+            // y pasa a medir en cuanto empieza a bajar el paquete.
+            var cuantas = ids.length || document.querySelectorAll('.cb-row').length;
+            abrirTrabajando('Armando el paquete de ' + cuantas + ' fila' + (cuantas !== 1 ? 's' : '') + '…');
+            barraSinMedida();
+            elDetail.textContent = 'Reuniendo los XML y PDF. Con muchos documentos puede tardar.';
             try {
                 var fd = new FormData();
                 fd.append('ids', ids.join(','));
@@ -2304,7 +2519,27 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                     throw new Error((cuerpo && cuerpo.message) || ('Error HTTP ' + res.status));
                 }
 
-                var blob = await res.blob();
+                setStatus('Bajando el paquete…');
+                elDetail.textContent = '';
+                var blob;
+                if (res.body && res.body.getReader) {
+                    var pesoTotal = parseInt(res.headers.get('content-length') || '0', 10) || 0;
+                    var lector = res.body.getReader();
+                    var partes = [];
+                    var recibido = 0;
+                    for (;;) {
+                        var tramo = await lector.read();
+                        if (tramo.done) break;
+                        partes.push(tramo.value);
+                        recibido += tramo.value.length;
+                        if (pesoTotal) setBar((recibido / pesoTotal) * 100);
+                        elCounts.textContent = (recibido / 1048576).toFixed(1) + ' MB'
+                            + (pesoTotal ? ' de ' + (pesoTotal / 1048576).toFixed(1) + ' MB' : '');
+                    }
+                    blob = new Blob(partes, { type: 'application/zip' });
+                } else {
+                    blob = await res.blob();
+                }
                 if (destino) {
                     var escritor = await destino.createWritable();
                     await escritor.write(blob);
@@ -2325,6 +2560,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                 var faltantes = [];
                 if (num('X-Sin-Pdf') > 0) { faltantes.push(num('X-Sin-Pdf') + ' sin PDF'); }
                 if (num('X-Sin-Xml') > 0) { faltantes.push(num('X-Sin-Xml') + ' sin XML'); }
+                cerrarTrabajando();
                 AppDialog.alert(
                     'Se guardaron ' + guardados + ' documento' + (guardados !== 1 ? 's' : '')
                     + ' (' + num('X-Guardados-Xml') + ' XML y ' + num('X-Guardados-Pdf') + ' PDF)'
@@ -2333,6 +2569,7 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
                     { title: 'Documentos guardados', type: 'success' }
                 );
             } catch (err) {
+                cerrarTrabajando();
                 AppDialog.alert(err.message, { title: 'No fue posible guardar', type: 'danger' });
             } finally {
                 btnGuardarZip.disabled = false;
@@ -2696,12 +2933,15 @@ $diasDefault = is_array($configResumen) ? (int) $configResumen['dias_atras'] : 1
     function paso() {
         if (detenido || ejecutandoPeticion || !lote || lote.estado !== 'ejecutando') return;
         ejecutandoPeticion = true;
+        // Si los motores de fondo ya lo mueven, el servidor solo devuelve el
+        // avance (ocupado): no hace falta preguntar tan seguido.
+        var espera = 500;
         post('/correo/general/procesar', {lote_id:lote.id, limit:6})
-            .then(function(r){ render(r.lote, r.incidencias || []); })
+            .then(function(r){ render(r.lote, r.incidencias || []); if (r.ocupado) espera = 2000; })
             .catch(function(e){ estado.textContent = 'Error: ' + e.message; })
             .then(function(){
                 ejecutandoPeticion = false;
-                if (lote && lote.estado === 'ejecutando' && !detenido) setTimeout(paso, 500);
+                if (lote && lote.estado === 'ejecutando' && !detenido) setTimeout(paso, espera);
             });
     }
 
