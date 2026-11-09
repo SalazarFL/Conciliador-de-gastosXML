@@ -1410,7 +1410,7 @@ class CorreoController extends Controller
             // computadora, mejor decirlo antes de crear el lote que a la
             // mitad, con la mitad del buzón ya leído.
             if (!AlmacenDocumentos::hayPrincipal()) {
-                throw new InvalidArgumentException(AlmacenDocumentos::SIN_SHAREPOINT);
+                throw new InvalidArgumentException(AlmacenDocumentos::sinPrincipal());
             }
             // La columna carpeta_raiz del lote queda vacía: ya no hay carpeta
             // de esta computadora que anotar.
@@ -3323,7 +3323,7 @@ class CorreoController extends Controller
         if ($capturarNuevos && !AlmacenDocumentos::hayPrincipal()) {
             $this->json([
                 'ok' => false,
-                'message' => 'La captura automática guarda en SharePoint. ' . AlmacenDocumentos::SIN_SHAREPOINT,
+                'message' => 'La captura automática no tiene dónde archivar. ' . AlmacenDocumentos::sinPrincipal(),
             ], 422);
         }
 

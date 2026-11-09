@@ -94,6 +94,16 @@ return [
     // que ser LA MISMA en todas las computadoras: la base es una sola.
     'clave_secretos' => $claveSecretos,
 
+    // Dónde se archiva lo NUEVO: 'sharepoint' (lo normal) o 'disco' (la
+    // carpeta de carpeta_destino en storage/correo/config.json). 'disco' es
+    // para seguir trabajando sin SharePoint —por ejemplo mientras se registra
+    // la aplicación en el tenant de la empresa—; lo archivado así se pasa
+    // después con cli/migrar_documentos_a_graph.php. Lo ya archivado se sigue
+    // leyendo de donde dice su fila, sea cual sea este valor.
+    'almacen_principal' => strtolower(trim((string) ($local['almacen_principal'] ?? ''))) === 'disco'
+        ? 'disco'
+        : 'sharepoint',
+
     // Los pesos y umbrales del viejo módulo de Conciliación salieron de aquí
     // con él. Los que quedaron en uso viven junto al código que los aplica:
     // FacturaMatcher (umbrales de número y proveedor, tolerancia en colones)

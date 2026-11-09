@@ -27,6 +27,7 @@
  */
 
 require_once __DIR__ . '/RutaDocumento.php';
+require_once __DIR__ . '/AlmacenDocumentos.php';
 
 class RespaldoBase
 {
@@ -329,6 +330,11 @@ class RespaldoBase
 
             $borrados = self::podar($carpeta);
 
+            // Con los documentos archivados en disco, la base sola no alcanza:
+            // sin los XML y PDF, restaurarla deja filas apuntando a la nada.
+            // Un fallo aquí NO tumba el respaldo de la base, que ya está hecho.
+            $documentos = AlmacenDocumentos::archivaEnDisco() ? self::copiarDocumentos($carpeta) : null;
+
             $estado = [
                 'estado'       => 'ok',
                 'fase'         => 'listo',
@@ -344,7 +350,9 @@ class RespaldoBase
                 'bytes_crudo'  => $crudo,
                 'tablas'       => count($tablas),
                 'borrados'     => $borrados,
-                'mensaje'      => 'Respaldo listo: ' . $nombre . ' (' . self::humano((int) @filesize($destino)) . ')',
+                'mensaje'      => 'Respaldo listo: ' . $nombre . ' (' . self::humano((int) @filesize($destino)) . ')'
+                                . ($documentos === null ? '' : ' · ' . $documentos['mensaje']),
+                'documentos'   => $documentos,
             ];
             self::escribirEstado($estado);
             return $estado;
@@ -359,6 +367,44 @@ class RespaldoBase
     }
 
     // ── Piezas ─────────────────────────────────────────────────────
+
+    /** Subcarpeta, dentro de la de respaldos, con el espejo de los documentos. */
+    public const CARPETA_DOCUMENTOS = 'DOCUMENTOS';
+
+    /**
+     * Espejo de la carpeta de documentos en disco junto a los respaldos de la
+     * base. robocopy /MIR copia solo lo que cambió, así que la noche que no
+     * entró nada cuesta segundos. No lanza: devuelve ['ok', 'mensaje'].
+     */
+    private static function copiarDocumentos($carpetaRespaldos)
+    {
+        $origen = RutaDocumento::raiz();
+        if ($origen === '' || !is_dir($origen)) {
+            return ['ok' => false, 'mensaje' => 'documentos NO copiados: no hay carpeta de documentos'];
+        }
+        if (stripos(PHP_OS_FAMILY, 'Windows') === false) {
+            return ['ok' => false, 'mensaje' => 'documentos NO copiados: robocopy solo existe en Windows'];
+        }
+        $destino = $carpetaRespaldos . DIRECTORY_SEPARATOR . self::CARPETA_DOCUMENTOS;
+        $inicio = microtime(true);
+        $comando = 'robocopy ' . escapeshellarg($origen) . ' ' . escapeshellarg($destino)
+            . ' /MIR /R:1 /W:1 /XJ /NFL /NDL /NP /NJH /NJS 2>&1';
+        $salida = [];
+        $codigo = 0;
+        @exec($comando, $salida, $codigo);
+        $segundos = round(microtime(true) - $inicio, 1);
+
+        // robocopy: 0-7 es éxito (bits de "copió", "sobraba", etc.); 8 o más, fallos.
+        if ($codigo >= 8) {
+            return [
+                'ok' => false,
+                'mensaje' => 'documentos NO copiados (robocopy ' . $codigo . '): '
+                    . mb_strimwidth(trim(implode(' ', $salida)), 0, 200, '…'),
+            ];
+        }
+
+        return ['ok' => true, 'mensaje' => 'documentos copiados a ' . self::CARPETA_DOCUMENTOS . ' en ' . $segundos . ' s'];
+    }
 
     /**
      * Solo tablas reales: las vistas se recrean al restaurar y pedírselas a

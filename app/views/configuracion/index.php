@@ -28,7 +28,9 @@ $sociedades     = is_array($sociedades ?? null) ? $sociedades : [];
 $sociedadActiva = $sociedadActiva ?? null;
 $sociedadEnUsoId = (int) ($sociedadEnUsoId ?? 0);
 $sharepoint     = (is_array($sharepoint ?? null) ? $sharepoint : [])
-    + ['disponible' => false, 'archivo_existe' => false, 'drive_id' => '', 'carpeta' => '', 'carpeta_anterior' => ''];
+    + ['disponible' => false, 'archivo_existe' => false, 'drive_id' => '', 'carpeta' => '', 'carpeta_anterior' => '',
+       'archiva_en_disco' => false, 'disco_raiz' => '', 'disco_escribe' => false, 'disco_libre' => false];
+$archivaEnDisco = !empty($sharepoint['archiva_en_disco']);
 $pagos        = is_array($pagos ?? null) ? $pagos : [];
 $pagoActivo   = (int) ($pagoActivo ?? 0);
 $usuarios       = is_array($usuarios ?? null) ? $usuarios : [];
@@ -122,14 +124,53 @@ $seccionAbierta = in_array($seccionInicial, $idsSecciones, true) ? $seccionInici
                     <div class="cfg-card-icono gold"><i class="fas fa-cloud"></i></div>
                     <div class="cfg-card-titulo">
                         <h2>Archivo de documentos</h2>
+                        <?php if ($archivaEnDisco): ?>
+                        <p>Por ahora los XML y los PDF de todas las empresas se guardan en una carpeta del servidor.</p>
+                        <?php else: ?>
                         <p>Los XML y los PDF de todas las empresas se guardan en SharePoint.</p>
+                        <?php endif; ?>
                     </div>
                 </div>
+
+                <?php if ($archivaEnDisco):
+                    $raizDisco = (string) $sharepoint['disco_raiz'];
+                    $discoEscribe = (bool) $sharepoint['disco_escribe'];
+                    $discoLibre = $sharepoint['disco_libre'];
+                ?>
+                <div class="cfg-row apilada">
+                    <div>
+                        <div class="cfg-row-label">
+                            <i class="fas fa-hard-drive" style="color:var(--gold);"></i>Archivo temporal en disco
+                        </div>
+                        <div class="cfg-row-ayuda">
+                            <?php if ($raizDisco === ''): ?>
+                            <i class="fas fa-triangle-exclamation" style="color:var(--warn);margin-right:4px;"></i>
+                            <strong>Sin carpeta.</strong> Falta <code>carpeta_destino</code> en
+                            <code>storage/correo/config.json</code>: hasta entonces no se puede ni capturar ni ver un comprobante.
+                            <?php else: ?>
+                            <i class="fas <?= $discoEscribe ? 'fa-circle-check' : 'fa-triangle-exclamation' ?>"
+                               style="color:var(<?= $discoEscribe ? '--ok' : '--warn' ?>);margin-right:4px;"></i>
+                            Guarda en <span class="cfg-ruta"><?= htmlspecialchars($raizDisco) ?></span>
+                            <?= $discoEscribe ? '' : '<strong>pero no se puede escribir ahí.</strong>' ?>
+                            <?php if ($discoLibre !== false): ?>
+                            · <?= number_format($discoLibre / 1073741824, 1, ',', '.') ?> GB libres.
+                            <?php endif; ?>
+                            <br>Es temporal, mientras no haya SharePoint de la empresa. Lo que se archive
+                            aquí se pasa después con <code>php cli/migrar_documentos_a_graph.php</code>,
+                            que no borra el original. El respaldo diario copia esta carpeta.
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+                <?php endif; ?>
 
                 <div class="cfg-row apilada">
                     <div>
                         <div class="cfg-row-label">
                             <i class="fas fa-plug" style="color:var(--gold);"></i>SharePoint en esta computadora
+                            <?php if ($archivaEnDisco): ?>
+                            <span class="cfg-arbol-tag no-tocar" style="margin-left:6px;">no en uso</span>
+                            <?php endif; ?>
                         </div>
                         <div class="cfg-row-ayuda">
                             <?php if ($sharepoint['disponible']): ?>

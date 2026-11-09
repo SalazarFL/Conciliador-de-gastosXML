@@ -1045,6 +1045,13 @@ class PorPagarController extends Controller
             return $resultado;
         }
 
+        // Con lo nuevo archivándose en disco, la carpeta del pago se arma
+        // aquí mismo: copiar en el disco propio es instantáneo, no son
+        // llamadas a la red con alguien esperando la pantalla.
+        if (AlmacenDocumentos::archivaEnDisco()) {
+            return $this->reubicarEnDisco($facturaIds, $resultado);
+        }
+
         try {
             $facturas = $this->loadModel('Factura');
             $enDisco = count($facturas->getParaOrganizarArchivos($facturaIds));
@@ -1092,6 +1099,49 @@ class PorPagarController extends Controller
                     . ' hace la tarea programada en los próximos minutos.';
         }
         $resultado['aviso'] = implode(' ', $avisos);
+        return $resultado;
+    }
+
+    /**
+     * La carpeta del pago con los documentos en disco: el organizador acomoda
+     * cada factura del pago en su mes y deja su copia en PAGOS/<pago>, en el
+     * acto. Es lo que se hacía antes de SharePoint, y lo que vuelve a hacerse
+     * mientras se archive en disco ('almacen_principal' => 'disco').
+     */
+    private function reubicarEnDisco(array $facturaIds, array $resultado)
+    {
+        try {
+            require_once __DIR__ . '/../helpers/OrganizadorDocumentos.php';
+            $resumen = (new OrganizadorDocumentos())->organizarIds($facturaIds, false);
+            if (!empty($resumen['omitido_por_bloqueo'])) {
+                $resultado['aviso'] = 'Hay otra ordenación en curso: la carpeta del pago se completa en la'
+                    . ' próxima vuelta de la tarea programada (unos minutos).';
+                return $resultado;
+            }
+            $resultado['movidos'] = (int) ($resumen['movidos'] ?? 0);
+            $resultado['por_fecha'] = (int) ($resumen['por_fecha'] ?? 0);
+            $resultado['en_pago'] = (int) ($resumen['en_pago'] ?? 0);
+            $resultado['copias_pago'] = (int) ($resumen['copias_pago'] ?? 0);
+            $resultado['sin_par'] = (int) ($resumen['sin_par_completo'] ?? 0);
+            $resultado['incompletos'] = is_array($resumen['incompletos'] ?? null) ? $resumen['incompletos'] : [];
+            $avisos = [];
+            if (!empty($resumen['errores'])) {
+                $avisos[] = $resumen['errores'] . ' documento(s) no se pudieron mover.';
+            }
+            // Un fallo al copiar no interrumpe el acomodo del original: sin
+            // decirlo, la carpeta del pago quedaría incompleta en silencio.
+            if (!empty($resumen['errores_copia_pago'])) {
+                $avisos[] = $resumen['errores_copia_pago'] . ' copia(s) no llegaron a la carpeta del pago.';
+            }
+            if (!empty($resumen['copias_pago_en_espera'])) {
+                $avisos[] = $resumen['copias_pago_en_espera'] . ' documento(s) son de antes, de SharePoint,'
+                    . ' y no entran a la carpeta del pago mientras se archive en disco.';
+            }
+            $resultado['aviso'] = implode(' ', $avisos);
+        } catch (Throwable $e) {
+            $resultado['aviso'] = 'No se pudieron mover los archivos: ' . $e->getMessage();
+        }
+
         return $resultado;
     }
 

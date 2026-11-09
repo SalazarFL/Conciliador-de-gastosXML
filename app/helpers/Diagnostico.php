@@ -495,6 +495,9 @@ class Diagnostico
      */
     private function sharepoint()
     {
+        if (AlmacenDocumentos::archivaEnDisco()) {
+            return $this->archivoEnDisco();
+        }
         require_once __DIR__ . '/AlmacenEnGraph.php';
         $revisiones = [];
         $documentos = null;
@@ -686,6 +689,41 @@ class Diagnostico
             }
         }
         return $n;
+    }
+
+    /**
+     * Con 'almacen_principal' => 'disco': lo que importa es la carpeta, no
+     * SharePoint. Que exista, que se pueda escribir y que tenga espacio.
+     */
+    private function archivoEnDisco()
+    {
+        $revisiones = [];
+        $raiz = RutaDocumento::raiz();
+        if ($raiz === '') {
+            $revisiones[] = $this->resultado('Carpeta de documentos', 'error',
+                'Sin carpeta configurada',
+                AlmacenDocumentos::SIN_CARPETA_DISCO);
+        } elseif (!is_dir($raiz)) {
+            $revisiones[] = $this->resultado('Carpeta de documentos', 'error',
+                'No existe: ' . $raiz,
+                "Créala y dale permiso de escritura a la cuenta de Apache y a SYSTEM:\n  mkdir \"{$raiz}\"");
+        } elseif (!AlmacenDocumentos::tipo(AlmacenDocumentos::DISCO)->permiteEscritura('')) {
+            $revisiones[] = $this->resultado('Carpeta de documentos', 'error',
+                'No se puede escribir en ' . $raiz,
+                'Dale permiso de escritura a la cuenta con la que corre Apache y a SYSTEM (las tareas programadas).');
+        } else {
+            $libre = @disk_free_space($raiz);
+            $gb = $libre === false ? null : $libre / 1073741824;
+            $revisiones[] = $this->resultado('Carpeta de documentos',
+                $gb !== null && $gb < 5 ? 'aviso' : 'ok',
+                'En disco (temporal): ' . $raiz
+                    . ($gb === null ? '' : ' · ' . number_format($gb, 1, ',', '.') . ' GB libres'),
+                $gb !== null && $gb < 5 ? 'Queda poco espacio en el disco de los documentos.' : '');
+        }
+        $revisiones[] = $this->resultado('SharePoint en esta computadora', 'ok',
+            'No se usa: lo nuevo se archiva en disco (almacen_principal = disco en local.php)', '');
+
+        return $revisiones;
     }
 
     private function resultado($nombre, $estado, $detalle, $queHacer)

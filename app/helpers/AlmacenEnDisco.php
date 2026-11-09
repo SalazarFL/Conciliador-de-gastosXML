@@ -307,6 +307,12 @@ class AlmacenEnDisco extends AlmacenDocumentos
 
     public function direccion($rutaRelativa)
     {
+        // La dirección de la raíz misma es la raíz: DocumentoArchivo la pide
+        // así cuando el disco es donde se archiva lo nuevo.
+        if (trim(str_replace('\\', '/', (string) $rutaRelativa), '/') === '') {
+            return RutaDocumento::raiz();
+        }
+
         return RutaDocumento::absoluta($rutaRelativa);
     }
 

@@ -37,6 +37,29 @@ $anotar = function ($texto) use ($log) {
     echo $linea;
 };
 
+// Archivando en disco, las copias las hace el organizador de siempre, en el
+// disco propio: es el mismo acomodo que la tarea de correo corre cada 15 min.
+if (AlmacenDocumentos::archivaEnDisco()) {
+    require_once $root . '/app/helpers/OrganizadorDocumentos.php';
+    $inicio = microtime(true);
+    try {
+        $r = (new OrganizadorDocumentos())->ejecutar(false, false);
+    } catch (Throwable $e) {
+        $anotar('No se pudieron armar las carpetas de pago en disco: ' . $e->getMessage());
+        exit(1);
+    }
+    if (!empty($r['omitido_por_bloqueo'])) {
+        $anotar('Otro proceso ya está acomodando el archivo en disco.');
+        exit(0);
+    }
+    $anotar(sprintf(
+        'Disco: %d copiadas, %d ya estaban, %d sin par completo, %d errores; %.1f s.',
+        (int) $r['copias_pago'], (int) $r['copias_pago_vigentes'], (int) ($r['sin_par_completo'] ?? 0),
+        (int) ($r['errores_copia_pago'] ?? 0), microtime(true) - $inicio
+    ));
+    exit(!empty($r['errores_copia_pago']) ? 1 : 0);
+}
+
 if (!ReconciliadorGraph::hayQueCorrer()) {
     $anotar('SharePoint no está configurado en esta computadora: nada que copiar.');
     exit(0);

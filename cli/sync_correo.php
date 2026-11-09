@@ -140,6 +140,77 @@ function registrar($rutaLog, $texto)
     }
 }
 
+/**
+ * El archivo en disco ('almacen_principal' => 'disco'): lo que antes del
+ * 27/09/2026 hacía esta tarea con la carpeta compartida.
+ *
+ *   1. Reconciliar: reconoce los documentos que alguien movió o renombró a
+ *      mano y corrige su ruta en la base. Rápida en cada corrida; completa
+ *      (rehasheando todo) una vez al día.
+ *   2. Acomodar, cada 15 minutos: cada documento a la carpeta de su mes y,
+ *      si está en un pago, su copia a PAGOS/<pago>. No en cada corrida: lo
+ *      que cambia dónde va un documento es que entre uno nuevo o que cambie
+ *      su pago, y eso no pasa cada cinco minutos.
+ *
+ * Solo toca filas de disco (almacen NULL): lo de SharePoint no lo ve.
+ */
+function archivoEnDisco($rutaLog)
+{
+    require_once dirname(__DIR__) . '/app/helpers/OrganizadorDocumentos.php';
+    $organizador = new OrganizadorDocumentos();
+
+    $completo = $organizador->requiereReconciliacionCompleta(86400);
+    $orden = $organizador->reconciliar(false, $completo);
+    if (!empty($orden['omitido_por_bloqueo'])) {
+        registrar($rutaLog, 'Archivo en disco: omitido, hay otra corrida en curso.');
+        return;
+    }
+    if ((int) ($orden['rutas_actualizadas'] ?? 0) > 0 || (int) ($orden['marcados_sin_archivo'] ?? 0) > 0
+        || (int) ($orden['errores'] ?? 0) > 0 || $completo) {
+        registrar($rutaLog, sprintf(
+            'Archivo en disco (%s): %d registrados; %d rutas actualizadas; %d sin archivo; %d errores.',
+            $completo ? 'revisión completa' : 'revisión rápida',
+            (int) ($orden['registrados_revisados'] ?? 0),
+            (int) ($orden['rutas_actualizadas'] ?? 0),
+            (int) ($orden['marcados_sin_archivo'] ?? 0),
+            (int) ($orden['errores'] ?? 0)
+        ));
+    }
+    if (!empty($orden['revision_suspendida'])) {
+        registrar($rutaLog, 'Archivo en disco: REVISIÓN SUSPENDIDA. ' . $orden['revision_suspendida']);
+    }
+
+    if (!$organizador->requiereOrden(900)) {
+        return;
+    }
+    $acomodo = $organizador->ejecutar(false, false);
+    if (!empty($acomodo['omitido_por_bloqueo'])) {
+        registrar($rutaLog, 'Acomodo del archivo: omitido, hay otra corrida en curso.');
+        return;
+    }
+    registrar($rutaLog, sprintf(
+        'Acomodo del archivo: %d movidos a su mes; %d copias al pago (%d ya estaban); %d sin archivo en disco; %d errores.',
+        (int) ($acomodo['movidos'] ?? 0),
+        (int) ($acomodo['copias_pago'] ?? 0),
+        (int) ($acomodo['copias_pago_vigentes'] ?? 0),
+        (int) ($acomodo['faltantes_en_disco'] ?? 0),
+        (int) ($acomodo['errores'] ?? 0) + (int) ($acomodo['errores_copia_pago'] ?? 0)
+    ));
+    // Las que se quedaron fuera de la carpeta del pago, con nombre: si no
+    // quedan aquí, la única forma de saberlo es volver a cargar el pago.
+    if (!empty($acomodo['sin_par_completo'])) {
+        registrar($rutaLog, sprintf('Sin copiar al pago (%d): les falta el XML o el PDF.', (int) $acomodo['sin_par_completo']));
+        foreach (array_slice((array) ($acomodo['incompletos'] ?? []), 0, 20) as $doc) {
+            registrar($rutaLog, sprintf(
+                '  · %s · %s — falta el %s',
+                trim((string) ($doc['numero'] ?? '')) ?: ('documento ' . (int) ($doc['documento_id'] ?? 0)),
+                trim((string) ($doc['proveedor'] ?? '')),
+                (string) ($doc['falta'] ?? '?')
+            ));
+        }
+    }
+}
+
 $resumenCuentas = [];
 $errorGlobal = null;
 
@@ -289,7 +360,7 @@ if ($capturaActiva && isset($cuentasModel, $cuentas)
         // La Bandeja y el archivo están en SharePoint: sin sus credenciales en
         // esta computadora no hay dónde dejar lo que se capture.
         if (!AlmacenDocumentos::hayPrincipal()) {
-            throw new RuntimeException('La captura automática guarda en SharePoint. ' . AlmacenDocumentos::SIN_SHAREPOINT);
+            throw new RuntimeException('La captura automática no tiene dónde archivar. ' . AlmacenDocumentos::sinPrincipal());
         }
 
         $capturas = new CorreoCapturaAutomatica();
@@ -613,7 +684,15 @@ try {
 // recorrerla. Sin empresas ni documentos allá, no sale a la red.
 try {
     require_once $ROOT . '/app/helpers/ReconciliadorGraph.php';
-    if (ReconciliadorGraph::hayQueCorrer()) {
+    // Con lo nuevo archivándose en disco, SharePoint no se usa: revisar su
+    // biblioteca solo sería salir a la red a que conteste que no.
+    if (AlmacenDocumentos::archivaEnDisco()) {
+        // Lo que hace el reconciliador con SharePoint, en disco lo hace el
+        // organizador de siempre: reconoce lo que alguien movió a mano, y cada
+        // 15 minutos acomoda cada documento en su mes y arma la carpeta de su
+        // pago (copias en PAGOS/<pago>). Ver archivoEnDisco(), abajo.
+        archivoEnDisco($rutaLog);
+    } elseif (ReconciliadorGraph::hayQueCorrer()) {
         $nube = (new ReconciliadorGraph(AlmacenDocumentos::tipo(AlmacenEnGraph::TIPO)))->ejecutar(false);
         if (!empty($nube['omitido_por_bloqueo'])) {
             registrar($rutaLog, 'SharePoint: omitido, otra PC está revisando la biblioteca.');

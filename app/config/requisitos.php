@@ -44,6 +44,11 @@
  * estas tres cosas, y cerrarlas dejaría el sistema sin salida.
  */
 
+// Dónde se archiva lo nuevo cambia lo que hay que tener para archivar: las
+// credenciales de SharePoint, o una carpeta en disco (ver almacen_principal).
+require_once __DIR__ . '/../helpers/AlmacenDocumentos.php';
+$archivaEnDisco = AlmacenDocumentos::archivaEnDisco();
+
 return [
 
     /*
@@ -113,7 +118,21 @@ return [
             },
         ],
 
-        'sharepoint' => [
+        // El id se queda 'sharepoint' aunque archive en disco: es el que usan
+        // los módulos de abajo, y lo que pide es "dónde archivar".
+        'sharepoint' => $archivaEnDisco ? [
+            'titulo'  => 'Carpeta de documentos en disco',
+            'falta'   => 'Los documentos se archivan en disco y esta computadora no tiene '
+                       . 'carpeta configurada (carpeta_destino en storage/correo/config.json).',
+            'porque'  => 'Mientras no haya SharePoint, los XML y PDF se guardan en esa '
+                       . 'carpeta: sin ella no se puede ni capturar ni ver un comprobante.',
+            'donde'   => 'Configuración → Archivo de documentos',
+            'ruta'    => '/configuracion?ir=archivo',
+            'permiso' => 'configuracion.archivo',
+            'comprobar' => static function (): bool {
+                return AlmacenDocumentos::hayPrincipal();
+            },
+        ] : [
             'titulo'  => 'SharePoint en esta computadora',
             'falta'   => 'Esta computadora no tiene las credenciales de SharePoint '
                        . '(app/config/local.graph.php).',

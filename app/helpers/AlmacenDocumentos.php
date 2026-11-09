@@ -488,17 +488,58 @@ abstract class AlmacenDocumentos
     }
 
     /**
-     * Donde se archiva todo lo nuevo: la biblioteca de SharePoint.
+     * Donde se archiva todo lo nuevo: la biblioteca de SharePoint, o la
+     * carpeta de disco si local.php dice 'almacen_principal' => 'disco'
+     * (ver tipoPrincipal()).
      *
-     * Lanza si esta computadora no tiene las credenciales. No hay a dónde
-     * caer: guardar en el disco lo que el resto de las PC busca en SharePoint
-     * es perder el documento sin que nadie se entere.
+     * Lanza si esta computadora no tiene ese almacén. No hay a dónde caer
+     * solo: guardar en el disco lo que el resto busca en SharePoint es perder
+     * el documento sin que nadie se entere. El disco se elige a propósito.
      *
      * @throws RuntimeException Sin app/config/local.graph.php.
      */
     public static function principal()
     {
-        return self::$forzado ?? self::tipo(self::SHAREPOINT);
+        return self::$forzado ?? self::tipo(self::tipoPrincipal());
+    }
+
+    /** @var string|null 'sharepoint' o 'disco'; null = falta leerlo de config.php. */
+    private static $tipoPrincipal = null;
+
+    /**
+     * Dónde se archiva lo nuevo según la configuración: 'sharepoint' (lo
+     * normal) o 'disco'. Se lee una vez por proceso. Es una decisión de la
+     * instalación, no de cada documento: lo ya archivado se lee de donde
+     * dice su fila (paraFila), cambie esto o no.
+     */
+    public static function tipoPrincipal()
+    {
+        if (self::$tipoPrincipal === null) {
+            $tipo = self::SHAREPOINT;
+            try {
+                $config = require dirname(__DIR__) . '/config/config.php';
+                if (is_array($config) && ($config['almacen_principal'] ?? '') === self::DISCO) {
+                    $tipo = self::DISCO;
+                }
+            } catch (Throwable $e) {
+                // Sin configuración legible, lo de siempre: SharePoint.
+            }
+            self::$tipoPrincipal = $tipo;
+        }
+
+        return self::$tipoPrincipal;
+    }
+
+    /** Para las pruebas: elegir el modo sin pasar por config.php. */
+    public static function fijarTipoPrincipal($tipo)
+    {
+        self::$tipoPrincipal = self::normalizarTipo($tipo) === self::DISCO ? self::DISCO : self::SHAREPOINT;
+    }
+
+    /** ¿Lo nuevo se archiva en disco? */
+    public static function archivaEnDisco()
+    {
+        return self::tipoPrincipal() === self::DISCO;
     }
 
     /**
@@ -554,7 +595,8 @@ abstract class AlmacenDocumentos
     }
 
     /**
-     * Dónde se archiva lo nuevo de una sociedad: SharePoint, sea cual sea.
+     * Dónde se archiva lo nuevo de una sociedad: el principal (SharePoint o,
+     * si así se configuró, el disco), sea cual sea la sociedad.
      *
      * Recibe la sociedad aunque no la use porque quien escribe la tiene a
      * mano y es la pregunta que hace; que la respuesta sea la misma para
@@ -637,22 +679,42 @@ abstract class AlmacenDocumentos
     }
 
     /**
-     * ¿Esta computadora puede archivar? Es decir, ¿tiene SharePoint? Solo
-     * mira si están las credenciales: no sale a la red, y por eso se puede
+     * ¿Esta computadora puede archivar? Con SharePoint, si están las
+     * credenciales; con disco, si hay carpeta configurada. No sale a la red
+     * ni toca el disco más que para leer la configuración, y por eso se puede
      * preguntar en cada petición.
      */
     public static function hayPrincipal()
     {
-        return self::$forzado !== null || self::disponible(self::SHAREPOINT);
+        if (self::$forzado !== null) {
+            return true;
+        }
+        if (self::archivaEnDisco()) {
+            return RutaDocumento::raiz() !== '';
+        }
+
+        return self::disponible(self::SHAREPOINT);
     }
 
     /**
      * Lo que se le dice a quien quiere guardar o abrir un documento en una
-     * computadora sin SharePoint.
+     * computadora sin SharePoint. Para el mensaje que corresponde al modo
+     * configurado, sinPrincipal().
      */
     public const SIN_SHAREPOINT = 'Esta computadora no tiene SharePoint configurado, y los XML y PDF de todas '
         . 'las empresas se guardan ahí. Falta app/config/local.graph.php: ver Configuración → Archivo de '
         . 'documentos, o docs/SHAREPOINT.md.';
+
+    /** Lo mismo, cuando lo nuevo se archiva en disco y no hay carpeta. */
+    public const SIN_CARPETA_DISCO = 'Los XML y PDF se están archivando en disco, y esta computadora no tiene '
+        . 'carpeta configurada. Falta carpeta_destino en storage/correo/config.json: ver Configuración → '
+        . 'Archivo de documentos.';
+
+    /** El motivo de no poder archivar, según dónde se archiva lo nuevo. */
+    public static function sinPrincipal()
+    {
+        return self::archivaEnDisco() ? self::SIN_CARPETA_DISCO : self::SIN_SHAREPOINT;
+    }
 
     private static function normalizarTipo($tipo)
     {
@@ -729,5 +791,6 @@ abstract class AlmacenDocumentos
         self::$forzado = null;
         self::$fabricas = [];
         self::$instancias = [];
+        self::$tipoPrincipal = self::SHAREPOINT;
     }
 }

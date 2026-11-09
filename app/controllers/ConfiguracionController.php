@@ -663,8 +663,13 @@ class ConfiguracionController extends Controller
         $config = ClienteGraph::configuracion();
         $archivo = dirname(__DIR__) . '/config/local.graph.php';
 
+        // En modo disco SharePoint no se usa: no se sale a la red a buscar el
+        // nombre de una biblioteca que quizá ya ni contesta.
+        $enDisco = AlmacenDocumentos::archivaEnDisco();
+        $raizDisco = $enDisco ? RutaDocumento::raiz() : '';
+
         $biblioteca = ['nombre' => '', 'url' => ''];
-        if ($config !== null) {
+        if ($config !== null && !$enDisco) {
             try {
                 $biblioteca = ClienteGraph::desdeConfiguracion()->bibliotecaVisible();
             } catch (Throwable $e) {
@@ -680,6 +685,13 @@ class ConfiguracionController extends Controller
             'drive_id' => $config === null ? '' : (string) $config['drive_id'],
             'carpeta' => $config === null ? '' : trim(str_replace('\\', '/', (string) ($config['carpeta'] ?? '')), '/'),
             'carpeta_anterior' => DocumentoArchivo::raizConfigurada(),
+            // Archivo temporal en disco: solo lo que se sabe sin recorrer la
+            // carpeta, porque dibujar la pantalla no puede contar miles de archivos.
+            'archiva_en_disco' => $enDisco,
+            'disco_raiz' => $raizDisco,
+            'disco_escribe' => $raizDisco !== ''
+                && AlmacenDocumentos::tipo(AlmacenDocumentos::DISCO)->permiteEscritura(''),
+            'disco_libre' => $raizDisco !== '' ? @disk_free_space($raizDisco) : false,
         ];
     }
 

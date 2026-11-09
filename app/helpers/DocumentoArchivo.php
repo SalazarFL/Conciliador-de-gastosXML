@@ -863,7 +863,7 @@ class DocumentoArchivo
     private function exigirCarpeta()
     {
         if ($this->almacen === null) {
-            throw new RuntimeException(AlmacenDocumentos::SIN_SHAREPOINT);
+            throw new RuntimeException(AlmacenDocumentos::sinPrincipal());
         }
         if ($this->raiz === '' && $this->almacen instanceof AlmacenEnDisco) {
             throw new RuntimeException('No hay carpeta de disco donde escribir.');

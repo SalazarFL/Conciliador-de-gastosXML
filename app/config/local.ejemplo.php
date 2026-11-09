@@ -36,6 +36,15 @@ return [
      */
     'pdftotext_path' => '',
 
+    /**
+     * Dónde se archiva lo NUEVO: 'sharepoint' (lo normal, necesita
+     * local.graph.php) o 'disco' (la carpeta carpeta_destino de
+     * storage/correo/config.json). 'disco' sirve para seguir trabajando
+     * mientras no hay SharePoint; lo archivado así se pasa después con
+     * cli/migrar_documentos_a_graph.php. Sin esta línea: 'sharepoint'.
+     */
+    // 'almacen_principal' => 'disco',
+
 ];
 
 /**
